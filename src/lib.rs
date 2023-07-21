@@ -16,3 +16,5 @@
 // under the License.
 
 //! Native Rust implementation of Apache Iceberg
+pub mod error;
+pub mod spec;
