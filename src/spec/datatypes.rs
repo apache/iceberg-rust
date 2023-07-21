@@ -387,4 +387,22 @@ mod tests {
         assert_eq!(Type::Primitive(PrimitiveType::String), *result.key);
         assert_eq!(Type::Primitive(PrimitiveType::Double), *result.value);
     }
+
+    #[test]
+    fn map_int() {
+        let record = r#"
+        {
+            "type": "map",
+            "key-id": 4,
+            "key": "int",
+            "value-id": 5,
+            "value-required": false,
+            "value": "string"
+        }
+        "#;
+
+        let result: MapType = serde_json::from_str(record).unwrap();
+        assert_eq!(Type::Primitive(PrimitiveType::Int), *result.key);
+        assert_eq!(Type::Primitive(PrimitiveType::String), *result.value);
+    }
 }
