@@ -115,8 +115,8 @@ where
         .ok_or_else(|| D::Error::custom("Decimal requires precision and scale: {s}"))?;
 
     Ok(PrimitiveType::Decimal {
-        precision: precision.parse().map_err(D::Error::custom)?,
-        scale: scale.parse().map_err(D::Error::custom)?,
+        precision: precision.trim().parse().map_err(D::Error::custom)?,
+        scale: scale.trim().parse().map_err(D::Error::custom)?,
     })
 }
 
