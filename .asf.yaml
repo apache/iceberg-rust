@@ -28,6 +28,10 @@ github:
     - apache
     - hacktoberfest
     - rust
+  enabled_merge_buttons:
+    squash: true
+    merge: false
+    rebase: false
   features:
     wiki: false
     issues: true
