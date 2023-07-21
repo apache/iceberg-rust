@@ -23,7 +23,7 @@ updates:
     schedule:
       interval: "monthly"
 
-  # Maintain dependencies for opendal
+  # Maintain dependencies for iceberg
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
