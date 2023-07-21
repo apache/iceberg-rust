@@ -321,20 +321,22 @@ mod tests {
         let record = r#"
         {
             "type": "struct",
-            "fields": [ {
-            "id": 1,
-            "name": "id",
-            "required": true,
-            "type": "uuid",
-            "initial-default": "0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb",
-            "write-default": "ec5911be-b0a7-458c-8438-c9a3e53cffae"
-            }, {
-            "id": 2,
-            "name": "data",
-            "required": false,
-            "type": "int"
-            } ]
-            }
+            "fields": [ 
+                {
+                    "id": 1,
+                    "name": "id",
+                    "required": true,
+                    "type": "uuid",
+                    "initial-default": "0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb",
+                    "write-default": "ec5911be-b0a7-458c-8438-c9a3e53cffae"
+                }, {
+                    "id": 2,
+                    "name": "data",
+                    "required": false,
+                    "type": "int"
+                } 
+            ]
+        }
         "#;
 
         let result: StructType = serde_json::from_str(record).unwrap();
@@ -361,7 +363,7 @@ mod tests {
             "element-id": 3,
             "element-required": true,
             "element": "string"
-            }
+        }
         "#;
 
         let result: ListType = serde_json::from_str(record).unwrap();
@@ -378,7 +380,7 @@ mod tests {
             "value-id": 5,
             "value-required": false,
             "value": "double"
-            }
+        }
         "#;
 
         let result: MapType = serde_json::from_str(record).unwrap();
