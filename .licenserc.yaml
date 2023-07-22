@@ -24,5 +24,6 @@ header:
     - 'LICENSE'
     - 'NOTICE'
     - '**/*.md'
+    - '**/*.json'
 
   comment: on-failure
