@@ -23,7 +23,6 @@ header:
   paths-ignore:
     - 'LICENSE'
     - 'NOTICE'
-    - '**/*.md'
     - '**/*.json'
 
   comment: on-failure
