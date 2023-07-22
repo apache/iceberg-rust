@@ -17,7 +17,6 @@ First, thank you for contributing to Iceberg Rust! The goal of this document is 
 
 ## Your First Contribution
 
-1. Ensure your change has an issue! Find an [existing issue](https://github.com/apache/iceberg-rust/issues) or [open a new issue](https://github.com/apache/iceberg-rust/issues/new).
 1. [Fork the iceberg-rust repository](https://github.com/apache/iceberg-rust/fork) in your own GitHub account.
 1. [Create a new Git branch](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-and-deleting-branches-within-your-repository).
 1. Make your changes.
