@@ -362,14 +362,14 @@ mod tests {
             result.fields[0].field_type
         );
         assert_eq!(1, result.fields[0].id);
-        assert_eq!(true, result.fields[0].required);
+        assert!(result.fields[0].required);
 
         assert_eq!(
             Type::Primitive(PrimitiveType::Int),
             result.fields[1].field_type
         );
         assert_eq!(2, result.fields[1].id);
-        assert_eq!(false, result.fields[1].required);
+        assert!(!result.fields[1].required);
     }
 
     #[test]
