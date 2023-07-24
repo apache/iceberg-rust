@@ -199,8 +199,8 @@ pub struct StructType {
 
 impl StructType {
     /// Get structfield with certain id
-    pub fn get(&self, index: usize) -> Option<&StructField> {
-        self.fields.iter().find(|field| field.id as usize == index)
+    pub fn get(&self, id: usize) -> Option<&StructField> {
+        self.fields.iter().find(|field| field.id as usize == id)
     }
     /// Get structfield with certain name
     pub fn get_name(&self, name: &str) -> Option<&StructField> {
