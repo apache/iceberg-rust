@@ -216,6 +216,16 @@ impl Index<usize> for StructType {
     }
 }
 
+impl fmt::Display for StructType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "struct<")?;
+        for field in &self.fields {
+            write!(f, "{}", field.field_type)?;
+        }
+        write!(f, ">")
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
@@ -240,6 +250,23 @@ pub struct StructField {
     /// Used to populate the field’s value for any records written after the field was added to the schema, if the writer does not supply the field’s value
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<String>,
+}
+
+impl fmt::Display for StructField {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: ", self.id)?;
+        write!(f, "{}: ", self.name)?;
+        if self.required {
+            write!(f, "required ")?;
+        } else {
+            write!(f, "optional ")?;
+        }
+        write!(f, "{} ", self.field_type)?;
+        if let Some(doc) = &self.doc {
+            write!(f, "{}", doc)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
