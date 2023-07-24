@@ -15,14 +15,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
-
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '**/*.json'
-
-  comment: on-failure
+edition = "2021"
+reorder_imports = true
