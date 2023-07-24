@@ -15,6 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
-pub mod error;
-pub mod spec;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum IcebergError {
+    #[error("The type `{0}` cannot be stored as bytes.")]
+    ValueByteConversion(String),
+    #[error("Failed to convert slice to array")]
+    TryFromSlice(#[from] std::array::TryFromSliceError),
+    #[error("Failed to convert u8 to string")]
+    Utf8(#[from] std::str::Utf8Error),
+}

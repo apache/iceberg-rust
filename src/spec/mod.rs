@@ -15,6 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
-pub mod error;
-pub mod spec;
+pub mod datatypes;
