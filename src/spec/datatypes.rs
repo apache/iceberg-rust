@@ -194,7 +194,7 @@ impl fmt::Display for PrimitiveType {
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields
-    pub fields: Vec<StructField>,
+    fields: Vec<StructField>,
 }
 
 impl StructType {
