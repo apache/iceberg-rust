@@ -43,7 +43,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::Primitive(primitive) => write!(f, "{}", primitive),
-            Type::Struct(_) => write!(f, "struct"),
+            Type::Struct(s) => write!(f, "{}", s),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
         }
