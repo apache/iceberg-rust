@@ -174,17 +174,16 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Long => write!(f, "long"),
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
-            PrimitiveType::Decimal {
-                precision: _,
-                scale: _,
-            } => write!(f, "decimal"),
+            PrimitiveType::Decimal { precision, scale } => {
+                write!(f, "decimal({},{})", precision, scale)
+            }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::Timestamptz => write!(f, "timestamptz"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
-            PrimitiveType::Fixed(_) => write!(f, "fixed"),
+            PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
             PrimitiveType::Binary => write!(f, "binary"),
         }
     }
