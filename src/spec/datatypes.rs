@@ -217,6 +217,7 @@ impl Index<usize> for StructType {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -233,6 +234,12 @@ pub struct StructField {
     /// Fields may have an optional comment or doc string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
+    /// Used to populate the field’s value for all records that were written before the field was added to the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_default: Option<String>,
+    /// Used to populate the field’s value for any records written after the field was added to the schema, if the writer does not supply the field’s value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_default: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -273,6 +280,17 @@ pub struct MapType {
 mod tests {
     use super::*;
 
+    fn check_type_serde(json: &str, expected_type: Type) {
+        let desered_type: Type = serde_json::from_str(json).unwrap();
+        assert_eq!(desered_type, expected_type);
+
+        let sered_json = serde_json::to_string(&expected_type).unwrap();
+        let parsed_json_value = serde_json::from_str::<serde_json::Value>(&sered_json).unwrap();
+        let raw_json_value = serde_json::from_str::<serde_json::Value>(json).unwrap();
+
+        assert_eq!(parsed_json_value, raw_json_value);
+    }
+
     #[test]
     fn decimal() {
         let record = r#"
@@ -289,19 +307,23 @@ mod tests {
         }
         "#;
 
-        let result: StructType = serde_json::from_str(record).unwrap();
-        assert_eq!(
-            Type::Primitive(PrimitiveType::Decimal {
-                precision: 9,
-                scale: 2
+        check_type_serde(
+            record,
+            Type::Struct(StructType {
+                fields: vec![StructField {
+                    id: 1,
+                    name: "id".to_string(),
+                    required: true,
+                    field_type: Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                }],
             }),
-            result.fields[0].field_type
-        );
-        let result_two: StructType = serde_json::from_str(
-            &serde_json::to_string(&result).expect("Failed to serialize result"),
         )
-        .expect("Failed to serialize json");
-        assert_eq!(result, result_two);
     }
 
     #[test]
@@ -320,16 +342,20 @@ mod tests {
         }
         "#;
 
-        let result: StructType = serde_json::from_str(record).unwrap();
-        assert_eq!(
-            Type::Primitive(PrimitiveType::Fixed(8)),
-            result.fields[0].field_type
-        );
-        let result_two: StructType = serde_json::from_str(
-            &serde_json::to_string(&result).expect("Failed to serialize result"),
+        check_type_serde(
+            record,
+            Type::Struct(StructType {
+                fields: vec![StructField {
+                    id: 1,
+                    name: "id".to_string(),
+                    required: true,
+                    field_type: Type::Primitive(PrimitiveType::Fixed(8)),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                }],
+            }),
         )
-        .expect("Failed to serialize json");
-        assert_eq!(result, result_two);
     }
 
     #[test]
@@ -355,20 +381,31 @@ mod tests {
         }
         "#;
 
-        let result: StructType = serde_json::from_str(record).unwrap();
-        assert_eq!(
-            Type::Primitive(PrimitiveType::Uuid),
-            result.fields[0].field_type
-        );
-        assert_eq!(1, result.fields[0].id);
-        assert!(result.fields[0].required);
-
-        assert_eq!(
-            Type::Primitive(PrimitiveType::Int),
-            result.fields[1].field_type
-        );
-        assert_eq!(2, result.fields[1].id);
-        assert!(!result.fields[1].required);
+        check_type_serde(
+            record,
+            Type::Struct(StructType {
+                fields: vec![
+                    StructField {
+                        id: 1,
+                        name: "id".to_string(),
+                        required: true,
+                        field_type: Type::Primitive(PrimitiveType::Uuid),
+                        doc: None,
+                        initial_default: Some("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb".to_string()),
+                        write_default: Some("ec5911be-b0a7-458c-8438-c9a3e53cffae".to_string()),
+                    },
+                    StructField {
+                        id: 2,
+                        name: "data".to_string(),
+                        required: false,
+                        field_type: Type::Primitive(PrimitiveType::Int),
+                        doc: None,
+                        initial_default: None,
+                        write_default: None,
+                    },
+                ],
+            }),
+        )
     }
 
     #[test]
@@ -382,8 +419,14 @@ mod tests {
         }
         "#;
 
-        let result: ListType = serde_json::from_str(record).unwrap();
-        assert_eq!(Type::Primitive(PrimitiveType::String), *result.element);
+        check_type_serde(
+            record,
+            Type::List(ListType {
+                element_id: 3,
+                element_required: true,
+                element: Box::new(Type::Primitive(PrimitiveType::String)),
+            }),
+        );
     }
 
     #[test]
@@ -399,9 +442,16 @@ mod tests {
         }
         "#;
 
-        let result: MapType = serde_json::from_str(record).unwrap();
-        assert_eq!(Type::Primitive(PrimitiveType::String), *result.key);
-        assert_eq!(Type::Primitive(PrimitiveType::Double), *result.value);
+        check_type_serde(
+            record,
+            Type::Map(MapType {
+                key_id: 4,
+                key: Box::new(Type::Primitive(PrimitiveType::String)),
+                value_id: 5,
+                value_required: false,
+                value: Box::new(Type::Primitive(PrimitiveType::Double)),
+            }),
+        );
     }
 
     #[test]
@@ -417,8 +467,15 @@ mod tests {
         }
         "#;
 
-        let result: MapType = serde_json::from_str(record).unwrap();
-        assert_eq!(Type::Primitive(PrimitiveType::Int), *result.key);
-        assert_eq!(Type::Primitive(PrimitiveType::String), *result.value);
+        check_type_serde(
+            record,
+            Type::Map(MapType {
+                key_id: 4,
+                key: Box::new(Type::Primitive(PrimitiveType::Int)),
+                value_id: 5,
+                value_required: false,
+                value: Box::new(Type::Primitive(PrimitiveType::String)),
+            }),
+        );
     }
 }
