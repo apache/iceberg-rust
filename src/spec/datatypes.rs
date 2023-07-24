@@ -79,7 +79,7 @@ pub enum PrimitiveType {
     Timestamp,
     /// Timestamp with timezone
     Timestamptz,
-    /// Arbitrary-length character sequences
+    /// Arbitrary-length character sequences encoded in utf-8
     String,
     /// Universally Unique Identifiers
     Uuid,
