@@ -18,7 +18,11 @@
 /*!
  * Data Types
 */
-use std::{collections::BTreeMap, fmt, ops::Index};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    ops::Index,
+};
 
 use serde::{
     de::{self, Error, IntoDeserializer, MapAccess, Visitor},
@@ -198,6 +202,9 @@ pub struct StructType {
     /// Lookup for index by field id
     #[serde(skip_serializing)]
     id_lookup: BTreeMap<i32, usize>,
+    /// Lookup for index by field name
+    #[serde(skip_serializing)]
+    name_lookup: HashMap<String, usize>,
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -241,7 +248,13 @@ impl<'de> Deserialize<'de> for StructType {
                     fields.ok_or_else(|| de::Error::missing_field("fields"))?;
                 let id_lookup =
                     BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
-                Ok(StructType { fields, id_lookup })
+                let name_lookup =
+                    HashMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.name.clone(), i)));
+                Ok(StructType {
+                    fields,
+                    id_lookup,
+                    name_lookup,
+                })
             }
         }
 
@@ -256,8 +269,8 @@ impl StructType {
         self.fields.get(*self.id_lookup.get(&id)?)
     }
     /// Get structfield with certain name
-    pub fn get_name(&self, name: &str) -> Option<&StructField> {
-        self.fields.iter().find(|field| field.name == name)
+    pub fn get_by_name(&self, name: &str) -> Option<&StructField> {
+        self.fields.get(*self.name_lookup.get(name)?)
     }
 }
 
@@ -403,6 +416,7 @@ mod tests {
                     write_default: None,
                 }],
                 id_lookup: BTreeMap::from([(1, 0)]),
+                name_lookup: HashMap::from([("id".to_string(), 0)]),
             }),
         )
     }
@@ -436,6 +450,7 @@ mod tests {
                     write_default: None,
                 }],
                 id_lookup: BTreeMap::from([(1, 0)]),
+                name_lookup: HashMap::from([("id".to_string(), 0)]),
             }),
         )
     }
@@ -487,6 +502,7 @@ mod tests {
                     },
                 ],
                 id_lookup: BTreeMap::from([(1, 0), (2, 1)]),
+                name_lookup: HashMap::from([("id".to_string(), 0), ("data".to_string(), 1)]),
             }),
         )
     }
