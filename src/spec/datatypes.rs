@@ -258,7 +258,7 @@ impl<'de> Deserialize<'de> for StructType {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &["type", "fields"];
+        const FIELDS: &[&str] = &["type", "fields"];
         deserializer.deserialize_struct("struct", FIELDS, StructTypeVisitor)
     }
 }
