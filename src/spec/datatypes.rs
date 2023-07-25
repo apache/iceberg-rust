@@ -246,15 +246,8 @@ impl<'de> Deserialize<'de> for StructType {
                 }
                 let fields: Vec<StructField> =
                     fields.ok_or_else(|| de::Error::missing_field("fields"))?;
-                let id_lookup =
-                    BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
-                let name_lookup =
-                    HashMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.name.clone(), i)));
-                Ok(StructType {
-                    fields,
-                    id_lookup,
-                    name_lookup,
-                })
+
+                Ok(StructType::new(fields))
             }
         }
 
@@ -264,6 +257,17 @@ impl<'de> Deserialize<'de> for StructType {
 }
 
 impl StructType {
+    ///
+    pub fn new(fields: Vec<StructField>) -> Self {
+        let id_lookup = BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
+        let name_lookup =
+            HashMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.name.clone(), i)));
+        Self {
+            fields,
+            id_lookup,
+            name_lookup,
+        }
+    }
     /// Get structfield with certain id
     pub fn get(&self, id: i32) -> Option<&StructField> {
         self.fields.get(*self.id_lookup.get(&id)?)
