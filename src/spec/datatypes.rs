@@ -19,7 +19,7 @@
  * Data Types
 */
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fmt,
     ops::Index,
 };
@@ -201,7 +201,7 @@ pub struct StructType {
     fields: Vec<StructField>,
     /// Lookup for index by field id
     #[serde(skip_serializing)]
-    id_lookup: BTreeMap<i32, usize>
+    id_lookup: BTreeMap<i32, usize>,
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -257,10 +257,7 @@ impl StructType {
     /// Creates a struct type with the given fields.
     pub fn new(fields: Vec<StructField>) -> Self {
         let id_lookup = BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
-        Self {
-            fields,
-            id_lookup
-        }
+        Self { fields, id_lookup }
     }
     /// Get structfield with certain id
     pub fn get(&self, id: i32) -> Option<&StructField> {
