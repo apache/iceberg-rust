@@ -16,5 +16,12 @@
 // under the License.
 
 //! Native Rust implementation of Apache Iceberg
-pub mod error;
+
+#![deny(missing_docs)]
+
+mod error;
+pub use error::Result;
+pub use error::Error;
+pub use error::ErrorKind;
+
 pub mod spec;
