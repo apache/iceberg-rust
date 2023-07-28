@@ -410,7 +410,6 @@ mod tests {
                     write_default: None,
                 }],
                 id_lookup: BTreeMap::from([(1, 0)]),
-                name_lookup: HashMap::from([("id".to_string(), 0)]),
             }),
         )
     }
@@ -444,7 +443,6 @@ mod tests {
                     write_default: None,
                 }],
                 id_lookup: BTreeMap::from([(1, 0)]),
-                name_lookup: HashMap::from([("id".to_string(), 0)]),
             }),
         )
     }
@@ -496,7 +494,6 @@ mod tests {
                     },
                 ],
                 id_lookup: BTreeMap::from([(1, 0), (2, 1)]),
-                name_lookup: HashMap::from([("id".to_string(), 0), ("data".to_string(), 1)]),
             }),
         )
     }
