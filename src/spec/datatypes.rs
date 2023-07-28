@@ -201,10 +201,7 @@ pub struct StructType {
     fields: Vec<StructField>,
     /// Lookup for index by field id
     #[serde(skip_serializing)]
-    id_lookup: BTreeMap<i32, usize>,
-    /// Lookup for index by field name
-    #[serde(skip_serializing)]
-    name_lookup: HashMap<String, usize>,
+    id_lookup: BTreeMap<i32, usize>
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -260,21 +257,14 @@ impl StructType {
     /// Creates a struct type with the given fields.
     pub fn new(fields: Vec<StructField>) -> Self {
         let id_lookup = BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
-        let name_lookup =
-            HashMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.name.clone(), i)));
         Self {
             fields,
-            id_lookup,
-            name_lookup,
+            id_lookup
         }
     }
     /// Get structfield with certain id
     pub fn get(&self, id: i32) -> Option<&StructField> {
         self.fields.get(*self.id_lookup.get(&id)?)
-    }
-    /// Get structfield with certain name
-    pub fn get_by_name(&self, name: &str) -> Option<&StructField> {
-        self.fields.get(*self.name_lookup.get(name)?)
     }
 }
 
