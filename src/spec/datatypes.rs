@@ -256,7 +256,7 @@ impl StructType {
         Self { fields, id_lookup }
     }
     /// Get structfield with certain id
-    pub fn get(&self, id: i32) -> Option<&StructField> {
+    pub fn field_by_id(&self, id: i32) -> Option<&StructField> {
         self.fields.get(*self.id_lookup.get(&id)?)
     }
 }
