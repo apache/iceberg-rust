@@ -18,10 +18,10 @@
 /*!
  * Data Types
 */
-use std::{fmt, ops::Index};
+use std::{collections::BTreeMap, fmt, ops::Index};
 
 use serde::{
-    de::{Error, IntoDeserializer},
+    de::{self, Error, IntoDeserializer, MapAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 
@@ -190,21 +190,74 @@ impl fmt::Display for PrimitiveType {
 }
 
 /// DataType for a specific struct
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields
     fields: Vec<StructField>,
+    /// Lookup for index by field id
+    #[serde(skip_serializing)]
+    id_lookup: BTreeMap<i32, usize>,
+}
+
+impl<'de> Deserialize<'de> for StructType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Type,
+            Fields,
+        }
+
+        struct StructTypeVisitor;
+
+        impl<'de> Visitor<'de> for StructTypeVisitor {
+            type Value = StructType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<StructType, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut fields = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Type => (),
+                        Field::Fields => {
+                            if fields.is_some() {
+                                return Err(de::Error::duplicate_field("fields"));
+                            }
+                            fields = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let fields: Vec<StructField> =
+                    fields.ok_or_else(|| de::Error::missing_field("fields"))?;
+
+                Ok(StructType::new(fields))
+            }
+        }
+
+        const FIELDS: &[&str] = &["type", "fields"];
+        deserializer.deserialize_struct("struct", FIELDS, StructTypeVisitor)
+    }
 }
 
 impl StructType {
-    /// Get structfield with certain id
-    pub fn get(&self, id: usize) -> Option<&StructField> {
-        self.fields.iter().find(|field| field.id as usize == id)
+    /// Creates a struct type with the given fields.
+    pub fn new(fields: Vec<StructField>) -> Self {
+        let id_lookup = BTreeMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
+        Self { fields, id_lookup }
     }
-    /// Get structfield with certain name
-    pub fn get_name(&self, name: &str) -> Option<&StructField> {
-        self.fields.iter().find(|field| field.name == name)
+    /// Get structfield with certain id
+    pub fn field_by_id(&self, id: i32) -> Option<&StructField> {
+        self.fields.get(*self.id_lookup.get(&id)?)
     }
 }
 
@@ -349,6 +402,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
+                id_lookup: BTreeMap::from([(1, 0)]),
             }),
         )
     }
@@ -381,6 +435,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
+                id_lookup: BTreeMap::from([(1, 0)]),
             }),
         )
     }
@@ -431,6 +486,7 @@ mod tests {
                         write_default: None,
                     },
                 ],
+                id_lookup: BTreeMap::from([(1, 0), (2, 1)]),
             }),
         )
     }
