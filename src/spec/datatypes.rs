@@ -18,11 +18,7 @@
 /*!
  * Data Types
 */
-use std::{
-    collections::BTreeMap,
-    fmt,
-    ops::Index,
-};
+use std::{collections::BTreeMap, fmt, ops::Index};
 
 use serde::{
     de::{self, Error, IntoDeserializer, MapAccess, Visitor},
