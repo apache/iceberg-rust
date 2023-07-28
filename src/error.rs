@@ -89,13 +89,13 @@ impl Display for ErrorKind {
 ///
 /// ```shell
 /// Unexpected => something wrong happened
-/// 
+///
 /// Context:
 ///    path: /path/to/file
 ///    called: send_async
-/// 
+///
 /// Source: networking error
-/// 
+///
 /// Backtrace:
 ///    0: iceberg::error::Error::new
 ///              at ./src/error.rs:197:24
@@ -235,7 +235,6 @@ impl Error {
         self
     }
 
-
     /// Return error's kind.
     ///
     /// Users can use this method to check error's kind and take actions.
@@ -262,10 +261,10 @@ mod tests {
             ErrorKind::Unexpected,
             "something wrong happened".to_string(),
         )
-            .with_context("path", "/path/to/file".to_string())
-            .with_context("called", "send_async".to_string())
-            .with_source(anyhow!("networking error")).with_backtrace(Backtrace::disabled())
-
+        .with_context("path", "/path/to/file".to_string())
+        .with_context("called", "send_async".to_string())
+        .with_source(anyhow!("networking error"))
+        .with_backtrace(Backtrace::disabled())
     }
 
     fn generate_error_with_backtrace_enabled() -> Error {
@@ -273,10 +272,10 @@ mod tests {
             ErrorKind::Unexpected,
             "something wrong happened".to_string(),
         )
-            .with_context("path", "/path/to/file".to_string())
-            .with_context("called", "send_async".to_string())
-            .with_source(anyhow!("networking error")).with_backtrace(Backtrace::force_capture())
-
+        .with_context("path", "/path/to/file".to_string())
+        .with_context("called", "send_async".to_string())
+        .with_source(anyhow!("networking error"))
+        .with_backtrace(Backtrace::force_capture())
     }
 
     #[test]
@@ -329,9 +328,6 @@ Source: networking error
 Backtrace:
    0: iceberg::error::tests::generate_error_with_backtrace_enabled
 "#;
-        assert_eq!(
-            &s[..expected.len()],
-            expected,
-        )
+        assert_eq!(&s[..expected.len()], expected,)
     }
 }
