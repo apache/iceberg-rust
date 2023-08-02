@@ -250,10 +250,14 @@ macro_rules! define_from_err {
                 Self::new($error_kind, $msg).with_source(v)
             }
         }
-    }
+    };
 }
 
-define_from_err!(std::str::Utf8Error, ErrorKind::Unexpected, "handling invalid utf-8 characters");
+define_from_err!(
+    std::str::Utf8Error,
+    ErrorKind::Unexpected,
+    "handling invalid utf-8 characters"
+);
 
 #[cfg(test)]
 mod tests {
