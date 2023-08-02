@@ -111,12 +111,16 @@ impl Deref for Struct {
 
 impl Struct {
     /// Get reference to partition value
-    pub fn get(&self, name: &str) -> Option<&Option<Value>> {
-        self.fields.get(*self.lookup.get(name)?)
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.fields
+            .get(*self.lookup.get(name)?)
+            .and_then(|x| x.as_ref())
     }
     /// Get mutable reference to partition value
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Option<Value>> {
-        self.fields.get_mut(*self.lookup.get(name)?)
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+        self.fields
+            .get_mut(*self.lookup.get(name)?)
+            .and_then(|x| x.as_mut())
     }
 }
 
