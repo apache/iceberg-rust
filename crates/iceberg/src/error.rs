@@ -44,6 +44,14 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+    /// Could not cast a byte slice to appropriate array
+    ///
+    /// This error occurs when converting Bytes to iceberg values.
+    ByteArrayConversionFailed,
+    /// Could not interpret bytes as value
+    ///
+    /// This error occurs when the value can't be represented as bytes
+    ValueByteConversionFailed,
 }
 
 impl ErrorKind {
@@ -59,6 +67,8 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
+            ErrorKind::ByteArrayConversionFailed => "ByteArrayConversionFailed",
+            ErrorKind::ValueByteConversionFailed => "ValueByteConversionFailed",
         }
     }
 }
@@ -257,6 +267,12 @@ define_from_err!(
     std::str::Utf8Error,
     ErrorKind::Unexpected,
     "handling invalid utf-8 characters"
+);
+
+define_from_err!(
+    std::array::TryFromSliceError,
+    ErrorKind::DataInvalid,
+    "failed to convert byte slive to array"
 );
 
 #[cfg(test)]
