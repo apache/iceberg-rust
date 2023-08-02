@@ -243,11 +243,17 @@ impl Error {
     }
 }
 
-impl From<std::str::Utf8Error> for Error {
-    fn from(v: std::str::Utf8Error) -> Self {
-        Self::new(ErrorKind::Unexpected, "handling invalid utf-8 characters").with_source(v)
+macro_rules! define_from_err {
+    ($source: path, $error_kind: path, $msg: expr) => {
+        impl std::convert::From<$source> for crate::error::Error {
+            fn from(v: $source) -> Self {
+                Self::new($error_kind, $msg).with_source(v)
+            }
+        }
     }
 }
+
+define_from_err!(std::str::Utf8Error, ErrorKind::Unexpected, "handling invalid utf-8 characters");
 
 #[cfg(test)]
 mod tests {
