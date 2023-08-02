@@ -287,7 +287,7 @@ mod tests {
 
         let raw_schema = r#"{"type": "boolean"}"#;
 
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
@@ -309,7 +309,7 @@ mod tests {
 
         let raw_schema = r#"{"type": "int"}"#;
 
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
@@ -331,7 +331,7 @@ mod tests {
 
         let raw_schema = r#"{"type": "float"}"#;
 
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
@@ -353,7 +353,7 @@ mod tests {
 
         let raw_schema = r#"{"type": "string"}"#;
 
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
@@ -382,7 +382,7 @@ mod tests {
                     "default": null
                 }]}"#;
 
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
