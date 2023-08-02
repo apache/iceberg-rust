@@ -18,6 +18,7 @@
 /*!
  * Data Types
 */
+use std::cell::OnceCell;
 use std::{collections::HashMap, fmt, ops::Index};
 
 use serde::{
@@ -197,7 +198,7 @@ pub struct StructType {
     fields: Vec<StructField>,
     /// Lookup for index by field id
     #[serde(skip_serializing)]
-    id_lookup: HashMap<i32, usize>,
+    id_lookup: OnceCell<HashMap<i32, usize>>,
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -252,12 +253,23 @@ impl<'de> Deserialize<'de> for StructType {
 impl StructType {
     /// Creates a struct type with the given fields.
     pub fn new(fields: Vec<StructField>) -> Self {
-        let id_lookup = HashMap::from_iter(fields.iter().enumerate().map(|(i, x)| (x.id, i)));
-        Self { fields, id_lookup }
+        Self {
+            fields,
+            id_lookup: OnceCell::default(),
+        }
     }
-    /// Get structfield with certain id
+    /// Get struct field with certain id
     pub fn field_by_id(&self, id: i32) -> Option<&StructField> {
-        self.fields.get(*self.id_lookup.get(&id)?)
+        self.field_id_to_index(id).map(|idx| &self.fields[idx])
+    }
+
+    fn field_id_to_index(&self, field_id: i32) -> Option<usize> {
+        self.id_lookup
+            .get_or_init(|| {
+                HashMap::from_iter(self.fields.iter().enumerate().map(|(i, x)| (x.id, i)))
+            })
+            .get(&field_id)
+            .copied()
     }
 }
 
@@ -303,6 +315,52 @@ pub struct StructField {
     /// Used to populate the field’s value for any records written after the field was added to the schema, if the writer does not supply the field’s value
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<String>,
+}
+
+impl StructField {
+    /// Construct a required field.
+    pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            required: true,
+            field_type,
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        }
+    }
+
+    /// Construct an optional field.
+    pub fn optional(id: i32, name: impl ToString, field_type: Type) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            required: false,
+            field_type,
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        }
+    }
+
+    /// Set the field's doc.
+    pub fn with_doc(mut self, doc: impl ToString) -> Self {
+        self.doc = Some(doc.to_string());
+        self
+    }
+
+    /// Set the field's initial default value.
+    pub fn with_initial_default(mut self, value: impl ToString) -> Self {
+        self.initial_default = Some(value.to_string());
+        self
+    }
+
+    /// Set the field's initial default value.
+    pub fn with_write_default(mut self, value: impl ToString) -> Self {
+        self.write_default = Some(value.to_string());
+        self
+    }
 }
 
 impl fmt::Display for StructField {
@@ -402,7 +460,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
-                id_lookup: HashMap::from([(1, 0)]),
+                id_lookup: HashMap::from([(1, 0)]).into(),
             }),
         )
     }
@@ -435,7 +493,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
-                id_lookup: HashMap::from([(1, 0)]),
+                id_lookup: HashMap::from([(1, 0)]).into(),
             }),
         )
     }
@@ -486,7 +544,7 @@ mod tests {
                         write_default: None,
                     },
                 ],
-                id_lookup: HashMap::from([(1, 0), (2, 1)]),
+                id_lookup: HashMap::from([(1, 0), (2, 1)]).into(),
             }),
         )
     }

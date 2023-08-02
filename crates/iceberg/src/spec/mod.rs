@@ -18,3 +18,4 @@
 //! Spec for Iceberg.
 
 pub mod datatypes;
+pub mod schema;
