@@ -326,7 +326,7 @@ Context:
 Source: networking error
 
 Backtrace:
-   0: iceberg::error::tests::generate_error_with_backtrace_enabled
+   0: std::backtrace_rs::backtrace::libunwind::trace
 "#;
         assert_eq!(&s[..expected.len()], expected,)
     }

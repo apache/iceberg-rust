@@ -191,7 +191,7 @@ impl fmt::Display for PrimitiveType {
 }
 
 /// DataType for a specific struct
-#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields
@@ -272,6 +272,14 @@ impl StructType {
             .copied()
     }
 }
+
+impl PartialEq for StructType {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+    }
+}
+
+impl Eq for StructType {}
 
 impl Index<usize> for StructType {
     type Output = StructField;
@@ -460,7 +468,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
-                id_lookup: HashMap::from([(1, 0)]).into(),
+                id_lookup: OnceCell::default(),
             }),
         )
     }
@@ -493,7 +501,7 @@ mod tests {
                     initial_default: None,
                     write_default: None,
                 }],
-                id_lookup: HashMap::from([(1, 0)]).into(),
+                id_lookup: OnceCell::default(),
             }),
         )
     }
