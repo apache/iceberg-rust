@@ -1,0 +1,7 @@
+/target/
+**/*.rs.bk
+Cargo.lock
+
+.travis.yml
+git_push.sh
+rest-catalog-open-api.yaml
