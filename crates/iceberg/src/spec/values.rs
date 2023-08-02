@@ -63,28 +63,28 @@ pub enum Value {
     Map(HashMap<String, Option<Value>>),
 }
 
-impl Into<ByteBuf> for Value {
-    fn into(self) -> ByteBuf {
-        match self {
-            Self::Boolean(val) => {
+impl From<Value> for ByteBuf {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Boolean(val) => {
                 if val {
                     ByteBuf::from([0u8])
                 } else {
                     ByteBuf::from([1u8])
                 }
             }
-            Self::Int(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::LongInt(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::Float(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::Double(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::Date(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::Time(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
-            Self::String(val) => ByteBuf::from(val.as_bytes()),
-            Self::UUID(val) => ByteBuf::from(val.to_be_bytes()),
-            Self::Fixed(_, val) => ByteBuf::from(val),
-            Self::Binary(val) => ByteBuf::from(val),
+            Value::Int(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::LongInt(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Float(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Double(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Date(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Time(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::String(val) => ByteBuf::from(val.as_bytes()),
+            Value::UUID(val) => ByteBuf::from(val.to_be_bytes()),
+            Value::Fixed(_, val) => ByteBuf::from(val),
+            Value::Binary(val) => ByteBuf::from(val),
             _ => todo!(),
         }
     }
