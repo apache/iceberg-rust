@@ -21,7 +21,7 @@
 
 use std::{any::Any, collections::HashMap, fmt, ops::Deref};
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use rust_decimal::Decimal;
 use serde::{
     de::{MapAccess, Visitor},
@@ -53,9 +53,9 @@ pub enum Value {
     /// Stores microseconds from midnight in an 8-byte little-endian long
     Time(#[serde(with = "time")] NaiveTime),
     /// Stores microseconds from 1970-01-01 00:00:00.000000 in an 8-byte little-endian long
-    Timestamp(i64),
+    Timestamp(#[serde(with = "timestamp")] NaiveDateTime),
     /// Stores microseconds from 1970-01-01 00:00:00.000000 in an 8-byte little-endian long
-    TimestampTZ(i64),
+    TimestampTZ(#[serde(with = "timestamp")] NaiveDateTime),
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
@@ -100,8 +100,12 @@ impl TryFrom<Value> for ByteBuf {
             Value::Time(val) => Ok(ByteBuf::from(
                 time::time_to_microseconds(&val)?.to_le_bytes(),
             )),
-            Value::Timestamp(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::TimestampTZ(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Value::Timestamp(val) => Ok(ByteBuf::from(
+                timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
+            )),
+            Value::TimestampTZ(val) => Ok(ByteBuf::from(
+                timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
+            )),
             Value::String(val) => Ok(ByteBuf::from(val.as_bytes())),
             Value::UUID(val) => Ok(ByteBuf::from(val.to_be_bytes())),
             Value::Fixed(_, val) => Ok(ByteBuf::from(val)),
@@ -233,12 +237,12 @@ impl Value {
                 PrimitiveType::Time => Ok(Value::Time(time::microseconds_to_time(
                     i64::from_le_bytes(bytes.try_into()?),
                 )?)),
-                PrimitiveType::Timestamp => {
-                    Ok(Value::Timestamp(i64::from_le_bytes(bytes.try_into()?)))
-                }
-                PrimitiveType::Timestamptz => {
-                    Ok(Value::TimestampTZ(i64::from_le_bytes(bytes.try_into()?)))
-                }
+                PrimitiveType::Timestamp => Ok(Value::Timestamp(
+                    timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
+                )),
+                PrimitiveType::Timestamptz => Ok(Value::TimestampTZ(
+                    timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
+                )),
                 PrimitiveType::String => Ok(Value::String(std::str::from_utf8(bytes)?.to_string())),
                 PrimitiveType::Uuid => Ok(Value::UUID(i128::from_be_bytes(bytes.try_into()?))),
                 PrimitiveType::Fixed(len) => Ok(Value::Fixed(*len as usize, Vec::from(bytes))),
@@ -388,6 +392,52 @@ mod time {
                 "Failed to convert microseconds to time",
             ),
         )
+    }
+}
+
+mod timestamp {
+    use chrono::NaiveDateTime;
+    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::Error;
+
+    pub fn serialize<S>(value: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let micros =
+            datetime_to_microseconds(value).map_err(|err| ser::Error::custom(err.to_string()))?;
+        micros.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let micros = i64::deserialize(deserializer)?;
+
+        Ok(microseconds_to_datetime(micros).map_err(|err| de::Error::custom(err.to_string()))?)
+    }
+
+    pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> Result<i64, Error> {
+        time.signed_duration_since(NaiveDateTime::from_timestamp_opt(0, 0).ok_or(Error::new(
+            crate::ErrorKind::DataInvalid,
+            "Failed to get time from midnight",
+        ))?)
+        .num_microseconds()
+        .ok_or(Error::new(
+            crate::ErrorKind::DataInvalid,
+            "Failed to convert time to microseconds",
+        ))
+    }
+
+    pub(crate) fn microseconds_to_datetime(micros: i64) -> Result<NaiveDateTime, Error> {
+        let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
+
+        NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1000).ok_or(Error::new(
+            crate::ErrorKind::DataInvalid,
+            "Failed to convert microseconds to time",
+        ))
     }
 }
 
