@@ -42,7 +42,7 @@ pub enum Value {
     /// Stored as 4-byte little-endian
     Int(i32),
     /// Stored as 8-byte little-endian
-    LongInt(i64),
+    Long(i64),
     /// Stored as 4-byte little-endian
     Float(f32),
     /// Stored as 8-byte little-endian
