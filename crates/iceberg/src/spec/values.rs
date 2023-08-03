@@ -496,7 +496,7 @@ mod tests {
     pub fn boolean() {
         let input = Value::Boolean(true);
 
-        let raw_schema = r#"{"type": "boolean"}"#;
+        let raw_schema = r#""boolean""#;
 
         let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
@@ -518,7 +518,7 @@ mod tests {
     pub fn int() {
         let input = Value::Int(42);
 
-        let raw_schema = r#"{"type": "int"}"#;
+        let raw_schema = r#""int""#;
 
         let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
@@ -540,7 +540,7 @@ mod tests {
     pub fn float() {
         let input = Value::Float(OrderedFloat(42.0));
 
-        let raw_schema = r#"{"type": "float"}"#;
+        let raw_schema = r#""float""#;
 
         let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
@@ -562,7 +562,7 @@ mod tests {
     pub fn string() {
         let input = Value::String("test".to_string());
 
-        let raw_schema = r#"{"type": "string"}"#;
+        let raw_schema = r#""string""#;
 
         let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
