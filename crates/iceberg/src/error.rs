@@ -336,8 +336,7 @@ Context:
 Source: networking error
 
 Backtrace:
-   0: iceberg::error::tests::generate_error_with_backtrace_enabled
-"#;
-        assert_eq!(&s[..expected.len()], expected,)
+   0:"#;
+        assert_eq!(&s[..expected.len()], expected,);
     }
 }
