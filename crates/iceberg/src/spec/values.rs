@@ -54,9 +54,9 @@ pub enum Value {
     Date(#[serde(with = "date")] NaiveDate),
     /// Stores microseconds from midnight in an 8-byte little-endian long
     Time(#[serde(with = "time")] NaiveTime),
-    /// Stores microseconds from 1970-01-01 00:00:00.000000 in an 8-byte little-endian long
+    /// Timestamp without timezone
     Timestamp(#[serde(with = "timestamp")] NaiveDateTime),
-    /// Stores microseconds from 1970-01-01 00:00:00.000000 in an 8-byte little-endian long
+    /// Timestamp with timezone
     TimestampTZ(#[serde(with = "timestamptz")] DateTime<Utc>),
     /// UTF-8 bytes (without length)
     String(String),
