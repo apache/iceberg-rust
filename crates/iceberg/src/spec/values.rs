@@ -21,7 +21,7 @@
 
 use std::{any::Any, collections::HashMap, fmt, ops::Deref};
 
-use chrono::NaiveTime;
+use chrono::{NaiveDate, NaiveTime};
 use rust_decimal::Decimal;
 use serde::{
     de::{MapAccess, Visitor},
@@ -49,7 +49,7 @@ pub enum Value {
     /// Stored as 8-byte little-endian
     Double(f64),
     /// Stores days from the 1970-01-01 in an 4-byte little-endian int
-    Date(i32),
+    Date(#[serde(with = "date")] NaiveDate),
     /// Stores microseconds from midnight in an 8-byte little-endian long
     Time(#[serde(with = "time")] NaiveTime),
     /// Stores microseconds from 1970-01-01 00:00:00.000000 in an 8-byte little-endian long
@@ -96,7 +96,7 @@ impl TryFrom<Value> for ByteBuf {
             Value::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
             Value::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
             Value::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::Date(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Value::Date(val) => Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes())),
             Value::Time(val) => Ok(ByteBuf::from(
                 time::time_to_microseconds(&val)?.to_le_bytes(),
             )),
@@ -227,7 +227,9 @@ impl Value {
                 PrimitiveType::Long => Ok(Value::Long(i64::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Float => Ok(Value::Float(f32::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Double => Ok(Value::Double(f64::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Date => Ok(Value::Date(i32::from_le_bytes(bytes.try_into()?))),
+                PrimitiveType::Date => Ok(Value::Date(date::days_to_date(i32::from_le_bytes(
+                    bytes.try_into()?,
+                ))?)),
                 PrimitiveType::Time => Ok(Value::Time(time::microseconds_to_time(
                     i64::from_le_bytes(bytes.try_into()?),
                 )?)),
@@ -296,6 +298,46 @@ impl Value {
             Value::Decimal(any) => Box::new(any),
             _ => unimplemented!(),
         }
+    }
+}
+
+mod date {
+    use chrono::NaiveDate;
+    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::Error;
+
+    pub fn serialize<S>(value: &NaiveDate, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let days = date_to_days(value).map_err(|err| ser::Error::custom(err.to_string()))?;
+        days.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDate, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let days = i32::deserialize(deserializer)?;
+
+        Ok(days_to_date(days).map_err(|err| de::Error::custom(err.to_string()))?)
+    }
+
+    pub(crate) fn date_to_days(date: &NaiveDate) -> Result<i32, Error> {
+        Ok(date
+            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 0, 0).ok_or(Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Failed to get time from midnight",
+            ))?)
+            .num_days() as i32)
+    }
+
+    pub(crate) fn days_to_date(days: i32) -> Result<NaiveDate, Error> {
+        NaiveDate::from_num_days_from_ce_opt(days).ok_or(Error::new(
+            crate::ErrorKind::DataInvalid,
+            "Failed to convert microseconds to time",
+        ))
     }
 }
 
