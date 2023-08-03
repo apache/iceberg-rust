@@ -328,7 +328,7 @@ mod float {
     where
         D: Deserializer<'de>,
     {
-        f32::deserialize(deserializer).map(|x| OrderedFloat(x))
+        f32::deserialize(deserializer).map(OrderedFloat)
     }
 }
 
@@ -347,7 +347,7 @@ mod double {
     where
         D: Deserializer<'de>,
     {
-        f64::deserialize(deserializer).map(|x| OrderedFloat(x))
+        f64::deserialize(deserializer).map(OrderedFloat)
     }
 }
 
