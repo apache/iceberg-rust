@@ -325,7 +325,7 @@ mod date {
     {
         let days = i32::deserialize(deserializer)?;
 
-        Ok(days_to_date(days).map_err(|err| de::Error::custom(err.to_string()))?)
+        days_to_date(days).map_err(|err| de::Error::custom(err.to_string()))
     }
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> Result<i32, Error> {
@@ -366,7 +366,7 @@ mod time {
     {
         let micros = i64::deserialize(deserializer)?;
 
-        Ok(microseconds_to_time(micros).map_err(|err| de::Error::custom(err.to_string()))?)
+        microseconds_to_time(micros).map_err(|err| de::Error::custom(err.to_string()))
     }
 
     pub(crate) fn time_to_microseconds(time: &NaiveTime) -> Result<i64, Error> {
@@ -416,7 +416,7 @@ mod timestamp {
     {
         let micros = i64::deserialize(deserializer)?;
 
-        Ok(microseconds_to_datetime(micros).map_err(|err| de::Error::custom(err.to_string()))?)
+        microseconds_to_datetime(micros).map_err(|err| de::Error::custom(err.to_string()))
     }
 
     pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> Result<i64, Error> {
