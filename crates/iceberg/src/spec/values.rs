@@ -22,6 +22,7 @@
 use std::{any::Any, collections::HashMap, fmt, ops::Deref};
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
 use serde::{
     de::{MapAccess, Visitor},
@@ -46,9 +47,9 @@ pub enum Value {
     /// Stored as 8-byte little-endian
     Long(i64),
     /// Stored as 4-byte little-endian
-    Float(f32),
+    Float(#[serde(with = "float")] OrderedFloat<f32>),
     /// Stored as 8-byte little-endian
-    Double(f64),
+    Double(#[serde(with = "double")] OrderedFloat<f64>),
     /// Stores days from the 1970-01-01 in an 4-byte little-endian int
     Date(#[serde(with = "date")] NaiveDate),
     /// Stores microseconds from midnight in an 8-byte little-endian long
@@ -230,8 +231,12 @@ impl Value {
                 }
                 PrimitiveType::Int => Ok(Value::Int(i32::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Long => Ok(Value::Long(i64::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Float => Ok(Value::Float(f32::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Double => Ok(Value::Double(f64::from_le_bytes(bytes.try_into()?))),
+                PrimitiveType::Float => Ok(Value::Float(OrderedFloat(f32::from_le_bytes(
+                    bytes.try_into()?,
+                )))),
+                PrimitiveType::Double => Ok(Value::Double(OrderedFloat(f64::from_le_bytes(
+                    bytes.try_into()?,
+                )))),
                 PrimitiveType::Date => Ok(Value::Date(date::days_to_date(i32::from_le_bytes(
                     bytes.try_into()?,
                 ))?)),
@@ -305,6 +310,44 @@ impl Value {
             Value::Decimal(any) => Box::new(any),
             _ => unimplemented!(),
         }
+    }
+}
+
+mod float {
+    use ordered_float::OrderedFloat;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &OrderedFloat<f32>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<OrderedFloat<f32>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        f32::deserialize(deserializer).map(|x| OrderedFloat(x))
+    }
+}
+
+mod double {
+    use ordered_float::OrderedFloat;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &OrderedFloat<f64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<OrderedFloat<f64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        f64::deserialize(deserializer).map(|x| OrderedFloat(x))
     }
 }
 
@@ -495,7 +538,7 @@ mod tests {
 
     #[test]
     pub fn float() {
-        let input = Value::Float(42.0);
+        let input = Value::Float(OrderedFloat(42.0));
 
         let raw_schema = r#"{"type": "float"}"#;
 
