@@ -29,6 +29,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 use serde_bytes::ByteBuf;
+use uuid::Uuid;
 
 use crate::Error;
 
@@ -59,7 +60,7 @@ pub enum Value {
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
-    UUID(i128),
+    UUID(Uuid),
     /// Binary value
     Fixed(usize, Vec<u8>),
     /// Binary value (without length)
@@ -107,7 +108,7 @@ impl TryFrom<Value> for ByteBuf {
                 timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
             )),
             Value::String(val) => Ok(ByteBuf::from(val.as_bytes())),
-            Value::UUID(val) => Ok(ByteBuf::from(val.to_be_bytes())),
+            Value::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
             Value::Fixed(_, val) => Ok(ByteBuf::from(val)),
             Value::Binary(val) => Ok(ByteBuf::from(val)),
             _ => todo!(),
@@ -244,7 +245,9 @@ impl Value {
                     timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
                 )),
                 PrimitiveType::String => Ok(Value::String(std::str::from_utf8(bytes)?.to_string())),
-                PrimitiveType::Uuid => Ok(Value::UUID(i128::from_be_bytes(bytes.try_into()?))),
+                PrimitiveType::Uuid => Ok(Value::UUID(Uuid::from_u128(u128::from_be_bytes(
+                    bytes.try_into()?,
+                )))),
                 PrimitiveType::Fixed(len) => Ok(Value::Fixed(*len as usize, Vec::from(bytes))),
                 PrimitiveType::Binary => Ok(Value::Binary(Vec::from(bytes))),
                 _ => Err(Error::new(
