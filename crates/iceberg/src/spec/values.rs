@@ -91,7 +91,7 @@ impl From<Value> for ByteBuf {
                 }
             }
             Value::Int(val) => ByteBuf::from(val.to_le_bytes()),
-            Value::LongInt(val) => ByteBuf::from(val.to_le_bytes()),
+            Value::Long(val) => ByteBuf::from(val.to_le_bytes()),
             Value::Float(val) => ByteBuf::from(val.to_le_bytes()),
             Value::Double(val) => ByteBuf::from(val.to_le_bytes()),
             Value::Date(val) => ByteBuf::from(val.to_le_bytes()),
@@ -220,7 +220,7 @@ impl Value {
                     }
                 }
                 PrimitiveType::Int => Ok(Value::Int(i32::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Long => Ok(Value::LongInt(i64::from_le_bytes(bytes.try_into()?))),
+                PrimitiveType::Long => Ok(Value::Long(i64::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Float => Ok(Value::Float(f32::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Double => Ok(Value::Double(f64::from_le_bytes(bytes.try_into()?))),
                 PrimitiveType::Date => Ok(Value::Date(i32::from_le_bytes(bytes.try_into()?))),
@@ -236,12 +236,12 @@ impl Value {
                 PrimitiveType::Fixed(len) => Ok(Value::Fixed(*len as usize, Vec::from(bytes))),
                 PrimitiveType::Binary => Ok(Value::Binary(Vec::from(bytes))),
                 _ => Err(Error::new(
-                    crate::ErrorKind::ValueByteConversionFailed,
+                    crate::ErrorKind::DataInvalid,
                     "Converting bytes to decimal is not supported.",
                 )),
             },
             _ => Err(Error::new(
-                crate::ErrorKind::ValueByteConversionFailed,
+                crate::ErrorKind::DataInvalid,
                 "Converting bytes to non-primitive types is not supported.",
             )),
         }
@@ -252,7 +252,7 @@ impl Value {
         match self {
             Value::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
             Value::Int(_) => Type::Primitive(PrimitiveType::Int),
-            Value::LongInt(_) => Type::Primitive(PrimitiveType::Long),
+            Value::Long(_) => Type::Primitive(PrimitiveType::Long),
             Value::Float(_) => Type::Primitive(PrimitiveType::Float),
             Value::Double(_) => Type::Primitive(PrimitiveType::Double),
             Value::Date(_) => Type::Primitive(PrimitiveType::Date),
@@ -276,7 +276,7 @@ impl Value {
         match self {
             Value::Boolean(any) => Box::new(any),
             Value::Int(any) => Box::new(any),
-            Value::LongInt(any) => Box::new(any),
+            Value::Long(any) => Box::new(any),
             Value::Float(any) => Box::new(any),
             Value::Double(any) => Box::new(any),
             Value::Date(any) => Box::new(any),
