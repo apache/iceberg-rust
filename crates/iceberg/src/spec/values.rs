@@ -130,12 +130,14 @@ impl From<Literal> for JsonValue {
                 PrimitiveLiteral::Boolean(val) => JsonValue::Bool(val),
                 PrimitiveLiteral::Int(val) => JsonValue::Number(val.into()),
                 PrimitiveLiteral::Long(val) => JsonValue::Number(val.into()),
-                PrimitiveLiteral::Float(val) => {
-                    JsonValue::Number(Number::from_f64(val.0 as f64).unwrap())
-                }
-                PrimitiveLiteral::Double(val) => {
-                    JsonValue::Number(Number::from_f64(val.0).unwrap())
-                }
+                PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
+                    Some(number) => JsonValue::Number(number),
+                    None => JsonValue::Null,
+                },
+                PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
+                    Some(number) => JsonValue::Number(number),
+                    None => JsonValue::Null,
+                },
                 PrimitiveLiteral::Date(val) => JsonValue::String(val.to_string()),
                 PrimitiveLiteral::Time(val) => JsonValue::String(val.to_string()),
                 PrimitiveLiteral::Timestamp(val) => {
