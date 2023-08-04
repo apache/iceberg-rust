@@ -85,44 +85,40 @@ pub enum Literal {
     Map(HashMap<String, Option<Literal>>),
 }
 
-impl TryFrom<Literal> for ByteBuf {
-    type Error = Error;
-    fn try_from(value: Literal) -> Result<Self, Self::Error> {
+impl From<Literal> for ByteBuf {
+    fn from(value: Literal) -> Self {
         match value {
             Literal::Primitive(prim) => match prim {
                 PrimitiveLiteral::Boolean(val) => {
                     if val {
-                        Ok(ByteBuf::from([0u8]))
+                        ByteBuf::from([0u8])
                     } else {
-                        Ok(ByteBuf::from([1u8]))
+                        ByteBuf::from([1u8])
                     }
                 }
-                PrimitiveLiteral::Int(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-                PrimitiveLiteral::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-                PrimitiveLiteral::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-                PrimitiveLiteral::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+                PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
                 PrimitiveLiteral::Date(val) => {
-                    Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes()))
+                    ByteBuf::from(date::date_to_days(&val).to_le_bytes())
                 }
-                PrimitiveLiteral::Time(val) => Ok(ByteBuf::from(
-                    time::time_to_microseconds(&val)?.to_le_bytes(),
-                )),
-                PrimitiveLiteral::Timestamp(val) => Ok(ByteBuf::from(
-                    timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
-                )),
-                PrimitiveLiteral::TimestampTZ(val) => Ok(ByteBuf::from(
-                    timestamptz::datetimetz_to_microseconds(&val)?.to_le_bytes(),
-                )),
-                PrimitiveLiteral::String(val) => Ok(ByteBuf::from(val.as_bytes())),
-                PrimitiveLiteral::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
-                PrimitiveLiteral::Fixed(val) => Ok(ByteBuf::from(val)),
-                PrimitiveLiteral::Binary(val) => Ok(ByteBuf::from(val)),
+                PrimitiveLiteral::Time(val) => {
+                    ByteBuf::from(time::time_to_microseconds(&val).to_le_bytes())
+                }
+                PrimitiveLiteral::Timestamp(val) => {
+                    ByteBuf::from(timestamp::datetime_to_microseconds(&val).to_le_bytes())
+                }
+                PrimitiveLiteral::TimestampTZ(val) => {
+                    ByteBuf::from(timestamptz::datetimetz_to_microseconds(&val).to_le_bytes())
+                }
+                PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
+                PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
+                PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
+                PrimitiveLiteral::Binary(val) => ByteBuf::from(val),
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
-            _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Complex types can't be converted to bytes",
-            )),
+            _ => unimplemented!(),
         }
     }
 }
@@ -380,13 +376,9 @@ mod date {
 
     use crate::Error;
 
-    pub(crate) fn date_to_days(date: &NaiveDate) -> Result<i32, Error> {
-        Ok(date
-            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 0, 0).ok_or(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Failed to get time from midnight",
-            ))?)
-            .num_days() as i32)
+    pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
+        date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 0, 0).unwrap())
+            .num_days() as i32
     }
 
     pub(crate) fn days_to_date(days: i32) -> Result<NaiveDate, Error> {
@@ -402,18 +394,10 @@ mod time {
 
     use crate::Error;
 
-    pub(crate) fn time_to_microseconds(time: &NaiveTime) -> Result<i64, Error> {
-        time.signed_duration_since(NaiveTime::from_num_seconds_from_midnight_opt(0, 0).ok_or(
-            Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Failed to get time from midnight",
-            ),
-        )?)
-        .num_microseconds()
-        .ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to convert time to microseconds",
-        ))
+    pub(crate) fn time_to_microseconds(time: &NaiveTime) -> i64 {
+        time.signed_duration_since(NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap())
+            .num_microseconds()
+            .unwrap()
     }
 
     pub(crate) fn microseconds_to_time(micros: i64) -> Result<NaiveTime, Error> {
@@ -433,16 +417,8 @@ mod timestamp {
 
     use crate::Error;
 
-    pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> Result<i64, Error> {
-        time.signed_duration_since(NaiveDateTime::from_timestamp_opt(0, 0).ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to get time from midnight",
-        ))?)
-        .num_microseconds()
-        .ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to convert time to microseconds",
-        ))
+    pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> i64 {
+        time.timestamp_micros()
     }
 
     pub(crate) fn microseconds_to_datetime(micros: i64) -> Result<NaiveDateTime, Error> {
@@ -460,19 +436,8 @@ mod timestamptz {
 
     use crate::Error;
 
-    pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> Result<i64, Error> {
-        time.signed_duration_since(DateTime::<Utc>::from_utc(
-            NaiveDateTime::from_timestamp_opt(0, 0).ok_or(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Failed to get time from midnight",
-            ))?,
-            Utc,
-        ))
-        .num_microseconds()
-        .ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to convert time to microseconds",
-        ))
+    pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
+        time.timestamp_micros()
     }
 
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> Result<DateTime<Utc>, Error> {
