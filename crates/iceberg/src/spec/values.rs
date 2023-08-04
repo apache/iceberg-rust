@@ -172,6 +172,14 @@ impl From<&Literal> for JsonValue {
                     (id.to_string(), json)
                 })))
             }
+            Literal::List(list) => JsonValue::Array(
+                list.into_iter()
+                    .map(|opt| match opt {
+                        Some(literal) => literal.into(),
+                        None => JsonValue::Null,
+                    })
+                    .collect(),
+            ),
             _ => todo!(),
         }
     }
@@ -380,6 +388,26 @@ impl Literal {
                     ))
                 }
             }
+            Type::List(list) => {
+                if let JsonValue::Array(array) = value {
+                    Ok(Literal::List(
+                        array
+                            .into_iter()
+                            .map(|value| {
+                                Ok(Some(Literal::try_from_json(
+                                    value,
+                                    &list.element_field.field_type,
+                                )?))
+                            })
+                            .collect::<Result<Vec<_>, Error>>()?,
+                    ))
+                } else {
+                    Err(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "The json value for a list type must be an array.",
+                    ))
+                }
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::DataInvalid,
                 "Converting bytes to non-primitive types is not supported.",
@@ -525,7 +553,7 @@ mod timestamptz {
 #[cfg(test)]
 mod tests {
 
-    use crate::spec::datatypes::{NestedField, StructType};
+    use crate::spec::datatypes::{ListType, NestedField, StructType};
 
     use super::*;
 
@@ -738,6 +766,31 @@ mod tests {
                     write_default: None,
                 },
             ])),
+        );
+    }
+
+    #[test]
+    fn json_list() {
+        let record = r#"[1, 2, 3]"#;
+
+        check_json_serde(
+            record,
+            Literal::List(vec![
+                Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
+            ]),
+            &Type::List(ListType {
+                element_field: NestedField {
+                    id: 0,
+                    name: "".to_string(),
+                    required: true,
+                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+            }),
         );
     }
 
