@@ -19,7 +19,7 @@
  * Value in iceberg
  */
 
-use std::{any::Any, collections::HashMap};
+use std::{any::Any, collections::BTreeMap};
 
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -34,7 +34,7 @@ use crate::Error;
 use super::datatypes::{PrimitiveType, Type};
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -68,7 +68,7 @@ pub enum PrimitiveLiteral {
 }
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum Literal {
     /// A primitive value
     Primitive(PrimitiveLiteral),
@@ -83,7 +83,7 @@ pub enum Literal {
     /// A map is a collection of key-value pairs with a key type and a value type.
     /// Both the key field and value field each have an integer id that is unique in the table schema.
     /// Map keys are required and map values can be either optional or required. Both map keys and map values may be any type, including nested types.
-    Map(HashMap<String, Option<Literal>>),
+    Map(BTreeMap<Literal, Option<Literal>>),
 }
 
 impl From<Literal> for ByteBuf {
@@ -180,7 +180,25 @@ impl From<&Literal> for JsonValue {
                     })
                     .collect(),
             ),
-            _ => todo!(),
+            Literal::Map(map) => {
+                let mut object = JsonMap::with_capacity(2);
+                object.insert(
+                    "keys".to_string(),
+                    JsonValue::Array(map.keys().map(|literal| literal.into()).collect()),
+                );
+                object.insert(
+                    "values".to_string(),
+                    JsonValue::Array(
+                        map.values()
+                            .map(|literal| match literal {
+                                Some(literal) => literal.into(),
+                                None => JsonValue::Null,
+                            })
+                            .collect(),
+                    ),
+                );
+                JsonValue::Object(object)
+            }
         }
     }
 }
@@ -188,7 +206,7 @@ impl From<&Literal> for JsonValue {
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
@@ -245,7 +263,6 @@ impl FromIterator<(i32, Option<Literal>, String)> for Struct {
 }
 
 impl Literal {
-    #[inline]
     /// Create iceberg value from bytes
     pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self, Error> {
         match data_type {
@@ -304,7 +321,6 @@ impl Literal {
         }
     }
 
-    #[inline]
     /// Create iceberg value from a json value
     pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Self, Error> {
         match data_type {
@@ -408,10 +424,39 @@ impl Literal {
                     ))
                 }
             }
-            _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Converting bytes to non-primitive types is not supported.",
-            )),
+            Type::Map(map) => {
+                if let JsonValue::Object(mut object) = value {
+                    if let (Some(JsonValue::Array(keys)), Some(JsonValue::Array(values))) =
+                        (object.remove("keys"), object.remove("values"))
+                    {
+                        Ok(Literal::Map(BTreeMap::from_iter(
+                            keys.into_iter()
+                                .zip(values.into_iter())
+                                .map(|(key, value)| {
+                                    Ok((
+                                        Literal::try_from_json(key, &map.key_field.field_type)?,
+                                        Some(Literal::try_from_json(
+                                            value,
+                                            &map.value_field.field_type,
+                                        )?),
+                                    ))
+                                })
+                                .collect::<Result<Vec<_>, Error>>()?
+                                .into_iter(),
+                        )))
+                    } else {
+                        Err(Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "The json value for a list type must be an array.",
+                        ))
+                    }
+                } else {
+                    Err(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "The json value for a list type must be an array.",
+                    ))
+                }
+            }
         }
     }
 
@@ -553,7 +598,7 @@ mod timestamptz {
 #[cfg(test)]
 mod tests {
 
-    use crate::spec::datatypes::{ListType, NestedField, StructType};
+    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
 
     use super::*;
 
@@ -784,6 +829,45 @@ mod tests {
                 element_field: NestedField {
                     id: 0,
                     name: "".to_string(),
+                    required: true,
+                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn json_map() {
+        let record = r#"{ "keys": ["a", "b"], "values": [1, 2] }"#;
+
+        check_json_serde(
+            record,
+            Literal::Map(BTreeMap::from([
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("b".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                ),
+            ])),
+            &Type::Map(MapType {
+                key_field: NestedField {
+                    id: 0,
+                    name: "key".to_string(),
+                    required: true,
+                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+                value_field: NestedField {
+                    id: 1,
+                    name: "value".to_string(),
                     required: true,
                     field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
                     doc: None,
