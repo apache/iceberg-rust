@@ -39,7 +39,7 @@ use super::datatypes::{PrimitiveType, Type};
 /// Values present in iceberg type
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(untagged)]
-pub enum Literal {
+pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
     /// Stored as 4-byte little-endian
@@ -69,6 +69,14 @@ pub enum Literal {
     /// Stores unscaled value as two’s-complement big-endian binary,
     /// using the minimum number of bytes for the value
     Decimal(Decimal),
+}
+
+/// Values present in iceberg type
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Literal {
+    /// A primitive value
+    Primitive(PrimitiveLiteral),
     /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
     /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
     /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -87,32 +95,40 @@ impl TryFrom<Literal> for ByteBuf {
     type Error = Error;
     fn try_from(value: Literal) -> Result<Self, Self::Error> {
         match value {
-            Literal::Boolean(val) => {
-                if val {
-                    Ok(ByteBuf::from([0u8]))
-                } else {
-                    Ok(ByteBuf::from([1u8]))
+            Literal::Primitive(prim) => match prim {
+                PrimitiveLiteral::Boolean(val) => {
+                    if val {
+                        Ok(ByteBuf::from([0u8]))
+                    } else {
+                        Ok(ByteBuf::from([1u8]))
+                    }
                 }
-            }
-            Literal::Int(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Literal::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Literal::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Literal::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Literal::Date(val) => Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes())),
-            Literal::Time(val) => Ok(ByteBuf::from(
-                time::time_to_microseconds(&val)?.to_le_bytes(),
+                PrimitiveLiteral::Int(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+                PrimitiveLiteral::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+                PrimitiveLiteral::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+                PrimitiveLiteral::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+                PrimitiveLiteral::Date(val) => {
+                    Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes()))
+                }
+                PrimitiveLiteral::Time(val) => Ok(ByteBuf::from(
+                    time::time_to_microseconds(&val)?.to_le_bytes(),
+                )),
+                PrimitiveLiteral::Timestamp(val) => Ok(ByteBuf::from(
+                    timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
+                )),
+                PrimitiveLiteral::TimestampTZ(val) => Ok(ByteBuf::from(
+                    timestamptz::datetimetz_to_microseconds(&val)?.to_le_bytes(),
+                )),
+                PrimitiveLiteral::String(val) => Ok(ByteBuf::from(val.as_bytes())),
+                PrimitiveLiteral::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
+                PrimitiveLiteral::Fixed(_, val) => Ok(ByteBuf::from(val)),
+                PrimitiveLiteral::Binary(val) => Ok(ByteBuf::from(val)),
+                PrimitiveLiteral::Decimal(_) => todo!(),
+            },
+            _ => Err(Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Complex types can't be converted to bytes",
             )),
-            Literal::Timestamp(val) => Ok(ByteBuf::from(
-                timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
-            )),
-            Literal::TimestampTZ(val) => Ok(ByteBuf::from(
-                timestamptz::datetimetz_to_microseconds(&val)?.to_le_bytes(),
-            )),
-            Literal::String(val) => Ok(ByteBuf::from(val.as_bytes())),
-            Literal::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
-            Literal::Fixed(_, val) => Ok(ByteBuf::from(val)),
-            Literal::Binary(val) => Ok(ByteBuf::from(val)),
-            _ => todo!(),
         }
     }
 }
@@ -224,43 +240,51 @@ impl Literal {
             Type::Primitive(primitive) => match primitive {
                 PrimitiveType::Boolean => {
                     if bytes.len() == 1 && bytes[0] == 0u8 {
-                        Ok(Literal::Boolean(false))
+                        Ok(Literal::Primitive(PrimitiveLiteral::Boolean(false)))
                     } else {
-                        Ok(Literal::Boolean(true))
+                        Ok(Literal::Primitive(PrimitiveLiteral::Boolean(true)))
                     }
                 }
-                PrimitiveType::Int => Ok(Literal::Int(i32::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Long => Ok(Literal::Long(i64::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Float => Ok(Literal::Float(OrderedFloat(f32::from_le_bytes(
-                    bytes.try_into()?,
-                )))),
-                PrimitiveType::Double => Ok(Literal::Double(OrderedFloat(f64::from_le_bytes(
-                    bytes.try_into()?,
-                )))),
-                PrimitiveType::Date => Ok(Literal::Date(date::days_to_date(i32::from_le_bytes(
-                    bytes.try_into()?,
-                ))?)),
-                PrimitiveType::Time => Ok(Literal::Time(time::microseconds_to_time(
+                PrimitiveType::Int => Ok(Literal::Primitive(PrimitiveLiteral::Int(
+                    i32::from_le_bytes(bytes.try_into()?),
+                ))),
+                PrimitiveType::Long => Ok(Literal::Primitive(PrimitiveLiteral::Long(
                     i64::from_le_bytes(bytes.try_into()?),
-                )?)),
-                PrimitiveType::Timestamp => Ok(Literal::Timestamp(
+                ))),
+                PrimitiveType::Float => Ok(Literal::Primitive(PrimitiveLiteral::Float(
+                    OrderedFloat(f32::from_le_bytes(bytes.try_into()?)),
+                ))),
+                PrimitiveType::Double => Ok(Literal::Primitive(PrimitiveLiteral::Double(
+                    OrderedFloat(f64::from_le_bytes(bytes.try_into()?)),
+                ))),
+                PrimitiveType::Date => Ok(Literal::Primitive(PrimitiveLiteral::Date(
+                    date::days_to_date(i32::from_le_bytes(bytes.try_into()?))?,
+                ))),
+                PrimitiveType::Time => Ok(Literal::Primitive(PrimitiveLiteral::Time(
+                    time::microseconds_to_time(i64::from_le_bytes(bytes.try_into()?))?,
+                ))),
+                PrimitiveType::Timestamp => Ok(Literal::Primitive(PrimitiveLiteral::Timestamp(
                     timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
+                ))),
+                PrimitiveType::Timestamptz => Ok(Literal::Primitive(
+                    PrimitiveLiteral::TimestampTZ(timestamptz::microseconds_to_datetimetz(
+                        i64::from_le_bytes(bytes.try_into()?),
+                    )?),
                 )),
-                PrimitiveType::Timestamptz => Ok(Literal::TimestampTZ(
-                    timestamptz::microseconds_to_datetimetz(i64::from_le_bytes(bytes.try_into()?))?,
-                )),
-                PrimitiveType::String => {
-                    Ok(Literal::String(std::str::from_utf8(bytes)?.to_string()))
-                }
-                PrimitiveType::Uuid => Ok(Literal::UUID(Uuid::from_u128(u128::from_be_bytes(
-                    bytes.try_into()?,
-                )))),
-                PrimitiveType::Fixed(len) => Ok(Literal::Fixed(*len as usize, Vec::from(bytes))),
-                PrimitiveType::Binary => Ok(Literal::Binary(Vec::from(bytes))),
-                _ => Err(Error::new(
-                    crate::ErrorKind::DataInvalid,
-                    "Converting bytes to decimal is not supported.",
-                )),
+                PrimitiveType::String => Ok(Literal::Primitive(PrimitiveLiteral::String(
+                    std::str::from_utf8(bytes)?.to_string(),
+                ))),
+                PrimitiveType::Uuid => Ok(Literal::Primitive(PrimitiveLiteral::UUID(
+                    Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)),
+                ))),
+                PrimitiveType::Fixed(len) => Ok(Literal::Primitive(PrimitiveLiteral::Fixed(
+                    *len as usize,
+                    Vec::from(bytes),
+                ))),
+                PrimitiveType::Binary => Ok(Literal::Primitive(PrimitiveLiteral::Binary(
+                    Vec::from(bytes),
+                ))),
+                _ => todo!(),
             },
             _ => Err(Error::new(
                 crate::ErrorKind::DataInvalid,
@@ -272,23 +296,27 @@ impl Literal {
     /// Get datatype of value
     pub fn datatype(&self) -> Type {
         match self {
-            Literal::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
-            Literal::Int(_) => Type::Primitive(PrimitiveType::Int),
-            Literal::Long(_) => Type::Primitive(PrimitiveType::Long),
-            Literal::Float(_) => Type::Primitive(PrimitiveType::Float),
-            Literal::Double(_) => Type::Primitive(PrimitiveType::Double),
-            Literal::Date(_) => Type::Primitive(PrimitiveType::Date),
-            Literal::Time(_) => Type::Primitive(PrimitiveType::Time),
-            Literal::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
-            Literal::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
-            Literal::Fixed(len, _) => Type::Primitive(PrimitiveType::Fixed(*len as u64)),
-            Literal::Binary(_) => Type::Primitive(PrimitiveType::Binary),
-            Literal::String(_) => Type::Primitive(PrimitiveType::String),
-            Literal::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
-            Literal::Decimal(dec) => Type::Primitive(PrimitiveType::Decimal {
-                precision: 38,
-                scale: dec.scale(),
-            }),
+            Literal::Primitive(prim) => match prim {
+                PrimitiveLiteral::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
+                PrimitiveLiteral::Int(_) => Type::Primitive(PrimitiveType::Int),
+                PrimitiveLiteral::Long(_) => Type::Primitive(PrimitiveType::Long),
+                PrimitiveLiteral::Float(_) => Type::Primitive(PrimitiveType::Float),
+                PrimitiveLiteral::Double(_) => Type::Primitive(PrimitiveType::Double),
+                PrimitiveLiteral::Date(_) => Type::Primitive(PrimitiveType::Date),
+                PrimitiveLiteral::Time(_) => Type::Primitive(PrimitiveType::Time),
+                PrimitiveLiteral::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
+                PrimitiveLiteral::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
+                PrimitiveLiteral::Fixed(len, _) => {
+                    Type::Primitive(PrimitiveType::Fixed(*len as u64))
+                }
+                PrimitiveLiteral::Binary(_) => Type::Primitive(PrimitiveType::Binary),
+                PrimitiveLiteral::String(_) => Type::Primitive(PrimitiveType::String),
+                PrimitiveLiteral::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
+                PrimitiveLiteral::Decimal(dec) => Type::Primitive(PrimitiveType::Decimal {
+                    precision: 38,
+                    scale: dec.scale(),
+                }),
+            },
             _ => unimplemented!(),
         }
     }
@@ -296,20 +324,23 @@ impl Literal {
     /// Convert Value to the any type
     pub fn into_any(self) -> Box<dyn Any> {
         match self {
-            Literal::Boolean(any) => Box::new(any),
-            Literal::Int(any) => Box::new(any),
-            Literal::Long(any) => Box::new(any),
-            Literal::Float(any) => Box::new(any),
-            Literal::Double(any) => Box::new(any),
-            Literal::Date(any) => Box::new(any),
-            Literal::Time(any) => Box::new(any),
-            Literal::Timestamp(any) => Box::new(any),
-            Literal::TimestampTZ(any) => Box::new(any),
-            Literal::Fixed(_, any) => Box::new(any),
-            Literal::Binary(any) => Box::new(any),
-            Literal::String(any) => Box::new(any),
-            Literal::UUID(any) => Box::new(any),
-            Literal::Decimal(any) => Box::new(any),
+            Literal::Primitive(prim) => match prim {
+                PrimitiveLiteral::Boolean(any) => Box::new(any),
+                PrimitiveLiteral::Int(any) => Box::new(any),
+                PrimitiveLiteral::Long(any) => Box::new(any),
+                PrimitiveLiteral::Float(any) => Box::new(any),
+                PrimitiveLiteral::Double(any) => Box::new(any),
+                PrimitiveLiteral::Date(any) => Box::new(any),
+                PrimitiveLiteral::Time(any) => Box::new(any),
+                PrimitiveLiteral::Timestamp(any) => Box::new(any),
+                PrimitiveLiteral::TimestampTZ(any) => Box::new(any),
+                PrimitiveLiteral::Fixed(_, any) => Box::new(any),
+                PrimitiveLiteral::Binary(any) => Box::new(any),
+                PrimitiveLiteral::String(any) => Box::new(any),
+                PrimitiveLiteral::UUID(any) => Box::new(any),
+                PrimitiveLiteral::Decimal(any) => Box::new(any),
+            },
+
             _ => unimplemented!(),
         }
     }
@@ -548,7 +579,7 @@ mod tests {
 
     #[test]
     pub fn boolean() {
-        let input = Literal::Boolean(true);
+        let input = Literal::Primitive(PrimitiveLiteral::Boolean(true));
 
         let raw_schema = r#""boolean""#;
 
@@ -570,7 +601,7 @@ mod tests {
 
     #[test]
     pub fn int() {
-        let input = Literal::Int(42);
+        let input = Literal::Primitive(PrimitiveLiteral::Int(42));
 
         let raw_schema = r#""int""#;
 
@@ -592,7 +623,7 @@ mod tests {
 
     #[test]
     pub fn float() {
-        let input = Literal::Float(OrderedFloat(42.0));
+        let input = Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(42.0)));
 
         let raw_schema = r#""float""#;
 
@@ -614,7 +645,7 @@ mod tests {
 
     #[test]
     pub fn string() {
-        let input = Literal::String("test".to_string());
+        let input = Literal::Primitive(PrimitiveLiteral::String("test".to_string()));
 
         let raw_schema = r#""string""#;
 
@@ -638,7 +669,9 @@ mod tests {
     pub fn struct_value() {
         let input = Literal::Struct(Struct::from_iter(vec![(
             "name".to_string(),
-            Some(Literal::String("Alice".to_string())),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                "Alice".to_string(),
+            ))),
         )]));
 
         let raw_schema = r#"{"type": "record","name": "r102","fields": [{
