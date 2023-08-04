@@ -17,7 +17,7 @@
 
 //! This module defines schema in iceberg.
 
-use crate::spec::datatypes::{StructField, StructType};
+use crate::spec::datatypes::{NestedField, StructType};
 
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
@@ -32,12 +32,12 @@ pub struct Schema {
 /// Schema builder.
 pub struct SchemaBuilder {
     schema_id: i32,
-    fields: Vec<StructField>,
+    fields: Vec<NestedField>,
 }
 
 impl SchemaBuilder {
     /// Add fields to schem builder
-    pub fn with_fields(mut self, fields: impl IntoIterator<Item = StructField>) -> Self {
+    pub fn with_fields(mut self, fields: impl IntoIterator<Item = NestedField>) -> Self {
         self.fields.extend(fields.into_iter());
         self
     }
@@ -69,7 +69,7 @@ impl Schema {
     }
 
     /// Get field by field id.
-    pub fn field_by_id(&self, field_id: i32) -> Option<&StructField> {
+    pub fn field_by_id(&self, field_id: i32) -> Option<&NestedField> {
         self.r#struct.field_by_id(field_id)
     }
 
@@ -88,13 +88,13 @@ impl Schema {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::datatypes::{PrimitiveType, StructField, Type};
+    use crate::spec::datatypes::{NestedField, PrimitiveType, Type};
     use crate::spec::schema::Schema;
 
     #[test]
     fn test_construct_schema() {
-        let field1 = StructField::required(1, "f1", Type::Primitive(PrimitiveType::Boolean));
-        let field2 = StructField::optional(2, "f2", Type::Primitive(PrimitiveType::Int));
+        let field1 = NestedField::required(1, "f1", Type::Primitive(PrimitiveType::Boolean));
+        let field2 = NestedField::optional(2, "f2", Type::Primitive(PrimitiveType::Int));
 
         let schema = Schema::builder()
             .with_fields(vec![field1.clone()])
