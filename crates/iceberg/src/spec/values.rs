@@ -525,7 +525,7 @@ mod timestamptz {
 #[cfg(test)]
 mod tests {
 
-    use crate::spec::datatypes::{StructField, StructType};
+    use crate::spec::datatypes::{NestedField, StructType};
 
     use super::*;
 
@@ -719,20 +719,20 @@ mod tests {
                 ),
             ])),
             &Type::Struct(StructType::new(vec![
-                StructField {
+                NestedField {
                     id: 1,
                     name: "id".to_string(),
                     required: true,
-                    field_type: Type::Primitive(PrimitiveType::Int),
+                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
                     doc: None,
                     initial_default: None,
                     write_default: None,
                 },
-                StructField {
+                NestedField {
                     id: 2,
                     name: "name".to_string(),
                     required: false,
-                    field_type: Type::Primitive(PrimitiveType::String),
+                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
                     doc: None,
                     initial_default: None,
                     write_default: None,
