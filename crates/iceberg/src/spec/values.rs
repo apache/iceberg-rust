@@ -19,16 +19,11 @@
  * Value in iceberg
  */
 
-use std::{any::Any, collections::HashMap, fmt, ops::Deref};
+use std::{any::Any, collections::HashMap};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
-use serde::{
-    de::{MapAccess, Visitor},
-    ser::SerializeStruct,
-    Deserialize, Deserializer, Serialize,
-};
 use serde_bytes::ByteBuf;
 use serde_json::{Number, Value as JsonValue};
 use uuid::Uuid;
@@ -38,8 +33,7 @@ use crate::Error;
 use super::datatypes::{PrimitiveType, Type};
 
 /// Values present in iceberg type
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -48,17 +42,17 @@ pub enum PrimitiveLiteral {
     /// Stored as 8-byte little-endian
     Long(i64),
     /// Stored as 4-byte little-endian
-    Float(#[serde(with = "float")] OrderedFloat<f32>),
+    Float(OrderedFloat<f32>),
     /// Stored as 8-byte little-endian
-    Double(#[serde(with = "double")] OrderedFloat<f64>),
+    Double(OrderedFloat<f64>),
     /// Stores days from the 1970-01-01 in an 4-byte little-endian int
-    Date(#[serde(with = "date")] NaiveDate),
+    Date(NaiveDate),
     /// Stores microseconds from midnight in an 8-byte little-endian long
-    Time(#[serde(with = "time")] NaiveTime),
+    Time(NaiveTime),
     /// Timestamp without timezone
-    Timestamp(#[serde(with = "timestamp")] NaiveDateTime),
+    Timestamp(NaiveDateTime),
     /// Timestamp with timezone
-    TimestampTZ(#[serde(with = "timestamptz")] DateTime<Utc>),
+    TimestampTZ(DateTime<Utc>),
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
@@ -73,8 +67,7 @@ pub enum PrimitiveLiteral {
 }
 
 /// Values present in iceberg type
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     /// A primitive value
     Primitive(PrimitiveLiteral),
@@ -197,94 +190,6 @@ pub struct Struct {
     fields: Vec<Option<Literal>>,
     /// A lookup that matches the field name to the entry in the vector
     lookup: HashMap<String, usize>,
-}
-
-impl Deref for Struct {
-    type Target = [Option<Literal>];
-
-    fn deref(&self) -> &Self::Target {
-        &self.fields
-    }
-}
-
-impl Struct {
-    /// Get reference to partition value
-    pub fn get(&self, name: &str) -> Option<&Literal> {
-        self.fields
-            .get(*self.lookup.get(name)?)
-            .and_then(|x| x.as_ref())
-    }
-    /// Get mutable reference to partition value
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Literal> {
-        self.fields
-            .get_mut(*self.lookup.get(name)?)
-            .and_then(|x| x.as_mut())
-    }
-}
-
-impl Serialize for Struct {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut record = serializer.serialize_struct("r102", self.fields.len())?;
-        for (i, value) in self.fields.iter().enumerate() {
-            let (key, _) = self.lookup.iter().find(|(_, value)| **value == i).unwrap();
-            record.serialize_field(Box::leak(key.clone().into_boxed_str()), value)?;
-        }
-        record.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for Struct {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct PartitionStructVisitor;
-
-        impl<'de> Visitor<'de> for PartitionStructVisitor {
-            type Value = Struct;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("map")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<Struct, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
-                let mut fields: Vec<Option<Literal>> = Vec::new();
-                let mut lookup: HashMap<String, usize> = HashMap::new();
-                let mut index = 0;
-                while let Some(key) = map.next_key()? {
-                    fields.push(map.next_value()?);
-                    lookup.insert(key, index);
-                    index += 1;
-                }
-                Ok(Struct { fields, lookup })
-            }
-        }
-        deserializer.deserialize_struct(
-            "r102",
-            Box::leak(vec![].into_boxed_slice()),
-            PartitionStructVisitor,
-        )
-    }
-}
-
-impl FromIterator<(String, Option<Literal>)> for Struct {
-    fn from_iter<I: IntoIterator<Item = (String, Option<Literal>)>>(iter: I) -> Self {
-        let mut fields = Vec::new();
-        let mut lookup = HashMap::new();
-
-        for (i, (key, value)) in iter.into_iter().enumerate() {
-            fields.push(value);
-            lookup.insert(key, i);
-        }
-
-        Struct { fields, lookup }
-    }
 }
 
 impl Literal {
@@ -470,66 +375,10 @@ impl Literal {
     }
 }
 
-mod float {
-    use ordered_float::OrderedFloat;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(value: &OrderedFloat<f32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        value.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<OrderedFloat<f32>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        f32::deserialize(deserializer).map(OrderedFloat)
-    }
-}
-
-mod double {
-    use ordered_float::OrderedFloat;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(value: &OrderedFloat<f64>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        value.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<OrderedFloat<f64>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        f64::deserialize(deserializer).map(OrderedFloat)
-    }
-}
-
 mod date {
     use chrono::NaiveDate;
-    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::Error;
-
-    pub fn serialize<S>(value: &NaiveDate, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let days = date_to_days(value).map_err(|err| ser::Error::custom(err.to_string()))?;
-        days.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDate, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let days = i32::deserialize(deserializer)?;
-
-        days_to_date(days).map_err(|err| de::Error::custom(err.to_string()))
-    }
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> Result<i32, Error> {
         Ok(date
@@ -550,27 +399,8 @@ mod date {
 
 mod time {
     use chrono::NaiveTime;
-    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::Error;
-
-    pub fn serialize<S>(value: &NaiveTime, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let micros =
-            time_to_microseconds(value).map_err(|err| ser::Error::custom(err.to_string()))?;
-        micros.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveTime, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let micros = i64::deserialize(deserializer)?;
-
-        microseconds_to_time(micros).map_err(|err| de::Error::custom(err.to_string()))
-    }
 
     pub(crate) fn time_to_microseconds(time: &NaiveTime) -> Result<i64, Error> {
         time.signed_duration_since(NaiveTime::from_num_seconds_from_midnight_opt(0, 0).ok_or(
@@ -600,27 +430,8 @@ mod time {
 
 mod timestamp {
     use chrono::NaiveDateTime;
-    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::Error;
-
-    pub fn serialize<S>(value: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let micros =
-            datetime_to_microseconds(value).map_err(|err| ser::Error::custom(err.to_string()))?;
-        micros.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let micros = i64::deserialize(deserializer)?;
-
-        microseconds_to_datetime(micros).map_err(|err| de::Error::custom(err.to_string()))
-    }
 
     pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> Result<i64, Error> {
         time.signed_duration_since(NaiveDateTime::from_timestamp_opt(0, 0).ok_or(Error::new(
@@ -646,27 +457,8 @@ mod timestamp {
 
 mod timestamptz {
     use chrono::{DateTime, NaiveDateTime, Utc};
-    use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::Error;
-
-    pub fn serialize<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let micros =
-            datetimetz_to_microseconds(value).map_err(|err| ser::Error::custom(err.to_string()))?;
-        micros.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let micros = i64::deserialize(deserializer)?;
-
-        microseconds_to_datetimetz(micros).map_err(|err| de::Error::custom(err.to_string()))
-    }
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> Result<i64, Error> {
         time.signed_duration_since(DateTime::<Utc>::from_utc(
@@ -848,124 +640,5 @@ mod tests {
             )),
             &Type::Primitive(PrimitiveType::Uuid),
         );
-    }
-
-    #[test]
-    pub fn boolean() {
-        let input = Literal::Primitive(PrimitiveLiteral::Boolean(true));
-
-        let raw_schema = r#""boolean""#;
-
-        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
-
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
-        writer.append_ser(input.clone()).unwrap();
-
-        let encoded = writer.into_inner().unwrap();
-
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
-
-        for record in reader {
-            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
-            assert_eq!(input, result);
-        }
-    }
-
-    #[test]
-    pub fn int() {
-        let input = Literal::Primitive(PrimitiveLiteral::Int(42));
-
-        let raw_schema = r#""int""#;
-
-        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
-
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
-        writer.append_ser(input.clone()).unwrap();
-
-        let encoded = writer.into_inner().unwrap();
-
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
-
-        for record in reader {
-            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
-            assert_eq!(input, result);
-        }
-    }
-
-    #[test]
-    pub fn float() {
-        let input = Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(42.0)));
-
-        let raw_schema = r#""float""#;
-
-        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
-
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
-        writer.append_ser(input.clone()).unwrap();
-
-        let encoded = writer.into_inner().unwrap();
-
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
-
-        for record in reader {
-            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
-            assert_eq!(input, result);
-        }
-    }
-
-    #[test]
-    pub fn string() {
-        let input = Literal::Primitive(PrimitiveLiteral::String("test".to_string()));
-
-        let raw_schema = r#""string""#;
-
-        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
-
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
-        writer.append_ser(input.clone()).unwrap();
-
-        let encoded = writer.into_inner().unwrap();
-
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
-
-        for record in reader {
-            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
-            assert_eq!(input, result);
-        }
-    }
-
-    #[test]
-    pub fn struct_value() {
-        let input = Literal::Struct(Struct::from_iter(vec![(
-            "name".to_string(),
-            Some(Literal::Primitive(PrimitiveLiteral::String(
-                "Alice".to_string(),
-            ))),
-        )]));
-
-        let raw_schema = r#"{"type": "record","name": "r102","fields": [{
-                    "name": "name", 
-                    "type":  ["null","string"],
-                    "default": null
-                }]}"#;
-
-        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
-
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
-        writer.append_ser(input.clone()).unwrap();
-
-        let encoded = writer.into_inner().unwrap();
-
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
-
-        for record in reader {
-            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
-            assert_eq!(input, result);
-        }
     }
 }
