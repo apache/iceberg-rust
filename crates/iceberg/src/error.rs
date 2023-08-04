@@ -265,6 +265,24 @@ define_from_err!(
     "failed to convert byte slive to array"
 );
 
+define_from_err!(
+    std::num::TryFromIntError,
+    ErrorKind::DataInvalid,
+    "failed to convert integer"
+);
+
+define_from_err!(
+    chrono::ParseError,
+    ErrorKind::DataInvalid,
+    "Failed to parse string to date or time"
+);
+
+define_from_err!(
+    uuid::Error,
+    ErrorKind::DataInvalid,
+    "Failed to convert between uuid und iceberg value"
+);
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;

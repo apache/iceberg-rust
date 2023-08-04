@@ -30,6 +30,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 use serde_bytes::ByteBuf;
+use serde_json::{Number, Value as JsonValue};
 use uuid::Uuid;
 
 use crate::Error;
@@ -123,6 +124,60 @@ impl TryFrom<Literal> for ByteBuf {
                 PrimitiveLiteral::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
                 PrimitiveLiteral::Fixed(val) => Ok(ByteBuf::from(val)),
                 PrimitiveLiteral::Binary(val) => Ok(ByteBuf::from(val)),
+                PrimitiveLiteral::Decimal(_) => todo!(),
+            },
+            _ => Err(Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Complex types can't be converted to bytes",
+            )),
+        }
+    }
+}
+
+impl TryFrom<Literal> for JsonValue {
+    type Error = Error;
+    fn try_from(value: Literal) -> Result<Self, Self::Error> {
+        match value {
+            Literal::Primitive(prim) => match prim {
+                PrimitiveLiteral::Boolean(val) => Ok(JsonValue::Bool(val)),
+                PrimitiveLiteral::Int(val) => Ok(JsonValue::Number(val.into())),
+                PrimitiveLiteral::Long(val) => Ok(JsonValue::Number(val.into())),
+                PrimitiveLiteral::Float(val) => Ok(JsonValue::Number(
+                    Number::from_f64(val.0 as f64).ok_or(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "Failed to convert float to json",
+                    ))?,
+                )),
+                PrimitiveLiteral::Double(val) => Ok(JsonValue::Number(
+                    Number::from_f64(val.0).ok_or(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "Failed to convert float to json",
+                    ))?,
+                )),
+                PrimitiveLiteral::Date(val) => Ok(JsonValue::String(val.to_string())),
+                PrimitiveLiteral::Time(val) => Ok(JsonValue::String(val.to_string())),
+                PrimitiveLiteral::Timestamp(val) => Ok(JsonValue::String(
+                    val.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+                )),
+                PrimitiveLiteral::TimestampTZ(val) => Ok(JsonValue::String(
+                    val.format("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string(),
+                )),
+                PrimitiveLiteral::String(val) => Ok(JsonValue::String(val)),
+                PrimitiveLiteral::UUID(val) => Ok(JsonValue::String(val.to_string())),
+                PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.into_iter().fold(
+                    String::new(),
+                    |mut acc, x| {
+                        acc.push_str(&format!("{:x}", x));
+                        acc
+                    },
+                ))),
+                PrimitiveLiteral::Binary(val) => Ok(JsonValue::String(val.into_iter().fold(
+                    String::new(),
+                    |mut acc, x| {
+                        acc.push_str(&format!("{:x}", x));
+                        acc
+                    },
+                ))),
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
             _ => Err(Error::new(
@@ -283,6 +338,76 @@ impl Literal {
                 PrimitiveType::Binary => Ok(Literal::Primitive(PrimitiveLiteral::Binary(
                     Vec::from(bytes),
                 ))),
+                _ => todo!(),
+            },
+            _ => Err(Error::new(
+                crate::ErrorKind::DataInvalid,
+                "Converting bytes to non-primitive types is not supported.",
+            )),
+        }
+    }
+
+    /// Create iceberg value from a json value
+    pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Self, Error> {
+        match data_type {
+            Type::Primitive(primitive) => match (primitive, value) {
+                (PrimitiveType::Boolean, JsonValue::Bool(bool)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::Boolean(bool)))
+                }
+                (PrimitiveType::Int, JsonValue::Number(number)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::Int(
+                        number
+                            .as_i64()
+                            .ok_or(Error::new(
+                                crate::ErrorKind::DataInvalid,
+                                "Failed to convert json number to int",
+                            ))?
+                            .try_into()?,
+                    )))
+                }
+                (PrimitiveType::Long, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Long(number.as_i64().ok_or(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "Failed to convert json number to long",
+                    ))?),
+                )),
+                (PrimitiveType::Float, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Float(OrderedFloat(number.as_f64().ok_or(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "Failed to convert json number to float",
+                    ))? as f32)),
+                )),
+                (PrimitiveType::Double, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Double(OrderedFloat(number.as_f64().ok_or(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "Failed to convert json number to double",
+                    ))?)),
+                )),
+                (PrimitiveType::Date, JsonValue::String(s)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Date(NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
+                )),
+                (PrimitiveType::Time, JsonValue::String(s)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Time(NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
+                )),
+                (PrimitiveType::Timestamp, JsonValue::String(s)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::Timestamp(
+                        NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
+                    )))
+                }
+                (PrimitiveType::Timestamptz, JsonValue::String(s)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::TimestampTZ(DateTime::from_utc(
+                        NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
+                        Utc,
+                    )),
+                )),
+                (PrimitiveType::String, JsonValue::String(s)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::String(s)))
+                }
+                (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::UUID(Uuid::parse_str(&s)?),
+                )),
+                (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
+                (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
                 _ => todo!(),
             },
             _ => Err(Error::new(
@@ -575,6 +700,155 @@ mod timestamptz {
 mod tests {
 
     use super::*;
+
+    fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
+        let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
+        let desered_literal = Literal::try_from_json(raw_json_value, expected_type).unwrap();
+        assert_eq!(desered_literal, expected_literal);
+
+        let expected_json_value: JsonValue = expected_literal.try_into().unwrap();
+        let sered_json = serde_json::to_string(&expected_json_value).unwrap();
+        let parsed_json_value = serde_json::from_str::<JsonValue>(&sered_json).unwrap();
+        let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
+
+        assert_eq!(parsed_json_value, raw_json_value);
+    }
+
+    #[test]
+    fn json_boolean() {
+        let record = r#"true"#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Boolean(true)),
+            &Type::Primitive(PrimitiveType::Boolean),
+        );
+    }
+
+    #[test]
+    fn json_int() {
+        let record = r#"32"#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Int(32)),
+            &Type::Primitive(PrimitiveType::Int),
+        );
+    }
+
+    #[test]
+    fn json_long() {
+        let record = r#"32"#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Long(32)),
+            &Type::Primitive(PrimitiveType::Long),
+        );
+    }
+
+    #[test]
+    fn json_float() {
+        let record = r#"1.0"#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Float),
+        );
+    }
+
+    #[test]
+    fn json_double() {
+        let record = r#"1.0"#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Double),
+        );
+    }
+
+    #[test]
+    fn json_date() {
+        let record = r#""2017-11-16""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Date(
+                NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
+            )),
+            &Type::Primitive(PrimitiveType::Date),
+        );
+    }
+
+    #[test]
+    fn json_time() {
+        let record = r#""22:31:08.123456""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Time(
+                NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
+            )),
+            &Type::Primitive(PrimitiveType::Time),
+        );
+    }
+
+    #[test]
+    fn json_timestamp() {
+        let record = r#""2017-11-16T22:31:08.123456""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Timestamp(NaiveDateTime::new(
+                NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
+                NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
+            ))),
+            &Type::Primitive(PrimitiveType::Timestamp),
+        );
+    }
+
+    #[test]
+    fn json_timestamptz() {
+        let record = r#""2017-11-16T22:31:08.123456+00:00""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::TimestampTZ(DateTime::<Utc>::from_utc(
+                NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
+                    NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
+                ),
+                Utc,
+            ))),
+            &Type::Primitive(PrimitiveType::Timestamptz),
+        );
+    }
+
+    #[test]
+    fn json_string() {
+        let record = r#""iceberg""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
+            &Type::Primitive(PrimitiveType::String),
+        );
+    }
+
+    #[test]
+    fn json_uuid() {
+        let record = r#""f79c3e09-677c-4bbd-a479-3f349cb785e7""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::UUID(
+                Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
+            )),
+            &Type::Primitive(PrimitiveType::Uuid),
+        );
+    }
 
     #[test]
     pub fn boolean() {
