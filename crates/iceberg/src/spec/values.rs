@@ -21,11 +21,12 @@
 
 use std::{any::Any, collections::HashMap};
 
+use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
 use serde_bytes::ByteBuf;
-use serde_json::{Number, Value as JsonValue};
+use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
 use crate::Error;
@@ -123,13 +124,13 @@ impl From<Literal> for ByteBuf {
     }
 }
 
-impl From<Literal> for JsonValue {
-    fn from(value: Literal) -> Self {
+impl From<&Literal> for JsonValue {
+    fn from(value: &Literal) -> Self {
         match value {
             Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => JsonValue::Bool(val),
-                PrimitiveLiteral::Int(val) => JsonValue::Number(val.into()),
-                PrimitiveLiteral::Long(val) => JsonValue::Number(val.into()),
+                PrimitiveLiteral::Boolean(val) => JsonValue::Bool(*val),
+                PrimitiveLiteral::Int(val) => JsonValue::Number((*val).into()),
+                PrimitiveLiteral::Long(val) => JsonValue::Number((*val).into()),
                 PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
                     Some(number) => JsonValue::Number(number),
                     None => JsonValue::Null,
@@ -146,7 +147,7 @@ impl From<Literal> for JsonValue {
                 PrimitiveLiteral::TimestampTZ(val) => {
                     JsonValue::String(val.format("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string())
                 }
-                PrimitiveLiteral::String(val) => JsonValue::String(val),
+                PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
                 PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
                 PrimitiveLiteral::Fixed(val) => {
                     JsonValue::String(val.into_iter().fold(String::new(), |mut acc, x| {
@@ -162,6 +163,15 @@ impl From<Literal> for JsonValue {
                 }
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
+            Literal::Struct(s) => {
+                JsonValue::Object(JsonMap::from_iter(s.iter().map(|(id, value, _)| {
+                    let json: JsonValue = match value {
+                        Some(val) => val.into(),
+                        None => JsonValue::Null,
+                    };
+                    (id.to_string(), json)
+                })))
+            }
             _ => todo!(),
         }
     }
@@ -173,9 +183,57 @@ impl From<Literal> for JsonValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Struct {
     /// Vector to store the field values
-    fields: Vec<Option<Literal>>,
-    /// A lookup that matches the field name to the entry in the vector
-    lookup: HashMap<String, usize>,
+    fields: Vec<Literal>,
+    /// Vector to store the field ids
+    field_ids: Vec<i32>,
+    /// Vector to store the field names
+    field_names: Vec<String>,
+    /// Null bitmap
+    null_bitmap: BitVec,
+}
+
+impl Struct {
+    /// Create a iterator to read the field in order of (field_id, field_value, field_name).
+    pub fn iter(&self) -> impl Iterator<Item = (&i32, Option<&Literal>, &str)> {
+        self.null_bitmap
+            .iter()
+            .zip(self.fields.iter())
+            .zip(self.field_ids.iter())
+            .zip(self.field_names.iter())
+            .map(|(((null, value), id), name)| {
+                (id, if *null { None } else { Some(value) }, name.as_str())
+            })
+    }
+}
+
+impl FromIterator<(i32, Option<Literal>, String)> for Struct {
+    fn from_iter<I: IntoIterator<Item = (i32, Option<Literal>, String)>>(iter: I) -> Self {
+        let mut fields = Vec::new();
+        let mut field_ids = Vec::new();
+        let mut field_names = Vec::new();
+        let mut null_bitmap = BitVec::new();
+
+        for (id, value, name) in iter.into_iter() {
+            field_ids.push(id);
+            field_names.push(name);
+            match value {
+                Some(value) => {
+                    fields.push(value);
+                    null_bitmap.push(false)
+                }
+                None => {
+                    fields.push(Literal::Primitive(PrimitiveLiteral::Boolean(false)));
+                    null_bitmap.push(true)
+                }
+            }
+        }
+        Struct {
+            fields,
+            field_ids,
+            field_names,
+            null_bitmap,
+        }
+    }
 }
 
 impl Literal {
@@ -238,6 +296,7 @@ impl Literal {
         }
     }
 
+    #[inline]
     /// Create iceberg value from a json value
     pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Self, Error> {
         match data_type {
@@ -301,6 +360,26 @@ impl Literal {
                 (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
                 _ => todo!(),
             },
+            Type::Struct(schema) => {
+                if let JsonValue::Object(mut object) = value {
+                    Ok(Literal::Struct(Struct::from_iter(schema.iter().map(
+                        |field| {
+                            (
+                                field.id,
+                                object.remove(&field.id.to_string()).and_then(|value| {
+                                    Literal::try_from_json(value, &field.field_type).ok()
+                                }),
+                                field.name.clone(),
+                            )
+                        },
+                    ))))
+                } else {
+                    Err(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "The json value for a struct type must be an object.",
+                    ))
+                }
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::DataInvalid,
                 "Converting bytes to non-primitive types is not supported.",
@@ -446,17 +525,19 @@ mod timestamptz {
 #[cfg(test)]
 mod tests {
 
+    use crate::spec::datatypes::{StructField, StructType};
+
     use super::*;
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
-        let desered_literal = Literal::try_from_json(raw_json_value, expected_type).unwrap();
+        let desered_literal =
+            Literal::try_from_json(raw_json_value.clone(), expected_type).unwrap();
         assert_eq!(desered_literal, expected_literal);
 
-        let expected_json_value: JsonValue = expected_literal.into();
+        let expected_json_value: JsonValue = (&expected_literal).into();
         let sered_json = serde_json::to_string(&expected_json_value).unwrap();
         let parsed_json_value = serde_json::from_str::<JsonValue>(&sered_json).unwrap();
-        let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
 
         assert_eq!(parsed_json_value, raw_json_value);
     }
@@ -594,6 +675,49 @@ mod tests {
                 Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
             )),
             &Type::Primitive(PrimitiveType::Uuid),
+        );
+    }
+
+    #[test]
+    fn json_struct() {
+        let record = r#"{"1": 1, "2": "bar"}"#;
+
+        check_json_serde(
+            record,
+            Literal::Struct(Struct::from_iter(vec![
+                (
+                    1,
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                    "id".to_string(),
+                ),
+                (
+                    2,
+                    Some(Literal::Primitive(PrimitiveLiteral::String(
+                        "bar".to_string(),
+                    ))),
+                    "name".to_string(),
+                ),
+            ])),
+            &Type::Struct(StructType::new(vec![
+                StructField {
+                    id: 1,
+                    name: "id".to_string(),
+                    required: true,
+                    field_type: Type::Primitive(PrimitiveType::Int),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+                StructField {
+                    id: 2,
+                    name: "name".to_string(),
+                    required: false,
+                    field_type: Type::Primitive(PrimitiveType::String),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+            ])),
         );
     }
 }
