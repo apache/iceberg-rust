@@ -150,13 +150,13 @@ impl From<&Literal> for JsonValue {
                 PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
                 PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
                 PrimitiveLiteral::Fixed(val) => {
-                    JsonValue::String(val.into_iter().fold(String::new(), |mut acc, x| {
+                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
                         acc.push_str(&format!("{:x}", x));
                         acc
                     }))
                 }
                 PrimitiveLiteral::Binary(val) => {
-                    JsonValue::String(val.into_iter().fold(String::new(), |mut acc, x| {
+                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
                         acc.push_str(&format!("{:x}", x));
                         acc
                     }))
