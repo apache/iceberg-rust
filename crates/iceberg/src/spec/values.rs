@@ -544,9 +544,9 @@ mod tests {
 
     fn check_avro_bytes_serde(input: Vec<u8>, expected_literal: Literal, expected_type: &Type) {
         let raw_schema = r#""bytes""#;
-        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+        let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
-        let bytes = ByteBuf::from(input.clone());
+        let bytes = ByteBuf::from(input);
         let literal = Literal::try_from_bytes(&bytes, expected_type).unwrap();
         assert_eq!(literal, expected_literal);
 
