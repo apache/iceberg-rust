@@ -312,7 +312,10 @@ impl Literal {
                 PrimitiveType::Binary => Ok(Literal::Primitive(PrimitiveLiteral::Binary(
                     Vec::from(bytes),
                 ))),
-                _ => todo!(),
+                PrimitiveType::Decimal {
+                    precision: _,
+                    scale: _,
+                } => todo!(),
             },
             _ => Err(Error::new(
                 crate::ErrorKind::DataInvalid,
@@ -382,7 +385,20 @@ impl Literal {
                 )),
                 (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
                 (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
-                _ => todo!(),
+                (
+                    PrimitiveType::Decimal {
+                        precision: _,
+                        scale: _,
+                    },
+                    JsonValue::String(_),
+                ) => todo!(),
+                (i, j) => Err(Error::new(
+                    crate::ErrorKind::DataInvalid,
+                    format!(
+                        "The json value {} doesn't fit to the iceberg type {}.",
+                        j, i
+                    ),
+                )),
             },
             Type::Struct(schema) => {
                 if let JsonValue::Object(mut object) = value {
@@ -507,7 +523,6 @@ impl Literal {
                 PrimitiveLiteral::UUID(any) => Box::new(any),
                 PrimitiveLiteral::Decimal(any) => Box::new(any),
             },
-
             _ => unimplemented!(),
         }
     }
