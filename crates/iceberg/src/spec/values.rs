@@ -542,6 +542,26 @@ mod tests {
         assert_eq!(parsed_json_value, raw_json_value);
     }
 
+    fn check_avro_bytes_serde(input: Vec<u8>, expected_literal: Literal, expected_type: &Type) {
+        let raw_schema = r#""bytes""#;
+        let schema = apache_avro::Schema::parse_str(&raw_schema).unwrap();
+
+        let bytes = ByteBuf::from(input.clone());
+        let literal = Literal::try_from_bytes(&bytes, expected_type).unwrap();
+        assert_eq!(literal, expected_literal);
+
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
+        writer.append_ser(bytes).unwrap();
+        let encoded = writer.into_inner().unwrap();
+        let reader = apache_avro::Reader::new(&*encoded).unwrap();
+
+        for record in reader {
+            let result = apache_avro::from_value::<ByteBuf>(&record.unwrap()).unwrap();
+            let desered_literal = Literal::try_from_bytes(&result, expected_type).unwrap();
+            assert_eq!(desered_literal, expected_literal);
+        }
+    }
+
     #[test]
     fn json_boolean() {
         let record = r#"true"#;
@@ -718,6 +738,72 @@ mod tests {
                     write_default: None,
                 },
             ])),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_boolean() {
+        let bytes = vec![1u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::Boolean(true)),
+            &Type::Primitive(PrimitiveType::Boolean),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_int() {
+        let bytes = vec![32u8, 0u8, 0u8, 0u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::Int(32)),
+            &Type::Primitive(PrimitiveType::Int),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_long() {
+        let bytes = vec![32u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::Long(32)),
+            &Type::Primitive(PrimitiveType::Long),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_float() {
+        let bytes = vec![0u8, 0u8, 128u8, 63u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Float),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_double() {
+        let bytes = vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 240u8, 63u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Double),
+        );
+    }
+
+    #[test]
+    fn avro_bytes_string() {
+        let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
+            &Type::Primitive(PrimitiveType::String),
         );
     }
 }
