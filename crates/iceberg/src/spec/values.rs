@@ -173,7 +173,7 @@ impl From<&Literal> for JsonValue {
                 })))
             }
             Literal::List(list) => JsonValue::Array(
-                list.into_iter()
+                list.iter()
                     .map(|opt| match opt {
                         Some(literal) => literal.into(),
                         None => JsonValue::Null,
