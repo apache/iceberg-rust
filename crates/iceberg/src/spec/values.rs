@@ -63,7 +63,7 @@ pub enum PrimitiveLiteral {
     /// 16-byte big-endian value
     UUID(Uuid),
     /// Binary value
-    Fixed(usize, Vec<u8>),
+    Fixed(Vec<u8>),
     /// Binary value (without length)
     Binary(Vec<u8>),
     /// Stores unscaled value as two’s-complement big-endian binary,
@@ -121,7 +121,7 @@ impl TryFrom<Literal> for ByteBuf {
                 )),
                 PrimitiveLiteral::String(val) => Ok(ByteBuf::from(val.as_bytes())),
                 PrimitiveLiteral::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
-                PrimitiveLiteral::Fixed(_, val) => Ok(ByteBuf::from(val)),
+                PrimitiveLiteral::Fixed(val) => Ok(ByteBuf::from(val)),
                 PrimitiveLiteral::Binary(val) => Ok(ByteBuf::from(val)),
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
@@ -277,8 +277,7 @@ impl Literal {
                 PrimitiveType::Uuid => Ok(Literal::Primitive(PrimitiveLiteral::UUID(
                     Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)),
                 ))),
-                PrimitiveType::Fixed(len) => Ok(Literal::Primitive(PrimitiveLiteral::Fixed(
-                    *len as usize,
+                PrimitiveType::Fixed(_) => Ok(Literal::Primitive(PrimitiveLiteral::Fixed(
                     Vec::from(bytes),
                 ))),
                 PrimitiveType::Binary => Ok(Literal::Primitive(PrimitiveLiteral::Binary(
@@ -306,8 +305,8 @@ impl Literal {
                 PrimitiveLiteral::Time(_) => Type::Primitive(PrimitiveType::Time),
                 PrimitiveLiteral::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
                 PrimitiveLiteral::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
-                PrimitiveLiteral::Fixed(len, _) => {
-                    Type::Primitive(PrimitiveType::Fixed(*len as u64))
+                PrimitiveLiteral::Fixed(vec) => {
+                    Type::Primitive(PrimitiveType::Fixed(vec.len() as u64))
                 }
                 PrimitiveLiteral::Binary(_) => Type::Primitive(PrimitiveType::Binary),
                 PrimitiveLiteral::String(_) => Type::Primitive(PrimitiveType::String),
@@ -334,7 +333,7 @@ impl Literal {
                 PrimitiveLiteral::Time(any) => Box::new(any),
                 PrimitiveLiteral::Timestamp(any) => Box::new(any),
                 PrimitiveLiteral::TimestampTZ(any) => Box::new(any),
-                PrimitiveLiteral::Fixed(_, any) => Box::new(any),
+                PrimitiveLiteral::Fixed(any) => Box::new(any),
                 PrimitiveLiteral::Binary(any) => Box::new(any),
                 PrimitiveLiteral::String(any) => Box::new(any),
                 PrimitiveLiteral::UUID(any) => Box::new(any),
