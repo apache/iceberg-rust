@@ -295,7 +295,7 @@ impl StructType {
             .copied()
     }
     /// Returns an iteratorr over the struct fields
-    pub fn iter(&self) -> Iter<StructField> {
+    pub fn iter(&self) -> Iter<NestedField> {
         self.fields.iter()
     }
 }
