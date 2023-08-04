@@ -39,7 +39,7 @@ use super::datatypes::{PrimitiveType, Type};
 /// Values present in iceberg type
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(untagged)]
-pub enum Value {
+pub enum Literal {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
     /// Stored as 4-byte little-endian
@@ -76,42 +76,42 @@ pub enum Value {
     /// A list is a collection of values with some element type.
     /// The element field has an integer id that is unique in the table schema.
     /// Elements can be either optional or required. Element types may be any type.
-    List(Vec<Option<Value>>),
+    List(Vec<Option<Literal>>),
     /// A map is a collection of key-value pairs with a key type and a value type.
     /// Both the key field and value field each have an integer id that is unique in the table schema.
     /// Map keys are required and map values can be either optional or required. Both map keys and map values may be any type, including nested types.
-    Map(HashMap<String, Option<Value>>),
+    Map(HashMap<String, Option<Literal>>),
 }
 
-impl TryFrom<Value> for ByteBuf {
+impl TryFrom<Literal> for ByteBuf {
     type Error = Error;
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Literal) -> Result<Self, Self::Error> {
         match value {
-            Value::Boolean(val) => {
+            Literal::Boolean(val) => {
                 if val {
                     Ok(ByteBuf::from([0u8]))
                 } else {
                     Ok(ByteBuf::from([1u8]))
                 }
             }
-            Value::Int(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
-            Value::Date(val) => Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes())),
-            Value::Time(val) => Ok(ByteBuf::from(
+            Literal::Int(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Literal::Long(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Literal::Float(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Literal::Double(val) => Ok(ByteBuf::from(val.to_le_bytes())),
+            Literal::Date(val) => Ok(ByteBuf::from(date::date_to_days(&val)?.to_le_bytes())),
+            Literal::Time(val) => Ok(ByteBuf::from(
                 time::time_to_microseconds(&val)?.to_le_bytes(),
             )),
-            Value::Timestamp(val) => Ok(ByteBuf::from(
+            Literal::Timestamp(val) => Ok(ByteBuf::from(
                 timestamp::datetime_to_microseconds(&val)?.to_le_bytes(),
             )),
-            Value::TimestampTZ(val) => Ok(ByteBuf::from(
+            Literal::TimestampTZ(val) => Ok(ByteBuf::from(
                 timestamptz::datetimetz_to_microseconds(&val)?.to_le_bytes(),
             )),
-            Value::String(val) => Ok(ByteBuf::from(val.as_bytes())),
-            Value::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
-            Value::Fixed(_, val) => Ok(ByteBuf::from(val)),
-            Value::Binary(val) => Ok(ByteBuf::from(val)),
+            Literal::String(val) => Ok(ByteBuf::from(val.as_bytes())),
+            Literal::UUID(val) => Ok(ByteBuf::from(val.as_u128().to_be_bytes())),
+            Literal::Fixed(_, val) => Ok(ByteBuf::from(val)),
+            Literal::Binary(val) => Ok(ByteBuf::from(val)),
             _ => todo!(),
         }
     }
@@ -123,13 +123,13 @@ impl TryFrom<Value> for ByteBuf {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Struct {
     /// Vector to store the field values
-    fields: Vec<Option<Value>>,
+    fields: Vec<Option<Literal>>,
     /// A lookup that matches the field name to the entry in the vector
     lookup: HashMap<String, usize>,
 }
 
 impl Deref for Struct {
-    type Target = [Option<Value>];
+    type Target = [Option<Literal>];
 
     fn deref(&self) -> &Self::Target {
         &self.fields
@@ -138,13 +138,13 @@ impl Deref for Struct {
 
 impl Struct {
     /// Get reference to partition value
-    pub fn get(&self, name: &str) -> Option<&Value> {
+    pub fn get(&self, name: &str) -> Option<&Literal> {
         self.fields
             .get(*self.lookup.get(name)?)
             .and_then(|x| x.as_ref())
     }
     /// Get mutable reference to partition value
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Literal> {
         self.fields
             .get_mut(*self.lookup.get(name)?)
             .and_then(|x| x.as_mut())
@@ -183,7 +183,7 @@ impl<'de> Deserialize<'de> for Struct {
             where
                 V: MapAccess<'de>,
             {
-                let mut fields: Vec<Option<Value>> = Vec::new();
+                let mut fields: Vec<Option<Literal>> = Vec::new();
                 let mut lookup: HashMap<String, usize> = HashMap::new();
                 let mut index = 0;
                 while let Some(key) = map.next_key()? {
@@ -202,8 +202,8 @@ impl<'de> Deserialize<'de> for Struct {
     }
 }
 
-impl FromIterator<(String, Option<Value>)> for Struct {
-    fn from_iter<I: IntoIterator<Item = (String, Option<Value>)>>(iter: I) -> Self {
+impl FromIterator<(String, Option<Literal>)> for Struct {
+    fn from_iter<I: IntoIterator<Item = (String, Option<Literal>)>>(iter: I) -> Self {
         let mut fields = Vec::new();
         let mut lookup = HashMap::new();
 
@@ -216,7 +216,7 @@ impl FromIterator<(String, Option<Value>)> for Struct {
     }
 }
 
-impl Value {
+impl Literal {
     #[inline]
     /// Create iceberg value from bytes
     pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self, Error> {
@@ -224,37 +224,39 @@ impl Value {
             Type::Primitive(primitive) => match primitive {
                 PrimitiveType::Boolean => {
                     if bytes.len() == 1 && bytes[0] == 0u8 {
-                        Ok(Value::Boolean(false))
+                        Ok(Literal::Boolean(false))
                     } else {
-                        Ok(Value::Boolean(true))
+                        Ok(Literal::Boolean(true))
                     }
                 }
-                PrimitiveType::Int => Ok(Value::Int(i32::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Long => Ok(Value::Long(i64::from_le_bytes(bytes.try_into()?))),
-                PrimitiveType::Float => Ok(Value::Float(OrderedFloat(f32::from_le_bytes(
+                PrimitiveType::Int => Ok(Literal::Int(i32::from_le_bytes(bytes.try_into()?))),
+                PrimitiveType::Long => Ok(Literal::Long(i64::from_le_bytes(bytes.try_into()?))),
+                PrimitiveType::Float => Ok(Literal::Float(OrderedFloat(f32::from_le_bytes(
                     bytes.try_into()?,
                 )))),
-                PrimitiveType::Double => Ok(Value::Double(OrderedFloat(f64::from_le_bytes(
+                PrimitiveType::Double => Ok(Literal::Double(OrderedFloat(f64::from_le_bytes(
                     bytes.try_into()?,
                 )))),
-                PrimitiveType::Date => Ok(Value::Date(date::days_to_date(i32::from_le_bytes(
+                PrimitiveType::Date => Ok(Literal::Date(date::days_to_date(i32::from_le_bytes(
                     bytes.try_into()?,
                 ))?)),
-                PrimitiveType::Time => Ok(Value::Time(time::microseconds_to_time(
+                PrimitiveType::Time => Ok(Literal::Time(time::microseconds_to_time(
                     i64::from_le_bytes(bytes.try_into()?),
                 )?)),
-                PrimitiveType::Timestamp => Ok(Value::Timestamp(
+                PrimitiveType::Timestamp => Ok(Literal::Timestamp(
                     timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
                 )),
-                PrimitiveType::Timestamptz => Ok(Value::TimestampTZ(
+                PrimitiveType::Timestamptz => Ok(Literal::TimestampTZ(
                     timestamptz::microseconds_to_datetimetz(i64::from_le_bytes(bytes.try_into()?))?,
                 )),
-                PrimitiveType::String => Ok(Value::String(std::str::from_utf8(bytes)?.to_string())),
-                PrimitiveType::Uuid => Ok(Value::UUID(Uuid::from_u128(u128::from_be_bytes(
+                PrimitiveType::String => {
+                    Ok(Literal::String(std::str::from_utf8(bytes)?.to_string()))
+                }
+                PrimitiveType::Uuid => Ok(Literal::UUID(Uuid::from_u128(u128::from_be_bytes(
                     bytes.try_into()?,
                 )))),
-                PrimitiveType::Fixed(len) => Ok(Value::Fixed(*len as usize, Vec::from(bytes))),
-                PrimitiveType::Binary => Ok(Value::Binary(Vec::from(bytes))),
+                PrimitiveType::Fixed(len) => Ok(Literal::Fixed(*len as usize, Vec::from(bytes))),
+                PrimitiveType::Binary => Ok(Literal::Binary(Vec::from(bytes))),
                 _ => Err(Error::new(
                     crate::ErrorKind::DataInvalid,
                     "Converting bytes to decimal is not supported.",
@@ -270,20 +272,20 @@ impl Value {
     /// Get datatype of value
     pub fn datatype(&self) -> Type {
         match self {
-            Value::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
-            Value::Int(_) => Type::Primitive(PrimitiveType::Int),
-            Value::Long(_) => Type::Primitive(PrimitiveType::Long),
-            Value::Float(_) => Type::Primitive(PrimitiveType::Float),
-            Value::Double(_) => Type::Primitive(PrimitiveType::Double),
-            Value::Date(_) => Type::Primitive(PrimitiveType::Date),
-            Value::Time(_) => Type::Primitive(PrimitiveType::Time),
-            Value::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
-            Value::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
-            Value::Fixed(len, _) => Type::Primitive(PrimitiveType::Fixed(*len as u64)),
-            Value::Binary(_) => Type::Primitive(PrimitiveType::Binary),
-            Value::String(_) => Type::Primitive(PrimitiveType::String),
-            Value::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
-            Value::Decimal(dec) => Type::Primitive(PrimitiveType::Decimal {
+            Literal::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
+            Literal::Int(_) => Type::Primitive(PrimitiveType::Int),
+            Literal::Long(_) => Type::Primitive(PrimitiveType::Long),
+            Literal::Float(_) => Type::Primitive(PrimitiveType::Float),
+            Literal::Double(_) => Type::Primitive(PrimitiveType::Double),
+            Literal::Date(_) => Type::Primitive(PrimitiveType::Date),
+            Literal::Time(_) => Type::Primitive(PrimitiveType::Time),
+            Literal::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
+            Literal::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
+            Literal::Fixed(len, _) => Type::Primitive(PrimitiveType::Fixed(*len as u64)),
+            Literal::Binary(_) => Type::Primitive(PrimitiveType::Binary),
+            Literal::String(_) => Type::Primitive(PrimitiveType::String),
+            Literal::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
+            Literal::Decimal(dec) => Type::Primitive(PrimitiveType::Decimal {
                 precision: 38,
                 scale: dec.scale(),
             }),
@@ -294,20 +296,20 @@ impl Value {
     /// Convert Value to the any type
     pub fn into_any(self) -> Box<dyn Any> {
         match self {
-            Value::Boolean(any) => Box::new(any),
-            Value::Int(any) => Box::new(any),
-            Value::Long(any) => Box::new(any),
-            Value::Float(any) => Box::new(any),
-            Value::Double(any) => Box::new(any),
-            Value::Date(any) => Box::new(any),
-            Value::Time(any) => Box::new(any),
-            Value::Timestamp(any) => Box::new(any),
-            Value::TimestampTZ(any) => Box::new(any),
-            Value::Fixed(_, any) => Box::new(any),
-            Value::Binary(any) => Box::new(any),
-            Value::String(any) => Box::new(any),
-            Value::UUID(any) => Box::new(any),
-            Value::Decimal(any) => Box::new(any),
+            Literal::Boolean(any) => Box::new(any),
+            Literal::Int(any) => Box::new(any),
+            Literal::Long(any) => Box::new(any),
+            Literal::Float(any) => Box::new(any),
+            Literal::Double(any) => Box::new(any),
+            Literal::Date(any) => Box::new(any),
+            Literal::Time(any) => Box::new(any),
+            Literal::Timestamp(any) => Box::new(any),
+            Literal::TimestampTZ(any) => Box::new(any),
+            Literal::Fixed(_, any) => Box::new(any),
+            Literal::Binary(any) => Box::new(any),
+            Literal::String(any) => Box::new(any),
+            Literal::UUID(any) => Box::new(any),
+            Literal::Decimal(any) => Box::new(any),
             _ => unimplemented!(),
         }
     }
@@ -546,7 +548,7 @@ mod tests {
 
     #[test]
     pub fn boolean() {
-        let input = Value::Boolean(true);
+        let input = Literal::Boolean(true);
 
         let raw_schema = r#""boolean""#;
 
@@ -561,14 +563,14 @@ mod tests {
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
         for record in reader {
-            let result = apache_avro::from_value::<Value>(&record.unwrap()).unwrap();
+            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
             assert_eq!(input, result);
         }
     }
 
     #[test]
     pub fn int() {
-        let input = Value::Int(42);
+        let input = Literal::Int(42);
 
         let raw_schema = r#""int""#;
 
@@ -583,14 +585,14 @@ mod tests {
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
         for record in reader {
-            let result = apache_avro::from_value::<Value>(&record.unwrap()).unwrap();
+            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
             assert_eq!(input, result);
         }
     }
 
     #[test]
     pub fn float() {
-        let input = Value::Float(OrderedFloat(42.0));
+        let input = Literal::Float(OrderedFloat(42.0));
 
         let raw_schema = r#""float""#;
 
@@ -605,14 +607,14 @@ mod tests {
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
         for record in reader {
-            let result = apache_avro::from_value::<Value>(&record.unwrap()).unwrap();
+            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
             assert_eq!(input, result);
         }
     }
 
     #[test]
     pub fn string() {
-        let input = Value::String("test".to_string());
+        let input = Literal::String("test".to_string());
 
         let raw_schema = r#""string""#;
 
@@ -627,16 +629,16 @@ mod tests {
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
         for record in reader {
-            let result = apache_avro::from_value::<Value>(&record.unwrap()).unwrap();
+            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
             assert_eq!(input, result);
         }
     }
 
     #[test]
     pub fn struct_value() {
-        let input = Value::Struct(Struct::from_iter(vec![(
+        let input = Literal::Struct(Struct::from_iter(vec![(
             "name".to_string(),
-            Some(Value::String("Alice".to_string())),
+            Some(Literal::String("Alice".to_string())),
         )]));
 
         let raw_schema = r#"{"type": "record","name": "r102","fields": [{
@@ -656,7 +658,7 @@ mod tests {
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
         for record in reader {
-            let result = apache_avro::from_value::<Value>(&record.unwrap()).unwrap();
+            let result = apache_avro::from_value::<Literal>(&record.unwrap()).unwrap();
             assert_eq!(input, result);
         }
     }
