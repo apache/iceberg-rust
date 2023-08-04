@@ -123,56 +123,44 @@ impl From<Literal> for ByteBuf {
     }
 }
 
-impl TryFrom<Literal> for JsonValue {
-    type Error = Error;
-    fn try_from(value: Literal) -> Result<Self, Self::Error> {
+impl From<Literal> for JsonValue {
+    fn from(value: Literal) -> Self {
         match value {
             Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => Ok(JsonValue::Bool(val)),
-                PrimitiveLiteral::Int(val) => Ok(JsonValue::Number(val.into())),
-                PrimitiveLiteral::Long(val) => Ok(JsonValue::Number(val.into())),
-                PrimitiveLiteral::Float(val) => Ok(JsonValue::Number(
-                    Number::from_f64(val.0 as f64).ok_or(Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "Failed to convert float to json",
-                    ))?,
-                )),
-                PrimitiveLiteral::Double(val) => Ok(JsonValue::Number(
-                    Number::from_f64(val.0).ok_or(Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "Failed to convert float to json",
-                    ))?,
-                )),
-                PrimitiveLiteral::Date(val) => Ok(JsonValue::String(val.to_string())),
-                PrimitiveLiteral::Time(val) => Ok(JsonValue::String(val.to_string())),
-                PrimitiveLiteral::Timestamp(val) => Ok(JsonValue::String(
-                    val.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
-                )),
-                PrimitiveLiteral::TimestampTZ(val) => Ok(JsonValue::String(
-                    val.format("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string(),
-                )),
-                PrimitiveLiteral::String(val) => Ok(JsonValue::String(val)),
-                PrimitiveLiteral::UUID(val) => Ok(JsonValue::String(val.to_string())),
-                PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.into_iter().fold(
-                    String::new(),
-                    |mut acc, x| {
+                PrimitiveLiteral::Boolean(val) => JsonValue::Bool(val),
+                PrimitiveLiteral::Int(val) => JsonValue::Number(val.into()),
+                PrimitiveLiteral::Long(val) => JsonValue::Number(val.into()),
+                PrimitiveLiteral::Float(val) => {
+                    JsonValue::Number(Number::from_f64(val.0 as f64).unwrap())
+                }
+                PrimitiveLiteral::Double(val) => {
+                    JsonValue::Number(Number::from_f64(val.0).unwrap())
+                }
+                PrimitiveLiteral::Date(val) => JsonValue::String(val.to_string()),
+                PrimitiveLiteral::Time(val) => JsonValue::String(val.to_string()),
+                PrimitiveLiteral::Timestamp(val) => {
+                    JsonValue::String(val.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                }
+                PrimitiveLiteral::TimestampTZ(val) => {
+                    JsonValue::String(val.format("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string())
+                }
+                PrimitiveLiteral::String(val) => JsonValue::String(val),
+                PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
+                PrimitiveLiteral::Fixed(val) => {
+                    JsonValue::String(val.into_iter().fold(String::new(), |mut acc, x| {
                         acc.push_str(&format!("{:x}", x));
                         acc
-                    },
-                ))),
-                PrimitiveLiteral::Binary(val) => Ok(JsonValue::String(val.into_iter().fold(
-                    String::new(),
-                    |mut acc, x| {
+                    }))
+                }
+                PrimitiveLiteral::Binary(val) => {
+                    JsonValue::String(val.into_iter().fold(String::new(), |mut acc, x| {
                         acc.push_str(&format!("{:x}", x));
                         acc
-                    },
-                ))),
+                    }))
+                }
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
-            _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Complex types can't be converted to bytes",
-            )),
+            _ => todo!(),
         }
     }
 }
@@ -463,7 +451,7 @@ mod tests {
         let desered_literal = Literal::try_from_json(raw_json_value, expected_type).unwrap();
         assert_eq!(desered_literal, expected_literal);
 
-        let expected_json_value: JsonValue = expected_literal.try_into().unwrap();
+        let expected_json_value: JsonValue = expected_literal.into();
         let sered_json = serde_json::to_string(&expected_json_value).unwrap();
         let parsed_json_value = serde_json::from_str::<JsonValue>(&sered_json).unwrap();
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
