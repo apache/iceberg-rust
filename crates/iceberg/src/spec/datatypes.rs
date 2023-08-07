@@ -23,12 +23,13 @@ use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::OnceCell;
 use std::slice::Iter;
+use std::sync::Arc;
 use std::{collections::HashMap, fmt, ops::Index};
 
 /// Field name for list type.
-const LIST_FILED_NAME: &str = "element";
-const MAP_KEY_FIELD_NAME: &str = "key";
-const MAP_VALUE_FIELD_NAME: &str = "value";
+pub(crate) const LIST_FILED_NAME: &str = "element";
+pub(crate) const MAP_KEY_FIELD_NAME: &str = "key";
+pub(crate) const MAP_VALUE_FIELD_NAME: &str = "value";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 /// All data types are either primitives or nested types, which are maps, lists, or structs.
@@ -51,6 +52,20 @@ impl fmt::Display for Type {
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
         }
+    }
+}
+
+impl Type {
+    /// Whether the type is primitive type.
+    #[inline(always)]
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, Type::Primitive(_))
+    }
+
+    /// Whether the type is struct type.
+    #[inline(always)]
+    pub fn is_struct(&self) -> bool {
+        matches!(self, Type::Struct(_))
     }
 }
 
@@ -218,7 +233,7 @@ impl fmt::Display for PrimitiveType {
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields
-    fields: Vec<NestedField>,
+    fields: Vec<NestedFieldRef>,
     /// Lookup for index by field id
     #[serde(skip_serializing)]
     id_lookup: OnceCell<HashMap<i32, usize>>,
@@ -261,7 +276,7 @@ impl<'de> Deserialize<'de> for StructType {
                         }
                     }
                 }
-                let fields: Vec<NestedField> =
+                let fields: Vec<NestedFieldRef> =
                     fields.ok_or_else(|| de::Error::missing_field("fields"))?;
 
                 Ok(StructType::new(fields))
@@ -275,14 +290,14 @@ impl<'de> Deserialize<'de> for StructType {
 
 impl StructType {
     /// Creates a struct type with the given fields.
-    pub fn new(fields: Vec<NestedField>) -> Self {
+    pub fn new(fields: Vec<NestedFieldRef>) -> Self {
         Self {
             fields,
             id_lookup: OnceCell::default(),
         }
     }
     /// Get struct field with certain id
-    pub fn field_by_id(&self, id: i32) -> Option<&NestedField> {
+    pub fn field_by_id(&self, id: i32) -> Option<&NestedFieldRef> {
         self.field_id_to_index(id).map(|idx| &self.fields[idx])
     }
 
@@ -297,6 +312,11 @@ impl StructType {
     /// Returns an iteratorr over the struct fields
     pub fn iter(&self) -> Iter<NestedField> {
         self.fields.iter()
+    }
+
+    /// Get fields.
+    pub fn fields(&self) -> &[NestedFieldRef] {
+        &self.fields
     }
 }
 
@@ -351,6 +371,9 @@ pub struct NestedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<String>,
 }
+
+/// Reference to nested field.
+pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
     /// Construct a required field.
@@ -443,13 +466,15 @@ impl fmt::Display for NestedField {
 /// Elements can be either optional or required. Element types may be any type.
 pub struct ListType {
     /// Element field of list type.
-    pub element_field: NestedField,
+    pub element_field: NestedFieldRef,
 }
 
 /// Module for type serialization/deserialization.
 pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
-    use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
+    use crate::spec::datatypes::{
+        ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+    };
     use serde_derive::{Deserialize, Serialize};
     use std::borrow::Cow;
 
@@ -466,7 +491,7 @@ pub(super) mod _serde {
         },
         Struct {
             r#type: String,
-            fields: Cow<'a, Vec<NestedField>>,
+            fields: Cow<'a, Vec<NestedFieldRef>>,
         },
         #[serde(rename_all = "kebab-case")]
         Map {
@@ -493,7 +518,8 @@ pub(super) mod _serde {
                         element_id,
                         element.into_owned(),
                         element_required,
-                    ),
+                    )
+                    .into(),
                 }),
                 SerdeType::Map {
                     r#type: _,
@@ -503,12 +529,13 @@ pub(super) mod _serde {
                     value_required,
                     value,
                 } => Map(MapType {
-                    key_field: NestedField::map_key_element(key_id, key.into_owned()),
+                    key_field: NestedField::map_key_element(key_id, key.into_owned()).into(),
                     value_field: NestedField::map_value_element(
                         value_id,
                         value.into_owned(),
                         value_required,
-                    ),
+                    )
+                    .into(),
                 }),
                 SerdeType::Struct { r#type: _, fields } => {
                     Self::Struct(StructType::new(fields.into_owned()))
@@ -552,9 +579,9 @@ pub(super) mod _serde {
 /// Both map keys and map values may be any type, including nested types.
 pub struct MapType {
     /// Field for key.
-    pub key_field: NestedField,
+    pub key_field: NestedFieldRef,
     /// Field for value.
-    pub value_field: NestedField,
+    pub value_field: NestedFieldRef,
 }
 
 #[cfg(test)]
@@ -598,7 +625,8 @@ mod tests {
                         precision: 9,
                         scale: 2,
                     }),
-                )],
+                )
+                .into()],
                 id_lookup: OnceCell::default(),
             }),
         )
@@ -627,7 +655,8 @@ mod tests {
                     1,
                     "id",
                     Type::Primitive(PrimitiveType::Fixed(8)),
-                )],
+                )
+                .into()],
                 id_lookup: OnceCell::default(),
             }),
         )
@@ -662,8 +691,9 @@ mod tests {
                 fields: vec![
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
                         .with_initial_default("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
-                        .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae"),
-                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)),
+                        .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                        .into(),
+                    NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
                 ],
                 id_lookup: HashMap::from([(1, 0), (2, 1)]).into(),
             }),
@@ -725,17 +755,21 @@ mod tests {
         let struct_type = Type::Struct(StructType::new(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
                 .with_initial_default("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
-                .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae"),
-            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)),
+                .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                .into(),
+            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
             NestedField::required(
                 3,
                 "address",
                 Type::Struct(StructType::new(vec![
-                    NestedField::required(4, "street", Type::Primitive(PrimitiveType::String)),
-                    NestedField::optional(5, "province", Type::Primitive(PrimitiveType::String)),
-                    NestedField::required(6, "zip", Type::Primitive(PrimitiveType::Int)),
+                    NestedField::required(4, "street", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::optional(5, "province", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::required(6, "zip", Type::Primitive(PrimitiveType::Int)).into(),
                 ])),
-            ),
+            )
+            .into(),
         ]));
 
         check_type_serde(record, struct_type)
@@ -759,7 +793,8 @@ mod tests {
                     3,
                     Type::Primitive(PrimitiveType::String),
                     true,
-                ),
+                )
+                .into(),
             }),
         );
     }
@@ -780,12 +815,14 @@ mod tests {
         check_type_serde(
             record,
             Type::Map(MapType {
-                key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String)),
+                key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String))
+                    .into(),
                 value_field: NestedField::map_value_element(
                     5,
                     Type::Primitive(PrimitiveType::Double),
                     false,
-                ),
+                )
+                .into(),
             }),
         );
     }
@@ -806,12 +843,14 @@ mod tests {
         check_type_serde(
             record,
             Type::Map(MapType {
-                key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::Int)),
+                key_field: NestedField::map_key_element(4, Type::Primitive(PrimitiveType::Int))
+                    .into(),
                 value_field: NestedField::map_value_element(
                     5,
                     Type::Primitive(PrimitiveType::String),
                     false,
-                ),
+                )
+                .into(),
             }),
         );
     }
