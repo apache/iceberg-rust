@@ -539,10 +539,7 @@ impl Literal {
 fn to_optional_literal(value: Result<Literal, Error>) -> Result<Option<Literal>, Error> {
     match value {
         Err(err) => {
-            let is_null_error = match err.kind() {
-                ErrorKind::NullConversion => true,
-                _ => false,
-            };
+            let is_null_error = matches!(err.kind(), ErrorKind::NullConversion);
             if is_null_error {
                 Ok(None)
             } else {
