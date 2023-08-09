@@ -21,9 +21,13 @@
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value as JsonValue;
 use std::cell::OnceCell;
+use std::convert::identity;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt, ops::Index};
+
+use super::values::Literal;
 
 /// Field name for list type.
 pub(crate) const LIST_FILED_NAME: &str = "element";
@@ -341,8 +345,8 @@ impl fmt::Display for StructType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -354,17 +358,65 @@ pub struct NestedField {
     /// Optional or required
     pub required: bool,
     /// Datatype
-    #[serde(rename = "type")]
     pub field_type: Box<Type>,
     /// Fields may have an optional comment or doc string.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
     /// Used to populate the field’s value for all records that were written before the field was added to the schema
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_default: Option<String>,
+    pub initial_default: Option<Literal>,
     /// Used to populate the field’s value for any records written after the field was added to the schema, if the writer does not supply the field’s value
+    pub write_default: Option<Literal>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+struct SerdeNestedField {
+    pub id: i32,
+    pub name: String,
+    pub required: bool,
+    #[serde(rename = "type")]
+    pub field_type: Box<Type>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub write_default: Option<String>,
+    pub doc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_default: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_default: Option<JsonValue>,
+}
+
+impl From<SerdeNestedField> for NestedField {
+    fn from(value: SerdeNestedField) -> Self {
+        NestedField {
+            id: value.id,
+            name: value.name,
+            required: value.required,
+            initial_default: value.initial_default.and_then(|x| {
+                Literal::try_from_json(x, &value.field_type)
+                    .ok()
+                    .and_then(identity)
+            }),
+            write_default: value.write_default.and_then(|x| {
+                Literal::try_from_json(x, &value.field_type)
+                    .ok()
+                    .and_then(identity)
+            }),
+            field_type: value.field_type,
+            doc: value.doc,
+        }
+    }
+}
+
+impl From<NestedField> for SerdeNestedField {
+    fn from(value: NestedField) -> Self {
+        SerdeNestedField {
+            id: value.id,
+            name: value.name,
+            required: value.required,
+            field_type: value.field_type,
+            doc: value.doc,
+            initial_default: value.initial_default.map(|x| (&x).into()),
+            write_default: value.write_default.map(|x| (&x).into()),
+        }
+    }
 }
 
 /// Reference to nested field.
@@ -427,14 +479,14 @@ impl NestedField {
     }
 
     /// Set the field's initial default value.
-    pub fn with_initial_default(mut self, value: impl ToString) -> Self {
-        self.initial_default = Some(value.to_string());
+    pub fn with_initial_default(mut self, value: Literal) -> Self {
+        self.initial_default = Some(value);
         self
     }
 
     /// Set the field's initial default value.
-    pub fn with_write_default(mut self, value: impl ToString) -> Self {
-        self.write_default = Some(value.to_string());
+    pub fn with_write_default(mut self, value: Literal) -> Self {
+        self.write_default = Some(value);
         self
     }
 }
@@ -581,6 +633,10 @@ pub struct MapType {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
+    use crate::spec::values::PrimitiveLiteral;
+
     use super::*;
 
     fn check_type_serde(json: &str, expected_type: Type) {
@@ -685,8 +741,12 @@ mod tests {
             Type::Struct(StructType {
                 fields: vec![
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                        .with_initial_default("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
-                        .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                            Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
+                        )))
+                        .with_write_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                            Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
+                        )))
                         .into(),
                     NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
                 ],
@@ -749,8 +809,12 @@ mod tests {
 
         let struct_type = Type::Struct(StructType::new(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                .with_initial_default("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
-                .with_write_default("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                    Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
+                )))
+                .with_write_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                    Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
+                )))
                 .into(),
             NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
             NestedField::required(
