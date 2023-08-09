@@ -19,4 +19,5 @@
 
 pub mod datatypes;
 pub mod schema;
+pub mod transform;
 pub mod values;
