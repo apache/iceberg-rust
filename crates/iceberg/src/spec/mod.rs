@@ -18,6 +18,7 @@
 //! Spec for Iceberg.
 
 pub mod datatypes;
+pub mod partition;
 pub mod schema;
 pub mod snapshot;
 pub mod transform;
