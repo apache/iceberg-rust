@@ -323,14 +323,14 @@ impl Literal {
     }
 
     /// Create iceberg value from a json value
-    pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Self, Error> {
+    pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Option<Self>, Error> {
         match data_type {
             Type::Primitive(primitive) => match (primitive, value) {
                 (PrimitiveType::Boolean, JsonValue::Bool(bool)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::Boolean(bool)))
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(bool))))
                 }
                 (PrimitiveType::Int, JsonValue::Number(number)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::Int(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
                         number
                             .as_i64()
                             .ok_or(Error::new(
@@ -338,55 +338,55 @@ impl Literal {
                                 "Failed to convert json number to int",
                             ))?
                             .try_into()?,
-                    )))
+                    ))))
                 }
-                (PrimitiveType::Long, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                (PrimitiveType::Long, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Long(number.as_i64().ok_or(Error::new(
                         crate::ErrorKind::DataInvalid,
                         "Failed to convert json number to long",
                     ))?),
-                )),
-                (PrimitiveType::Float, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                ))),
+                (PrimitiveType::Float, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Float(OrderedFloat(number.as_f64().ok_or(Error::new(
                         crate::ErrorKind::DataInvalid,
                         "Failed to convert json number to float",
                     ))? as f32)),
-                )),
-                (PrimitiveType::Double, JsonValue::Number(number)) => Ok(Literal::Primitive(
+                ))),
+                (PrimitiveType::Double, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Double(OrderedFloat(number.as_f64().ok_or(Error::new(
                         crate::ErrorKind::DataInvalid,
                         "Failed to convert json number to double",
                     ))?)),
-                )),
+                ))),
                 (PrimitiveType::Date, JsonValue::String(s)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::Date(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Date(
                         date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
-                    )))
+                    ))))
                 }
                 (PrimitiveType::Time, JsonValue::String(s)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::Time(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Time(
                         time::time_to_microseconds(&NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
-                    )))
+                    ))))
                 }
-                (PrimitiveType::Timestamp, JsonValue::String(s)) => Ok(Literal::Primitive(
+                (PrimitiveType::Timestamp, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Timestamp(timestamp::datetime_to_microseconds(
                         &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
                     )),
-                )),
+                ))),
                 (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::TimestampTZ(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::TimestampTZ(
                         timestamptz::datetimetz_to_microseconds(&DateTime::from_utc(
                             NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
                             Utc,
                         )),
-                    )))
+                    ))))
                 }
                 (PrimitiveType::String, JsonValue::String(s)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::String(s)))
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::String(s))))
                 }
-                (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Literal::Primitive(
+                (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::UUID(Uuid::parse_str(&s)?),
-                )),
+                ))),
                 (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
                 (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
                 (
@@ -396,10 +396,7 @@ impl Literal {
                     },
                     JsonValue::String(_),
                 ) => todo!(),
-                (_, JsonValue::Null) => Err(Error::new(
-                    crate::ErrorKind::NullConversion,
-                    "Failed to convert null to iceberg value",
-                )),
+                (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(Error::new(
                     crate::ErrorKind::DataInvalid,
                     format!(
@@ -410,17 +407,24 @@ impl Literal {
             },
             Type::Struct(schema) => {
                 if let JsonValue::Object(mut object) = value {
-                    Ok(Literal::Struct(Struct::from_iter(schema.iter().map(
+                    Ok(Some(Literal::Struct(Struct::from_iter(schema.iter().map(
                         |field| {
                             (
                                 field.id,
                                 object.remove(&field.id.to_string()).and_then(|value| {
-                                    Literal::try_from_json(value, &field.field_type).ok()
+                                    Literal::try_from_json(value, &field.field_type)
+                                        .and_then(|value| {
+                                            value.ok_or(Error::new(
+                                                ErrorKind::DataInvalid,
+                                                "Key of map cannot be null",
+                                            ))
+                                        })
+                                        .ok()
                                 }),
                                 field.name.clone(),
                             )
                         },
-                    ))))
+                    )))))
                 } else {
                     Err(Error::new(
                         crate::ErrorKind::DataInvalid,
@@ -430,17 +434,14 @@ impl Literal {
             }
             Type::List(list) => {
                 if let JsonValue::Array(array) = value {
-                    Ok(Literal::List(
+                    Ok(Some(Literal::List(
                         array
                             .into_iter()
                             .map(|value| {
-                                to_optional_literal(Literal::try_from_json(
-                                    value,
-                                    &list.element_field.field_type,
-                                ))
+                                Literal::try_from_json(value, &list.element_field.field_type)
                             })
                             .collect::<Result<Vec<_>, Error>>()?,
-                    ))
+                    )))
                 } else {
                     Err(Error::new(
                         crate::ErrorKind::DataInvalid,
@@ -453,21 +454,24 @@ impl Literal {
                     if let (Some(JsonValue::Array(keys)), Some(JsonValue::Array(values))) =
                         (object.remove("keys"), object.remove("values"))
                     {
-                        Ok(Literal::Map(BTreeMap::from_iter(
+                        Ok(Some(Literal::Map(BTreeMap::from_iter(
                             keys.into_iter()
                                 .zip(values.into_iter())
                                 .map(|(key, value)| {
                                     Ok((
-                                        Literal::try_from_json(key, &map.key_field.field_type)?,
-                                        to_optional_literal(Literal::try_from_json(
-                                            value,
-                                            &map.value_field.field_type,
-                                        ))?,
+                                        Literal::try_from_json(key, &map.key_field.field_type)
+                                            .and_then(|value| {
+                                                value.ok_or(Error::new(
+                                                    ErrorKind::DataInvalid,
+                                                    "Key of map cannot be null",
+                                                ))
+                                            })?,
+                                        Literal::try_from_json(value, &map.value_field.field_type)?,
                                     ))
                                 })
                                 .collect::<Result<Vec<_>, Error>>()?
                                 .into_iter(),
-                        )))
+                        ))))
                     } else {
                         Err(Error::new(
                             crate::ErrorKind::DataInvalid,
@@ -533,20 +537,6 @@ impl Literal {
             },
             _ => unimplemented!(),
         }
-    }
-}
-
-fn to_optional_literal(value: Result<Literal, Error>) -> Result<Option<Literal>, Error> {
-    match value {
-        Err(err) => {
-            let is_null_error = matches!(err.kind(), ErrorKind::NullConversion);
-            if is_null_error {
-                Ok(None)
-            } else {
-                Err(err)
-            }
-        }
-        Ok(x) => Ok(Some(x)),
     }
 }
 
@@ -632,7 +622,7 @@ mod tests {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
         let desered_literal =
             Literal::try_from_json(raw_json_value.clone(), expected_type).unwrap();
-        assert_eq!(desered_literal, expected_literal);
+        assert_eq!(desered_literal, Some(expected_literal.clone()));
 
         let expected_json_value: JsonValue = (&expected_literal).into();
         let sered_json = serde_json::to_string(&expected_json_value).unwrap();
