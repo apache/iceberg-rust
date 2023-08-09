@@ -697,7 +697,12 @@ pub struct SchemaV1 {
 
 impl From<SchemaV2> for Schema {
     fn from(value: SchemaV2) -> Self {
-        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        let highest_field_id = value
+            .fields
+            .iter()
+            .map(|x| x.id)
+            .max()
+            .unwrap_or(DEFAULT_SCHEMA_ID);
         Schema {
             schema_id: value.schema_id,
             highest_field_id,
@@ -708,9 +713,14 @@ impl From<SchemaV2> for Schema {
 
 impl From<SchemaV1> for Schema {
     fn from(value: SchemaV1) -> Self {
-        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        let highest_field_id = value
+            .fields
+            .iter()
+            .map(|x| x.id)
+            .max()
+            .unwrap_or(DEFAULT_SCHEMA_ID);
         Schema {
-            schema_id: value.schema_id.unwrap_or(1),
+            schema_id: value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID),
             highest_field_id,
             r#struct: value.fields,
         }
