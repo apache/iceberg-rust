@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn json_struct() {
-        let record = r#"{"1": 1, "2": "bar"}"#;
+        let record = r#"{"1": 1, "2": "bar", "3": null}"#;
 
         check_json_serde(
             record,
@@ -806,6 +806,7 @@ mod tests {
                     ))),
                     "name".to_string(),
                 ),
+                (3, None, "address".to_string()),
             ])),
             &Type::Struct(StructType::new(vec![
                 NestedField {
@@ -820,6 +821,15 @@ mod tests {
                 NestedField {
                     id: 2,
                     name: "name".to_string(),
+                    required: false,
+                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
+                    doc: None,
+                    initial_default: None,
+                    write_default: None,
+                },
+                NestedField {
+                    id: 3,
+                    name: "address".to_string(),
                     required: false,
                     field_type: Box::new(Type::Primitive(PrimitiveType::String)),
                     doc: None,
