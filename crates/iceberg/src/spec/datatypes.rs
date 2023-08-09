@@ -22,7 +22,6 @@ use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::OnceCell;
-use std::slice::Iter;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt, ops::Index};
 
@@ -308,10 +307,6 @@ impl StructType {
             })
             .get(&field_id)
             .copied()
-    }
-    /// Returns an iteratorr over the struct fields
-    pub fn iter(&self) -> Iter<NestedField> {
-        self.fields.iter()
     }
 
     /// Get fields.
