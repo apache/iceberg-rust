@@ -47,13 +47,13 @@ pub enum PrimitiveLiteral {
     /// Stored as 8-byte little-endian
     Double(OrderedFloat<f64>),
     /// Stores days from the 1970-01-01 in an 4-byte little-endian int
-    Date(NaiveDate),
+    Date(i32),
     /// Stores microseconds from midnight in an 8-byte little-endian long
-    Time(NaiveTime),
+    Time(i64),
     /// Timestamp without timezone
-    Timestamp(NaiveDateTime),
+    Timestamp(i64),
     /// Timestamp with timezone
-    TimestampTZ(DateTime<Utc>),
+    TimestampTZ(i64),
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
@@ -101,18 +101,10 @@ impl From<Literal> for ByteBuf {
                 PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
                 PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
                 PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Date(val) => {
-                    ByteBuf::from(date::date_to_days(&val).to_le_bytes())
-                }
-                PrimitiveLiteral::Time(val) => {
-                    ByteBuf::from(time::time_to_microseconds(&val).to_le_bytes())
-                }
-                PrimitiveLiteral::Timestamp(val) => {
-                    ByteBuf::from(timestamp::datetime_to_microseconds(&val).to_le_bytes())
-                }
-                PrimitiveLiteral::TimestampTZ(val) => {
-                    ByteBuf::from(timestamptz::datetimetz_to_microseconds(&val).to_le_bytes())
-                }
+                PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
+                PrimitiveLiteral::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
                 PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
                 PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
                 PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
@@ -139,14 +131,22 @@ impl From<&Literal> for JsonValue {
                     Some(number) => JsonValue::Number(number),
                     None => JsonValue::Null,
                 },
-                PrimitiveLiteral::Date(val) => JsonValue::String(val.to_string()),
-                PrimitiveLiteral::Time(val) => JsonValue::String(val.to_string()),
-                PrimitiveLiteral::Timestamp(val) => {
-                    JsonValue::String(val.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                PrimitiveLiteral::Date(val) => {
+                    JsonValue::String(date::days_to_date(*val).to_string())
                 }
-                PrimitiveLiteral::TimestampTZ(val) => {
-                    JsonValue::String(val.format("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string())
+                PrimitiveLiteral::Time(val) => {
+                    JsonValue::String(time::microseconds_to_time(*val).to_string())
                 }
+                PrimitiveLiteral::Timestamp(val) => JsonValue::String(
+                    timestamp::microseconds_to_datetime(*val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string(),
+                ),
+                PrimitiveLiteral::TimestampTZ(val) => JsonValue::String(
+                    timestamptz::microseconds_to_datetimetz(*val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                        .to_string(),
+                ),
                 PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
                 PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
                 PrimitiveLiteral::Fixed(val) => {
@@ -287,18 +287,16 @@ impl Literal {
                     OrderedFloat(f64::from_le_bytes(bytes.try_into()?)),
                 ))),
                 PrimitiveType::Date => Ok(Literal::Primitive(PrimitiveLiteral::Date(
-                    date::days_to_date(i32::from_le_bytes(bytes.try_into()?))?,
+                    i32::from_le_bytes(bytes.try_into()?),
                 ))),
                 PrimitiveType::Time => Ok(Literal::Primitive(PrimitiveLiteral::Time(
-                    time::microseconds_to_time(i64::from_le_bytes(bytes.try_into()?))?,
+                    i64::from_le_bytes(bytes.try_into()?),
                 ))),
                 PrimitiveType::Timestamp => Ok(Literal::Primitive(PrimitiveLiteral::Timestamp(
-                    timestamp::microseconds_to_datetime(i64::from_le_bytes(bytes.try_into()?))?,
+                    i64::from_le_bytes(bytes.try_into()?),
                 ))),
                 PrimitiveType::Timestamptz => Ok(Literal::Primitive(
-                    PrimitiveLiteral::TimestampTZ(timestamptz::microseconds_to_datetimetz(
-                        i64::from_le_bytes(bytes.try_into()?),
-                    )?),
+                    PrimitiveLiteral::TimestampTZ(i64::from_le_bytes(bytes.try_into()?)),
                 )),
                 PrimitiveType::String => Ok(Literal::Primitive(PrimitiveLiteral::String(
                     std::str::from_utf8(bytes)?.to_string(),
@@ -360,23 +358,29 @@ impl Literal {
                         "Failed to convert json number to double",
                     ))?)),
                 )),
-                (PrimitiveType::Date, JsonValue::String(s)) => Ok(Literal::Primitive(
-                    PrimitiveLiteral::Date(NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
-                )),
-                (PrimitiveType::Time, JsonValue::String(s)) => Ok(Literal::Primitive(
-                    PrimitiveLiteral::Time(NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
-                )),
-                (PrimitiveType::Timestamp, JsonValue::String(s)) => {
-                    Ok(Literal::Primitive(PrimitiveLiteral::Timestamp(
-                        NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
+                (PrimitiveType::Date, JsonValue::String(s)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::Date(
+                        date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
                     )))
                 }
-                (PrimitiveType::Timestamptz, JsonValue::String(s)) => Ok(Literal::Primitive(
-                    PrimitiveLiteral::TimestampTZ(DateTime::from_utc(
-                        NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
-                        Utc,
+                (PrimitiveType::Time, JsonValue::String(s)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::Time(
+                        time::time_to_microseconds(&NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
+                    )))
+                }
+                (PrimitiveType::Timestamp, JsonValue::String(s)) => Ok(Literal::Primitive(
+                    PrimitiveLiteral::Timestamp(timestamp::datetime_to_microseconds(
+                        &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
                     )),
                 )),
+                (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
+                    Ok(Literal::Primitive(PrimitiveLiteral::TimestampTZ(
+                        timestamptz::datetimetz_to_microseconds(&DateTime::from_utc(
+                            NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
+                            Utc,
+                        )),
+                    )))
+                }
                 (PrimitiveType::String, JsonValue::String(s)) => {
                     Ok(Literal::Primitive(PrimitiveLiteral::String(s)))
                 }
@@ -529,84 +533,73 @@ impl Literal {
 }
 
 mod date {
-    use chrono::NaiveDate;
-
-    use crate::Error;
+    use chrono::{NaiveDate, NaiveDateTime};
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
-        date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 0, 0).unwrap())
-            .num_days() as i32
+        date.signed_duration_since(
+            // This is always the same and shouldn't fail
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32
     }
 
-    pub(crate) fn days_to_date(days: i32) -> Result<NaiveDate, Error> {
-        NaiveDate::from_num_days_from_ce_opt(days).ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to convert microseconds to time",
-        ))
+    pub(crate) fn days_to_date(days: i32) -> NaiveDate {
+        // This shouldn't fail until the year 262000
+        NaiveDateTime::from_timestamp_opt(days as i64 * 86_400, 0)
+            .unwrap()
+            .date()
     }
 }
 
 mod time {
     use chrono::NaiveTime;
 
-    use crate::Error;
-
     pub(crate) fn time_to_microseconds(time: &NaiveTime) -> i64 {
-        time.signed_duration_since(NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap())
-            .num_microseconds()
-            .unwrap()
+        time.signed_duration_since(
+            // This is always the same and shouldn't fail
+            NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
+        )
+        .num_microseconds()
+        .unwrap()
     }
 
-    pub(crate) fn microseconds_to_time(micros: i64) -> Result<NaiveTime, Error> {
+    pub(crate) fn microseconds_to_time(micros: i64) -> NaiveTime {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
-        NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem as u32 * 1000).ok_or(
-            Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Failed to convert microseconds to time",
-            ),
-        )
+        NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem as u32 * 1_000).unwrap()
     }
 }
 
 mod timestamp {
     use chrono::NaiveDateTime;
 
-    use crate::Error;
-
     pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> i64 {
         time.timestamp_micros()
     }
 
-    pub(crate) fn microseconds_to_datetime(micros: i64) -> Result<NaiveDateTime, Error> {
+    pub(crate) fn microseconds_to_datetime(micros: i64) -> NaiveDateTime {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
-        NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1000).ok_or(Error::new(
-            crate::ErrorKind::DataInvalid,
-            "Failed to convert microseconds to time",
-        ))
+        // This shouldn't fail until the year 262000
+        NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap()
     }
 }
 
 mod timestamptz {
     use chrono::{DateTime, NaiveDateTime, Utc};
 
-    use crate::Error;
-
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
     }
 
-    pub(crate) fn microseconds_to_datetimetz(micros: i64) -> Result<DateTime<Utc>, Error> {
+    pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
-        Ok(DateTime::<Utc>::from_utc(
-            NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1000).ok_or(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Failed to convert microseconds to time",
-            ))?,
+        DateTime::<Utc>::from_utc(
+            // This shouldn't fail until the year 262000
+            NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap(),
             Utc,
-        ))
+        )
     }
 }
 
@@ -711,9 +704,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Date(
-                NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
-            )),
+            Literal::Primitive(PrimitiveLiteral::Date(17486)),
             &Type::Primitive(PrimitiveType::Date),
         );
     }
@@ -724,9 +715,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Time(
-                NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
-            )),
+            Literal::Primitive(PrimitiveLiteral::Time(81068123456)),
             &Type::Primitive(PrimitiveType::Time),
         );
     }
@@ -737,10 +726,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Timestamp(NaiveDateTime::new(
-                NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
-                NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
-            ))),
+            Literal::Primitive(PrimitiveLiteral::Timestamp(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamp),
         );
     }
@@ -751,13 +737,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(DateTime::<Utc>::from_utc(
-                NaiveDateTime::new(
-                    NaiveDate::from_ymd_opt(2017, 11, 16).unwrap(),
-                    NaiveTime::from_hms_micro_opt(22, 31, 8, 123456).unwrap(),
-                ),
-                Utc,
-            ))),
+            Literal::Primitive(PrimitiveLiteral::TimestampTZ(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamptz),
         );
     }
