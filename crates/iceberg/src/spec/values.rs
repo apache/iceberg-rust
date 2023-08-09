@@ -29,7 +29,7 @@ use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
-use crate::Error;
+use crate::{Error, ErrorKind};
 
 use super::datatypes::{PrimitiveType, Type};
 
@@ -396,6 +396,10 @@ impl Literal {
                     },
                     JsonValue::String(_),
                 ) => todo!(),
+                (_, JsonValue::Null) => Err(Error::new(
+                    crate::ErrorKind::NullConversion,
+                    "Failed to convert null to iceberg value",
+                )),
                 (i, j) => Err(Error::new(
                     crate::ErrorKind::DataInvalid,
                     format!(
@@ -430,10 +434,10 @@ impl Literal {
                         array
                             .into_iter()
                             .map(|value| {
-                                Ok(Some(Literal::try_from_json(
+                                to_optional_literal(Literal::try_from_json(
                                     value,
                                     &list.element_field.field_type,
-                                )?))
+                                ))
                             })
                             .collect::<Result<Vec<_>, Error>>()?,
                     ))
@@ -455,10 +459,10 @@ impl Literal {
                                 .map(|(key, value)| {
                                     Ok((
                                         Literal::try_from_json(key, &map.key_field.field_type)?,
-                                        Some(Literal::try_from_json(
+                                        to_optional_literal(Literal::try_from_json(
                                             value,
                                             &map.value_field.field_type,
-                                        )?),
+                                        ))?,
                                     ))
                                 })
                                 .collect::<Result<Vec<_>, Error>>()?
@@ -529,6 +533,23 @@ impl Literal {
             },
             _ => unimplemented!(),
         }
+    }
+}
+
+fn to_optional_literal(value: Result<Literal, Error>) -> Result<Option<Literal>, Error> {
+    match value {
+        Err(err) => {
+            let is_null_error = match err.kind() {
+                ErrorKind::NullConversion => true,
+                _ => false,
+            };
+            if is_null_error {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        }
+        Ok(x) => Ok(Some(x)),
     }
 }
 

@@ -44,6 +44,8 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+    /// This error is returned when we try to convert a JSON null value to an iceberg value
+    NullConversion,
 }
 
 impl ErrorKind {
@@ -59,6 +61,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
+            ErrorKind::NullConversion => "NullConversion",
         }
     }
 }
