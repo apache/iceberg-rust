@@ -17,6 +17,8 @@
 
 //! This module defines schema in iceberg.
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::Result;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
@@ -609,13 +611,119 @@ impl SchemaVisitor for IndexByName {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+/// Names and types of fields in a table.
+pub struct SchemaV2 {
+    /// Identifier of the schema
+    pub schema_id: i32,
+    /// Set of primitive fields that identify rows in a table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier_field_ids: Option<Vec<i32>>,
+
+    #[serde(flatten)]
+    /// The struct fields
+    pub fields: StructType,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+/// Names and types of fields in a table.
+pub struct SchemaV1 {
+    /// Identifier of the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_id: Option<i32>,
+    /// Set of primitive fields that identify rows in a table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier_field_ids: Option<Vec<i32>>,
+
+    #[serde(flatten)]
+    /// The struct fields
+    pub fields: StructType,
+}
+
+impl From<SchemaV2> for Schema {
+    fn from(value: SchemaV2) -> Self {
+        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        Schema {
+            schema_id: value.schema_id,
+            highest_field_id,
+            r#struct: value.fields,
+        }
+    }
+}
+
+impl From<SchemaV1> for Schema {
+    fn from(value: SchemaV1) -> Self {
+        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        Schema {
+            schema_id: value.schema_id.unwrap_or(1),
+            highest_field_id,
+            r#struct: value.fields,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+/// Names and types of fields in a table.
+pub struct SchemaV2 {
+    /// Identifier of the schema
+    pub schema_id: i32,
+    /// Set of primitive fields that identify rows in a table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier_field_ids: Option<Vec<i32>>,
+
+    #[serde(flatten)]
+    /// The struct fields
+    pub fields: StructType,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+/// Names and types of fields in a table.
+pub struct SchemaV1 {
+    /// Identifier of the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_id: Option<i32>,
+    /// Set of primitive fields that identify rows in a table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier_field_ids: Option<Vec<i32>>,
+
+    #[serde(flatten)]
+    /// The struct fields
+    pub fields: StructType,
+}
+
+impl From<SchemaV2> for Schema {
+    fn from(value: SchemaV2) -> Self {
+        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        Schema {
+            schema_id: value.schema_id,
+            highest_field_id,
+            r#struct: value.fields,
+        }
+    }
+}
+
+impl From<SchemaV1> for Schema {
+    fn from(value: SchemaV1) -> Self {
+        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
+        Schema {
+            schema_id: value.schema_id.unwrap_or(1),
+            highest_field_id,
+            r#struct: value.fields,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
-    use crate::spec::schema::Schema;
+    use crate::spec::schema::{Schema, SchemaV2};
     use std::collections::HashMap;
 
     #[test]
@@ -637,6 +745,43 @@ mod tests {
         assert_eq!(Some(&field1), schema.field_by_id(1));
         assert_eq!(Some(&field2), schema.field_by_id(2));
         assert_eq!(None, schema.field_by_id(3));
+    }
+
+    #[test]
+    fn schema() {
+        let record = r#"
+        {
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [ {
+            "id": 1,
+            "name": "id",
+            "required": true,
+            "type": "uuid"
+            }, {
+            "id": 2,
+            "name": "data",
+            "required": false,
+            "type": "int"
+            } ]
+            }
+        "#;
+
+        let result: SchemaV2 = serde_json::from_str(record).unwrap();
+        assert_eq!(1, result.schema_id);
+        assert_eq!(
+            Box::new(Type::Primitive(PrimitiveType::Uuid)),
+            result.fields[0].field_type
+        );
+        assert_eq!(1, result.fields[0].id);
+        assert_eq!(true, result.fields[0].required);
+
+        assert_eq!(
+            Box::new(Type::Primitive(PrimitiveType::Int)),
+            result.fields[1].field_type
+        );
+        assert_eq!(2, result.fields[1].id);
+        assert_eq!(false, result.fields[1].required);
     }
 
     fn table_schema_simple() -> Schema {
