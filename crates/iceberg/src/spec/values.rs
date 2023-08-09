@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn json_list() {
-        let record = r#"[1, 2, 3]"#;
+        let record = r#"[1, 2, 3, null]"#;
 
         check_json_serde(
             record,
@@ -840,6 +840,7 @@ mod tests {
                 Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
                 Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
                 Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
+                None,
             ]),
             &Type::List(ListType {
                 element_field: NestedField {
@@ -857,7 +858,7 @@ mod tests {
 
     #[test]
     fn json_map() {
-        let record = r#"{ "keys": ["a", "b"], "values": [1, 2] }"#;
+        let record = r#"{ "keys": ["a", "b", "c"], "values": [1, 2, null] }"#;
 
         check_json_serde(
             record,
@@ -869,6 +870,10 @@ mod tests {
                 (
                     Literal::Primitive(PrimitiveLiteral::String("b".to_string())),
                     Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("c".to_string())),
+                    None,
                 ),
             ])),
             &Type::Map(MapType {
