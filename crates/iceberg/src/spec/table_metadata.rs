@@ -117,7 +117,7 @@ impl TableMetadata {
     }
     /// Get default partition spec
     #[inline]
-    pub fn defaul_partition_spec(&self) -> Result<&PartitionSpec, Error> {
+    pub fn default_partition_spec(&self) -> Result<&PartitionSpec, Error> {
         self.partition_specs
             .get(&self.default_spec_id)
             .ok_or_else(|| {
