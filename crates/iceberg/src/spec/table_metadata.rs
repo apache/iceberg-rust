@@ -35,6 +35,8 @@ use super::{
     sort::SortOrder,
 };
 
+static MAIN_BRANCH: &str = "main";
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
@@ -158,7 +160,7 @@ impl TableMetadata {
         self.last_sequence_number = snapshot.sequence_number();
 
         self.refs
-            .entry("main".to_string())
+            .entry(MAIN_BRANCH.to_string())
             .and_modify(|s| {
                 s.snapshot_id = snapshot.snapshot_id();
                 s.retention = Retention::Branch {
@@ -452,7 +454,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             default_sort_order_id: value.default_sort_order_id,
             refs: value.refs.unwrap_or_else(|| {
                 HashMap::from_iter(vec![(
-                    "main".to_string(),
+                    MAIN_BRANCH.to_string(),
                     Reference {
                         snapshot_id: value.current_snapshot_id.unwrap_or_default(),
                         retention: Retention::Branch {
@@ -522,7 +524,7 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: HashMap::from_iter(vec![(
-                "main".to_string(),
+                MAIN_BRANCH.to_string(),
                 Reference {
                     snapshot_id: value.current_snapshot_id.unwrap_or_default(),
                     retention: Retention::Branch {
