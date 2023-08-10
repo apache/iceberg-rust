@@ -241,6 +241,12 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
+
+    /// Return error's message.
+    #[inline]
+    pub fn message(&self) -> &str {
+        self.message.as_str()
+    }
 }
 
 macro_rules! define_from_err {
@@ -282,6 +288,25 @@ define_from_err!(
     ErrorKind::DataInvalid,
     "Failed to convert between uuid und iceberg value"
 );
+
+/// Helper macro to check arguments.
+///
+///
+/// Example:
+///
+/// Following example check `a > 0`, otherwise returns an error.
+/// ```ignore
+/// use iceberg::check;
+/// ensure_data_valid!(a > 0, "{} is not positive.", a);
+/// ```
+#[macro_export]
+macro_rules! ensure_data_valid {
+    ($cond: expr, $fmt: literal, $($arg:tt)*) => {
+        if !$cond {
+            return Err($crate::error::Error::new($crate::error::ErrorKind::DataInvalid, format!($fmt, $($arg)*)))
+        }
+    };
+}
 
 #[cfg(test)]
 mod tests {

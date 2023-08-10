@@ -407,8 +407,8 @@ impl Literal {
             },
             Type::Struct(schema) => {
                 if let JsonValue::Object(mut object) = value {
-                    Ok(Some(Literal::Struct(Struct::from_iter(schema.iter().map(
-                        |field| {
+                    Ok(Some(Literal::Struct(Struct::from_iter(
+                        schema.fields().iter().map(|field| {
                             (
                                 field.id,
                                 object.remove(&field.id.to_string()).and_then(|value| {
@@ -423,8 +423,8 @@ impl Literal {
                                 }),
                                 field.name.clone(),
                             )
-                        },
-                    )))))
+                        }),
+                    ))))
                 } else {
                     Err(Error::new(
                         crate::ErrorKind::DataInvalid,
@@ -796,33 +796,9 @@ mod tests {
                 (3, None, "address".to_string()),
             ])),
             &Type::Struct(StructType::new(vec![
-                NestedField {
-                    id: 1,
-                    name: "id".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
-                NestedField {
-                    id: 2,
-                    name: "name".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
-                NestedField {
-                    id: 3,
-                    name: "address".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "address", Type::Primitive(PrimitiveType::String)).into(),
             ])),
         );
     }
@@ -840,15 +816,12 @@ mod tests {
                 None,
             ]),
             &Type::List(ListType {
-                element_field: NestedField {
-                    id: 0,
-                    name: "".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
+                element_field: NestedField::list_element(
+                    0,
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .into(),
             }),
         );
     }
@@ -874,24 +847,14 @@ mod tests {
                 ),
             ])),
             &Type::Map(MapType {
-                key_field: NestedField {
-                    id: 0,
-                    name: "key".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
-                value_field: NestedField {
-                    id: 1,
-                    name: "value".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    doc: None,
-                    initial_default: None,
-                    write_default: None,
-                },
+                key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::String))
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    1,
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .into(),
             }),
         );
     }
