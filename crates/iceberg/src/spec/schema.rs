@@ -647,7 +647,7 @@ impl TryFrom<SchemaV2> for Schema {
     fn try_from(value: SchemaV2) -> Result<Self> {
         Schema::builder()
             .with_schema_id(value.schema_id)
-            .with_fields(value.fields.fields().into_iter().map(|x| x.clone()))
+            .with_fields(value.fields.fields().iter().cloned())
             .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
             .build()
     }
@@ -658,7 +658,7 @@ impl TryFrom<SchemaV1> for Schema {
     fn try_from(value: SchemaV1) -> Result<Self> {
         Schema::builder()
             .with_schema_id(value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID))
-            .with_fields(value.fields.fields().into_iter().map(|x| x.clone()))
+            .with_fields(value.fields.fields().iter().cloned())
             .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
             .build()
     }
