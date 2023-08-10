@@ -22,5 +22,6 @@ pub mod partition;
 pub mod schema;
 pub mod snapshot;
 pub mod sort;
+pub mod table_metadata;
 pub mod transform;
 pub mod values;

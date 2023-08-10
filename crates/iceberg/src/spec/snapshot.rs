@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
 pub enum Operation {
@@ -37,7 +37,7 @@ pub enum Operation {
     Delete,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Summarises the changes in the snapshot.
 pub struct Summary {
     /// The type of operation in the snapshot
@@ -53,7 +53,7 @@ impl Default for Operation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
     /// A unique long ID
@@ -111,7 +111,7 @@ impl Snapshot {
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct SnapshotV2 {
     /// A unique long ID
-    snapshot_id: i64,
+    pub snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +137,7 @@ pub struct SnapshotV2 {
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct SnapshotV1 {
     /// A unique long ID
-    snapshot_id: i64,
+    pub snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -221,7 +221,7 @@ impl From<Snapshot> for SnapshotV1 {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Iceberg tables keep track of branches and tags using snapshot references.
 pub struct Reference {
@@ -232,7 +232,7 @@ pub struct Reference {
     pub retention: Retention,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase", tag = "type")]
 /// The snapshot expiration procedure removes snapshots from table metadata and applies the table’s retention policy.
 pub enum Retention {

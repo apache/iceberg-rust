@@ -727,6 +727,28 @@ impl From<SchemaV1> for Schema {
     }
 }
 
+impl From<Schema> for SchemaV2 {
+    fn from(value: Schema) -> Self {
+        SchemaV2 {
+            schema_id: value.schema_id,
+            /// TODO!!! Implement once available in Schema
+            identifier_field_ids: None,
+            fields: value.r#struct,
+        }
+    }
+}
+
+impl From<Schema> for SchemaV1 {
+    fn from(value: Schema) -> Self {
+        SchemaV1 {
+            schema_id: Some(value.schema_id),
+            /// TODO!!! Implement once available in Schema
+            identifier_field_ids: None,
+            fields: value.r#struct,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};

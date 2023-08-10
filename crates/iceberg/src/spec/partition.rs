@@ -116,7 +116,7 @@ where
     serializer.serialize_str(&format!("truncate[{value}]"))
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Partition fields capture the transform from table data to partition values.
 pub struct PartitionField {
@@ -131,7 +131,7 @@ pub struct PartitionField {
     pub transform: Transform,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 ///  Partition spec that defines how to produce a tuple of partition values from a record.
 pub struct PartitionSpec {

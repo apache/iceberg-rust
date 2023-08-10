@@ -49,7 +49,7 @@ pub enum NullOrder {
 /// Entry for every column that is to be sorted
 pub struct SortField {
     /// A source column id from the table’s schema
-    pub source_id: i32,
+    pub source_id: i64,
     /// A transform that is used to produce values to be sorted on from the source column.
     pub transform: Transform,
     /// A sort direction, that can only be either asc or desc
@@ -58,13 +58,13 @@ pub struct SortField {
     pub null_order: NullOrder,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// A sort order is defined by a sort order id and a list of sort fields.
 /// The order of the sort fields within the list defines the order in which the sort is applied to the data.
 pub struct SortOrder {
     /// Identifier for SortOrder, order_id `0` is no sort order.
-    pub order_id: i32,
+    pub order_id: i64,
     /// Details of the sort
     pub fields: Vec<SortField>,
 }
