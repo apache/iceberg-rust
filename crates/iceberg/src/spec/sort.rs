@@ -20,7 +20,7 @@
 */
 use serde::{Deserialize, Serialize};
 
-use super::partition::Transform;
+use super::transform::Transform;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Sort direction in a partition, either ascending or descending
