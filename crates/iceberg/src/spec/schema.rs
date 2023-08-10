@@ -614,59 +614,6 @@ impl SchemaVisitor for IndexByName {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Names and types of fields in a table.
-pub struct SchemaV2 {
-    /// Identifier of the schema
-    pub schema_id: i32,
-    /// Set of primitive fields that identify rows in a table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier_field_ids: Option<Vec<i32>>,
-
-    #[serde(flatten)]
-    /// The struct fields
-    pub fields: StructType,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
-/// Names and types of fields in a table.
-pub struct SchemaV1 {
-    /// Identifier of the schema
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_id: Option<i32>,
-    /// Set of primitive fields that identify rows in a table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier_field_ids: Option<Vec<i32>>,
-
-    #[serde(flatten)]
-    /// The struct fields
-    pub fields: StructType,
-}
-
-impl From<SchemaV2> for Schema {
-    fn from(value: SchemaV2) -> Self {
-        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
-        Schema {
-            schema_id: value.schema_id,
-            highest_field_id,
-            r#struct: value.fields,
-        }
-    }
-}
-
-impl From<SchemaV1> for Schema {
-    fn from(value: SchemaV1) -> Self {
-        let highest_field_id = value.fields.iter().map(|x| x.id).max().unwrap_or(1);
-        Schema {
-            schema_id: value.schema_id.unwrap_or(1),
-            highest_field_id,
-            r#struct: value.fields,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
-/// Names and types of fields in a table.
 pub(crate) struct SchemaV2 {
     /// Identifier of the schema
     pub schema_id: i32,
@@ -695,35 +642,25 @@ pub(crate) struct SchemaV1 {
     pub fields: StructType,
 }
 
-impl From<SchemaV2> for Schema {
-    fn from(value: SchemaV2) -> Self {
-        let highest_field_id = value
-            .fields
-            .iter()
-            .map(|x| x.id)
-            .max()
-            .unwrap_or(DEFAULT_SCHEMA_ID);
-        Schema {
-            schema_id: value.schema_id,
-            highest_field_id,
-            r#struct: value.fields,
-        }
+impl TryFrom<SchemaV2> for Schema {
+    type Error = Error;
+    fn try_from(value: SchemaV2) -> Result<Self> {
+        Schema::builder()
+            .with_schema_id(value.schema_id)
+            .with_fields(value.fields.fields().into_iter().map(|x| x.clone()))
+            .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+            .build()
     }
 }
 
-impl From<SchemaV1> for Schema {
-    fn from(value: SchemaV1) -> Self {
-        let highest_field_id = value
-            .fields
-            .iter()
-            .map(|x| x.id)
-            .max()
-            .unwrap_or(DEFAULT_SCHEMA_ID);
-        Schema {
-            schema_id: value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID),
-            highest_field_id,
-            r#struct: value.fields,
-        }
+impl TryFrom<SchemaV1> for Schema {
+    type Error = Error;
+    fn try_from(value: SchemaV1) -> Result<Self> {
+        Schema::builder()
+            .with_schema_id(value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID))
+            .with_fields(value.fields.fields().into_iter().map(|x| x.clone()))
+            .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+            .build()
     }
 }
 

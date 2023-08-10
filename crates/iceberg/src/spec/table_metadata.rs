@@ -36,7 +36,7 @@ use super::{
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "TableMetadataEnum", into = "TableMetadataEnum")]
+#[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 pub struct TableMetadata {
     /// Integer Version for the format.
@@ -398,11 +398,12 @@ impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
     }
 }
 
-impl From<TableMetadataEnum> for TableMetadata {
-    fn from(value: TableMetadataEnum) -> Self {
+impl TryFrom<TableMetadataEnum> for TableMetadata {
+    type Error = Error;
+    fn try_from(value: TableMetadataEnum) -> Result<Self, Error> {
         match value {
-            TableMetadataEnum::V2(value) => value.into(),
-            TableMetadataEnum::V1(value) => value.into(),
+            TableMetadataEnum::V2(value) => value.try_into(),
+            TableMetadataEnum::V1(value) => value.try_into(),
         }
     }
 }
@@ -416,9 +417,10 @@ impl From<TableMetadata> for TableMetadataEnum {
     }
 }
 
-impl From<TableMetadataV2> for TableMetadata {
-    fn from(value: TableMetadataV2) -> Self {
-        TableMetadata {
+impl TryFrom<TableMetadataV2> for TableMetadata {
+    type Error = Error;
+    fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
+        Ok(TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: value.table_uuid,
             location: value.location,
@@ -429,14 +431,13 @@ impl From<TableMetadataV2> for TableMetadata {
                 value
                     .schemas
                     .into_iter()
-                    .map(|schema| (schema.schema_id, schema.into())),
+                    .map(|schema| Ok((schema.schema_id, schema.try_into()?)))
+                    .collect::<Result<Vec<_>, Error>>()?
+                    .into_iter(),
             ),
             current_schema_id: value.current_schema_id,
             partition_specs: HashMap::from_iter(
-                value
-                    .partition_specs
-                    .into_iter()
-                    .map(|x| (x.spec_id, x)),
+                value.partition_specs.into_iter().map(|x| (x.spec_id, x)),
             ),
             default_spec_id: value.default_spec_id,
             last_partition_id: value.last_partition_id,
@@ -447,12 +448,7 @@ impl From<TableMetadataV2> for TableMetadata {
             }),
             snapshot_log: value.snapshot_log,
             metadata_log: value.metadata_log,
-            sort_orders: HashMap::from_iter(
-                value
-                    .sort_orders
-                    .into_iter()
-                    .map(|x| (x.order_id, x)),
-            ),
+            sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: value.refs.unwrap_or_else(|| {
                 HashMap::from_iter(vec![(
@@ -467,22 +463,28 @@ impl From<TableMetadataV2> for TableMetadata {
                     },
                 )])
             }),
-        }
+        })
     }
 }
 
-impl From<TableMetadataV1> for TableMetadata {
-    fn from(value: TableMetadataV1) -> Self {
+impl TryFrom<TableMetadataV1> for TableMetadata {
+    type Error = Error;
+    fn try_from(value: TableMetadataV1) -> Result<Self, Error> {
         let schemas = value
             .schemas
             .map(|schemas| {
-                HashMap::from_iter(
+                Ok::<_, Error>(HashMap::from_iter(
                     schemas
                         .into_iter()
                         .enumerate()
-                        .map(|(i, schema)| (schema.schema_id.unwrap_or(i as i32), schema.into())),
-                )
+                        .map(|(i, schema)| {
+                            Ok((schema.schema_id.unwrap_or(i as i32), schema.try_into()?))
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?
+                        .into_iter(),
+                ))
             })
+            .transpose()?
             .unwrap_or_default();
         let partition_specs = HashMap::from_iter(
             value
@@ -491,7 +493,7 @@ impl From<TableMetadataV1> for TableMetadata {
                 .into_iter()
                 .map(|x| (x.spec_id, x)),
         );
-        TableMetadata {
+        Ok(TableMetadata {
             format_version: FormatVersion::V1,
             table_uuid: value.table_uuid.unwrap_or_default(),
             location: value.location,
@@ -501,16 +503,12 @@ impl From<TableMetadataV1> for TableMetadata {
             current_schema_id: value
                 .current_schema_id
                 .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default()),
-            default_spec_id: value.default_spec_id.unwrap_or_else(|| {
-                partition_specs.keys().copied()
-                    .max()
-                    .unwrap_or_default()
-            }),
-            last_partition_id: value.last_partition_id.unwrap_or_else(|| {
-                partition_specs.keys().copied()
-                    .max()
-                    .unwrap_or_default()
-            }),
+            default_spec_id: value
+                .default_spec_id
+                .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
+            last_partition_id: value
+                .last_partition_id
+                .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
             partition_specs,
             schemas,
 
@@ -521,12 +519,7 @@ impl From<TableMetadataV1> for TableMetadata {
             }),
             snapshot_log: value.snapshot_log,
             metadata_log: value.metadata_log,
-            sort_orders: HashMap::from_iter(
-                value
-                    .sort_orders
-                    .into_iter()
-                    .map(|x| (x.order_id, x)),
-            ),
+            sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: HashMap::from_iter(vec![(
                 "main".to_string(),
@@ -539,7 +532,7 @@ impl From<TableMetadataV1> for TableMetadata {
                     },
                 },
             )]),
-        }
+        })
     }
 }
 
