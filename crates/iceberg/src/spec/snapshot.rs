@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::table_metadata::SnapshotLog;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
@@ -86,7 +88,7 @@ impl Snapshot {
     }
     /// Get sequence_number of the snapshot. Is 0 for Iceberg V1 tables.
     #[inline]
-    pub fn sequence_number(self) -> i64 {
+    pub fn sequence_number(&self) -> i64 {
         self.sequence_number
     }
     /// Get location of manifest_list file
@@ -103,6 +105,13 @@ impl Snapshot {
     #[inline]
     pub fn timestamp(&self) -> i64 {
         self.timestamp_ms
+    }
+
+    pub(crate) fn log(&self) -> SnapshotLog {
+        SnapshotLog {
+            timestamp_ms: self.timestamp_ms,
+            snapshot_id: self.snapshot_id,
+        }
     }
 }
 
@@ -230,6 +239,15 @@ pub struct Reference {
     #[serde(flatten)]
     /// Snapshot retention policy
     pub retention: Retention,
+}
+
+impl Reference {
+    pub fn new(snapshot_id: i64, retention: Retention) -> Self {
+        Reference {
+            snapshot_id,
+            retention,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]

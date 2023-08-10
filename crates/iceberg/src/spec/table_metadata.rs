@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
+use crate::{Error, ErrorKind};
+
 use super::{
     partition::{PartitionField, PartitionSpec},
     schema::{self, Schema},
@@ -97,7 +99,110 @@ pub struct TableMetadata {
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
-    refs: Option<HashMap<String, Reference>>,
+    refs: HashMap<String, Reference>,
+}
+
+impl TableMetadata {
+    /// Get current schema
+    #[inline]
+    pub fn current_schema(&self) -> Result<&Schema, Error> {
+        self.schemas.get(&self.current_schema_id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Schema id {} not found!", self.current_schema_id),
+            )
+        })
+    }
+    /// Get default partition spec
+    #[inline]
+    pub fn defaul_partition_spec(&self) -> Result<&PartitionSpec, Error> {
+        self.partition_specs
+            .get(&self.default_spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Partition spec id {} not found!", self.default_spec_id),
+                )
+            })
+    }
+
+    /// Get current snapshot
+    #[inline]
+    pub fn current_snapshot(&self) -> Result<&Snapshot, Error> {
+        let snapshot_id = self.current_snapshot_id.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Table snapshots are missing!"),
+            )
+        })?;
+        self.snapshots
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Table snapshots are missing!"),
+                )
+            })?
+            .get(&snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Partition spec id {} not found!", snapshot_id),
+                )
+            })
+    }
+
+    /// Append snapshot to table
+    pub fn append_snapshot(&mut self, snapshot: Snapshot) -> Result<(), Error> {
+        self.last_updated_ms = snapshot.timestamp();
+        self.last_sequence_number = snapshot.sequence_number();
+
+        self.refs
+            .entry("main".to_string())
+            .and_modify(|s| {
+                s.snapshot_id = snapshot.snapshot_id();
+                s.retention = Retention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                }
+            })
+            .or_insert_with(|| {
+                Reference::new(
+                    snapshot.snapshot_id(),
+                    Retention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                )
+            });
+
+        if let Some(snapshots) = &mut self.snapshots {
+            self.snapshot_log
+                .as_mut()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Snapshot logs is empty while snapshots is not!",
+                    )
+                })?
+                .push(snapshot.log());
+            snapshots.insert(snapshot.snapshot_id(), snapshot);
+        } else {
+            if self.snapshot_log.is_some() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Snapshot logs is empty while snapshots is not!",
+                ));
+            }
+
+            self.snapshot_log = Some(vec![snapshot.log()]);
+            self.snapshots = Some(HashMap::from_iter(vec![(snapshot.snapshot_id(), snapshot)]));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -349,7 +454,19 @@ impl From<TableMetadataV2> for TableMetadata {
                     .map(|x| (x.order_id, x.into())),
             ),
             default_sort_order_id: value.default_sort_order_id,
-            refs: value.refs,
+            refs: value.refs.unwrap_or_else(|| {
+                HashMap::from_iter(vec![(
+                    "main".to_string(),
+                    Reference {
+                        snapshot_id: value.current_snapshot_id.unwrap_or_default(),
+                        retention: Retention::Branch {
+                            min_snapshots_to_keep: None,
+                            max_snapshot_age_ms: None,
+                            max_ref_age_ms: None,
+                        },
+                    },
+                )])
+            }),
         }
     }
 }
@@ -415,7 +532,7 @@ impl From<TableMetadataV1> for TableMetadata {
                     .map(|x| (x.order_id, x.into())),
             ),
             default_sort_order_id: value.default_sort_order_id,
-            refs: Some(HashMap::from_iter(vec![(
+            refs: HashMap::from_iter(vec![(
                 "main".to_string(),
                 Reference {
                     snapshot_id: value.current_snapshot_id.unwrap_or_default(),
@@ -425,7 +542,7 @@ impl From<TableMetadataV1> for TableMetadata {
                         max_ref_age_ms: None,
                     },
                 },
-            )])),
+            )]),
         }
     }
 }
@@ -453,7 +570,7 @@ impl From<TableMetadata> for TableMetadataV2 {
             metadata_log: v.metadata_log,
             sort_orders: v.sort_orders.into_values().collect(),
             default_sort_order_id: v.default_sort_order_id,
-            refs: v.refs,
+            refs: Some(v.refs),
         }
     }
 }
