@@ -132,7 +132,7 @@ impl TableMetadata {
         let snapshot_id = self.current_snapshot_id.ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                format!("Table snapshots are missing!"),
+                "Table snapshots are missing!".to_string(),
             )
         })?;
         self.snapshots
@@ -140,7 +140,7 @@ impl TableMetadata {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Table snapshots are missing!"),
+                    "Table snapshots are missing!".to_string(),
                 )
             })?
             .get(&snapshot_id)
@@ -436,7 +436,7 @@ impl From<TableMetadataV2> for TableMetadata {
                 value
                     .partition_specs
                     .into_iter()
-                    .map(|x| (x.spec_id, x.into())),
+                    .map(|x| (x.spec_id, x)),
             ),
             default_spec_id: value.default_spec_id,
             last_partition_id: value.last_partition_id,
@@ -451,7 +451,7 @@ impl From<TableMetadataV2> for TableMetadata {
                 value
                     .sort_orders
                     .into_iter()
-                    .map(|x| (x.order_id, x.into())),
+                    .map(|x| (x.order_id, x)),
             ),
             default_sort_order_id: value.default_sort_order_id,
             refs: value.refs.unwrap_or_else(|| {
@@ -489,7 +489,7 @@ impl From<TableMetadataV1> for TableMetadata {
                 .partition_specs
                 .unwrap_or_default()
                 .into_iter()
-                .map(|x| (x.spec_id, x.into())),
+                .map(|x| (x.spec_id, x)),
         );
         TableMetadata {
             format_version: FormatVersion::V1,
@@ -500,18 +500,14 @@ impl From<TableMetadataV1> for TableMetadata {
             last_column_id: value.last_column_id,
             current_schema_id: value
                 .current_schema_id
-                .unwrap_or_else(|| schemas.iter().map(|(i, _)| *i).max().unwrap_or_default()),
+                .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default()),
             default_spec_id: value.default_spec_id.unwrap_or_else(|| {
-                partition_specs
-                    .iter()
-                    .map(|(i, _)| *i)
+                partition_specs.keys().copied()
                     .max()
                     .unwrap_or_default()
             }),
             last_partition_id: value.last_partition_id.unwrap_or_else(|| {
-                partition_specs
-                    .iter()
-                    .map(|(i, _)| *i)
+                partition_specs.keys().copied()
                     .max()
                     .unwrap_or_default()
             }),
@@ -529,7 +525,7 @@ impl From<TableMetadataV1> for TableMetadata {
                 value
                     .sort_orders
                     .into_iter()
-                    .map(|x| (x.order_id, x.into())),
+                    .map(|x| (x.order_id, x)),
             ),
             default_sort_order_id: value.default_sort_order_id,
             refs: HashMap::from_iter(vec![(
