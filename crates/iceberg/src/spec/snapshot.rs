@@ -242,6 +242,7 @@ pub struct Reference {
 }
 
 impl Reference {
+    /// Create new snapshot reference
     pub fn new(snapshot_id: i64, retention: Retention) -> Self {
         Reference {
             snapshot_id,
