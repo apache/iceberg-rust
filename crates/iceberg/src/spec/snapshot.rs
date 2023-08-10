@@ -118,55 +118,55 @@ impl Snapshot {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
-pub struct SnapshotV2 {
+pub(crate) struct SnapshotV2 {
     /// A unique long ID
     pub snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
     #[serde(skip_serializing_if = "Option::is_none")]
-    parent_snapshot_id: Option<i64>,
+    pub parent_snapshot_id: Option<i64>,
     /// A monotonically increasing long that tracks the order of
     /// changes to a table.
-    sequence_number: i64,
+    pub sequence_number: i64,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection
-    timestamp_ms: i64,
+    pub timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
-    manifest_list: String,
+    pub manifest_list: String,
     /// A string map that summarizes the snapshot changes, including operation.
-    summary: Summary,
+    pub summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
     #[serde(skip_serializing_if = "Option::is_none")]
-    schema_id: Option<i64>,
+    pub schema_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
-pub struct SnapshotV1 {
+pub(crate) struct SnapshotV1 {
     /// A unique long ID
     pub snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
     #[serde(skip_serializing_if = "Option::is_none")]
-    parent_snapshot_id: Option<i64>,
+    pub parent_snapshot_id: Option<i64>,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection
-    timestamp_ms: i64,
+    pub timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
-    manifest_list: Option<String>,
+    pub manifest_list: Option<String>,
     /// A list of manifest file locations. Must be omitted if manifest-list is present
     #[serde(skip_serializing_if = "Option::is_none")]
-    manifests: Option<Vec<String>>,
+    pub manifests: Option<Vec<String>>,
     /// A string map that summarizes the snapshot changes, including operation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<Summary>,
+    pub summary: Option<Summary>,
     /// ID of the table’s current schema when the snapshot was created.
     #[serde(skip_serializing_if = "Option::is_none")]
-    schema_id: Option<i64>,
+    pub schema_id: Option<i64>,
 }
 
 impl From<SnapshotV2> for Snapshot {
