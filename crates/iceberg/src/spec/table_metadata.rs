@@ -66,7 +66,7 @@ pub struct TableMetadata {
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    properties: Option<HashMap<String, String>>,
+    properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
     current_snapshot_id: Option<i64>,
@@ -443,7 +443,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             ),
             default_spec_id: value.default_spec_id,
             last_partition_id: value.last_partition_id,
-            properties: value.properties,
+            properties: value.properties.unwrap_or_default(),
             current_snapshot_id: value.current_snapshot_id,
             snapshots: value.snapshots.map(|snapshots| {
                 HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
@@ -514,7 +514,7 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             partition_specs,
             schemas,
 
-            properties: value.properties,
+            properties: value.properties.unwrap_or_default(),
             current_snapshot_id: value.current_snapshot_id,
             snapshots: value.snapshots.map(|snapshots| {
                 HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
@@ -552,7 +552,11 @@ impl From<TableMetadata> for TableMetadataV2 {
             partition_specs: v.partition_specs.into_values().collect(),
             default_spec_id: v.default_spec_id,
             last_partition_id: v.last_partition_id,
-            properties: v.properties,
+            properties: if v.properties.is_empty() {
+                None
+            } else {
+                Some(v.properties)
+            },
             current_snapshot_id: v.current_snapshot_id,
             snapshots: v
                 .snapshots
@@ -585,7 +589,11 @@ impl From<TableMetadata> for TableMetadataV1 {
             partition_specs: Some(v.partition_specs.into_values().collect()),
             default_spec_id: Some(v.default_spec_id),
             last_partition_id: Some(v.last_partition_id),
-            properties: v.properties,
+            properties: if v.properties.is_empty() {
+                None
+            } else {
+                Some(v.properties)
+            },
             current_snapshot_id: v.current_snapshot_id,
             snapshots: v
                 .snapshots
@@ -735,10 +743,10 @@ mod tests {
             snapshots: None,
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: Some(HashMap::from_iter(vec![(
+            properties: HashMap::from_iter(vec![(
                 "commit.retry.num-retries".to_string(),
                 "1".to_string(),
-            )])),
+            )]),
             snapshot_log: None,
             metadata_log: Some(vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -960,7 +968,7 @@ mod tests {
             snapshots: Some(HashMap::from_iter(vec![(638933773299822130, snapshot)])),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
-            properties: Some(HashMap::from_iter(vec![("owner".to_string(),"root".to_string())])),
+            properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
             snapshot_log: Some(vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
                 timestamp_ms: 1662532818843,
