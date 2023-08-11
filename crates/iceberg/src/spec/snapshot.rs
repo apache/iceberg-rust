@@ -241,12 +241,12 @@ pub struct SnapshotReference {
     pub snapshot_id: i64,
     #[serde(flatten)]
     /// Snapshot retention policy
-    pub retention: Retention,
+    pub retention: SnapshotRetention,
 }
 
 impl SnapshotReference {
     /// Create new snapshot reference
-    pub fn new(snapshot_id: i64, retention: Retention) -> Self {
+    pub fn new(snapshot_id: i64, retention: SnapshotRetention) -> Self {
         SnapshotReference {
             snapshot_id,
             retention,
@@ -257,7 +257,7 @@ impl SnapshotReference {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase", tag = "type")]
 /// The snapshot expiration procedure removes snapshots from table metadata and applies the table’s retention policy.
-pub enum Retention {
+pub enum SnapshotRetention {
     #[serde(rename_all = "kebab-case")]
     /// Branches are mutable named references that can be updated by committing a new snapshot as
     /// the branch’s referenced snapshot using the Commit Conflict Resolution and Retry procedures.

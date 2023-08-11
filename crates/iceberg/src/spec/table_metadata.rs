@@ -31,7 +31,7 @@ use crate::{Error, ErrorKind};
 use super::{
     partition::{PartitionField, PartitionSpec},
     schema::{self, Schema},
-    snapshot::{Retention, Snapshot, SnapshotReference, SnapshotV1, SnapshotV2},
+    snapshot::{Snapshot, SnapshotReference, SnapshotRetention, SnapshotV1, SnapshotV2},
     sort::SortOrder,
 };
 
@@ -163,7 +163,7 @@ impl TableMetadata {
             .entry(MAIN_BRANCH.to_string())
             .and_modify(|s| {
                 s.snapshot_id = snapshot.snapshot_id();
-                s.retention = Retention::Branch {
+                s.retention = SnapshotRetention::Branch {
                     min_snapshots_to_keep: None,
                     max_snapshot_age_ms: None,
                     max_ref_age_ms: None,
@@ -172,7 +172,7 @@ impl TableMetadata {
             .or_insert_with(|| {
                 SnapshotReference::new(
                     snapshot.snapshot_id(),
-                    Retention::Branch {
+                    SnapshotRetention::Branch {
                         min_snapshots_to_keep: None,
                         max_snapshot_age_ms: None,
                         max_ref_age_ms: None,
@@ -457,7 +457,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
                     MAIN_BRANCH.to_string(),
                     SnapshotReference {
                         snapshot_id: value.current_snapshot_id.unwrap_or_default(),
-                        retention: Retention::Branch {
+                        retention: SnapshotRetention::Branch {
                             min_snapshots_to_keep: None,
                             max_snapshot_age_ms: None,
                             max_ref_age_ms: None,
@@ -527,7 +527,7 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
                 MAIN_BRANCH.to_string(),
                 SnapshotReference {
                     snapshot_id: value.current_snapshot_id.unwrap_or_default(),
-                    retention: Retention::Branch {
+                    retention: SnapshotRetention::Branch {
                         min_snapshots_to_keep: None,
                         max_snapshot_age_ms: None,
                         max_ref_age_ms: None,
@@ -628,8 +628,8 @@ mod tests {
 
     use crate::spec::{
         table_metadata::TableMetadata, NestedField, Operation, PartitionField,
-        PartitionSpecBuilder, PrimitiveType, Retention, Schema, SnapshotBuilder, SnapshotReference,
-        SortOrderBuilder, Summary, Transform, Type,
+        PartitionSpecBuilder, PrimitiveType, Schema, SnapshotBuilder, SnapshotReference,
+        SnapshotRetention, SortOrderBuilder, Summary, Transform, Type,
     };
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
@@ -748,7 +748,7 @@ mod tests {
                 "main".to_string(),
                 SnapshotReference {
                     snapshot_id: 0,
-                    retention: Retention::Branch {
+                    retention: SnapshotRetention::Branch {
                         min_snapshots_to_keep: None,
                         max_snapshot_age_ms: None,
                         max_ref_age_ms: None,
@@ -966,7 +966,7 @@ mod tests {
                 timestamp_ms: 1662532818843,
             }]),
             metadata_log: Some(vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}]),
-            refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: Retention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
+            refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
         };
 
         check_table_metadata_serde(data, expected);
