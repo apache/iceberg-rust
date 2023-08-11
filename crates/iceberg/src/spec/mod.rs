@@ -17,11 +17,20 @@
 
 //! Spec for Iceberg.
 
-pub mod datatypes;
-pub mod partition;
-pub mod schema;
-pub mod snapshot;
-pub mod sort;
-pub mod table_metadata;
-pub mod transform;
-pub mod values;
+mod datatypes;
+mod partition;
+mod schema;
+mod snapshot;
+mod sort;
+mod table_metadata;
+mod transform;
+mod values;
+
+pub use datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
+pub use partition::{PartitionField, PartitionSpec};
+pub use schema::{visit_schema, visit_struct, visit_type, Schema, SchemaVisitor};
+pub use snapshot::{Operation, Reference, Snapshot, Summary};
+pub use sort::{SortField, SortOrder};
+pub use table_metadata::TableMetadata;
+pub use transform::Transform;
+pub use values::{Literal, PrimitiveLiteral, Struct};
