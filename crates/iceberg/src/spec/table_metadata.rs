@@ -31,7 +31,7 @@ use crate::{Error, ErrorKind};
 use super::{
     partition::{PartitionField, PartitionSpec},
     schema::{self, Schema},
-    snapshot::{Reference, Retention, Snapshot, SnapshotV1, SnapshotV2},
+    snapshot::{Retention, Snapshot, SnapshotReference, SnapshotV1, SnapshotV2},
     sort::SortOrder,
 };
 
@@ -101,7 +101,7 @@ pub struct TableMetadata {
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
-    refs: HashMap<String, Reference>,
+    refs: HashMap<String, SnapshotReference>,
 }
 
 impl TableMetadata {
@@ -170,7 +170,7 @@ impl TableMetadata {
                 }
             })
             .or_insert_with(|| {
-                Reference::new(
+                SnapshotReference::new(
                     snapshot.snapshot_id(),
                     Retention::Branch {
                         min_snapshots_to_keep: None,
@@ -284,7 +284,7 @@ struct TableMetadataV2 {
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refs: Option<HashMap<String, Reference>>,
+    pub refs: Option<HashMap<String, SnapshotReference>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -455,7 +455,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             refs: value.refs.unwrap_or_else(|| {
                 HashMap::from_iter(vec![(
                     MAIN_BRANCH.to_string(),
-                    Reference {
+                    SnapshotReference {
                         snapshot_id: value.current_snapshot_id.unwrap_or_default(),
                         retention: Retention::Branch {
                             min_snapshots_to_keep: None,
@@ -525,7 +525,7 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             default_sort_order_id: value.default_sort_order_id,
             refs: HashMap::from_iter(vec![(
                 MAIN_BRANCH.to_string(),
-                Reference {
+                SnapshotReference {
                     snapshot_id: value.current_snapshot_id.unwrap_or_default(),
                     retention: Retention::Branch {
                         min_snapshots_to_keep: None,
@@ -628,7 +628,7 @@ mod tests {
 
     use crate::spec::{
         table_metadata::TableMetadata, NestedField, Operation, PartitionField,
-        PartitionSpecBuilder, PrimitiveType, Reference, Retention, Schema, SnapshotBuilder,
+        PartitionSpecBuilder, PrimitiveType, Retention, Schema, SnapshotBuilder, SnapshotReference,
         SortOrderBuilder, Summary, Transform, Type,
     };
 
@@ -746,7 +746,7 @@ mod tests {
             }]),
             refs: HashMap::from_iter(vec![(
                 "main".to_string(),
-                Reference {
+                SnapshotReference {
                     snapshot_id: 0,
                     retention: Retention::Branch {
                         min_snapshots_to_keep: None,
@@ -966,7 +966,7 @@ mod tests {
                 timestamp_ms: 1662532818843,
             }]),
             metadata_log: Some(vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}]),
-            refs: HashMap::from_iter(vec![("main".to_string(),Reference{snapshot_id: 638933773299822130, retention: Retention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
+            refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: Retention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
         };
 
         check_table_metadata_serde(data, expected);

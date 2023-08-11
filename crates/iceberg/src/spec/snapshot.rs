@@ -236,7 +236,7 @@ impl From<Snapshot> for SnapshotV1 {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Iceberg tables keep track of branches and tags using snapshot references.
-pub struct Reference {
+pub struct SnapshotReference {
     /// A reference’s snapshot ID. The tagged snapshot or latest snapshot of a branch.
     pub snapshot_id: i64,
     #[serde(flatten)]
@@ -244,10 +244,10 @@ pub struct Reference {
     pub retention: Retention,
 }
 
-impl Reference {
+impl SnapshotReference {
     /// Create new snapshot reference
     pub fn new(snapshot_id: i64, retention: Retention) -> Self {
-        Reference {
+        SnapshotReference {
             snapshot_id,
             retention,
         }
