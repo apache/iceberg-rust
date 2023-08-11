@@ -56,6 +56,7 @@ impl Default for Operation {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Builder)]
+#[builder(setter(prefix = "with"))]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
     /// A unique long ID
@@ -108,6 +109,10 @@ impl Snapshot {
     #[inline]
     pub fn timestamp(&self) -> i64 {
         self.timestamp_ms
+    }
+    /// Create snapshot builder
+    pub fn builder() -> SnapshotBuilder {
+        SnapshotBuilder::default()
     }
 
     pub(crate) fn log(&self) -> SnapshotLog {

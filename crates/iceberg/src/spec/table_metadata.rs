@@ -643,9 +643,9 @@ mod tests {
     use uuid::Uuid;
 
     use crate::spec::{
-        table_metadata::TableMetadata, NestedField, Operation, PartitionField,
-        PartitionSpecBuilder, PrimitiveType, Schema, SnapshotBuilder, SnapshotReference,
-        SnapshotRetention, SortOrderBuilder, Summary, Transform, Type,
+        table_metadata::TableMetadata, NestedField, Operation, PartitionField, PartitionSpec,
+        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortOrder, Summary,
+        Transform, Type,
     };
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
@@ -724,8 +724,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpecBuilder::default()
-            .spec_id(1)
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(1)
             .with_partition_field(PartitionField {
                 name: "ts_day".to_string(),
                 transform: Transform::Day,
@@ -934,8 +934,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpecBuilder::default()
-            .spec_id(0)
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(0)
             .with_partition_field(PartitionField {
                 name: "vendor_id".to_string(),
                 transform: Transform::Identity,
@@ -945,19 +945,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = SortOrderBuilder::default()
-            .order_id(0)
-            .fields(vec![])
-            .build()
-            .unwrap();
+        let sort_order = SortOrder::builder().with_order_id(0).build().unwrap();
 
-        let snapshot = SnapshotBuilder::default()
-            .snapshot_id(638933773299822130)
-            .timestamp_ms(1662532818843)
-            .sequence_number(0)
-            .schema_id(0)
-            .manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string())
-            .summary(Summary{operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(),"local-1662532784305".to_string()),("added-data-files".to_string(),"4".to_string()),("added-records".to_string(),"4".to_string()),("added-files-size".to_string(),"6001".to_string())])})
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(638933773299822130)
+            .with_timestamp_ms(1662532818843)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string())
+            .with_summary(Summary{operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(),"local-1662532784305".to_string()),("added-data-files".to_string(),"4".to_string()),("added-records".to_string(),"4".to_string()),("added-files-size".to_string(),"6001".to_string())])})
             .build().unwrap();
 
         let expected = TableMetadata {

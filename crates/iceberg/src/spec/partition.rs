@@ -39,6 +39,7 @@ pub struct PartitionField {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
 #[serde(rename_all = "kebab-case")]
+#[builder(setter(prefix = "with"))]
 ///  Partition spec that defines how to produce a tuple of partition values from a record.
 pub struct PartitionSpec {
     /// Identifier for PartitionSpec
@@ -48,7 +49,12 @@ pub struct PartitionSpec {
     pub fields: Vec<PartitionField>,
 }
 
-impl PartitionSpec {}
+impl PartitionSpec {
+    /// Create partition spec builer
+    pub fn builder() -> PartitionSpecBuilder {
+        PartitionSpecBuilder::default()
+    }
+}
 
 #[cfg(test)]
 mod tests {
