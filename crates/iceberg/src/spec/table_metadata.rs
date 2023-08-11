@@ -81,7 +81,7 @@ pub struct TableMetadata {
     /// and the new current-snapshot-id. When snapshots are expired from
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
-    snapshot_log: Option<Vec<SnapshotLog>>,
+    snapshot_log: Vec<SnapshotLog>,
 
     /// A list (optional) of timestamp and metadata file location pairs
     /// that encodes changes to the previous metadata files for the table.
@@ -89,7 +89,7 @@ pub struct TableMetadata {
     /// previous metadata file location should be added to the list.
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
-    metadata_log: Option<Vec<MetadataLog>>,
+    metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
     sort_orders: HashMap<i64, SortOrder>,
@@ -181,25 +181,17 @@ impl TableMetadata {
             });
 
         if let Some(snapshots) = &mut self.snapshots {
-            self.snapshot_log
-                .as_mut()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Snapshot logs is empty while snapshots is not!",
-                    )
-                })?
-                .push(snapshot.log());
+            self.snapshot_log.push(snapshot.log());
             snapshots.insert(snapshot.snapshot_id(), snapshot);
         } else {
-            if self.snapshot_log.is_some() {
+            if !self.snapshot_log.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Snapshot logs is empty while snapshots is not!",
                 ));
             }
 
-            self.snapshot_log = Some(vec![snapshot.log()]);
+            self.snapshot_log = vec![snapshot.log()];
             self.snapshots = Some(HashMap::from_iter(vec![(snapshot.snapshot_id(), snapshot)]));
         }
 
@@ -448,8 +440,8 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             snapshots: value.snapshots.map(|snapshots| {
                 HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
             }),
-            snapshot_log: value.snapshot_log,
-            metadata_log: value.metadata_log,
+            snapshot_log: value.snapshot_log.unwrap_or_default(),
+            metadata_log: value.metadata_log.unwrap_or_default(),
             sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: value.refs.unwrap_or_else(|| {
@@ -519,8 +511,8 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             snapshots: value.snapshots.map(|snapshots| {
                 HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
             }),
-            snapshot_log: value.snapshot_log,
-            metadata_log: value.metadata_log,
+            snapshot_log: value.snapshot_log.unwrap_or_default(),
+            metadata_log: value.metadata_log.unwrap_or_default(),
             sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: HashMap::from_iter(vec![(
@@ -561,8 +553,16 @@ impl From<TableMetadata> for TableMetadataV2 {
             snapshots: v
                 .snapshots
                 .map(|snapshots| snapshots.into_values().map(|x| x.into()).collect()),
-            snapshot_log: v.snapshot_log,
-            metadata_log: v.metadata_log,
+            snapshot_log: if v.snapshot_log.is_empty() {
+                None
+            } else {
+                Some(v.snapshot_log)
+            },
+            metadata_log: if v.metadata_log.is_empty() {
+                None
+            } else {
+                Some(v.metadata_log)
+            },
             sort_orders: v.sort_orders.into_values().collect(),
             default_sort_order_id: v.default_sort_order_id,
             refs: Some(v.refs),
@@ -598,8 +598,16 @@ impl From<TableMetadata> for TableMetadataV1 {
             snapshots: v
                 .snapshots
                 .map(|snapshots| snapshots.into_values().map(|x| x.into()).collect()),
-            snapshot_log: v.snapshot_log,
-            metadata_log: v.metadata_log,
+            snapshot_log: if v.snapshot_log.is_empty() {
+                None
+            } else {
+                Some(v.snapshot_log)
+            },
+            metadata_log: if v.metadata_log.is_empty() {
+                None
+            } else {
+                Some(v.metadata_log)
+            },
             sort_orders: v.sort_orders.into_values().collect(),
             default_sort_order_id: v.default_sort_order_id,
         }
@@ -747,11 +755,11 @@ mod tests {
                 "commit.retry.num-retries".to_string(),
                 "1".to_string(),
             )]),
-            snapshot_log: None,
-            metadata_log: Some(vec![MetadataLog {
+            snapshot_log: Vec::new(),
+            metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
                 timestamp_ms: 1515100,
-            }]),
+            }],
             refs: HashMap::from_iter(vec![(
                 "main".to_string(),
                 SnapshotReference {
@@ -969,11 +977,11 @@ mod tests {
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
             properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
-            snapshot_log: Some(vec![SnapshotLog {
+            snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
                 timestamp_ms: 1662532818843,
-            }]),
-            metadata_log: Some(vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}]),
+            }],
+            metadata_log: vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}],
             refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
         };
 
