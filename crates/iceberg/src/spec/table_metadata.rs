@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_data_v2() -> Result<()> {
+    fn test_table_data_v2() {
         let data = r#"
             {
                 "format-version" : 2,
@@ -683,7 +683,7 @@ mod tests {
                     }
                 ],
                 "default-spec-id": 1,
-                "last-partition-id": 1,
+                "last-partition-id": 1000,
                 "properties": {
                     "commit.retry.num-retries": "1"
                 },
@@ -697,16 +697,67 @@ mod tests {
                 "default-sort-order-id": 0
             }
         "#;
-        let metadata =
-            serde_json::from_str::<TableMetadata>(data).expect("Failed to deserialize json");
-        //test serialise deserialise works.
-        let metadata_two: TableMetadata = serde_json::from_str(
-            &serde_json::to_string(&metadata).expect("Failed to serialize metadata"),
-        )
-        .expect("Failed to serialize json");
-        assert_eq!(metadata, metadata_two);
 
-        Ok(())
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "struct_name",
+                Type::Primitive(PrimitiveType::Fixed(1)),
+            ))])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::default()
+            .spec_id(1)
+            .with_partition_field(PartitionField {
+                name: "ts_day".to_string(),
+                transform: Transform::Day,
+                source_id: 4,
+                field_id: 1000,
+            })
+            .build()
+            .unwrap();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: "s3://b/wh/data.db/table".to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 1,
+            schemas: HashMap::from_iter(vec![(1, schema)]),
+            current_schema_id: 1,
+            partition_specs: HashMap::from_iter(vec![(1, partition_spec)]),
+            default_spec_id: 1,
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![]),
+            snapshots: None,
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties: Some(HashMap::from_iter(vec![(
+                "commit.retry.num-retries".to_string(),
+                "1".to_string(),
+            )])),
+            snapshot_log: None,
+            metadata_log: Some(vec![MetadataLog {
+                metadata_file: "s3://bucket/.../v1.json".to_string(),
+                timestamp_ms: 1515100,
+            }]),
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                Reference {
+                    snapshot_id: 0,
+                    retention: Retention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )]),
+        };
+
+        check_table_metadata_serde(data, expected);
     }
 
     #[test]
