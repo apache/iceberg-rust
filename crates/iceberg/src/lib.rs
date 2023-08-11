@@ -19,6 +19,9 @@
 
 #![deny(missing_docs)]
 
+#[macro_use]
+extern crate derive_builder;
+
 mod error;
 pub use error::Error;
 pub use error::ErrorKind;

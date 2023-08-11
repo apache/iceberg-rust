@@ -55,13 +55,14 @@ impl Default for Operation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Builder)]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
     /// A unique long ID
     snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
+    #[builder(default = "None")]
     parent_snapshot_id: Option<i64>,
     /// A monotonically increasing long that tracks the order of
     /// changes to a table.
@@ -73,10 +74,12 @@ pub struct Snapshot {
     /// tracks manifest files with additional metadata.
     manifest_list: String,
     /// A list of manifest file locations. Must be omitted if manifest-list is present
+    #[builder(default = "None")]
     manifests: Option<Vec<String>>,
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
+    #[builder(setter(strip_option))]
     schema_id: Option<i64>,
 }
 

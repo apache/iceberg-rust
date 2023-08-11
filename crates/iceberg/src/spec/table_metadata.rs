@@ -621,12 +621,31 @@ pub struct SnapshotLog {
 #[cfg(test)]
 mod tests {
 
-    use anyhow::Result;
+    use std::{collections::HashMap, sync::Arc};
 
-    use crate::spec::table_metadata::TableMetadata;
+    use anyhow::Result;
+    use uuid::Uuid;
+
+    use crate::spec::{
+        table_metadata::TableMetadata, NestedField, Operation, PartitionField,
+        PartitionSpecBuilder, PrimitiveType, Reference, Retention, Schema, SnapshotBuilder,
+        SortOrderBuilder, Summary, Transform, Type,
+    };
+
+    use super::{FormatVersion, MetadataLog, SnapshotLog};
+
+    fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
+        let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(desered_type, expected_type);
+
+        let sered_json = serde_json::to_string(&expected_type).unwrap();
+        let parsed_json_value = serde_json::from_str::<TableMetadata>(&sered_json).unwrap();
+
+        assert_eq!(parsed_json_value, desered_type);
+    }
 
     #[test]
-    fn test_deserialize_table_data_v2() -> Result<()> {
+    fn test_table_data_v2() -> Result<()> {
         let data = r#"
             {
                 "format-version" : 2,
@@ -691,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_table_data_v1() -> Result<()> {
+    fn test_table_data_v1() {
         let data = r#"
         {
             "format-version" : 1,
@@ -795,19 +814,13 @@ mod tests {
             "snapshots" : [ {
               "snapshot-id" : 638933773299822130,
               "timestamp-ms" : 1662532818843,
+              "sequence-number" : 0,
               "summary" : {
                 "operation" : "append",
                 "spark.app.id" : "local-1662532784305",
                 "added-data-files" : "4",
                 "added-records" : "4",
-                "added-files-size" : "6001",
-                "changed-partition-count" : "2",
-                "total-records" : "4",
-                "total-files-size" : "6001",
-                "total-data-files" : "4",
-                "total-delete-files" : "0",
-                "total-position-deletes" : "0",
-                "total-equality-deletes" : "0"
+                "added-files-size" : "6001"
               },
               "manifest-list" : "/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro",
               "schema-id" : 0
@@ -822,17 +835,90 @@ mod tests {
             } ]
           }
         "#;
-        let metadata =
-            serde_json::from_str::<TableMetadata>(data).expect("Failed to deserialize json");
-        //test serialise deserialise works.
-        let metadata_two: TableMetadata = serde_json::from_str(
-            &serde_json::to_string(&metadata).expect("Failed to serialize metadata"),
-        )
-        .expect("Failed to serialize json");
-        dbg!(&metadata, &metadata_two);
-        assert_eq!(metadata, metadata_two);
 
-        Ok(())
+        let schema = Schema::builder()
+            .with_fields(vec![
+                Arc::new(NestedField::optional(
+                    1,
+                    "vendor_id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "trip_id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    3,
+                    "trip_distance",
+                    Type::Primitive(PrimitiveType::Float),
+                )),
+                Arc::new(NestedField::optional(
+                    4,
+                    "fare_amount",
+                    Type::Primitive(PrimitiveType::Double),
+                )),
+                Arc::new(NestedField::optional(
+                    5,
+                    "store_and_fwd_flag",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::default()
+            .spec_id(0)
+            .with_partition_field(PartitionField {
+                name: "vendor_id".to_string(),
+                transform: Transform::Identity,
+                source_id: 1,
+                field_id: 1000,
+            })
+            .build()
+            .unwrap();
+
+        let sort_order = SortOrderBuilder::default()
+            .order_id(0)
+            .fields(vec![])
+            .build()
+            .unwrap();
+
+        let snapshot = SnapshotBuilder::default()
+            .snapshot_id(638933773299822130)
+            .timestamp_ms(1662532818843)
+            .sequence_number(0)
+            .schema_id(0)
+            .manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string())
+            .summary(Summary{operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(),"local-1662532784305".to_string()),("added-data-files".to_string(),"4".to_string()),("added-records".to_string(),"4".to_string()),("added-files-size".to_string(),"6001".to_string())])})
+            .build().unwrap();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V1,
+            table_uuid: Uuid::parse_str("df838b92-0b32-465d-a44e-d39936e538b7").unwrap(),
+            location: "/home/iceberg/warehouse/nyc/taxis".to_string(),
+            last_updated_ms: 1662532818843,
+            last_column_id: 5,
+            schemas: HashMap::from_iter(vec![(0, schema)]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            default_spec_id: 0,
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![(0, sort_order)]),
+            snapshots: Some(HashMap::from_iter(vec![(638933773299822130, snapshot)])),
+            current_snapshot_id: Some(638933773299822130),
+            last_sequence_number: 0,
+            properties: Some(HashMap::from_iter(vec![("owner".to_string(),"root".to_string())])),
+            snapshot_log: Some(vec![SnapshotLog {
+                snapshot_id: 638933773299822130,
+                timestamp_ms: 1662532818843,
+            }]),
+            metadata_log: Some(vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}]),
+            refs: HashMap::from_iter(vec![("main".to_string(),Reference{snapshot_id: 638933773299822130, retention: Retention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
+        };
+
+        check_table_metadata_serde(data, expected);
     }
 
     #[test]

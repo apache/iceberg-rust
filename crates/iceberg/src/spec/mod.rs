@@ -27,10 +27,10 @@ mod transform;
 mod values;
 
 pub use datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
-pub use partition::{PartitionField, PartitionSpec};
+pub use partition::{PartitionField, PartitionSpec, PartitionSpecBuilder};
 pub use schema::{visit_schema, visit_struct, visit_type, Schema, SchemaVisitor};
-pub use snapshot::{Operation, Reference, Snapshot, Summary};
-pub use sort::{SortField, SortOrder};
+pub use snapshot::{Operation, Reference, Retention, Snapshot, SnapshotBuilder, Summary};
+pub use sort::{SortField, SortOrder, SortOrderBuilder};
 pub use table_metadata::TableMetadata;
 pub use transform::Transform;
 pub use values::{Literal, PrimitiveLiteral, Struct};

@@ -37,15 +37,18 @@ pub struct PartitionField {
     pub transform: Transform,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
 #[serde(rename_all = "kebab-case")]
 ///  Partition spec that defines how to produce a tuple of partition values from a record.
 pub struct PartitionSpec {
     /// Identifier for PartitionSpec
     pub spec_id: i32,
     /// Details of the partition spec
+    #[builder(setter(each(name = "with_partition_field")))]
     pub fields: Vec<PartitionField>,
 }
+
+impl PartitionSpec {}
 
 #[cfg(test)]
 mod tests {
