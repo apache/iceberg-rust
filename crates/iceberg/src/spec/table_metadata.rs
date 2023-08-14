@@ -163,11 +163,6 @@ impl TableMetadata {
             .entry(MAIN_BRANCH.to_string())
             .and_modify(|s| {
                 s.snapshot_id = snapshot.snapshot_id();
-                s.retention = SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
-                }
             })
             .or_insert_with(|| {
                 SnapshotReference::new(
