@@ -73,15 +73,22 @@ pub struct Snapshot {
     timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
-    manifest_list: String,
-    /// A list of manifest file locations. Must be omitted if manifest-list is present
-    #[builder(default = "None")]
-    manifests: Option<Vec<String>>,
+    manifest_list: ManifestList,
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
     #[builder(setter(strip_option))]
     schema_id: Option<i64>,
+}
+
+/// Type to distinguish between a path to a manifestlist file or a vector of manifestfile locations
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(untagged)]
+pub enum ManifestList {
+    /// Location of manifestlist file
+    ManifestListFile(String),
+    /// Manifestfile locations
+    ManifestFiles(Vec<String>),
 }
 
 impl Snapshot {
@@ -97,7 +104,7 @@ impl Snapshot {
     }
     /// Get location of manifest_list file
     #[inline]
-    pub fn manifest_list(&self) -> &str {
+    pub fn manifest_list(&self) -> &ManifestList {
         &self.manifest_list
     }
     /// Get summary of the snapshot
@@ -184,8 +191,7 @@ impl From<SnapshotV2> for Snapshot {
             parent_snapshot_id: v2.parent_snapshot_id,
             sequence_number: v2.sequence_number,
             timestamp_ms: v2.timestamp_ms,
-            manifest_list: v2.manifest_list,
-            manifests: None,
+            manifest_list: ManifestList::ManifestListFile(v2.manifest_list),
             summary: v2.summary,
             schema_id: v2.schema_id,
         }
@@ -199,7 +205,10 @@ impl From<Snapshot> for SnapshotV2 {
             parent_snapshot_id: v2.parent_snapshot_id,
             sequence_number: v2.sequence_number,
             timestamp_ms: v2.timestamp_ms,
-            manifest_list: v2.manifest_list,
+            manifest_list: match v2.manifest_list {
+                ManifestList::ManifestListFile(file) => file,
+                ManifestList::ManifestFiles(_) => panic!("Wrong table format version. Can't convert a list of manifest files into a location of a manifest file.")
+            },
             summary: v2.summary,
             schema_id: v2.schema_id,
         }
@@ -213,8 +222,11 @@ impl From<SnapshotV1> for Snapshot {
             parent_snapshot_id: v1.parent_snapshot_id,
             sequence_number: 0,
             timestamp_ms: v1.timestamp_ms,
-            manifest_list: v1.manifest_list.unwrap_or_default(),
-            manifests: v1.manifests,
+            manifest_list: match (v1.manifest_list, v1.manifests) {
+                (Some(file), _) => ManifestList::ManifestListFile(file),
+                (None, Some(files)) => ManifestList::ManifestFiles(files),
+                (None, None) => panic!("Neither manifestlist file or manifest files are provided."),
+            },
             summary: v1.summary.unwrap_or(Summary {
                 operation: Operation::default(),
                 other: HashMap::new(),
@@ -226,12 +238,16 @@ impl From<SnapshotV1> for Snapshot {
 
 impl From<Snapshot> for SnapshotV1 {
     fn from(v2: Snapshot) -> Self {
+        let (manifest_list, manifests) = match v2.manifest_list {
+            ManifestList::ManifestListFile(file) => (Some(file), None),
+            ManifestList::ManifestFiles(files) => (None, Some(files)),
+        };
         SnapshotV1 {
             snapshot_id: v2.snapshot_id,
             parent_snapshot_id: v2.parent_snapshot_id,
             timestamp_ms: v2.timestamp_ms,
-            manifest_list: Some(v2.manifest_list),
-            manifests: v2.manifests,
+            manifest_list,
+            manifests,
             summary: Some(v2.summary),
             schema_id: v2.schema_id,
         }
@@ -293,7 +309,7 @@ pub enum SnapshotRetention {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::spec::snapshot::{Operation, Snapshot, SnapshotV1, Summary};
+    use crate::spec::snapshot::{ManifestList, Operation, Snapshot, SnapshotV1, Summary};
 
     #[test]
     fn schema() {
@@ -319,6 +335,9 @@ mod tests {
             },
             *result.summary()
         );
-        assert_eq!("s3://b/wh/.../s1.avro", result.manifest_list());
+        assert_eq!(
+            ManifestList::ManifestListFile("s3://b/wh/.../s1.avro".to_string()),
+            *result.manifest_list()
+        );
     }
 }
