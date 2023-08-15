@@ -409,7 +409,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -460,7 +461,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -511,7 +513,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -560,7 +563,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -609,7 +613,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -658,7 +663,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -707,7 +713,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     None,
                 ),
             ],
@@ -759,12 +766,14 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     Some(Struct(StructType::new(vec![NestedField::optional(
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )]))),
+                    )
+                    .into()]))),
                 ),
             ],
         };
@@ -813,7 +822,8 @@ mod tests {
                         1,
                         "a",
                         Primitive(Timestamp),
-                    )])),
+                    )
+                    .into()])),
                     Some(Primitive(StringType)),
                 ),
             ],
