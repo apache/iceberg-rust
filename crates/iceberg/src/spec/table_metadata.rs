@@ -20,7 +20,7 @@ Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
 The main struct here is [TableMetadataV2] which defines the data for a table.
 */
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -54,7 +54,7 @@ pub struct TableMetadata {
     /// An integer; the highest assigned column ID for the table.
     last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    schemas: HashMap<i32, Schema>,
+    schemas: HashMap<i32, Arc<Schema>>,
     /// ID of the table’s current schema.
     current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
@@ -107,13 +107,16 @@ pub struct TableMetadata {
 impl TableMetadata {
     /// Get current schema
     #[inline]
-    pub fn current_schema(&self) -> Result<&Schema, Error> {
-        self.schemas.get(&self.current_schema_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Schema id {} not found!", self.current_schema_id),
-            )
-        })
+    pub fn current_schema(&self) -> Result<Arc<Schema>, Error> {
+        self.schemas
+            .get(&self.current_schema_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Schema id {} not found!", self.current_schema_id),
+                )
+            })
+            .cloned()
     }
     /// Get default partition spec
     #[inline]
@@ -420,7 +423,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
                 value
                     .schemas
                     .into_iter()
-                    .map(|schema| Ok((schema.schema_id, schema.try_into()?)))
+                    .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
                     .collect::<Result<Vec<_>, Error>>()?
                     .into_iter(),
             ),
@@ -467,7 +470,10 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
                         .into_iter()
                         .enumerate()
                         .map(|(i, schema)| {
-                            Ok((schema.schema_id.unwrap_or(i as i32), schema.try_into()?))
+                            Ok((
+                                schema.schema_id.unwrap_or(i as i32),
+                                Arc::new(schema.try_into()?),
+                            ))
                         })
                         .collect::<Result<Vec<_>, Error>>()?
                         .into_iter(),
@@ -534,7 +540,15 @@ impl From<TableMetadata> for TableMetadataV2 {
             last_sequence_number: v.last_sequence_number,
             last_updated_ms: v.last_updated_ms,
             last_column_id: v.last_column_id,
-            schemas: v.schemas.into_values().map(|x| x.into()).collect(),
+            schemas: v
+                .schemas
+                .into_values()
+                .map(|x| {
+                    Arc::try_unwrap(x)
+                        .unwrap_or_else(|schema| schema.as_ref().clone())
+                        .into()
+                })
+                .collect(),
             current_schema_id: v.current_schema_id,
             partition_specs: v.partition_specs.into_values().collect(),
             default_spec_id: v.default_spec_id,
@@ -573,8 +587,23 @@ impl From<TableMetadata> for TableMetadataV1 {
             location: v.location,
             last_updated_ms: v.last_updated_ms,
             last_column_id: v.last_column_id,
-            schema: v.schemas.get(&v.current_schema_id).unwrap().clone().into(),
-            schemas: Some(v.schemas.into_values().map(|x| x.into()).collect()),
+            schema: v
+                .schemas
+                .get(&v.current_schema_id)
+                .unwrap()
+                .as_ref()
+                .clone()
+                .into(),
+            schemas: Some(
+                v.schemas
+                    .into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|schema| schema.as_ref().clone())
+                            .into()
+                    })
+                    .collect(),
+            ),
             current_schema_id: Some(v.current_schema_id),
             partition_spec: v
                 .partition_specs
@@ -736,7 +765,7 @@ mod tests {
             location: "s3://b/wh/data.db/table".to_string(),
             last_updated_ms: 1515100955770,
             last_column_id: 1,
-            schemas: HashMap::from_iter(vec![(1, schema)]),
+            schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
             current_schema_id: 1,
             partition_specs: HashMap::from_iter(vec![(1, partition_spec)]),
             default_spec_id: 1,
@@ -957,7 +986,7 @@ mod tests {
             location: "/home/iceberg/warehouse/nyc/taxis".to_string(),
             last_updated_ms: 1662532818843,
             last_column_id: 5,
-            schemas: HashMap::from_iter(vec![(0, schema)]),
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
             partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
             default_spec_id: 0,
