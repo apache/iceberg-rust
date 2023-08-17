@@ -645,6 +645,7 @@ pub(crate) struct SchemaV1 {
 impl TryFrom<SchemaV2> for Schema {
     type Error = Error;
     fn try_from(value: SchemaV2) -> Result<Self> {
+        dbg!(&value);
         Schema::builder()
             .with_schema_id(value.schema_id)
             .with_fields(value.fields.fields().iter().cloned())
@@ -668,8 +669,11 @@ impl From<Schema> for SchemaV2 {
     fn from(value: Schema) -> Self {
         SchemaV2 {
             schema_id: value.schema_id,
-            /// TODO!!! Implement once available in Schema
-            identifier_field_ids: None,
+            identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                None
+            } else {
+                Some(value.identifier_field_ids.into_iter().collect())
+            },
             fields: value.r#struct,
         }
     }
@@ -679,8 +683,11 @@ impl From<Schema> for SchemaV1 {
     fn from(value: Schema) -> Self {
         SchemaV1 {
             schema_id: Some(value.schema_id),
-            /// TODO!!! Implement once available in Schema
-            identifier_field_ids: None,
+            identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                None
+            } else {
+                Some(value.identifier_field_ids.into_iter().collect())
+            },
             fields: value.r#struct,
         }
     }
