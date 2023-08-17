@@ -74,7 +74,7 @@ pub struct TableMetadata {
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    snapshots: Option<HashMap<i64, Snapshot>>,
+    snapshots: Option<HashMap<i64, Arc<Snapshot>>>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
     /// is changed, a new entry should be added with the last-updated-ms
@@ -133,7 +133,7 @@ impl TableMetadata {
 
     /// Get current snapshot
     #[inline]
-    pub fn current_snapshot(&self) -> Result<&Snapshot, Error> {
+    pub fn current_snapshot(&self) -> Result<Arc<Snapshot>, Error> {
         let snapshot_id = self.current_snapshot_id.ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
@@ -155,6 +155,7 @@ impl TableMetadata {
                     format!("Partition spec id {} not found!", snapshot_id),
                 )
             })
+            .cloned()
     }
 
     /// Append snapshot to table
@@ -180,7 +181,7 @@ impl TableMetadata {
 
         if let Some(snapshots) = &mut self.snapshots {
             self.snapshot_log.push(snapshot.log());
-            snapshots.insert(snapshot.snapshot_id(), snapshot);
+            snapshots.insert(snapshot.snapshot_id(), Arc::new(snapshot));
         } else {
             if !self.snapshot_log.is_empty() {
                 return Err(Error::new(
@@ -190,7 +191,10 @@ impl TableMetadata {
             }
 
             self.snapshot_log = vec![snapshot.log()];
-            self.snapshots = Some(HashMap::from_iter(vec![(snapshot.snapshot_id(), snapshot)]));
+            self.snapshots = Some(HashMap::from_iter(vec![(
+                snapshot.snapshot_id(),
+                Arc::new(snapshot),
+            )]));
         }
 
         Ok(())
@@ -436,7 +440,11 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             properties: value.properties.unwrap_or_default(),
             current_snapshot_id: value.current_snapshot_id,
             snapshots: value.snapshots.map(|snapshots| {
-                HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
+                HashMap::from_iter(
+                    snapshots
+                        .into_iter()
+                        .map(|x| (x.snapshot_id, Arc::new(x.into()))),
+                )
             }),
             snapshot_log: value.snapshot_log.unwrap_or_default(),
             metadata_log: value.metadata_log.unwrap_or_default(),
@@ -510,7 +518,11 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             properties: value.properties.unwrap_or_default(),
             current_snapshot_id: value.current_snapshot_id,
             snapshots: value.snapshots.map(|snapshots| {
-                HashMap::from_iter(snapshots.into_iter().map(|x| (x.snapshot_id, x.into())))
+                HashMap::from_iter(
+                    snapshots
+                        .into_iter()
+                        .map(|x| (x.snapshot_id, Arc::new(x.into()))),
+                )
             }),
             snapshot_log: value.snapshot_log.unwrap_or_default(),
             metadata_log: value.metadata_log.unwrap_or_default(),
@@ -559,9 +571,16 @@ impl From<TableMetadata> for TableMetadataV2 {
                 Some(v.properties)
             },
             current_snapshot_id: v.current_snapshot_id,
-            snapshots: v
-                .snapshots
-                .map(|snapshots| snapshots.into_values().map(|x| x.into()).collect()),
+            snapshots: v.snapshots.map(|snapshots| {
+                snapshots
+                    .into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
+                            .into()
+                    })
+                    .collect()
+            }),
             snapshot_log: if v.snapshot_log.is_empty() {
                 None
             } else {
@@ -619,9 +638,16 @@ impl From<TableMetadata> for TableMetadataV1 {
                 Some(v.properties)
             },
             current_snapshot_id: v.current_snapshot_id,
-            snapshots: v
-                .snapshots
-                .map(|snapshots| snapshots.into_values().map(|x| x.into()).collect()),
+            snapshots: v.snapshots.map(|snapshots| {
+                snapshots
+                    .into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
+                            .into()
+                    })
+                    .collect()
+            }),
             snapshot_log: if v.snapshot_log.is_empty() {
                 None
             } else {
@@ -993,7 +1019,7 @@ mod tests {
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![(0, sort_order)]),
-            snapshots: Some(HashMap::from_iter(vec![(638933773299822130, snapshot)])),
+            snapshots: Some(HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))])),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
             properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
