@@ -36,6 +36,7 @@ use super::{
 };
 
 static MAIN_BRANCH: &str = "main";
+static DEFAULT_SPEC_ID: i32 = 1;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -497,7 +498,12 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
         let partition_specs = HashMap::from_iter(
             value
                 .partition_specs
-                .unwrap_or_else(|| vec![value.partition_spec])
+                .unwrap_or_else(|| {
+                    vec![PartitionSpec {
+                        spec_id: DEFAULT_SPEC_ID,
+                        fields: value.partition_spec,
+                    }]
+                })
                 .into_iter()
                 .map(|x| (x.spec_id, x)),
         );
