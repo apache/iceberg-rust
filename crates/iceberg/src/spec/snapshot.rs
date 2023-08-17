@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Error, ErrorKind};
+
 use super::table_metadata::SnapshotLog;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -215,9 +217,11 @@ impl From<Snapshot> for SnapshotV2 {
     }
 }
 
-impl From<SnapshotV1> for Snapshot {
-    fn from(v1: SnapshotV1) -> Self {
-        Snapshot {
+impl TryFrom<SnapshotV1> for Snapshot {
+    type Error = Error;
+
+    fn try_from(v1: SnapshotV1) -> Result<Self, Self::Error> {
+        Ok(Snapshot {
             snapshot_id: v1.snapshot_id,
             parent_snapshot_id: v1.parent_snapshot_id,
             sequence_number: 0,
@@ -225,14 +229,19 @@ impl From<SnapshotV1> for Snapshot {
             manifest_list: match (v1.manifest_list, v1.manifests) {
                 (Some(file), _) => ManifestList::ManifestListFile(file),
                 (None, Some(files)) => ManifestList::ManifestFiles(files),
-                (None, None) => panic!("Neither manifestlist file or manifest files are provided."),
+                (None, None) => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Neither manifestlist file or manifest files are provided.",
+                    ))
+                }
             },
             summary: v1.summary.unwrap_or(Summary {
                 operation: Operation::default(),
                 other: HashMap::new(),
             }),
             schema_id: v1.schema_id,
-        }
+        })
     }
 }
 
@@ -325,7 +334,10 @@ mod tests {
         }
         "#;
 
-        let result: Snapshot = serde_json::from_str::<SnapshotV1>(record).unwrap().into();
+        let result: Snapshot = serde_json::from_str::<SnapshotV1>(record)
+            .unwrap()
+            .try_into()
+            .unwrap();
         assert_eq!(3051729675574597004, result.snapshot_id());
         assert_eq!(1515100955770, result.timestamp());
         assert_eq!(

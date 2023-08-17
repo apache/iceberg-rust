@@ -508,13 +508,17 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
 
             properties: value.properties.unwrap_or_default(),
             current_snapshot_id: value.current_snapshot_id,
-            snapshots: value.snapshots.map(|snapshots| {
-                HashMap::from_iter(
-                    snapshots
-                        .into_iter()
-                        .map(|x| (x.snapshot_id, Arc::new(x.into()))),
-                )
-            }),
+            snapshots: value
+                .snapshots
+                .map(|snapshots| {
+                    Ok::<_, Error>(HashMap::from_iter(
+                        snapshots
+                            .into_iter()
+                            .map(|x| Ok((x.snapshot_id, Arc::new(x.try_into()?))))
+                            .collect::<Result<Vec<_>, Error>>()?,
+                    ))
+                })
+                .transpose()?,
             snapshot_log: value.snapshot_log.unwrap_or_default(),
             metadata_log: value.metadata_log.unwrap_or_default(),
             sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
