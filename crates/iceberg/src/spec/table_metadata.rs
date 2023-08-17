@@ -487,6 +487,11 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
                         .into_iter(),
                 ))
             })
+            .or_else(|| {
+                Some(value.schema.try_into().map(|schema: Schema| {
+                    HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
+                }))
+            })
             .transpose()?
             .unwrap_or_default();
         let partition_specs = HashMap::from_iter(
