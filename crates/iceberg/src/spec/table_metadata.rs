@@ -497,7 +497,7 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
         let partition_specs = HashMap::from_iter(
             value
                 .partition_specs
-                .unwrap_or_default()
+                .unwrap_or_else(|| vec![value.partition_spec])
                 .into_iter()
                 .map(|x| (x.spec_id, x)),
         );
