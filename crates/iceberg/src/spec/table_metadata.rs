@@ -133,29 +133,20 @@ impl TableMetadata {
 
     /// Get current snapshot
     #[inline]
-    pub fn current_snapshot(&self) -> Result<Arc<Snapshot>, Error> {
-        let snapshot_id = self.current_snapshot_id.ok_or_else(|| {
-            Error::new(
+    pub fn current_snapshot(&self) -> Result<Option<Arc<Snapshot>>, Error> {
+        match (&self.current_snapshot_id, &self.snapshots) {
+            (Some(snapshot_id), Some(snapshots)) => Ok(snapshots.get(snapshot_id).cloned()),
+            (Some(-1), None) => Ok(None),
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(Error::new(
                 ErrorKind::DataInvalid,
-                "Table snapshots are missing!".to_string(),
-            )
-        })?;
-        self.snapshots
-            .as_ref()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Table snapshots are missing!".to_string(),
-                )
-            })?
-            .get(&snapshot_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Partition spec id {} not found!", snapshot_id),
-                )
-            })
-            .cloned()
+                "Snapshot id is provided but there are no snapshots".to_string(),
+            )),
+            (None, Some(_)) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "There are snapshots but no snapshot id is provided".to_string(),
+            )),
+        }
     }
 
     /// Append snapshot to table
