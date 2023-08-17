@@ -407,6 +407,11 @@ impl From<TableMetadata> for TableMetadataEnum {
 impl TryFrom<TableMetadataV2> for TableMetadata {
     type Error = Error;
     fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
+        let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
+            None
+        } else {
+            value.current_snapshot_id
+        };
         Ok(TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: value.table_uuid,
@@ -429,7 +434,7 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             default_spec_id: value.default_spec_id,
             last_partition_id: value.last_partition_id,
             properties: value.properties.unwrap_or_default(),
-            current_snapshot_id: value.current_snapshot_id,
+            current_snapshot_id,
             snapshots: value.snapshots.map(|snapshots| {
                 HashMap::from_iter(
                     snapshots
@@ -442,17 +447,21 @@ impl TryFrom<TableMetadataV2> for TableMetadata {
             sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
             default_sort_order_id: value.default_sort_order_id,
             refs: value.refs.unwrap_or_else(|| {
-                HashMap::from_iter(vec![(
-                    MAIN_BRANCH.to_string(),
-                    SnapshotReference {
-                        snapshot_id: value.current_snapshot_id.unwrap_or_default(),
-                        retention: SnapshotRetention::Branch {
-                            min_snapshots_to_keep: None,
-                            max_snapshot_age_ms: None,
-                            max_ref_age_ms: None,
+                if let Some(snapshot_id) = current_snapshot_id {
+                    HashMap::from_iter(vec![(
+                        MAIN_BRANCH.to_string(),
+                        SnapshotReference {
+                            snapshot_id,
+                            retention: SnapshotRetention::Branch {
+                                min_snapshots_to_keep: None,
+                                max_snapshot_age_ms: None,
+                                max_ref_age_ms: None,
+                            },
                         },
-                    },
-                )])
+                    )])
+                } else {
+                    HashMap::new()
+                }
             }),
         })
     }
@@ -507,7 +516,11 @@ impl TryFrom<TableMetadataV1> for TableMetadata {
             schemas,
 
             properties: value.properties.unwrap_or_default(),
-            current_snapshot_id: value.current_snapshot_id,
+            current_snapshot_id: if let &Some(-1) = &value.current_snapshot_id {
+                None
+            } else {
+                value.current_snapshot_id
+            },
             snapshots: value
                 .snapshots
                 .map(|snapshots| {
@@ -565,7 +578,7 @@ impl From<TableMetadata> for TableMetadataV2 {
             } else {
                 Some(v.properties)
             },
-            current_snapshot_id: v.current_snapshot_id,
+            current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
             snapshots: v.snapshots.map(|snapshots| {
                 snapshots
                     .into_values()
@@ -632,7 +645,7 @@ impl From<TableMetadata> for TableMetadataV1 {
             } else {
                 Some(v.properties)
             },
-            current_snapshot_id: v.current_snapshot_id,
+            current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
             snapshots: v.snapshots.map(|snapshots| {
                 snapshots
                     .into_values()
@@ -805,17 +818,7 @@ mod tests {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
                 timestamp_ms: 1515100,
             }],
-            refs: HashMap::from_iter(vec![(
-                "main".to_string(),
-                SnapshotReference {
-                    snapshot_id: 0,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                },
-            )]),
+            refs: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
