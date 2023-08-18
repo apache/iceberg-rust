@@ -29,17 +29,13 @@ use uuid::Uuid;
 use crate::{Error, ErrorKind};
 
 use super::{
-    partition::{PartitionField, PartitionSpec},
-    schema::{
-        Schema,
-        _serde::{SchemaV1, SchemaV2},
-    },
-    snapshot::{
-        Snapshot, SnapshotReference, SnapshotRetention,
-        _serde::{SnapshotV1, SnapshotV2},
-    },
+    partition::PartitionSpec,
+    schema::Schema,
+    snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
     sort::SortOrder,
 };
+
+use _serde::TableMetadataEnum;
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 1;
@@ -199,160 +195,512 @@ impl TableMetadata {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-enum TableMetadataEnum {
-    V2(TableMetadataV2),
-    V1(TableMetadataV1),
-}
+pub(super) mod _serde {
+    use std::{collections::HashMap, sync::Arc};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-/// Fields for the version 2 of the table metadata.
-struct TableMetadataV2 {
-    /// Integer Version for the format.
-    pub format_version: VersionNumber<2>,
-    /// A UUID that identifies the table
-    pub table_uuid: Uuid,
-    /// Location tables base location
-    pub location: String,
-    /// The tables highest sequence number
-    pub last_sequence_number: i64,
-    /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    pub last_updated_ms: i64,
-    /// An integer; the highest assigned column ID for the table.
-    pub last_column_id: i32,
-    /// A list of schemas, stored as objects with schema-id.
-    pub schemas: Vec<SchemaV2>,
-    /// ID of the table’s current schema.
-    pub current_schema_id: i32,
-    /// A list of partition specs, stored as full partition spec objects.
-    pub partition_specs: Vec<PartitionSpec>,
-    /// ID of the “current” spec that writers should use by default.
-    pub default_spec_id: i32,
-    /// An integer; the highest assigned partition field ID across all partition specs for the table.
-    pub last_partition_id: i32,
-    ///A string to string map of table properties. This is used to control settings that
-    /// affect reading and writing and is not intended to be used for arbitrary metadata.
-    /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<HashMap<String, String>>,
-    /// long ID of the current table snapshot; must be the same as the current
-    /// ID of the main branch in refs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_snapshot_id: Option<i64>,
-    ///A list of valid snapshots. Valid snapshots are snapshots for which all
-    /// data files exist in the file system. A data file must not be deleted
-    /// from the file system until the last snapshot in which it was listed is
-    /// garbage collected.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshots: Option<Vec<SnapshotV2>>,
-    /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
-    /// to the current snapshot for the table. Each time the current-snapshot-id
-    /// is changed, a new entry should be added with the last-updated-ms
-    /// and the new current-snapshot-id. When snapshots are expired from
-    /// the list of valid snapshots, all entries before a snapshot that has
-    /// expired should be removed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot_log: Option<Vec<SnapshotLog>>,
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
 
-    /// A list (optional) of timestamp and metadata file location pairs
-    /// that encodes changes to the previous metadata files for the table.
-    /// Each time a new metadata file is created, a new entry of the
-    /// previous metadata file location should be added to the list.
-    /// Tables can be configured to remove oldest metadata log entries and
-    /// keep a fixed-size log of the most recent entries after a commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_log: Option<Vec<MetadataLog>>,
+    use crate::{
+        spec::{
+            schema::_serde::{SchemaV1, SchemaV2},
+            snapshot::_serde::{SnapshotV1, SnapshotV2},
+            PartitionField, PartitionSpec, Schema, SnapshotReference, SnapshotRetention, SortOrder,
+        },
+        Error,
+    };
 
-    /// A list of sort orders, stored as full sort order objects.
-    pub sort_orders: Vec<SortOrder>,
-    /// Default sort order id of the table. Note that this could be used by
-    /// writers, but is not used when reading because reads use the specs
-    /// stored in manifest files.
-    pub default_sort_order_id: i64,
-    ///A map of snapshot references. The map keys are the unique snapshot reference
-    /// names in the table, and the map values are snapshot reference objects.
-    /// There is always a main branch reference pointing to the current-snapshot-id
-    /// even if the refs map is null.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refs: Option<HashMap<String, SnapshotReference>>,
-}
+    use super::{
+        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SPEC_ID, MAIN_BRANCH,
+    };
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-/// Fields for the version 1 of the table metadata.
-struct TableMetadataV1 {
-    /// Integer Version for the format.
-    pub format_version: VersionNumber<1>,
-    /// A UUID that identifies the table
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table_uuid: Option<Uuid>,
-    /// Location tables base location
-    pub location: String,
-    /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    pub last_updated_ms: i64,
-    /// An integer; the highest assigned column ID for the table.
-    pub last_column_id: i32,
-    /// The table’s current schema.
-    pub schema: SchemaV1,
-    /// A list of schemas, stored as objects with schema-id.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schemas: Option<Vec<SchemaV1>>,
-    /// ID of the table’s current schema.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_schema_id: Option<i32>,
-    /// The table’s current partition spec, stored as only fields. Note that this is used by writers to partition data,
-    /// but is not used when reading because reads use the specs stored in manifest files.
-    pub partition_spec: Vec<PartitionField>,
-    /// A list of partition specs, stored as full partition spec objects.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub partition_specs: Option<Vec<PartitionSpec>>,
-    /// ID of the “current” spec that writers should use by default.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_spec_id: Option<i32>,
-    /// An integer; the highest assigned partition field ID across all partition specs for the table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_partition_id: Option<i32>,
-    ///A string to string map of table properties. This is used to control settings that
-    /// affect reading and writing and is not intended to be used for arbitrary metadata.
-    /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<HashMap<String, String>>,
-    /// long ID of the current table snapshot; must be the same as the current
-    /// ID of the main branch in refs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_snapshot_id: Option<i64>,
-    ///A list of valid snapshots. Valid snapshots are snapshots for which all
-    /// data files exist in the file system. A data file must not be deleted
-    /// from the file system until the last snapshot in which it was listed is
-    /// garbage collected.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshots: Option<Vec<SnapshotV1>>,
-    /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
-    /// to the current snapshot for the table. Each time the current-snapshot-id
-    /// is changed, a new entry should be added with the last-updated-ms
-    /// and the new current-snapshot-id. When snapshots are expired from
-    /// the list of valid snapshots, all entries before a snapshot that has
-    /// expired should be removed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot_log: Option<Vec<SnapshotLog>>,
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [SchemaV1] or [SchemaV2] struct
+    /// and then converted into the [Schema] struct. Serialization works the other way araound.
+    /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(untagged)]
+    pub(super) enum TableMetadataEnum {
+        V2(TableMetadataV2),
+        V1(TableMetadataV1),
+    }
 
-    /// A list (optional) of timestamp and metadata file location pairs
-    /// that encodes changes to the previous metadata files for the table.
-    /// Each time a new metadata file is created, a new entry of the
-    /// previous metadata file location should be added to the list.
-    /// Tables can be configured to remove oldest metadata log entries and
-    /// keep a fixed-size log of the most recent entries after a commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_log: Option<Vec<MetadataLog>>,
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Fields for the version 2 of the table metadata.
+    pub(super) struct TableMetadataV2 {
+        /// Integer Version for the format.
+        pub format_version: VersionNumber<2>,
+        /// A UUID that identifies the table
+        pub table_uuid: Uuid,
+        /// Location tables base location
+        pub location: String,
+        /// The tables highest sequence number
+        pub last_sequence_number: i64,
+        /// Timestamp in milliseconds from the unix epoch when the table was last updated.
+        pub last_updated_ms: i64,
+        /// An integer; the highest assigned column ID for the table.
+        pub last_column_id: i32,
+        /// A list of schemas, stored as objects with schema-id.
+        pub schemas: Vec<SchemaV2>,
+        /// ID of the table’s current schema.
+        pub current_schema_id: i32,
+        /// A list of partition specs, stored as full partition spec objects.
+        pub partition_specs: Vec<PartitionSpec>,
+        /// ID of the “current” spec that writers should use by default.
+        pub default_spec_id: i32,
+        /// An integer; the highest assigned partition field ID across all partition specs for the table.
+        pub last_partition_id: i32,
+        ///A string to string map of table properties. This is used to control settings that
+        /// affect reading and writing and is not intended to be used for arbitrary metadata.
+        /// For example, commit.retry.num-retries is used to control the number of commit retries.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub properties: Option<HashMap<String, String>>,
+        /// long ID of the current table snapshot; must be the same as the current
+        /// ID of the main branch in refs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub current_snapshot_id: Option<i64>,
+        ///A list of valid snapshots. Valid snapshots are snapshots for which all
+        /// data files exist in the file system. A data file must not be deleted
+        /// from the file system until the last snapshot in which it was listed is
+        /// garbage collected.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub snapshots: Option<Vec<SnapshotV2>>,
+        /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
+        /// to the current snapshot for the table. Each time the current-snapshot-id
+        /// is changed, a new entry should be added with the last-updated-ms
+        /// and the new current-snapshot-id. When snapshots are expired from
+        /// the list of valid snapshots, all entries before a snapshot that has
+        /// expired should be removed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub snapshot_log: Option<Vec<SnapshotLog>>,
 
-    /// A list of sort orders, stored as full sort order objects.
-    pub sort_orders: Vec<SortOrder>,
-    /// Default sort order id of the table. Note that this could be used by
-    /// writers, but is not used when reading because reads use the specs
-    /// stored in manifest files.
-    pub default_sort_order_id: i64,
+        /// A list (optional) of timestamp and metadata file location pairs
+        /// that encodes changes to the previous metadata files for the table.
+        /// Each time a new metadata file is created, a new entry of the
+        /// previous metadata file location should be added to the list.
+        /// Tables can be configured to remove oldest metadata log entries and
+        /// keep a fixed-size log of the most recent entries after a commit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub metadata_log: Option<Vec<MetadataLog>>,
+
+        /// A list of sort orders, stored as full sort order objects.
+        pub sort_orders: Vec<SortOrder>,
+        /// Default sort order id of the table. Note that this could be used by
+        /// writers, but is not used when reading because reads use the specs
+        /// stored in manifest files.
+        pub default_sort_order_id: i64,
+        ///A map of snapshot references. The map keys are the unique snapshot reference
+        /// names in the table, and the map values are snapshot reference objects.
+        /// There is always a main branch reference pointing to the current-snapshot-id
+        /// even if the refs map is null.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub refs: Option<HashMap<String, SnapshotReference>>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Fields for the version 1 of the table metadata.
+    pub(super) struct TableMetadataV1 {
+        /// Integer Version for the format.
+        pub format_version: VersionNumber<1>,
+        /// A UUID that identifies the table
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub table_uuid: Option<Uuid>,
+        /// Location tables base location
+        pub location: String,
+        /// Timestamp in milliseconds from the unix epoch when the table was last updated.
+        pub last_updated_ms: i64,
+        /// An integer; the highest assigned column ID for the table.
+        pub last_column_id: i32,
+        /// The table’s current schema.
+        pub schema: SchemaV1,
+        /// A list of schemas, stored as objects with schema-id.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schemas: Option<Vec<SchemaV1>>,
+        /// ID of the table’s current schema.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub current_schema_id: Option<i32>,
+        /// The table’s current partition spec, stored as only fields. Note that this is used by writers to partition data,
+        /// but is not used when reading because reads use the specs stored in manifest files.
+        pub partition_spec: Vec<PartitionField>,
+        /// A list of partition specs, stored as full partition spec objects.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub partition_specs: Option<Vec<PartitionSpec>>,
+        /// ID of the “current” spec that writers should use by default.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub default_spec_id: Option<i32>,
+        /// An integer; the highest assigned partition field ID across all partition specs for the table.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub last_partition_id: Option<i32>,
+        ///A string to string map of table properties. This is used to control settings that
+        /// affect reading and writing and is not intended to be used for arbitrary metadata.
+        /// For example, commit.retry.num-retries is used to control the number of commit retries.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub properties: Option<HashMap<String, String>>,
+        /// long ID of the current table snapshot; must be the same as the current
+        /// ID of the main branch in refs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub current_snapshot_id: Option<i64>,
+        ///A list of valid snapshots. Valid snapshots are snapshots for which all
+        /// data files exist in the file system. A data file must not be deleted
+        /// from the file system until the last snapshot in which it was listed is
+        /// garbage collected.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub snapshots: Option<Vec<SnapshotV1>>,
+        /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
+        /// to the current snapshot for the table. Each time the current-snapshot-id
+        /// is changed, a new entry should be added with the last-updated-ms
+        /// and the new current-snapshot-id. When snapshots are expired from
+        /// the list of valid snapshots, all entries before a snapshot that has
+        /// expired should be removed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub snapshot_log: Option<Vec<SnapshotLog>>,
+
+        /// A list (optional) of timestamp and metadata file location pairs
+        /// that encodes changes to the previous metadata files for the table.
+        /// Each time a new metadata file is created, a new entry of the
+        /// previous metadata file location should be added to the list.
+        /// Tables can be configured to remove oldest metadata log entries and
+        /// keep a fixed-size log of the most recent entries after a commit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub metadata_log: Option<Vec<MetadataLog>>,
+
+        /// A list of sort orders, stored as full sort order objects.
+        pub sort_orders: Vec<SortOrder>,
+        /// Default sort order id of the table. Note that this could be used by
+        /// writers, but is not used when reading because reads use the specs
+        /// stored in manifest files.
+        pub default_sort_order_id: i64,
+    }
+
+    /// Helper to serialize and deserialize the format version.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct VersionNumber<const V: u8>;
+
+    impl<const V: u8> Serialize for VersionNumber<V> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            serializer.serialize_u8(V)
+        }
+    }
+
+    impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = u8::deserialize(deserializer)?;
+            if value == V {
+                Ok(VersionNumber::<V>)
+            } else {
+                Err(serde::de::Error::custom("Invalid Version"))
+            }
+        }
+    }
+
+    impl TryFrom<TableMetadataEnum> for TableMetadata {
+        type Error = Error;
+        fn try_from(value: TableMetadataEnum) -> Result<Self, Error> {
+            match value {
+                TableMetadataEnum::V2(value) => value.try_into(),
+                TableMetadataEnum::V1(value) => value.try_into(),
+            }
+        }
+    }
+
+    impl From<TableMetadata> for TableMetadataEnum {
+        fn from(value: TableMetadata) -> Self {
+            match value.format_version {
+                FormatVersion::V2 => TableMetadataEnum::V2(value.into()),
+                FormatVersion::V1 => TableMetadataEnum::V1(value.into()),
+            }
+        }
+    }
+
+    impl TryFrom<TableMetadataV2> for TableMetadata {
+        type Error = Error;
+        fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
+            let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
+                None
+            } else {
+                value.current_snapshot_id
+            };
+            Ok(TableMetadata {
+                format_version: FormatVersion::V2,
+                table_uuid: value.table_uuid,
+                location: value.location,
+                last_sequence_number: value.last_sequence_number,
+                last_updated_ms: value.last_updated_ms,
+                last_column_id: value.last_column_id,
+                schemas: HashMap::from_iter(
+                    value
+                        .schemas
+                        .into_iter()
+                        .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
+                        .collect::<Result<Vec<_>, Error>>()?
+                        .into_iter(),
+                ),
+                current_schema_id: value.current_schema_id,
+                partition_specs: HashMap::from_iter(
+                    value.partition_specs.into_iter().map(|x| (x.spec_id, x)),
+                ),
+                default_spec_id: value.default_spec_id,
+                last_partition_id: value.last_partition_id,
+                properties: value.properties.unwrap_or_default(),
+                current_snapshot_id,
+                snapshots: value.snapshots.map(|snapshots| {
+                    HashMap::from_iter(
+                        snapshots
+                            .into_iter()
+                            .map(|x| (x.snapshot_id, Arc::new(x.into()))),
+                    )
+                }),
+                snapshot_log: value.snapshot_log.unwrap_or_default(),
+                metadata_log: value.metadata_log.unwrap_or_default(),
+                sort_orders: HashMap::from_iter(
+                    value.sort_orders.into_iter().map(|x| (x.order_id, x)),
+                ),
+                default_sort_order_id: value.default_sort_order_id,
+                refs: value.refs.unwrap_or_else(|| {
+                    if let Some(snapshot_id) = current_snapshot_id {
+                        HashMap::from_iter(vec![(
+                            MAIN_BRANCH.to_string(),
+                            SnapshotReference {
+                                snapshot_id,
+                                retention: SnapshotRetention::Branch {
+                                    min_snapshots_to_keep: None,
+                                    max_snapshot_age_ms: None,
+                                    max_ref_age_ms: None,
+                                },
+                            },
+                        )])
+                    } else {
+                        HashMap::new()
+                    }
+                }),
+            })
+        }
+    }
+
+    impl TryFrom<TableMetadataV1> for TableMetadata {
+        type Error = Error;
+        fn try_from(value: TableMetadataV1) -> Result<Self, Error> {
+            let schemas = value
+                .schemas
+                .map(|schemas| {
+                    Ok::<_, Error>(HashMap::from_iter(
+                        schemas
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, schema)| {
+                                Ok((
+                                    schema.schema_id.unwrap_or(i as i32),
+                                    Arc::new(schema.try_into()?),
+                                ))
+                            })
+                            .collect::<Result<Vec<_>, Error>>()?
+                            .into_iter(),
+                    ))
+                })
+                .or_else(|| {
+                    Some(value.schema.try_into().map(|schema: Schema| {
+                        HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
+                    }))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let partition_specs = HashMap::from_iter(
+                value
+                    .partition_specs
+                    .unwrap_or_else(|| {
+                        vec![PartitionSpec {
+                            spec_id: DEFAULT_SPEC_ID,
+                            fields: value.partition_spec,
+                        }]
+                    })
+                    .into_iter()
+                    .map(|x| (x.spec_id, x)),
+            );
+            Ok(TableMetadata {
+                format_version: FormatVersion::V1,
+                table_uuid: value.table_uuid.unwrap_or_default(),
+                location: value.location,
+                last_sequence_number: 0,
+                last_updated_ms: value.last_updated_ms,
+                last_column_id: value.last_column_id,
+                current_schema_id: value
+                    .current_schema_id
+                    .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default()),
+                default_spec_id: value
+                    .default_spec_id
+                    .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
+                last_partition_id: value
+                    .last_partition_id
+                    .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
+                partition_specs,
+                schemas,
+
+                properties: value.properties.unwrap_or_default(),
+                current_snapshot_id: if let &Some(-1) = &value.current_snapshot_id {
+                    None
+                } else {
+                    value.current_snapshot_id
+                },
+                snapshots: value
+                    .snapshots
+                    .map(|snapshots| {
+                        Ok::<_, Error>(HashMap::from_iter(
+                            snapshots
+                                .into_iter()
+                                .map(|x| Ok((x.snapshot_id, Arc::new(x.try_into()?))))
+                                .collect::<Result<Vec<_>, Error>>()?,
+                        ))
+                    })
+                    .transpose()?,
+                snapshot_log: value.snapshot_log.unwrap_or_default(),
+                metadata_log: value.metadata_log.unwrap_or_default(),
+                sort_orders: HashMap::from_iter(
+                    value.sort_orders.into_iter().map(|x| (x.order_id, x)),
+                ),
+                default_sort_order_id: value.default_sort_order_id,
+                refs: HashMap::from_iter(vec![(
+                    MAIN_BRANCH.to_string(),
+                    SnapshotReference {
+                        snapshot_id: value.current_snapshot_id.unwrap_or_default(),
+                        retention: SnapshotRetention::Branch {
+                            min_snapshots_to_keep: None,
+                            max_snapshot_age_ms: None,
+                            max_ref_age_ms: None,
+                        },
+                    },
+                )]),
+            })
+        }
+    }
+
+    impl From<TableMetadata> for TableMetadataV2 {
+        fn from(v: TableMetadata) -> Self {
+            TableMetadataV2 {
+                format_version: VersionNumber::<2>,
+                table_uuid: v.table_uuid,
+                location: v.location,
+                last_sequence_number: v.last_sequence_number,
+                last_updated_ms: v.last_updated_ms,
+                last_column_id: v.last_column_id,
+                schemas: v
+                    .schemas
+                    .into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|schema| schema.as_ref().clone())
+                            .into()
+                    })
+                    .collect(),
+                current_schema_id: v.current_schema_id,
+                partition_specs: v.partition_specs.into_values().collect(),
+                default_spec_id: v.default_spec_id,
+                last_partition_id: v.last_partition_id,
+                properties: if v.properties.is_empty() {
+                    None
+                } else {
+                    Some(v.properties)
+                },
+                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                snapshots: v.snapshots.map(|snapshots| {
+                    snapshots
+                        .into_values()
+                        .map(|x| {
+                            Arc::try_unwrap(x)
+                                .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
+                                .into()
+                        })
+                        .collect()
+                }),
+                snapshot_log: if v.snapshot_log.is_empty() {
+                    None
+                } else {
+                    Some(v.snapshot_log)
+                },
+                metadata_log: if v.metadata_log.is_empty() {
+                    None
+                } else {
+                    Some(v.metadata_log)
+                },
+                sort_orders: v.sort_orders.into_values().collect(),
+                default_sort_order_id: v.default_sort_order_id,
+                refs: Some(v.refs),
+            }
+        }
+    }
+
+    impl From<TableMetadata> for TableMetadataV1 {
+        fn from(v: TableMetadata) -> Self {
+            TableMetadataV1 {
+                format_version: VersionNumber::<1>,
+                table_uuid: Some(v.table_uuid),
+                location: v.location,
+                last_updated_ms: v.last_updated_ms,
+                last_column_id: v.last_column_id,
+                schema: v
+                    .schemas
+                    .get(&v.current_schema_id)
+                    .unwrap()
+                    .as_ref()
+                    .clone()
+                    .into(),
+                schemas: Some(
+                    v.schemas
+                        .into_values()
+                        .map(|x| {
+                            Arc::try_unwrap(x)
+                                .unwrap_or_else(|schema| schema.as_ref().clone())
+                                .into()
+                        })
+                        .collect(),
+                ),
+                current_schema_id: Some(v.current_schema_id),
+                partition_spec: v
+                    .partition_specs
+                    .get(&v.default_spec_id)
+                    .map(|x| x.fields.clone())
+                    .unwrap_or_default(),
+                partition_specs: Some(v.partition_specs.into_values().collect()),
+                default_spec_id: Some(v.default_spec_id),
+                last_partition_id: Some(v.last_partition_id),
+                properties: if v.properties.is_empty() {
+                    None
+                } else {
+                    Some(v.properties)
+                },
+                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                snapshots: v.snapshots.map(|snapshots| {
+                    snapshots
+                        .into_values()
+                        .map(|x| {
+                            Arc::try_unwrap(x)
+                                .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
+                                .into()
+                        })
+                        .collect()
+                }),
+                snapshot_log: if v.snapshot_log.is_empty() {
+                    None
+                } else {
+                    Some(v.snapshot_log)
+                },
+                metadata_log: if v.metadata_log.is_empty() {
+                    None
+                } else {
+                    Some(v.metadata_log)
+                },
+                sort_orders: v.sort_orders.into_values().collect(),
+                default_sort_order_id: v.default_sort_order_id,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone)]
@@ -363,330 +711,6 @@ pub enum FormatVersion {
     V1 = b'1',
     /// Iceberg spec version 2
     V2 = b'2',
-}
-
-/// Helper to serialize and deserialize the format version.
-#[derive(Debug, PartialEq, Eq)]
-struct VersionNumber<const V: u8>;
-
-impl<const V: u8> Serialize for VersionNumber<V> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_u8(V)
-    }
-}
-
-impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = u8::deserialize(deserializer)?;
-        if value == V {
-            Ok(VersionNumber::<V>)
-        } else {
-            Err(serde::de::Error::custom("Invalid Version"))
-        }
-    }
-}
-
-impl TryFrom<TableMetadataEnum> for TableMetadata {
-    type Error = Error;
-    fn try_from(value: TableMetadataEnum) -> Result<Self, Error> {
-        match value {
-            TableMetadataEnum::V2(value) => value.try_into(),
-            TableMetadataEnum::V1(value) => value.try_into(),
-        }
-    }
-}
-
-impl From<TableMetadata> for TableMetadataEnum {
-    fn from(value: TableMetadata) -> Self {
-        match value.format_version {
-            FormatVersion::V2 => TableMetadataEnum::V2(value.into()),
-            FormatVersion::V1 => TableMetadataEnum::V1(value.into()),
-        }
-    }
-}
-
-impl TryFrom<TableMetadataV2> for TableMetadata {
-    type Error = Error;
-    fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
-        let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
-            None
-        } else {
-            value.current_snapshot_id
-        };
-        Ok(TableMetadata {
-            format_version: FormatVersion::V2,
-            table_uuid: value.table_uuid,
-            location: value.location,
-            last_sequence_number: value.last_sequence_number,
-            last_updated_ms: value.last_updated_ms,
-            last_column_id: value.last_column_id,
-            schemas: HashMap::from_iter(
-                value
-                    .schemas
-                    .into_iter()
-                    .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
-                    .collect::<Result<Vec<_>, Error>>()?
-                    .into_iter(),
-            ),
-            current_schema_id: value.current_schema_id,
-            partition_specs: HashMap::from_iter(
-                value.partition_specs.into_iter().map(|x| (x.spec_id, x)),
-            ),
-            default_spec_id: value.default_spec_id,
-            last_partition_id: value.last_partition_id,
-            properties: value.properties.unwrap_or_default(),
-            current_snapshot_id,
-            snapshots: value.snapshots.map(|snapshots| {
-                HashMap::from_iter(
-                    snapshots
-                        .into_iter()
-                        .map(|x| (x.snapshot_id, Arc::new(x.into()))),
-                )
-            }),
-            snapshot_log: value.snapshot_log.unwrap_or_default(),
-            metadata_log: value.metadata_log.unwrap_or_default(),
-            sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
-            default_sort_order_id: value.default_sort_order_id,
-            refs: value.refs.unwrap_or_else(|| {
-                if let Some(snapshot_id) = current_snapshot_id {
-                    HashMap::from_iter(vec![(
-                        MAIN_BRANCH.to_string(),
-                        SnapshotReference {
-                            snapshot_id,
-                            retention: SnapshotRetention::Branch {
-                                min_snapshots_to_keep: None,
-                                max_snapshot_age_ms: None,
-                                max_ref_age_ms: None,
-                            },
-                        },
-                    )])
-                } else {
-                    HashMap::new()
-                }
-            }),
-        })
-    }
-}
-
-impl TryFrom<TableMetadataV1> for TableMetadata {
-    type Error = Error;
-    fn try_from(value: TableMetadataV1) -> Result<Self, Error> {
-        let schemas = value
-            .schemas
-            .map(|schemas| {
-                Ok::<_, Error>(HashMap::from_iter(
-                    schemas
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, schema)| {
-                            Ok((
-                                schema.schema_id.unwrap_or(i as i32),
-                                Arc::new(schema.try_into()?),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?
-                        .into_iter(),
-                ))
-            })
-            .or_else(|| {
-                Some(value.schema.try_into().map(|schema: Schema| {
-                    HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
-                }))
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let partition_specs = HashMap::from_iter(
-            value
-                .partition_specs
-                .unwrap_or_else(|| {
-                    vec![PartitionSpec {
-                        spec_id: DEFAULT_SPEC_ID,
-                        fields: value.partition_spec,
-                    }]
-                })
-                .into_iter()
-                .map(|x| (x.spec_id, x)),
-        );
-        Ok(TableMetadata {
-            format_version: FormatVersion::V1,
-            table_uuid: value.table_uuid.unwrap_or_default(),
-            location: value.location,
-            last_sequence_number: 0,
-            last_updated_ms: value.last_updated_ms,
-            last_column_id: value.last_column_id,
-            current_schema_id: value
-                .current_schema_id
-                .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default()),
-            default_spec_id: value
-                .default_spec_id
-                .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
-            last_partition_id: value
-                .last_partition_id
-                .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
-            partition_specs,
-            schemas,
-
-            properties: value.properties.unwrap_or_default(),
-            current_snapshot_id: if let &Some(-1) = &value.current_snapshot_id {
-                None
-            } else {
-                value.current_snapshot_id
-            },
-            snapshots: value
-                .snapshots
-                .map(|snapshots| {
-                    Ok::<_, Error>(HashMap::from_iter(
-                        snapshots
-                            .into_iter()
-                            .map(|x| Ok((x.snapshot_id, Arc::new(x.try_into()?))))
-                            .collect::<Result<Vec<_>, Error>>()?,
-                    ))
-                })
-                .transpose()?,
-            snapshot_log: value.snapshot_log.unwrap_or_default(),
-            metadata_log: value.metadata_log.unwrap_or_default(),
-            sort_orders: HashMap::from_iter(value.sort_orders.into_iter().map(|x| (x.order_id, x))),
-            default_sort_order_id: value.default_sort_order_id,
-            refs: HashMap::from_iter(vec![(
-                MAIN_BRANCH.to_string(),
-                SnapshotReference {
-                    snapshot_id: value.current_snapshot_id.unwrap_or_default(),
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                },
-            )]),
-        })
-    }
-}
-
-impl From<TableMetadata> for TableMetadataV2 {
-    fn from(v: TableMetadata) -> Self {
-        TableMetadataV2 {
-            format_version: VersionNumber::<2>,
-            table_uuid: v.table_uuid,
-            location: v.location,
-            last_sequence_number: v.last_sequence_number,
-            last_updated_ms: v.last_updated_ms,
-            last_column_id: v.last_column_id,
-            schemas: v
-                .schemas
-                .into_values()
-                .map(|x| {
-                    Arc::try_unwrap(x)
-                        .unwrap_or_else(|schema| schema.as_ref().clone())
-                        .into()
-                })
-                .collect(),
-            current_schema_id: v.current_schema_id,
-            partition_specs: v.partition_specs.into_values().collect(),
-            default_spec_id: v.default_spec_id,
-            last_partition_id: v.last_partition_id,
-            properties: if v.properties.is_empty() {
-                None
-            } else {
-                Some(v.properties)
-            },
-            current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
-            snapshots: v.snapshots.map(|snapshots| {
-                snapshots
-                    .into_values()
-                    .map(|x| {
-                        Arc::try_unwrap(x)
-                            .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
-                            .into()
-                    })
-                    .collect()
-            }),
-            snapshot_log: if v.snapshot_log.is_empty() {
-                None
-            } else {
-                Some(v.snapshot_log)
-            },
-            metadata_log: if v.metadata_log.is_empty() {
-                None
-            } else {
-                Some(v.metadata_log)
-            },
-            sort_orders: v.sort_orders.into_values().collect(),
-            default_sort_order_id: v.default_sort_order_id,
-            refs: Some(v.refs),
-        }
-    }
-}
-
-impl From<TableMetadata> for TableMetadataV1 {
-    fn from(v: TableMetadata) -> Self {
-        TableMetadataV1 {
-            format_version: VersionNumber::<1>,
-            table_uuid: Some(v.table_uuid),
-            location: v.location,
-            last_updated_ms: v.last_updated_ms,
-            last_column_id: v.last_column_id,
-            schema: v
-                .schemas
-                .get(&v.current_schema_id)
-                .unwrap()
-                .as_ref()
-                .clone()
-                .into(),
-            schemas: Some(
-                v.schemas
-                    .into_values()
-                    .map(|x| {
-                        Arc::try_unwrap(x)
-                            .unwrap_or_else(|schema| schema.as_ref().clone())
-                            .into()
-                    })
-                    .collect(),
-            ),
-            current_schema_id: Some(v.current_schema_id),
-            partition_spec: v
-                .partition_specs
-                .get(&v.default_spec_id)
-                .map(|x| x.fields.clone())
-                .unwrap_or_default(),
-            partition_specs: Some(v.partition_specs.into_values().collect()),
-            default_spec_id: Some(v.default_spec_id),
-            last_partition_id: Some(v.last_partition_id),
-            properties: if v.properties.is_empty() {
-                None
-            } else {
-                Some(v.properties)
-            },
-            current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
-            snapshots: v.snapshots.map(|snapshots| {
-                snapshots
-                    .into_values()
-                    .map(|x| {
-                        Arc::try_unwrap(x)
-                            .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
-                            .into()
-                    })
-                    .collect()
-            }),
-            snapshot_log: if v.snapshot_log.is_empty() {
-                None
-            } else {
-                Some(v.snapshot_log)
-            },
-            metadata_log: if v.metadata_log.is_empty() {
-                None
-            } else {
-                Some(v.metadata_log)
-            },
-            sort_orders: v.sort_orders.into_values().collect(),
-            default_sort_order_id: v.default_sort_order_id,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
