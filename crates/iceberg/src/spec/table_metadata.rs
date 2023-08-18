@@ -196,6 +196,10 @@ impl TableMetadata {
 }
 
 pub(super) mod _serde {
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
+    /// and then converted into the [TableMetadata] struct. Serialization works the other way araound.
+    /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
     use std::{collections::HashMap, sync::Arc};
 
     use serde::{Deserialize, Serialize};
@@ -214,10 +218,6 @@ pub(super) mod _serde {
         FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SPEC_ID, MAIN_BRANCH,
     };
 
-    /// This is a helper module that defines types to help with serialization/deserialization.
-    /// For deserialization the input first gets read into either the [SchemaV1] or [SchemaV2] struct
-    /// and then converted into the [Schema] struct. Serialization works the other way araound.
-    /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
     pub(super) enum TableMetadataEnum {
@@ -227,150 +227,68 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
-    /// Fields for the version 2 of the table metadata.
+    /// Defines the structure of a v2 table metadata for serialization/deserialization
     pub(super) struct TableMetadataV2 {
-        /// Integer Version for the format.
         pub format_version: VersionNumber<2>,
-        /// A UUID that identifies the table
         pub table_uuid: Uuid,
-        /// Location tables base location
         pub location: String,
-        /// The tables highest sequence number
         pub last_sequence_number: i64,
-        /// Timestamp in milliseconds from the unix epoch when the table was last updated.
         pub last_updated_ms: i64,
-        /// An integer; the highest assigned column ID for the table.
         pub last_column_id: i32,
-        /// A list of schemas, stored as objects with schema-id.
         pub schemas: Vec<SchemaV2>,
-        /// ID of the table’s current schema.
         pub current_schema_id: i32,
-        /// A list of partition specs, stored as full partition spec objects.
         pub partition_specs: Vec<PartitionSpec>,
-        /// ID of the “current” spec that writers should use by default.
         pub default_spec_id: i32,
-        /// An integer; the highest assigned partition field ID across all partition specs for the table.
         pub last_partition_id: i32,
-        ///A string to string map of table properties. This is used to control settings that
-        /// affect reading and writing and is not intended to be used for arbitrary metadata.
-        /// For example, commit.retry.num-retries is used to control the number of commit retries.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub properties: Option<HashMap<String, String>>,
-        /// long ID of the current table snapshot; must be the same as the current
-        /// ID of the main branch in refs.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub current_snapshot_id: Option<i64>,
-        ///A list of valid snapshots. Valid snapshots are snapshots for which all
-        /// data files exist in the file system. A data file must not be deleted
-        /// from the file system until the last snapshot in which it was listed is
-        /// garbage collected.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub snapshots: Option<Vec<SnapshotV2>>,
-        /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
-        /// to the current snapshot for the table. Each time the current-snapshot-id
-        /// is changed, a new entry should be added with the last-updated-ms
-        /// and the new current-snapshot-id. When snapshots are expired from
-        /// the list of valid snapshots, all entries before a snapshot that has
-        /// expired should be removed.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub snapshot_log: Option<Vec<SnapshotLog>>,
-
-        /// A list (optional) of timestamp and metadata file location pairs
-        /// that encodes changes to the previous metadata files for the table.
-        /// Each time a new metadata file is created, a new entry of the
-        /// previous metadata file location should be added to the list.
-        /// Tables can be configured to remove oldest metadata log entries and
-        /// keep a fixed-size log of the most recent entries after a commit.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub metadata_log: Option<Vec<MetadataLog>>,
-
-        /// A list of sort orders, stored as full sort order objects.
         pub sort_orders: Vec<SortOrder>,
-        /// Default sort order id of the table. Note that this could be used by
-        /// writers, but is not used when reading because reads use the specs
-        /// stored in manifest files.
         pub default_sort_order_id: i64,
-        ///A map of snapshot references. The map keys are the unique snapshot reference
-        /// names in the table, and the map values are snapshot reference objects.
-        /// There is always a main branch reference pointing to the current-snapshot-id
-        /// even if the refs map is null.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub refs: Option<HashMap<String, SnapshotReference>>,
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
-    /// Fields for the version 1 of the table metadata.
+    /// Defines the structure of a v1 table metadata for serialization/deserialization
     pub(super) struct TableMetadataV1 {
-        /// Integer Version for the format.
         pub format_version: VersionNumber<1>,
-        /// A UUID that identifies the table
         #[serde(skip_serializing_if = "Option::is_none")]
         pub table_uuid: Option<Uuid>,
-        /// Location tables base location
         pub location: String,
-        /// Timestamp in milliseconds from the unix epoch when the table was last updated.
         pub last_updated_ms: i64,
-        /// An integer; the highest assigned column ID for the table.
         pub last_column_id: i32,
-        /// The table’s current schema.
         pub schema: SchemaV1,
-        /// A list of schemas, stored as objects with schema-id.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schemas: Option<Vec<SchemaV1>>,
-        /// ID of the table’s current schema.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub current_schema_id: Option<i32>,
-        /// The table’s current partition spec, stored as only fields. Note that this is used by writers to partition data,
-        /// but is not used when reading because reads use the specs stored in manifest files.
         pub partition_spec: Vec<PartitionField>,
-        /// A list of partition specs, stored as full partition spec objects.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub partition_specs: Option<Vec<PartitionSpec>>,
-        /// ID of the “current” spec that writers should use by default.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub default_spec_id: Option<i32>,
-        /// An integer; the highest assigned partition field ID across all partition specs for the table.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub last_partition_id: Option<i32>,
-        ///A string to string map of table properties. This is used to control settings that
-        /// affect reading and writing and is not intended to be used for arbitrary metadata.
-        /// For example, commit.retry.num-retries is used to control the number of commit retries.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub properties: Option<HashMap<String, String>>,
-        /// long ID of the current table snapshot; must be the same as the current
-        /// ID of the main branch in refs.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub current_snapshot_id: Option<i64>,
-        ///A list of valid snapshots. Valid snapshots are snapshots for which all
-        /// data files exist in the file system. A data file must not be deleted
-        /// from the file system until the last snapshot in which it was listed is
-        /// garbage collected.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub snapshots: Option<Vec<SnapshotV1>>,
-        /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
-        /// to the current snapshot for the table. Each time the current-snapshot-id
-        /// is changed, a new entry should be added with the last-updated-ms
-        /// and the new current-snapshot-id. When snapshots are expired from
-        /// the list of valid snapshots, all entries before a snapshot that has
-        /// expired should be removed.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub snapshot_log: Option<Vec<SnapshotLog>>,
-
-        /// A list (optional) of timestamp and metadata file location pairs
-        /// that encodes changes to the previous metadata files for the table.
-        /// Each time a new metadata file is created, a new entry of the
-        /// previous metadata file location should be added to the list.
-        /// Tables can be configured to remove oldest metadata log entries and
-        /// keep a fixed-size log of the most recent entries after a commit.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub metadata_log: Option<Vec<MetadataLog>>,
-
-        /// A list of sort orders, stored as full sort order objects.
         pub sort_orders: Vec<SortOrder>,
-        /// Default sort order id of the table. Note that this could be used by
-        /// writers, but is not used when reading because reads use the specs
-        /// stored in manifest files.
         pub default_sort_order_id: i64,
     }
 
