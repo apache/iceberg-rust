@@ -198,7 +198,7 @@ impl TableMetadata {
 pub(super) mod _serde {
     /// This is a helper module that defines types to help with serialization/deserialization.
     /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
-    /// and then converted into the [TableMetadata] struct. Serialization works the other way araound.
+    /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
     use std::{collections::HashMap, sync::Arc};
 
