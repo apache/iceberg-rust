@@ -17,8 +17,6 @@
 
 //! This module defines schema in iceberg.
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::Result;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
@@ -611,84 +609,88 @@ impl SchemaVisitor for IndexByName {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
-/// Names and types of fields in a table.
-pub(crate) struct SchemaV2 {
-    /// Identifier of the schema
-    pub schema_id: i32,
-    /// Set of primitive fields that identify rows in a table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier_field_ids: Option<Vec<i32>>,
+pub(super) mod _serde {
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [SchemaV1] or [SchemaV2] struct
+    /// and then converted into the [Schema] struct. Serialization works the other way araound.
+    /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
+    use serde::{Deserialize, Serialize};
 
-    #[serde(flatten)]
-    /// The struct fields
-    pub fields: StructType,
-}
+    use crate::{spec::StructType, Error, Result};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
-/// Names and types of fields in a table.
-pub(crate) struct SchemaV1 {
-    /// Identifier of the schema
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_id: Option<i32>,
-    /// Set of primitive fields that identify rows in a table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier_field_ids: Option<Vec<i32>>,
+    use super::{Schema, DEFAULT_SCHEMA_ID};
 
-    #[serde(flatten)]
-    /// The struct fields
-    pub fields: StructType,
-}
-
-impl TryFrom<SchemaV2> for Schema {
-    type Error = Error;
-    fn try_from(value: SchemaV2) -> Result<Self> {
-        dbg!(&value);
-        Schema::builder()
-            .with_schema_id(value.schema_id)
-            .with_fields(value.fields.fields().iter().cloned())
-            .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
-            .build()
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 schema for serialization/deserialization
+    pub(crate) struct SchemaV2 {
+        pub schema_id: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub identifier_field_ids: Option<Vec<i32>>,
+        #[serde(flatten)]
+        pub fields: StructType,
     }
-}
 
-impl TryFrom<SchemaV1> for Schema {
-    type Error = Error;
-    fn try_from(value: SchemaV1) -> Result<Self> {
-        Schema::builder()
-            .with_schema_id(value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID))
-            .with_fields(value.fields.fields().iter().cloned())
-            .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
-            .build()
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 schema for serialization/deserialization
+    pub(crate) struct SchemaV1 {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema_id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub identifier_field_ids: Option<Vec<i32>>,
+        #[serde(flatten)]
+        pub fields: StructType,
     }
-}
 
-impl From<Schema> for SchemaV2 {
-    fn from(value: Schema) -> Self {
-        SchemaV2 {
-            schema_id: value.schema_id,
-            identifier_field_ids: if value.identifier_field_ids.is_empty() {
-                None
-            } else {
-                Some(value.identifier_field_ids.into_iter().collect())
-            },
-            fields: value.r#struct,
+    impl TryFrom<SchemaV2> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaV2) -> Result<Self> {
+            dbg!(&value);
+            Schema::builder()
+                .with_schema_id(value.schema_id)
+                .with_fields(value.fields.fields().iter().cloned())
+                .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+                .build()
         }
     }
-}
 
-impl From<Schema> for SchemaV1 {
-    fn from(value: Schema) -> Self {
-        SchemaV1 {
-            schema_id: Some(value.schema_id),
-            identifier_field_ids: if value.identifier_field_ids.is_empty() {
-                None
-            } else {
-                Some(value.identifier_field_ids.into_iter().collect())
-            },
-            fields: value.r#struct,
+    impl TryFrom<SchemaV1> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaV1) -> Result<Self> {
+            Schema::builder()
+                .with_schema_id(value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID))
+                .with_fields(value.fields.fields().iter().cloned())
+                .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+                .build()
+        }
+    }
+
+    impl From<Schema> for SchemaV2 {
+        fn from(value: Schema) -> Self {
+            SchemaV2 {
+                schema_id: value.schema_id,
+                identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                    None
+                } else {
+                    Some(value.identifier_field_ids.into_iter().collect())
+                },
+                fields: value.r#struct,
+            }
+        }
+    }
+
+    impl From<Schema> for SchemaV1 {
+        fn from(value: Schema) -> Self {
+            SchemaV1 {
+                schema_id: Some(value.schema_id),
+                identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                    None
+                } else {
+                    Some(value.identifier_field_ids.into_iter().collect())
+                },
+                fields: value.r#struct,
+            }
         }
     }
 }
@@ -699,7 +701,8 @@ mod tests {
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
-    use crate::spec::schema::{Schema, SchemaV2};
+    use crate::spec::schema::Schema;
+    use crate::spec::schema::_serde::SchemaV2;
     use std::collections::HashMap;
 
     #[test]

@@ -30,7 +30,10 @@ use crate::{Error, ErrorKind};
 
 use super::{
     partition::{PartitionField, PartitionSpec},
-    schema::{self, Schema},
+    schema::{
+        Schema,
+        _serde::{SchemaV1, SchemaV2},
+    },
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention, SnapshotV1, SnapshotV2},
     sort::SortOrder,
 };
@@ -217,7 +220,7 @@ struct TableMetadataV2 {
     /// An integer; the highest assigned column ID for the table.
     pub last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    pub schemas: Vec<schema::SchemaV2>,
+    pub schemas: Vec<SchemaV2>,
     /// ID of the table’s current schema.
     pub current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
@@ -289,10 +292,10 @@ struct TableMetadataV1 {
     /// An integer; the highest assigned column ID for the table.
     pub last_column_id: i32,
     /// The table’s current schema.
-    pub schema: schema::SchemaV1,
+    pub schema: SchemaV1,
     /// A list of schemas, stored as objects with schema-id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub schemas: Option<Vec<schema::SchemaV1>>,
+    pub schemas: Option<Vec<SchemaV1>>,
     /// ID of the table’s current schema.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_schema_id: Option<i32>,
