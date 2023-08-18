@@ -633,7 +633,7 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
     #[serde(rename_all = "kebab-case")]
-    /// Defines the structure of a v2 schema for serialization/deserialization
+    /// Defines the structure of a v1 schema for serialization/deserialization
     pub(crate) struct SchemaV1 {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schema_id: Option<i32>,

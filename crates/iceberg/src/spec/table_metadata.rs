@@ -34,7 +34,10 @@ use super::{
         Schema,
         _serde::{SchemaV1, SchemaV2},
     },
-    snapshot::{Snapshot, SnapshotReference, SnapshotRetention, SnapshotV1, SnapshotV2},
+    snapshot::{
+        Snapshot, SnapshotReference, SnapshotRetention,
+        _serde::{SnapshotV1, SnapshotV2},
+    },
     sort::SortOrder,
 };
 

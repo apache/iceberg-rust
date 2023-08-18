@@ -22,8 +22,6 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, ErrorKind};
-
 use super::table_metadata::SnapshotLog;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -132,77 +130,69 @@ impl Snapshot {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-/// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
-pub(crate) struct SnapshotV2 {
-    /// A unique long ID
-    pub snapshot_id: i64,
-    /// The snapshot ID of the snapshot’s parent.
-    /// Omitted for any snapshot with no parent
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_snapshot_id: Option<i64>,
-    /// A monotonically increasing long that tracks the order of
-    /// changes to a table.
-    pub sequence_number: i64,
-    /// A timestamp when the snapshot was created, used for garbage
-    /// collection and table inspection
-    pub timestamp_ms: i64,
-    /// The location of a manifest list for this snapshot that
-    /// tracks manifest files with additional metadata.
-    pub manifest_list: String,
-    /// A string map that summarizes the snapshot changes, including operation.
-    pub summary: Summary,
-    /// ID of the table’s current schema when the snapshot was created.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_id: Option<i64>,
-}
+pub(super) mod _serde {
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [SnapshotV1] or [SnapshotV2] struct
+    /// and then converted into the [Snapshot] struct. Serialization works the other way araound.
+    /// [SnapshotV1] and [SnapshotV2] are internal struct that are only used for serialization and deserialization.
+    use std::collections::HashMap;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-/// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
-pub(crate) struct SnapshotV1 {
-    /// A unique long ID
-    pub snapshot_id: i64,
-    /// The snapshot ID of the snapshot’s parent.
-    /// Omitted for any snapshot with no parent
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_snapshot_id: Option<i64>,
-    /// A timestamp when the snapshot was created, used for garbage
-    /// collection and table inspection
-    pub timestamp_ms: i64,
-    /// The location of a manifest list for this snapshot that
-    /// tracks manifest files with additional metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest_list: Option<String>,
-    /// A list of manifest file locations. Must be omitted if manifest-list is present
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifests: Option<Vec<String>>,
-    /// A string map that summarizes the snapshot changes, including operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<Summary>,
-    /// ID of the table’s current schema when the snapshot was created.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_id: Option<i64>,
-}
+    use serde::{Deserialize, Serialize};
 
-impl From<SnapshotV2> for Snapshot {
-    fn from(v2: SnapshotV2) -> Self {
-        Snapshot {
-            snapshot_id: v2.snapshot_id,
-            parent_snapshot_id: v2.parent_snapshot_id,
-            sequence_number: v2.sequence_number,
-            timestamp_ms: v2.timestamp_ms,
-            manifest_list: ManifestList::ManifestListFile(v2.manifest_list),
-            summary: v2.summary,
-            schema_id: v2.schema_id,
+    use crate::{Error, ErrorKind};
+
+    use super::{ManifestList, Operation, Snapshot, Summary};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 snapshot for serialization/deserialization
+    pub(crate) struct SnapshotV2 {
+        pub snapshot_id: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub parent_snapshot_id: Option<i64>,
+        pub sequence_number: i64,
+        pub timestamp_ms: i64,
+        pub manifest_list: String,
+        pub summary: Summary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema_id: Option<i64>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v1 snapshot for serialization/deserialization
+    pub(crate) struct SnapshotV1 {
+        pub snapshot_id: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub parent_snapshot_id: Option<i64>,
+        pub timestamp_ms: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub manifest_list: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub manifests: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub summary: Option<Summary>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema_id: Option<i64>,
+    }
+
+    impl From<SnapshotV2> for Snapshot {
+        fn from(v2: SnapshotV2) -> Self {
+            Snapshot {
+                snapshot_id: v2.snapshot_id,
+                parent_snapshot_id: v2.parent_snapshot_id,
+                sequence_number: v2.sequence_number,
+                timestamp_ms: v2.timestamp_ms,
+                manifest_list: ManifestList::ManifestListFile(v2.manifest_list),
+                summary: v2.summary,
+                schema_id: v2.schema_id,
+            }
         }
     }
-}
 
-impl From<Snapshot> for SnapshotV2 {
-    fn from(v2: Snapshot) -> Self {
-        SnapshotV2 {
+    impl From<Snapshot> for SnapshotV2 {
+        fn from(v2: Snapshot) -> Self {
+            SnapshotV2 {
             snapshot_id: v2.snapshot_id,
             parent_snapshot_id: v2.parent_snapshot_id,
             sequence_number: v2.sequence_number,
@@ -214,51 +204,52 @@ impl From<Snapshot> for SnapshotV2 {
             summary: v2.summary,
             schema_id: v2.schema_id,
         }
+        }
     }
-}
 
-impl TryFrom<SnapshotV1> for Snapshot {
-    type Error = Error;
+    impl TryFrom<SnapshotV1> for Snapshot {
+        type Error = Error;
 
-    fn try_from(v1: SnapshotV1) -> Result<Self, Self::Error> {
-        Ok(Snapshot {
-            snapshot_id: v1.snapshot_id,
-            parent_snapshot_id: v1.parent_snapshot_id,
-            sequence_number: 0,
-            timestamp_ms: v1.timestamp_ms,
-            manifest_list: match (v1.manifest_list, v1.manifests) {
-                (Some(file), _) => ManifestList::ManifestListFile(file),
-                (None, Some(files)) => ManifestList::ManifestFiles(files),
-                (None, None) => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Neither manifestlist file or manifest files are provided.",
-                    ))
-                }
-            },
-            summary: v1.summary.unwrap_or(Summary {
-                operation: Operation::default(),
-                other: HashMap::new(),
-            }),
-            schema_id: v1.schema_id,
-        })
+        fn try_from(v1: SnapshotV1) -> Result<Self, Self::Error> {
+            Ok(Snapshot {
+                snapshot_id: v1.snapshot_id,
+                parent_snapshot_id: v1.parent_snapshot_id,
+                sequence_number: 0,
+                timestamp_ms: v1.timestamp_ms,
+                manifest_list: match (v1.manifest_list, v1.manifests) {
+                    (Some(file), _) => ManifestList::ManifestListFile(file),
+                    (None, Some(files)) => ManifestList::ManifestFiles(files),
+                    (None, None) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Neither manifestlist file or manifest files are provided.",
+                        ))
+                    }
+                },
+                summary: v1.summary.unwrap_or(Summary {
+                    operation: Operation::default(),
+                    other: HashMap::new(),
+                }),
+                schema_id: v1.schema_id,
+            })
+        }
     }
-}
 
-impl From<Snapshot> for SnapshotV1 {
-    fn from(v2: Snapshot) -> Self {
-        let (manifest_list, manifests) = match v2.manifest_list {
-            ManifestList::ManifestListFile(file) => (Some(file), None),
-            ManifestList::ManifestFiles(files) => (None, Some(files)),
-        };
-        SnapshotV1 {
-            snapshot_id: v2.snapshot_id,
-            parent_snapshot_id: v2.parent_snapshot_id,
-            timestamp_ms: v2.timestamp_ms,
-            manifest_list,
-            manifests,
-            summary: Some(v2.summary),
-            schema_id: v2.schema_id,
+    impl From<Snapshot> for SnapshotV1 {
+        fn from(v2: Snapshot) -> Self {
+            let (manifest_list, manifests) = match v2.manifest_list {
+                ManifestList::ManifestListFile(file) => (Some(file), None),
+                ManifestList::ManifestFiles(files) => (None, Some(files)),
+            };
+            SnapshotV1 {
+                snapshot_id: v2.snapshot_id,
+                parent_snapshot_id: v2.parent_snapshot_id,
+                timestamp_ms: v2.timestamp_ms,
+                manifest_list,
+                manifests,
+                summary: Some(v2.summary),
+                schema_id: v2.schema_id,
+            }
         }
     }
 }
@@ -318,7 +309,7 @@ pub enum SnapshotRetention {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::spec::snapshot::{ManifestList, Operation, Snapshot, SnapshotV1, Summary};
+    use crate::spec::snapshot::{ManifestList, Operation, Snapshot, Summary, _serde::SnapshotV1};
 
     #[test]
     fn schema() {
