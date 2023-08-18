@@ -38,7 +38,7 @@ use super::{
 use _serde::TableMetadataEnum;
 
 static MAIN_BRANCH: &str = "main";
-static DEFAULT_SPEC_ID: i32 = 1;
+static DEFAULT_SPEC_ID: i32 = 0;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -659,6 +659,8 @@ mod tests {
     use anyhow::Result;
     use uuid::Uuid;
 
+    use pretty_assertions::assert_eq;
+
     use crate::spec::{
         table_metadata::TableMetadata, ManifestList, NestedField, Operation, PartitionField,
         PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
@@ -822,52 +824,11 @@ mod tests {
                 "type" : "string"
               } ]
             },
-            "current-schema-id" : 0,
-            "schemas" : [ {
-              "type" : "struct",
-              "schema-id" : 0,
-              "fields" : [ {
-                "id" : 1,
-                "name" : "vendor_id",
-                "required" : false,
-                "type" : "long"
-              }, {
-                "id" : 2,
-                "name" : "trip_id",
-                "required" : false,
-                "type" : "long"
-              }, {
-                "id" : 3,
-                "name" : "trip_distance",
-                "required" : false,
-                "type" : "float"
-              }, {
-                "id" : 4,
-                "name" : "fare_amount",
-                "required" : false,
-                "type" : "double"
-              }, {
-                "id" : 5,
-                "name" : "store_and_fwd_flag",
-                "required" : false,
-                "type" : "string"
-              } ]
-            } ],
             "partition-spec" : [ {
               "name" : "vendor_id",
               "transform" : "identity",
               "source-id" : 1,
               "field-id" : 1000
-            } ],
-            "default-spec-id" : 0,
-            "partition-specs" : [ {
-              "spec-id" : 0,
-              "fields" : [ {
-                "name" : "vendor_id",
-                "transform" : "identity",
-                "source-id" : 1,
-                "field-id" : 1000
-              } ]
             } ],
             "last-partition-id" : 1000,
             "default-sort-order-id" : 0,
