@@ -202,7 +202,11 @@ impl Literal {
     /// ```
     pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse date".to_string()).with_source(e)
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse date from string: {}", s.as_ref()),
+            )
+            .with_source(e)
         })?;
 
         Ok(Self::date_from_naive_date(t))
@@ -264,7 +268,11 @@ impl Literal {
     /// ```
     pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse time".to_string()).with_source(e)
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse time from string: {}", s.as_ref()),
+            )
+            .with_source(e)
         })?;
 
         Ok(Self::time_from_naive_time(t))
@@ -371,8 +379,13 @@ impl Literal {
     /// assert_eq!(t1, t2);
     /// ```
     pub fn uuid_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let uuid = Uuid::parse_str(s.as_ref())
-            .map_err(|e| Error::new(ErrorKind::DataInvalid, "Can't parse uuid.").with_source(e))?;
+        let uuid = Uuid::parse_str(s.as_ref()).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse uuid from string: {}", s.as_ref()),
+            )
+            .with_source(e)
+        })?;
         Ok(Self::uuid(uuid))
     }
 
