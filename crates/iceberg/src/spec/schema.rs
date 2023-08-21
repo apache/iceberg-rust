@@ -609,6 +609,92 @@ impl SchemaVisitor for IndexByName {
     }
 }
 
+pub(super) mod _serde {
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [SchemaV1] or [SchemaV2] struct
+    /// and then converted into the [Schema] struct. Serialization works the other way around.
+    /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
+    use serde::{Deserialize, Serialize};
+
+    use crate::{spec::StructType, Error, Result};
+
+    use super::{Schema, DEFAULT_SCHEMA_ID};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v2 schema for serialization/deserialization
+    pub(crate) struct SchemaV2 {
+        pub schema_id: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub identifier_field_ids: Option<Vec<i32>>,
+        #[serde(flatten)]
+        pub fields: StructType,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    /// Defines the structure of a v1 schema for serialization/deserialization
+    pub(crate) struct SchemaV1 {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema_id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub identifier_field_ids: Option<Vec<i32>>,
+        #[serde(flatten)]
+        pub fields: StructType,
+    }
+
+    impl TryFrom<SchemaV2> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaV2) -> Result<Self> {
+            dbg!(&value);
+            Schema::builder()
+                .with_schema_id(value.schema_id)
+                .with_fields(value.fields.fields().iter().cloned())
+                .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+                .build()
+        }
+    }
+
+    impl TryFrom<SchemaV1> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaV1) -> Result<Self> {
+            Schema::builder()
+                .with_schema_id(value.schema_id.unwrap_or(DEFAULT_SCHEMA_ID))
+                .with_fields(value.fields.fields().iter().cloned())
+                .with_identifier_field_ids(value.identifier_field_ids.unwrap_or_default())
+                .build()
+        }
+    }
+
+    impl From<Schema> for SchemaV2 {
+        fn from(value: Schema) -> Self {
+            SchemaV2 {
+                schema_id: value.schema_id,
+                identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                    None
+                } else {
+                    Some(value.identifier_field_ids.into_iter().collect())
+                },
+                fields: value.r#struct,
+            }
+        }
+    }
+
+    impl From<Schema> for SchemaV1 {
+        fn from(value: Schema) -> Self {
+            SchemaV1 {
+                schema_id: Some(value.schema_id),
+                identifier_field_ids: if value.identifier_field_ids.is_empty() {
+                    None
+                } else {
+                    Some(value.identifier_field_ids.into_iter().collect())
+                },
+                fields: value.r#struct,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
@@ -616,6 +702,7 @@ mod tests {
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
     use crate::spec::schema::Schema;
+    use crate::spec::schema::_serde::SchemaV2;
     use std::collections::HashMap;
 
     #[test]
@@ -637,6 +724,43 @@ mod tests {
         assert_eq!(Some(&field1), schema.field_by_id(1));
         assert_eq!(Some(&field2), schema.field_by_id(2));
         assert_eq!(None, schema.field_by_id(3));
+    }
+
+    #[test]
+    fn schema() {
+        let record = r#"
+        {
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [ {
+            "id": 1,
+            "name": "id",
+            "required": true,
+            "type": "uuid"
+            }, {
+            "id": 2,
+            "name": "data",
+            "required": false,
+            "type": "int"
+            } ]
+            }
+        "#;
+
+        let result: SchemaV2 = serde_json::from_str(record).unwrap();
+        assert_eq!(1, result.schema_id);
+        assert_eq!(
+            Box::new(Type::Primitive(PrimitiveType::Uuid)),
+            result.fields[0].field_type
+        );
+        assert_eq!(1, result.fields[0].id);
+        assert!(result.fields[0].required);
+
+        assert_eq!(
+            Box::new(Type::Primitive(PrimitiveType::Int)),
+            result.fields[1].field_type
+        );
+        assert_eq!(2, result.fields[1].id);
+        assert!(!result.fields[1].required);
     }
 
     fn table_schema_simple() -> Schema {

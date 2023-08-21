@@ -17,7 +17,20 @@
 
 //! Spec for Iceberg.
 
-pub mod datatypes;
-pub mod schema;
-pub mod transform;
-pub mod values;
+mod datatypes;
+mod partition;
+mod schema;
+mod snapshot;
+mod sort;
+mod table_metadata;
+mod transform;
+mod values;
+
+pub use datatypes::*;
+pub use partition::*;
+pub use schema::*;
+pub use snapshot::*;
+pub use sort::*;
+pub use table_metadata::*;
+pub use transform::*;
+pub use values::*;
