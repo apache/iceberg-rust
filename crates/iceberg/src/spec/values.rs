@@ -202,7 +202,7 @@ impl Literal {
     /// ```
     pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, format!("Can't parse date")).with_source(e)
+            Error::new(ErrorKind::DataInvalid, "Can't parse date".to_string()).with_source(e)
         })?;
 
         Ok(Self::date_from_naive_date(t))
@@ -264,7 +264,7 @@ impl Literal {
     /// ```
     pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, format!("Can't parse time")).with_source(e)
+            Error::new(ErrorKind::DataInvalid, "Can't parse time".to_string()).with_source(e)
         })?;
 
         Ok(Self::time_from_naive_time(t))
@@ -280,7 +280,7 @@ impl Literal {
     /// use iceberg::spec::values::Literal;
     /// let t = Literal::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
-    /// assert_eq!(Literal::time_from_str("22:15:33.000111"), t);
+    /// assert_eq!(Literal::time_from_str("22:15:33.000111").unwrap(), t);
     /// ```
     pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
         let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
