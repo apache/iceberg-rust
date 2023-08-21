@@ -19,10 +19,12 @@
  * Value in iceberg
  */
 
+use std::str::FromStr;
 use std::{any::Any, collections::BTreeMap};
 
+use crate::error::Result;
 use bitvec::vec::BitVec;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
 use serde_bytes::ByteBuf;
@@ -84,6 +86,349 @@ pub enum Literal {
     /// Both the key field and value field each have an integer id that is unique in the table schema.
     /// Map keys are required and map values can be either optional or required. Both map keys and map values may be any type, including nested types.
     Map(BTreeMap<Literal, Option<Literal>>),
+}
+
+impl Literal {
+    /// Creates a boolean value.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::bool(true);
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(true)), t);
+    /// ```
+    pub fn bool<T: Into<bool>>(t: T) -> Self {
+        Self::Primitive(PrimitiveLiteral::Boolean(t.into()))
+    }
+
+    /// Creates a boolean value from string.
+    /// See [Parse bool from str](https://doc.rust-lang.org/stable/std/primitive.bool.html#impl-FromStr-for-bool) for reference.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::bool_from_str("false").unwrap();
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(false)), t);
+    /// ```
+    pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let v = s.as_ref().parse::<bool>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse string to bool.").with_source(e)
+        })?;
+        Ok(Self::Primitive(PrimitiveLiteral::Boolean(v)))
+    }
+
+    /// Creates an 32bit integer.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::int(23i8);
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Int(23)), t);
+    /// ```
+    pub fn int<T: Into<i32>>(t: T) -> Self {
+        Self::Primitive(PrimitiveLiteral::Int(t.into()))
+    }
+
+    /// Creates an 64bit integer.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::long(24i8);
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Long(24)), t);
+    /// ```
+    pub fn long<T: Into<i64>>(t: T) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(t.into()))
+    }
+
+    /// Creates an 32bit floating point number.
+    ///
+    /// Example:
+    /// ```rust
+    /// use ordered_float::OrderedFloat;
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::float( 32.1f32 );
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t);
+    /// ```
+    pub fn float<T: Into<f32>>(t: T) -> Self {
+        Self::Primitive(PrimitiveLiteral::Float(OrderedFloat(t.into())))
+    }
+
+    /// Creates an 32bit floating point number.
+    ///
+    /// Example:
+    /// ```rust
+    /// use ordered_float::OrderedFloat;
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t = Literal::double( 32.1f64 );
+    ///
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t);
+    /// ```
+    pub fn double<T: Into<f64>>(t: T) -> Self {
+        Self::Primitive(PrimitiveLiteral::Double(OrderedFloat(t.into())))
+    }
+
+    /// Returns unix epoch.
+    pub fn unix_epoch() -> DateTime<Utc> {
+        Utc.timestamp_nanos(0)
+    }
+
+    /// Creates date literal from number of days from unix epoch directly.
+    pub fn date(days: i32) -> Self {
+        Self::Primitive(PrimitiveLiteral::Date(days))
+    }
+
+    /// Creates date literal from `NaiveDate`, assuming it's utc timezone.
+    fn date_from_naive_date(date: NaiveDate) -> Self {
+        let days = (date - Self::unix_epoch().date_naive()).num_days();
+        Self::date(days as i32)
+    }
+
+    /// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
+    ///
+    /// See [`NaiveDate::from_str`].
+    ///
+    /// Example
+    /// ```rust
+    /// use iceberg::spec::values::Literal;
+    /// let t = Literal::date_from_str("1970-01-03").unwrap();
+    ///
+    /// assert_eq!(Literal::date(2), t);
+    /// ```
+    pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, format!("Can't parse date")).with_source(e)
+        })?;
+
+        Ok(Self::date_from_naive_date(t))
+    }
+
+    /// Create a date from calendar date (year, month and day).
+    ///
+    /// See [`NaiveDate::from_ymd_opt`].
+    ///
+    /// Example:
+    ///
+    ///```rust
+    /// use iceberg::spec::values::Literal;
+    /// let t = Literal::date_from_ymd(1970, 1, 5).unwrap();
+    ///
+    /// assert_eq!(Literal::date(4), t);
+    /// ```
+    pub fn date_from_ymd(year: i32, month: u32, day: u32) -> Result<Self> {
+        let t = NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't create date from year: {year}, month: {month}, day: {day}"),
+            )
+        })?;
+
+        Ok(Self::date_from_naive_date(t))
+    }
+
+    /// Creates time in microseconds directly
+    pub fn time(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Time(value))
+    }
+
+    /// Creates time literal from [`chrono::NaiveTime`].
+    fn time_from_naive_time(t: NaiveTime) -> Self {
+        let duration = t - Self::unix_epoch().time();
+        // It's safe to unwrap here since less than 24 hours will never overflow.
+        let micro_secs = duration.num_microseconds().unwrap();
+
+        Literal::time(micro_secs)
+    }
+
+    /// Creates time in microseconds in `%H:%M:%S:.f` format.
+    ///
+    /// See [`NaiveTime::from_str`] for details.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::values::Literal;
+    /// let t = Literal::time_from_str("01:02:01.888999777").unwrap();
+    ///
+    /// let micro_secs = {
+    ///     1 * 3600 * 1_000_000 + // 1 hour
+    ///     2 * 60 * 1_000_000 +   // 2 minutes
+    ///     1 * 1_000_000 + // 1 second
+    ///     888999  // microseconds
+    /// };
+    /// assert_eq!(Literal::time(micro_secs), t);
+    /// ```
+    pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, format!("Can't parse time")).with_source(e)
+        })?;
+
+        Ok(Self::time_from_naive_time(t))
+    }
+
+    /// Creates time literal from hour, minute, second, and microseconds.
+    ///
+    /// See [`NaiveTime::from_hms_micro_opt`].
+    ///
+    /// Example:
+    /// ```rust
+    ///
+    /// use iceberg::spec::values::Literal;
+    /// let t = Literal::time_from_hms_micro(22, 15, 33, 111).unwrap();
+    ///
+    /// assert_eq!(Literal::time_from_str("22:15:33.000111"), t);
+    /// ```
+    pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
+        let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
+            .ok_or_else(|| Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
+            ))?;
+        Ok(Self::time_from_naive_time(t))
+    }
+
+    /// Creates a timestamp from unix epoch in microseconds.
+    pub fn timestamp(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Timestamp(value))
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in microseconds.
+    pub fn timestamptz(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::TimestampTZ(value))
+    }
+
+    /// Creates a timestamp from [`DateTime`].
+    pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
+        Self::timestamp(dt.with_timezone(&Utc).timestamp_micros())
+    }
+
+    /// Creates a timestamp with timezone from [`DateTime`].
+    pub fn timestamptz_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
+        Self::timestamptz(dt.with_timezone(&Utc).timestamp_micros())
+    }
+
+    /// Parse a timestamp in RFC3339 format.
+    ///
+    /// See [`DateTime<Utc>::from_str`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+    /// use iceberg::spec::values::Literal;
+    /// let t = Literal::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
+    ///
+    /// let t2 = {
+    ///  let date = NaiveDate::from_ymd_opt(2012, 12, 12).unwrap();
+    ///  let time = NaiveTime::from_hms_micro_opt(12, 12, 12, 889900).unwrap();
+    ///  let dt = NaiveDateTime::new(date, time);
+    ///  Literal::timestamp_from_datetime(DateTime::<FixedOffset>::from_local(dt, FixedOffset::west_opt(4 * 3600).unwrap()))
+    /// };
+    ///
+    /// assert_eq!(t, t2);
+    /// ```
+    pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
+        })?;
+
+        Ok(Self::timestamp_from_datetime(dt))
+    }
+
+    /// Similar to [`Literal::timestamp_from_str`], but return timestamp with timezone literal.
+    pub fn timestamptz_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
+        })?;
+
+        Ok(Self::timestamptz_from_datetime(dt))
+    }
+
+    /// Creates a string literal.
+    pub fn string<S: ToString>(s: S) -> Self {
+        Self::Primitive(PrimitiveLiteral::String(s.to_string()))
+    }
+
+    /// Creates uuid literal.
+    pub fn uuid(uuid: Uuid) -> Self {
+        Self::Primitive(PrimitiveLiteral::UUID(uuid))
+    }
+
+    /// Creates uuid from str. See [`Uuid::parse_str`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use uuid::Uuid;
+    /// use iceberg::spec::values::Literal;
+    /// let t1 = Literal::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
+    /// let t2 = Literal::uuid(Uuid::from_u128_le(0xd8d7d6d5d4d3d2d1c2c1b2b1a4a3a2a1));
+    ///
+    /// assert_eq!(t1, t2);
+    /// ```
+    pub fn uuid_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let uuid = Uuid::parse_str(s.as_ref())
+            .map_err(|e| Error::new(ErrorKind::DataInvalid, "Can't parse uuid.").with_source(e))?;
+        Ok(Self::uuid(uuid))
+    }
+
+    /// Creates a fixed literal from bytes.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t1 = Literal::fixed(vec![1u8, 2u8]);
+    /// let t2 = Literal::Primitive(PrimitiveLiteral::Fixed(vec![1u8, 2u8]));
+    ///
+    /// assert_eq!(t1, t2);
+    /// ```
+    pub fn fixed<I: IntoIterator<Item = u8>>(input: I) -> Self {
+        Literal::Primitive(PrimitiveLiteral::Fixed(input.into_iter().collect()))
+    }
+
+    /// Creates a binary literal from bytes.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// let t1 = Literal::binary(vec![1u8, 2u8]);
+    /// let t2 = Literal::Primitive(PrimitiveLiteral::Binary(vec![1u8, 2u8]));
+    ///
+    /// assert_eq!(t1, t2);
+    /// ```
+    pub fn binary<I: IntoIterator<Item = u8>>(input: I) -> Self {
+        Literal::Primitive(PrimitiveLiteral::Binary(input.into_iter().collect()))
+    }
+
+    /// Creates a decimal literal.
+    pub fn decimal(decimal: Decimal) -> Self {
+        Self::Primitive(PrimitiveLiteral::Decimal(decimal))
+    }
+
+    /// Creates decimal literal from string. See [`Decimal::from_str_exact`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use rust_decimal::Decimal;
+    /// use iceberg::spec::values::Literal;
+    /// let t1 = Literal::decimal(Decimal::new(12345, 2));
+    /// let t2 = Literal::decimal_from_str("123.45").unwrap();
+    ///
+    /// assert_eq!(t1, t2);
+    /// ```
+    pub fn decimal_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let decimal = Decimal::from_str_exact(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse decimal.").with_source(e)
+        })?;
+        Ok(Self::decimal(decimal))
+    }
 }
 
 impl From<Literal> for ByteBuf {
@@ -264,7 +609,7 @@ impl FromIterator<(i32, Option<Literal>, String)> for Struct {
 
 impl Literal {
     /// Create iceberg value from bytes
-    pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self, Error> {
+    pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self> {
         match data_type {
             Type::Primitive(primitive) => match primitive {
                 PrimitiveType::Boolean => {
@@ -323,7 +668,7 @@ impl Literal {
     }
 
     /// Create iceberg value from a json value
-    pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Option<Self>, Error> {
+    pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Option<Self>> {
         match data_type {
             Type::Primitive(primitive) => match (primitive, value) {
                 (PrimitiveType::Boolean, JsonValue::Bool(bool)) => {
@@ -440,7 +785,7 @@ impl Literal {
                             .map(|value| {
                                 Literal::try_from_json(value, &list.element_field.field_type)
                             })
-                            .collect::<Result<Vec<_>, Error>>()?,
+                            .collect::<Result<Vec<_>>>()?,
                     )))
                 } else {
                     Err(Error::new(
@@ -469,7 +814,7 @@ impl Literal {
                                         Literal::try_from_json(value, &map.value_field.field_type)?,
                                     ))
                                 })
-                                .collect::<Result<Vec<_>, Error>>()?
+                                .collect::<Result<Vec<_>>>()?
                                 .into_iter(),
                         ))))
                     } else {
