@@ -23,16 +23,20 @@ use crate::spec::datatypes::{
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use crate::{ensure_data_valid, Error, ErrorKind};
+use serde::{Deserialize, Serialize};
 use bimap::BiHashMap;
 use itertools::Itertools;
 use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
+use _serde::SchemaEnum;
+
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
 /// Defines schema in iceberg.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[serde(try_from = "SchemaEnum", into = "SchemaEnum")]
 pub struct Schema {
     r#struct: StructType,
     schema_id: i32,
@@ -620,6 +624,13 @@ pub(super) mod _serde {
 
     use super::{Schema, DEFAULT_SCHEMA_ID};
 
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(untagged)]
+    pub(super) enum SchemaEnum {
+        V2(SchemaV2),
+        V1(SchemaV1),
+    }
+
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
     #[serde(rename_all = "kebab-case")]
     /// Defines the structure of a v2 schema for serialization/deserialization
@@ -641,6 +652,26 @@ pub(super) mod _serde {
         pub identifier_field_ids: Option<Vec<i32>>,
         #[serde(flatten)]
         pub fields: StructType,
+    }
+
+    impl TryFrom<SchemaEnum> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaEnum) -> Result<Self> {
+            match value {
+                SchemaEnum::V2(value) => value.try_into(),
+                SchemaEnum::V1(value) => value.try_into(),
+            }
+        }
+    }
+
+    impl From<Schema> for SchemaEnum {
+        fn from(value: Schema) -> Self {
+            if value.schema_id == 0 {
+                SchemaEnum::V1(value.into())
+            } else {
+                SchemaEnum::V2(value.into())
+            }
+        }
     }
 
     impl TryFrom<SchemaV2> for Schema {
@@ -683,6 +714,7 @@ pub(super) mod _serde {
     impl From<Schema> for SchemaV1 {
         fn from(value: Schema) -> Self {
             SchemaV1 {
+                // r#type: TypeEnum::Struct,
                 schema_id: Some(value.schema_id),
                 identifier_field_ids: if value.identifier_field_ids.is_empty() {
                     None
@@ -704,6 +736,37 @@ mod tests {
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::SchemaV2;
     use std::collections::HashMap;
+
+    fn check_schema_serde(json: &str, expected_type: Schema) {
+        let desered_type: Schema = serde_json::from_str(json).unwrap();
+        assert_eq!(desered_type, expected_type);
+
+        let sered_json = serde_json::to_string(&expected_type).unwrap();
+        assert_eq!(sered_json, json);
+        let parsed_json_value = serde_json::from_str::<Schema>(&sered_json).unwrap();
+
+        assert_eq!(parsed_json_value, desered_type);
+    }
+
+    #[test]
+    fn test_serde() {
+        let record = r#"{"schema-id":1,"type":"struct","fields":[{"id":1,"name":"id","required":true,"type":"uuid"},{"id":2,"name":"data","required":false,"type":"int"}]}"#;
+
+        let field1: NestedFieldRef =
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid)).into();
+        let field2: NestedFieldRef =
+            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into();
+
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![field1.clone()])
+            .with_fields(vec![field2.clone()])
+            .build()
+            .unwrap();
+
+        check_schema_serde(record, schema);
+
+    }
 
     #[test]
     fn test_construct_schema() {
