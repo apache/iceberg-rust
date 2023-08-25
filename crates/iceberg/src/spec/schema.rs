@@ -30,6 +30,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
 
 const DEFAULT_SCHEMA_ID: i32 = 0;
+pub(crate) const DECIMAL_LENGTH: usize = 128;
 
 /// Defines schema in iceberg.
 #[derive(Debug, PartialEq, Eq, Clone)]

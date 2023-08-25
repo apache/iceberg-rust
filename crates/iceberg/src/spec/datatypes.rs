@@ -18,6 +18,8 @@
 /*!
  * Data Types
 */
+use crate::ensure_data_valid;
+use crate::error::Result;
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -33,6 +35,8 @@ use super::values::Literal;
 pub(crate) const LIST_FILED_NAME: &str = "element";
 pub(crate) const MAP_KEY_FIELD_NAME: &str = "key";
 pub(crate) const MAP_VALUE_FIELD_NAME: &str = "value";
+
+pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 /// All data types are either primitives or nested types, which are maps, lists, or structs.
@@ -69,6 +73,37 @@ impl Type {
     #[inline(always)]
     pub fn is_struct(&self) -> bool {
         matches!(self, Type::Struct(_))
+    }
+
+    /// Creates  decimal type.
+    #[inline(always)]
+    pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
+        ensure_data_valid!(precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
+        Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
+    }
+}
+
+impl From<PrimitiveType> for Type {
+    fn from(value: PrimitiveType) -> Self {
+        Self::Primitive(value)
+    }
+}
+
+impl From<StructType> for Type {
+    fn from(value: StructType) -> Self {
+        Type::Struct(value)
+    }
+}
+
+impl From<ListType> for Type {
+    fn from(value: ListType) -> Self {
+        Type::List(value)
+    }
+}
+
+impl From<MapType> for Type {
+    fn from(value: MapType) -> Self {
+        Type::Map(value)
     }
 }
 
@@ -112,7 +147,7 @@ pub enum PrimitiveType {
 }
 
 impl Serialize for Type {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -122,7 +157,7 @@ impl Serialize for Type {
 }
 
 impl<'de> Deserialize<'de> for Type {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -132,7 +167,7 @@ impl<'de> Deserialize<'de> for Type {
 }
 
 impl<'de> Deserialize<'de> for PrimitiveType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -148,7 +183,7 @@ impl<'de> Deserialize<'de> for PrimitiveType {
 }
 
 impl Serialize for PrimitiveType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -162,7 +197,7 @@ impl Serialize for PrimitiveType {
     }
 }
 
-fn deserialize_decimal<'de, D>(deserializer: D) -> Result<PrimitiveType, D::Error>
+fn deserialize_decimal<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -179,14 +214,18 @@ where
     })
 }
 
-fn serialize_decimal<S>(precision: &u32, scale: &u32, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_decimal<S>(
+    precision: &u32,
+    scale: &u32,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_str(&format!("decimal({precision},{scale})"))
 }
 
-fn deserialize_fixed<'de, D>(deserializer: D) -> Result<PrimitiveType, D::Error>
+fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -201,7 +240,7 @@ where
         .map_err(D::Error::custom)
 }
 
-fn serialize_fixed<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_fixed<S>(value: &u64, serializer: S) -> std::result::Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -243,7 +282,7 @@ pub struct StructType {
 }
 
 impl<'de> Deserialize<'de> for StructType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -263,7 +302,7 @@ impl<'de> Deserialize<'de> for StructType {
                 formatter.write_str("struct")
             }
 
-            fn visit_map<V>(self, mut map: V) -> Result<StructType, V::Error>
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<StructType, V::Error>
             where
                 V: MapAccess<'de>,
             {
