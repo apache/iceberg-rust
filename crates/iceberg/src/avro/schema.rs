@@ -857,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unknonwn_primitive() {
+    fn test_unknown_primitive() {
         let mut converter = AvroSchemaToSchema { next_id: 0 };
 
         assert!(converter.primitive(&AvroSchema::Duration).is_err());
