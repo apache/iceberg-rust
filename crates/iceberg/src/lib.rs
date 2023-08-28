@@ -37,3 +37,5 @@ pub mod table;
 mod avro;
 pub mod io;
 pub mod spec;
+
+pub mod transform;

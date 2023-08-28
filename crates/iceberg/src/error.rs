@@ -44,6 +44,10 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+    /// Arrow compute error.
+    ///
+    /// Error returned by compute function in arrow.
+    ArrowCompute,
 }
 
 impl ErrorKind {
@@ -59,6 +63,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
+            ErrorKind::ArrowCompute => "ArrowCompute",
         }
     }
 }
