@@ -82,9 +82,9 @@ pub enum PrimitiveType {
     Int,
     /// 64-bit signed integer
     Long,
-    /// 32-bit IEEE 753 floating bit.
+    /// 32-bit IEEE 754 floating bit.
     Float,
-    /// 64-bit IEEE 753 floating bit.
+    /// 64-bit IEEE 754 floating bit.
     Double,
     /// Fixed point decimal
     Decimal {
