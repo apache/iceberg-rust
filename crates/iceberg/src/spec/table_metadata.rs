@@ -203,6 +203,7 @@ pub(super) mod _serde {
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
     use std::{collections::HashMap, sync::Arc};
 
+    use itertools::Itertools;
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
@@ -212,7 +213,7 @@ pub(super) mod _serde {
             snapshot::_serde::{SnapshotV1, SnapshotV2},
             PartitionField, PartitionSpec, Schema, SnapshotReference, SnapshotRetention, SortOrder,
         },
-        Error,
+        Error, ErrorKind,
     };
 
     use super::{
@@ -348,6 +349,14 @@ pub(super) mod _serde {
             } else {
                 value.current_snapshot_id
             };
+            let schemas = HashMap::from_iter(
+                value
+                    .schemas
+                    .into_iter()
+                    .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
+                    .collect::<Result<Vec<_>, Error>>()?
+                    .into_iter(),
+            );
             Ok(TableMetadata {
                 format_version: FormatVersion::V2,
                 table_uuid: value.table_uuid,
@@ -355,14 +364,15 @@ pub(super) mod _serde {
                 last_sequence_number: value.last_sequence_number,
                 last_updated_ms: value.last_updated_ms,
                 last_column_id: value.last_column_id,
-                schemas: HashMap::from_iter(
-                    value
-                        .schemas
-                        .into_iter()
-                        .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
-                        .collect::<Result<Vec<_>, Error>>()?,
-                ),
-                current_schema_id: value.current_schema_id,
+                current_schema_id: if schemas.keys().contains(&value.current_schema_id) {
+                    Ok(value.current_schema_id)
+                } else {
+                    Err(self::Error::new(
+                        ErrorKind::DataInvalid,
+                        "No schema exists with the current schema id.",
+                    ))
+                }?,
+                schemas,
                 partition_specs: HashMap::from_iter(
                     value.partition_specs.into_iter().map(|x| (x.spec_id, x)),
                 ),
@@ -1269,5 +1279,17 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_table_metadata_v2_schema_not_found() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV2CurrentSchemaNotFound.json")
+                .unwrap();
+
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        desered.unwrap();
     }
 }
