@@ -93,7 +93,7 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::bool(true);
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(true)), t);
@@ -107,7 +107,7 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::bool_from_str("false").unwrap();
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(false)), t);
@@ -123,7 +123,7 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::int(23i8);
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Int(23)), t);
@@ -136,7 +136,7 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::long(24i8);
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Long(24)), t);
@@ -150,7 +150,7 @@ impl Literal {
     /// Example:
     /// ```rust
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::float( 32.1f32 );
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t);
@@ -164,7 +164,7 @@ impl Literal {
     /// Example:
     /// ```rust
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t = Literal::double( 32.1f64 );
     ///
     /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t);
@@ -195,7 +195,7 @@ impl Literal {
     ///
     /// Example
     /// ```rust
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t = Literal::date_from_str("1970-01-03").unwrap();
     ///
     /// assert_eq!(Literal::date(2), t);
@@ -219,7 +219,7 @@ impl Literal {
     /// Example:
     ///
     ///```rust
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t = Literal::date_from_ymd(1970, 1, 5).unwrap();
     ///
     /// assert_eq!(Literal::date(4), t);
@@ -255,7 +255,7 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t = Literal::time_from_str("01:02:01.888999777").unwrap();
     ///
     /// let micro_secs = {
@@ -285,7 +285,7 @@ impl Literal {
     /// Example:
     /// ```rust
     ///
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t = Literal::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
     /// assert_eq!(Literal::time_from_str("22:15:33.000111").unwrap(), t);
@@ -327,7 +327,7 @@ impl Literal {
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t = Literal::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
     ///
     /// let t2 = {
@@ -372,7 +372,7 @@ impl Literal {
     ///
     /// ```rust
     /// use uuid::Uuid;
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t1 = Literal::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
     /// let t2 = Literal::uuid(Uuid::from_u128_le(0xd8d7d6d5d4d3d2d1c2c1b2b1a4a3a2a1));
     ///
@@ -394,7 +394,7 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t1 = Literal::fixed(vec![1u8, 2u8]);
     /// let t2 = Literal::Primitive(PrimitiveLiteral::Fixed(vec![1u8, 2u8]));
     ///
@@ -409,7 +409,7 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::values::{Literal, PrimitiveLiteral};
+    /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t1 = Literal::binary(vec![1u8, 2u8]);
     /// let t2 = Literal::Primitive(PrimitiveLiteral::Binary(vec![1u8, 2u8]));
     ///
@@ -430,7 +430,7 @@ impl Literal {
     ///
     /// ```rust
     /// use rust_decimal::Decimal;
-    /// use iceberg::spec::values::Literal;
+    /// use iceberg::spec::Literal;
     /// let t1 = Literal::decimal(Decimal::new(12345, 2));
     /// let t2 = Literal::decimal_from_str("123.45").unwrap();
     ///
