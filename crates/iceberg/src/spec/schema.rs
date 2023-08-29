@@ -626,6 +626,7 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
+    /// Enum for Schema serialization/deserializaion
     pub(super) enum SchemaEnum {
         V2(SchemaV2),
         V1(SchemaV1),
@@ -654,6 +655,7 @@ pub(super) mod _serde {
         pub fields: StructType,
     }
 
+    /// Helper to serialize/deserializa Schema
     impl TryFrom<SchemaEnum> for Schema {
         type Error = Error;
         fn try_from(value: SchemaEnum) -> Result<Self> {
@@ -714,7 +716,6 @@ pub(super) mod _serde {
     impl From<Schema> for SchemaV1 {
         fn from(value: Schema) -> Self {
             SchemaV1 {
-                // r#type: TypeEnum::Struct,
                 schema_id: Some(value.schema_id),
                 identifier_field_ids: if value.identifier_field_ids.is_empty() {
                     None
@@ -765,7 +766,6 @@ mod tests {
             .unwrap();
 
         check_schema_serde(record, schema);
-
     }
 
     #[test]
