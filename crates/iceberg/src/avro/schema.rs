@@ -35,14 +35,12 @@ struct SchemaToAvroSchema {
     schema: String,
 }
 
-impl SchemaVisitor for SchemaToAvroSchema {
-    type T = Either<AvroSchema, AvroRecordField>;
+type AvroSchemaOrField = Either<AvroSchema, AvroRecordField>;
 
-    fn schema(
-        &mut self,
-        _schema: &Schema,
-        value: Either<AvroSchema, AvroRecordField>,
-    ) -> Result<Either<AvroSchema, AvroRecordField>> {
+impl SchemaVisitor for SchemaToAvroSchema {
+    type T = AvroSchemaOrField;
+
+    fn schema(&mut self, _schema: &Schema, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
         let mut avro_schema = value.unwrap_left();
 
         if let AvroSchema::Record(record) = &mut avro_schema {
@@ -60,8 +58,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
     fn field(
         &mut self,
         field: &NestedFieldRef,
-        avro_schema: Either<AvroSchema, AvroRecordField>,
-    ) -> Result<Either<AvroSchema, AvroRecordField>> {
+        avro_schema: AvroSchemaOrField,
+    ) -> Result<AvroSchemaOrField> {
         let mut field_schema = avro_schema.unwrap_left();
         if let AvroSchema::Record(record) = &mut field_schema {
             record.name = Name::from(format!("r{}", field.id).as_str());
@@ -96,8 +94,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
     fn r#struct(
         &mut self,
         _struct: &StructType,
-        results: Vec<Either<AvroSchema, AvroRecordField>>,
-    ) -> Result<Either<AvroSchema, AvroRecordField>> {
+        results: Vec<AvroSchemaOrField>,
+    ) -> Result<AvroSchemaOrField> {
         let avro_fields = results.into_iter().map(|r| r.unwrap_right()).collect();
 
         Ok(Either::Left(AvroSchema::Record(RecordSchema {
@@ -112,11 +110,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
         })))
     }
 
-    fn list(
-        &mut self,
-        list: &ListType,
-        value: Either<AvroSchema, AvroRecordField>,
-    ) -> Result<Either<AvroSchema, AvroRecordField>> {
+    fn list(&mut self, list: &ListType, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
         let mut field_schema = value.unwrap_left();
 
         if let AvroSchema::Record(record) = &mut field_schema {
@@ -134,9 +128,9 @@ impl SchemaVisitor for SchemaToAvroSchema {
     fn map(
         &mut self,
         map: &MapType,
-        key_value: Either<AvroSchema, AvroRecordField>,
-        value: Either<AvroSchema, AvroRecordField>,
-    ) -> Result<Either<AvroSchema, AvroRecordField>> {
+        key_value: AvroSchemaOrField,
+        value: AvroSchemaOrField,
+    ) -> Result<AvroSchemaOrField> {
         let key_field_schema = key_value.unwrap_left();
         let mut value_field_schema = value.unwrap_left();
         if !map.value_field.required {
@@ -197,7 +191,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
         }
     }
 
-    fn primitive(&mut self, p: &PrimitiveType) -> Result<Either<AvroSchema, AvroRecordField>> {
+    fn primitive(&mut self, p: &PrimitiveType) -> Result<AvroSchemaOrField> {
         let avro_schema = match p {
             PrimitiveType::Boolean => AvroSchema::Boolean,
             PrimitiveType::Int => AvroSchema::Int,
@@ -262,7 +256,7 @@ fn is_avro_optional(avro_schema: &AvroSchema) -> bool {
 }
 
 /// Post order avro schema visitor.
-pub trait AvroSchemaVisitor {
+pub(crate) trait AvroSchemaVisitor {
     type T;
 
     fn record(&mut self, record: &RecordSchema, fields: Vec<Self::T>) -> Result<Self::T>;
@@ -276,7 +270,7 @@ pub trait AvroSchemaVisitor {
 }
 
 /// Visit avro schema in post order visitor.
-pub fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) -> Result<V::T> {
+pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) -> Result<V::T> {
     match schema {
         AvroSchema::Record(record) => {
             let field_results = record
