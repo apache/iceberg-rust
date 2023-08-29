@@ -16,7 +16,7 @@
 // under the License.
 
 use super::TransformFunction;
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 use arrow::array::{Array, TimestampMicrosecondArray};
 use arrow::compute::binary;
 use arrow::datatypes;
@@ -28,24 +28,28 @@ use arrow::{
 use chrono::Datelike;
 use std::sync::Arc;
 
-/// 719163 is the number of days from 0000-01-01 to 1970-01-01
-const EPOCH_DAY_FROM_CE: i32 = 719163;
-const DAY_PER_SECOND: f64 = 0.0000115741;
-const HOUR_PER_SECOND: f64 = 1_f64 / 3600.0;
-const BASE_YEAR: i32 = 1970;
+/// The number of days since unix epoch.
+const DAY_SINCE_UNIX_EPOCH: i32 = 719163;
+/// Hour in one second.
+const HOUR_PER_SECOND: f64 = 1.0_f64 / 3600.0_f64;
+/// Day in one second.
+const DAY_PER_SECOND: f64 = 1.0_f64 / 24.0_f64 / 3600.0_f64;
+/// Year of unix epoch.
+const UNIX_EPOCH_YEAR: i32 = 1970;
 
 /// Extract a date or timestamp year, as years from 1970
 pub struct Year;
 
 impl TransformFunction for Year {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let array = year_dyn(&input).expect("Should not call transform in Year with non-date type");
+        let array =
+            year_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             array
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .unwrap()
-                .unary(|v| v - BASE_YEAR),
+                .unary(|v| v - UNIX_EPOCH_YEAR),
         ))
     }
 }
@@ -56,14 +60,14 @@ pub struct Month;
 impl TransformFunction for Month {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
         let year_array =
-            year_dyn(&input).expect("Should not call transform in Month with non-date type");
+            year_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         let year_array: Int32Array = year_array
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap()
-            .unary(|v| 12 * (v - BASE_YEAR));
+            .unary(|v| 12 * (v - UNIX_EPOCH_YEAR));
         let month_array =
-            month_dyn(&input).expect("Should not call transform in Month with non-date type");
+            month_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             binary(
                 month_array.as_any().downcast_ref::<Int32Array>().unwrap(),
@@ -94,13 +98,18 @@ impl TransformFunction for Day {
                     .unwrap()
                     .unary(|v| -> i32 {
                         datatypes::Date32Type::to_naive_date(v).num_days_from_ce()
-                            - EPOCH_DAY_FROM_CE
+                            - DAY_SINCE_UNIX_EPOCH
                     })
             }
-            _ => unreachable!(
-                "Should not call transform in Day with type {:?}",
-                input.data_type()
-            ),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Should not call internally for unsupport data type {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
         };
         Ok(Arc::new(res))
     }
@@ -117,10 +126,15 @@ impl TransformFunction for Hour {
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
                 .unary(|v| -> i32 { (v as f64 * HOUR_PER_SECOND / 1000.0 / 1000.0) as i32 }),
-            _ => unreachable!(
-                "Should not call transform in Day with type {:?}",
-                input.data_type()
-            ),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Should not call internally for unsupport data type {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
         };
         Ok(Arc::new(res))
     }
