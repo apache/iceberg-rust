@@ -653,7 +653,7 @@ pub struct SnapshotLog {
 #[cfg(test)]
 mod tests {
 
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, fs, sync::Arc};
 
     use anyhow::Result;
     use uuid::Uuid;
@@ -661,9 +661,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::spec::{
-        table_metadata::TableMetadata, ManifestList, NestedField, Operation, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, Summary, Transform, Type,
+        table_metadata::TableMetadata, ManifestList, NestedField, NullOrder, Operation,
+        PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
     };
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
@@ -971,5 +971,147 @@ mod tests {
         "#;
         assert!(serde_json::from_str::<TableMetadata>(data).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn test_table_metadata_v2_file_valid() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV2Valid.json").unwrap();
+
+        let schema1 = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "x",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .unwrap();
+
+        let schema2 = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(
+                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                        .with_doc("comment"),
+                ),
+                Arc::new(NestedField::required(
+                    3,
+                    "z",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .with_identifier_field_ids(vec![1, 2])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .with_partition_field(PartitionField {
+                name: "x".to_string(),
+                transform: Transform::Identity,
+                source_id: 1,
+                field_id: 1000,
+            })
+            .build()
+            .unwrap();
+
+        let sort_order = SortOrder::builder()
+            .with_order_id(3)
+            .with_sort_field(SortField {
+                source_id: 2,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            })
+            .with_sort_field(SortField {
+                source_id: 3,
+                transform: Transform::Bucket(4),
+                direction: SortDirection::Descending,
+                null_order: NullOrder::Last,
+            })
+            .build()
+            .unwrap();
+
+        let snapshot1 = Snapshot::builder()
+            .with_snapshot_id(3051729675574597004)
+            .with_timestamp_ms(1515100955770)
+            .with_sequence_number(0)
+            .with_manifest_list(ManifestList::ManifestListFile(
+                "s3://a/b/1.avro".to_string(),
+            ))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                other: HashMap::new(),
+            })
+            .build()
+            .unwrap();
+
+        let snapshot2 = Snapshot::builder()
+            .with_snapshot_id(3055729675574597004)
+            .with_parent_snapshot_id(Some(3051729675574597004))
+            .with_timestamp_ms(1555100955770)
+            .with_sequence_number(1)
+            .with_schema_id(1)
+            .with_manifest_list(ManifestList::ManifestListFile(
+                "s3://a/b/2.avro".to_string(),
+            ))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                other: HashMap::new(),
+            })
+            .build()
+            .unwrap();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
+            location: "s3://bucket/test/location".to_string(),
+            last_updated_ms: 1602638573590,
+            last_column_id: 3,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema1)), (1, Arc::new(schema2))]),
+            current_schema_id: 1,
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            default_spec_id: 0,
+            last_partition_id: 1000,
+            default_sort_order_id: 3,
+            sort_orders: HashMap::from_iter(vec![(3, sort_order)]),
+            snapshots: Some(HashMap::from_iter(vec![
+                (3051729675574597004, Arc::new(snapshot1)),
+                (3055729675574597004, Arc::new(snapshot2)),
+            ])),
+            current_snapshot_id: Some(3055729675574597004),
+            last_sequence_number: 34,
+            properties: HashMap::new(),
+            snapshot_log: vec![
+                SnapshotLog {
+                    snapshot_id: 3051729675574597004,
+                    timestamp_ms: 1515100955770,
+                },
+                SnapshotLog {
+                    snapshot_id: 3055729675574597004,
+                    timestamp_ms: 1555100955770,
+                },
+            ],
+            metadata_log: Vec::new(),
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: 3055729675574597004,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )]),
+        };
+
+        check_table_metadata_serde(&metadata, expected);
     }
 }
