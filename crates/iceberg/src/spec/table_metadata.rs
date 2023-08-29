@@ -39,6 +39,7 @@ use _serde::TableMetadataEnum;
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
+static DEFAULT_SORT_ORDER_ID: i64 = 0;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -215,7 +216,8 @@ pub(super) mod _serde {
     };
 
     use super::{
-        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SPEC_ID, MAIN_BRANCH,
+        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
+        DEFAULT_SPEC_ID, MAIN_BRANCH,
     };
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -288,8 +290,8 @@ pub(super) mod _serde {
         pub snapshot_log: Option<Vec<SnapshotLog>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub metadata_log: Option<Vec<MetadataLog>>,
-        pub sort_orders: Vec<SortOrder>,
-        pub default_sort_order_id: i64,
+        pub sort_orders: Option<Vec<SortOrder>>,
+        pub default_sort_order_id: Option<i64>,
     }
 
     /// Helper to serialize and deserialize the format version.
@@ -479,10 +481,13 @@ pub(super) mod _serde {
                     .transpose()?,
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
-                sort_orders: HashMap::from_iter(
-                    value.sort_orders.into_iter().map(|x| (x.order_id, x)),
-                ),
-                default_sort_order_id: value.default_sort_order_id,
+                sort_orders: match value.sort_orders {
+                    Some(sort_orders) => {
+                        HashMap::from_iter(sort_orders.into_iter().map(|x| (x.order_id, x)))
+                    }
+                    None => HashMap::new(),
+                },
+                default_sort_order_id: value.default_sort_order_id.unwrap_or(DEFAULT_SORT_ORDER_ID),
                 refs: HashMap::from_iter(vec![(
                     MAIN_BRANCH.to_string(),
                     SnapshotReference {
@@ -613,8 +618,8 @@ pub(super) mod _serde {
                 } else {
                     Some(v.metadata_log)
                 },
-                sort_orders: v.sort_orders.into_values().collect(),
-                default_sort_order_id: v.default_sort_order_id,
+                sort_orders: Some(v.sort_orders.into_values().collect()),
+                default_sort_order_id: Some(v.default_sort_order_id),
             }
         }
     }
@@ -1189,6 +1194,78 @@ mod tests {
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
+        };
+
+        check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_file_valid() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(
+                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                        .with_doc("comment"),
+                ),
+                Arc::new(NestedField::required(
+                    3,
+                    "z",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .with_partition_field(PartitionField {
+                name: "x".to_string(),
+                transform: Transform::Identity,
+                source_id: 1,
+                field_id: 1000,
+            })
+            .build()
+            .unwrap();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V1,
+            table_uuid: Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap(),
+            location: "s3://bucket/test/location".to_string(),
+            last_updated_ms: 1602638573874,
+            last_column_id: 3,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            default_spec_id: 0,
+            last_partition_id: 0,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::new(),
+            snapshots: Some(HashMap::new()),
+            current_snapshot_id: None,
+            last_sequence_number: 0,
+            properties: HashMap::new(),
+            snapshot_log: vec![],
+            metadata_log: Vec::new(),
+            refs: HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: -1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )]),
         };
 
         check_table_metadata_serde(&metadata, expected);
