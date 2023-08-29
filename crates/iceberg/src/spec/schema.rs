@@ -668,11 +668,7 @@ pub(super) mod _serde {
 
     impl From<Schema> for SchemaEnum {
         fn from(value: Schema) -> Self {
-            if value.schema_id == 0 {
-                SchemaEnum::V1(value.into())
-            } else {
-                SchemaEnum::V2(value.into())
-            }
+            SchemaEnum::V2(value.into())
         }
     }
 
