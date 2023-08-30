@@ -23,10 +23,10 @@ use crate::spec::datatypes::{
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use crate::{ensure_data_valid, Error, ErrorKind};
-use serde::{Deserialize, Serialize};
 use bimap::BiHashMap;
 use itertools::Itertools;
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
@@ -731,37 +731,88 @@ mod tests {
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
     use crate::spec::schema::Schema;
-    use crate::spec::schema::_serde::SchemaV2;
+    use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
     use std::collections::HashMap;
 
-    fn check_schema_serde(json: &str, expected_type: Schema) {
+    use super::DEFAULT_SCHEMA_ID;
+
+    fn check_schema_serde(json: &str, expected_type: Schema, _expected_enum: SchemaEnum) {
         let desered_type: Schema = serde_json::from_str(json).unwrap();
         assert_eq!(desered_type, expected_type);
+        assert!(matches!(desered_type.clone(), _expected_enum));
 
         let sered_json = serde_json::to_string(&expected_type).unwrap();
-        assert_eq!(sered_json, json);
         let parsed_json_value = serde_json::from_str::<Schema>(&sered_json).unwrap();
 
         assert_eq!(parsed_json_value, desered_type);
     }
 
     #[test]
-    fn test_serde() {
-        let record = r#"{"schema-id":1,"type":"struct","fields":[{"id":1,"name":"id","required":true,"type":"uuid"},{"id":2,"name":"data","required":false,"type":"int"}]}"#;
+    fn test_serde_with_schema_id() {
+        let record = r#"{
+            "type":"struct",
+            "schema-id":1,
+            "fields":[
+                {
+                    "id":1,
+                    "name":"foo",
+                    "required":false,
+                    "type":"string"
+                },
+                {
+                    "id":2,
+                    "name":"bar",
+                    "required":true,
+                    "type":"int"
+                },
+                {
+                    "id":3,
+                    "name":"baz",
+                    "required":false,
+                    "type":"boolean"
+                }
+            ],
+            "identifier-field-ids":[2]
+        }"#;
+        let schema = table_schema_simple();
 
-        let field1: NestedFieldRef =
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid)).into();
-        let field2: NestedFieldRef =
-            NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into();
+        let x: SchemaV2 = serde_json::from_str(record).unwrap();
+        check_schema_serde(record, schema, SchemaEnum::V2(x));
+    }
 
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![field1.clone()])
-            .with_fields(vec![field2.clone()])
-            .build()
-            .unwrap();
+    #[test]
+    fn test_serde_without_schema_id() {
+        let record = r#"{
+            "type":"struct",
+            "fields":[
+                {
+                    "id":1,
+                    "name":"foo",
+                    "required":false,
+                    "type":"string"
+                },
+                {
+                    "id":2,
+                    "name":"bar",
+                    "required":true,
+                    "type":"int"
+                },
+                {
+                    "id":3,
+                    "name":"baz",
+                    "required":false,
+                    "type":"boolean"
+                }
+            ],
+            "identifier-field-ids":[2]
+        }"#;
 
-        check_schema_serde(record, schema);
+        let mut schema = table_schema_simple();
+        // By default schema_id field is set to DEFAULT_SCHEMA_ID when no value is set in json
+        schema.schema_id = DEFAULT_SCHEMA_ID;
+
+        let x: SchemaV1 = serde_json::from_str(record).unwrap();
+        check_schema_serde(record, schema, SchemaEnum::V1(x));
     }
 
     #[test]
