@@ -16,5 +16,5 @@
 # under the License.
 
 [toolchain]
-channel = "stable"
+channel = "1.72.0"
 components = ["rustfmt", "clippy"]
