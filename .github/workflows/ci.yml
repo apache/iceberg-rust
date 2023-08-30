@@ -72,3 +72,6 @@ jobs:
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
+      
+      - name: Doc Test
+        run: cargo test --no-fail-fast --doc --all-features --workspace
