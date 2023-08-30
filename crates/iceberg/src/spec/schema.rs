@@ -749,70 +749,22 @@ mod tests {
 
     #[test]
     fn test_serde_with_schema_id() {
-        let record = r#"{
-            "type":"struct",
-            "schema-id":1,
-            "fields":[
-                {
-                    "id":1,
-                    "name":"foo",
-                    "required":false,
-                    "type":"string"
-                },
-                {
-                    "id":2,
-                    "name":"bar",
-                    "required":true,
-                    "type":"int"
-                },
-                {
-                    "id":3,
-                    "name":"baz",
-                    "required":false,
-                    "type":"boolean"
-                }
-            ],
-            "identifier-field-ids":[2]
-        }"#;
-        let schema = table_schema_simple();
-
+        let (schema, record) = table_schema_simple();
+        
         let x: SchemaV2 = serde_json::from_str(record).unwrap();
         check_schema_serde(record, schema, SchemaEnum::V2(x));
     }
 
     #[test]
     fn test_serde_without_schema_id() {
-        let record = r#"{
-            "type":"struct",
-            "fields":[
-                {
-                    "id":1,
-                    "name":"foo",
-                    "required":false,
-                    "type":"string"
-                },
-                {
-                    "id":2,
-                    "name":"bar",
-                    "required":true,
-                    "type":"int"
-                },
-                {
-                    "id":3,
-                    "name":"baz",
-                    "required":false,
-                    "type":"boolean"
-                }
-            ],
-            "identifier-field-ids":[2]
-        }"#;
-
-        let mut schema = table_schema_simple();
+        let (mut schema, record) = table_schema_simple();
+        // we remove the ""schema-id": 1," string from example
+        let new_record = record.replace("\"schema-id\":1,","");
         // By default schema_id field is set to DEFAULT_SCHEMA_ID when no value is set in json
         schema.schema_id = DEFAULT_SCHEMA_ID;
 
-        let x: SchemaV1 = serde_json::from_str(record).unwrap();
-        check_schema_serde(record, schema, SchemaEnum::V1(x));
+        let x: SchemaV1 = serde_json::from_str(new_record.as_str()).unwrap();
+        check_schema_serde(&new_record, schema, SchemaEnum::V1(x));
     }
 
     #[test]
@@ -873,8 +825,8 @@ mod tests {
         assert!(!result.fields[1].required);
     }
 
-    fn table_schema_simple() -> Schema {
-        Schema::builder()
+    fn table_schema_simple<'a>() -> (Schema, &'a str) {
+        let schema = Schema::builder()
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
@@ -883,7 +835,33 @@ mod tests {
                 NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
             ])
             .build()
-            .unwrap()
+            .unwrap();
+        let record = r#"{
+            "type":"struct",
+            "schema-id":1,
+            "fields":[
+                {
+                    "id":1,
+                    "name":"foo",
+                    "required":false,
+                    "type":"string"
+                },
+                {
+                    "id":2,
+                    "name":"bar",
+                    "required":true,
+                    "type":"int"
+                },
+                {
+                    "id":3,
+                    "name":"baz",
+                    "required":false,
+                    "type":"boolean"
+                }
+            ],
+            "identifier-field-ids":[2]
+        }"#;
+        (schema,record)
     }
 
     fn table_schema_nested() -> Schema {
@@ -989,7 +967,7 @@ table {
 }
 "#;
 
-        assert_eq!(expected_str, format!("\n{}", table_schema_simple()));
+        assert_eq!(expected_str, format!("\n{}", table_schema_simple().0));
     }
 
     #[test]
@@ -1083,7 +1061,7 @@ table {
     fn test_schema_find_column_name_by_id_simple() {
         let expected_id_to_name = HashMap::from([(1, "foo"), (2, "bar"), (3, "baz")]);
 
-        let schema = table_schema_simple();
+        let schema = table_schema_simple().0;
 
         for (id, name) in expected_id_to_name {
             assert_eq!(
@@ -1097,7 +1075,7 @@ table {
 
     #[test]
     fn test_schema_find_simple() {
-        let schema = table_schema_simple();
+        let schema = table_schema_simple().0;
 
         assert_eq!(
             Some(schema.r#struct.fields()[0].clone()),
