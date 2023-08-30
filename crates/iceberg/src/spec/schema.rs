@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn test_serde_with_schema_id() {
         let (schema, record) = table_schema_simple();
-        
+
         let x: SchemaV2 = serde_json::from_str(record).unwrap();
         check_schema_serde(record, schema, SchemaEnum::V2(x));
     }
@@ -759,7 +759,7 @@ mod tests {
     fn test_serde_without_schema_id() {
         let (mut schema, record) = table_schema_simple();
         // we remove the ""schema-id": 1," string from example
-        let new_record = record.replace("\"schema-id\":1,","");
+        let new_record = record.replace("\"schema-id\":1,", "");
         // By default schema_id field is set to DEFAULT_SCHEMA_ID when no value is set in json
         schema.schema_id = DEFAULT_SCHEMA_ID;
 
@@ -861,7 +861,7 @@ mod tests {
             ],
             "identifier-field-ids":[2]
         }"#;
-        (schema,record)
+        (schema, record)
     }
 
     fn table_schema_nested() -> Schema {
