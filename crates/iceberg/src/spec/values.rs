@@ -950,7 +950,7 @@ mod timestamp {
 }
 
 mod timestamptz {
-    use chrono::{DateTime, NaiveDateTime, Utc, TimeZone};
+    use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
