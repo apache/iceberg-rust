@@ -22,9 +22,9 @@ use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
-use std::cell::OnceCell;
 use std::convert::identity;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::{collections::HashMap, fmt, ops::Index};
 
 use super::values::Literal;
@@ -239,7 +239,7 @@ pub struct StructType {
     fields: Vec<NestedFieldRef>,
     /// Lookup for index by field id
     #[serde(skip_serializing)]
-    id_lookup: OnceCell<HashMap<i32, usize>>,
+    id_lookup: OnceLock<HashMap<i32, usize>>,
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -296,7 +296,7 @@ impl StructType {
     pub fn new(fields: Vec<NestedFieldRef>) -> Self {
         Self {
             fields,
-            id_lookup: OnceCell::default(),
+            id_lookup: OnceLock::new(),
         }
     }
     /// Get struct field with certain id
@@ -678,7 +678,7 @@ mod tests {
                     }),
                 )
                 .into()],
-                id_lookup: OnceCell::default(),
+                id_lookup: OnceLock::default(),
             }),
         )
     }
@@ -708,7 +708,7 @@ mod tests {
                     Type::Primitive(PrimitiveType::Fixed(8)),
                 )
                 .into()],
-                id_lookup: OnceCell::default(),
+                id_lookup: OnceLock::default(),
             }),
         )
     }

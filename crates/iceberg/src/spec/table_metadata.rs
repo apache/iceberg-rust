@@ -358,8 +358,7 @@ pub(super) mod _serde {
                         .schemas
                         .into_iter()
                         .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
-                        .collect::<Result<Vec<_>, Error>>()?
-                        .into_iter(),
+                        .collect::<Result<Vec<_>, Error>>()?,
                 ),
                 current_schema_id: value.current_schema_id,
                 partition_specs: HashMap::from_iter(

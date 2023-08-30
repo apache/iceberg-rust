@@ -827,8 +827,7 @@ impl Literal {
                                         Literal::try_from_json(value, &map.value_field.field_type)?,
                                     ))
                                 })
-                                .collect::<Result<Vec<_>>>()?
-                                .into_iter(),
+                                .collect::<Result<Vec<_>>>()?,
                         ))))
                     } else {
                         Err(Error::new(
