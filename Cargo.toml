@@ -16,4 +16,5 @@
 # under the License.
 
 [workspace]
+resolver = "2"
 members = ["crates/*"]

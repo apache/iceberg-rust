@@ -733,9 +733,8 @@ impl Literal {
                 ))),
                 (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::TimestampTZ(
-                        timestamptz::datetimetz_to_microseconds(&DateTime::from_utc(
-                            NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
-                            Utc,
+                        timestamptz::datetimetz_to_microseconds(&Utc.from_utc_datetime(
+                            &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
                         )),
                     ))))
                 }
@@ -951,7 +950,7 @@ mod timestamp {
 }
 
 mod timestamptz {
-    use chrono::{DateTime, NaiveDateTime, Utc};
+    use chrono::{DateTime, NaiveDateTime, Utc, TimeZone};
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
@@ -960,10 +959,9 @@ mod timestamptz {
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
-        DateTime::<Utc>::from_utc(
+        Utc.from_utc_datetime(
             // This shouldn't fail until the year 262000
-            NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap(),
-            Utc,
+            &NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap(),
         )
     }
 }
