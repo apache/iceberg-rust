@@ -25,9 +25,9 @@ use crate::spec::datatypes::{
 use crate::{ensure_data_valid, Error, ErrorKind};
 use bimap::BiHashMap;
 use itertools::Itertools;
-use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::sync::OnceLock;
 
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
@@ -44,7 +44,7 @@ pub struct Schema {
 
     name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
-    lower_case_name_to_id: OnceCell<HashMap<String, i32>>,
+    lower_case_name_to_id: OnceLock<HashMap<String, i32>>,
 }
 
 /// Schema builder.
@@ -58,7 +58,7 @@ pub struct SchemaBuilder {
 impl SchemaBuilder {
     /// Add fields to schem builder.
     pub fn with_fields(mut self, fields: impl IntoIterator<Item = NestedFieldRef>) -> Self {
-        self.fields.extend(fields.into_iter());
+        self.fields.extend(fields);
         self
     }
 
@@ -110,7 +110,7 @@ impl SchemaBuilder {
 
             name_to_id,
             id_to_name,
-            lower_case_name_to_id: OnceCell::default(),
+            lower_case_name_to_id: OnceLock::default(),
         })
     }
 
