@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::Result;
-use arrow::array::ArrayRef;
+use arrow_array::ArrayRef;
 
 use super::TransformFunction;
 

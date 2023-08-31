@@ -27,7 +27,9 @@ license = "Apache-2.0"
 keywords = ["iceberg"]
 
 [dependencies]
-arrow = { version = ">=46" }
+arrow-array = { version = ">=46" }
+arrow-schema = { version = ">=46" }
+arrow-arith = { version = ">=46" }
 anyhow = "1.0.72"
 apache-avro = "0.15"
 async-trait = "0.1"

@@ -17,7 +17,7 @@
 
 //! Transform function used to compute partition values.
 use crate::{spec::Transform, Result};
-use arrow::array::ArrayRef;
+use arrow_array::ArrayRef;
 
 mod identity;
 mod temporal;

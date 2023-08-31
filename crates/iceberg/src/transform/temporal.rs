@@ -17,14 +17,14 @@
 
 use super::TransformFunction;
 use crate::{Error, ErrorKind, Result};
-use arrow::array::{Array, TimestampMicrosecondArray};
-use arrow::compute::binary;
-use arrow::datatypes;
-use arrow::datatypes::DataType;
-use arrow::{
-    array::{ArrayRef, Date32Array, Int32Array},
-    compute::{month_dyn, year_dyn},
+use arrow_arith::{
+    arity::binary,
+    temporal::{month_dyn, year_dyn},
 };
+use arrow_array::{
+    types::Date32Type, Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray,
+};
+use arrow_schema::{DataType, TimeUnit};
 use chrono::Datelike;
 use std::sync::Arc;
 
@@ -86,7 +86,7 @@ pub struct Day;
 impl TransformFunction for Day {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
         let res: Int32Array = match input.data_type() {
-            DataType::Timestamp(datatypes::TimeUnit::Microsecond, _) => input
+            DataType::Timestamp(TimeUnit::Microsecond, _) => input
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
@@ -97,8 +97,7 @@ impl TransformFunction for Day {
                     .downcast_ref::<Date32Array>()
                     .unwrap()
                     .unary(|v| -> i32 {
-                        datatypes::Date32Type::to_naive_date(v).num_days_from_ce()
-                            - DAY_SINCE_UNIX_EPOCH
+                        Date32Type::to_naive_date(v).num_days_from_ce() - DAY_SINCE_UNIX_EPOCH
                     })
             }
             _ => {
@@ -121,7 +120,7 @@ pub struct Hour;
 impl TransformFunction for Hour {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
         let res: Int32Array = match input.data_type() {
-            DataType::Timestamp(datatypes::TimeUnit::Microsecond, _) => input
+            DataType::Timestamp(TimeUnit::Microsecond, _) => input
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
@@ -142,8 +141,8 @@ impl TransformFunction for Hour {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
-    use chrono::NaiveDate;
+    use arrow_array::{ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
+    use chrono::{NaiveDate, NaiveDateTime};
     use std::sync::Arc;
 
     use crate::transform::TransformFunction;
@@ -151,17 +150,16 @@ mod test {
     #[test]
     fn test_transform_years() {
         let year = super::Year;
+
+        // Test Date32
         let ori_date = vec![
             NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2030, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2060, 1, 1).unwrap(),
         ];
-
-        // Test Date32
         let date_array: ArrayRef = Arc::new(Date32Array::from(
             ori_date
-                .clone()
                 .into_iter()
                 .map(|date| {
                     date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
@@ -178,11 +176,28 @@ mod test {
         assert_eq!(res.value(3), 90);
 
         // Test TimestampMicrosecond
+        let ori_timestamp = vec![
+            NaiveDateTime::parse_from_str("1970-01-01 12:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2000-01-01 19:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2030-01-01 10:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2060-01-01 11:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+        ];
         let date_array: ArrayRef = Arc::new(TimestampMicrosecondArray::from(
-            ori_date
+            ori_timestamp
                 .into_iter()
-                .map(|date| {
-                    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                .map(|timestamp| {
+                    timestamp
+                        .signed_duration_since(
+                            NaiveDateTime::parse_from_str(
+                                "1970-01-01 00:00:00.0",
+                                "%Y-%m-%d %H:%M:%S.%f",
+                            )
+                            .unwrap(),
+                        )
                         .num_microseconds()
                         .unwrap()
                 })
@@ -200,17 +215,16 @@ mod test {
     #[test]
     fn test_transform_months() {
         let month = super::Month;
+
+        // Test Date32
         let ori_date = vec![
             NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2000, 4, 1).unwrap(),
             NaiveDate::from_ymd_opt(2030, 7, 1).unwrap(),
             NaiveDate::from_ymd_opt(2060, 10, 1).unwrap(),
         ];
-
-        // Test Date32
         let date_array: ArrayRef = Arc::new(Date32Array::from(
             ori_date
-                .clone()
                 .into_iter()
                 .map(|date| {
                     date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
@@ -227,11 +241,28 @@ mod test {
         assert_eq!(res.value(3), 90 * 12 + 9);
 
         // Test TimestampMicrosecond
+        let ori_timestamp = vec![
+            NaiveDateTime::parse_from_str("1970-01-01 12:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2000-04-01 19:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2030-07-01 10:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2060-10-01 11:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+        ];
         let date_array: ArrayRef = Arc::new(TimestampMicrosecondArray::from(
-            ori_date
+            ori_timestamp
                 .into_iter()
-                .map(|date| {
-                    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                .map(|timestamp| {
+                    timestamp
+                        .signed_duration_since(
+                            NaiveDateTime::parse_from_str(
+                                "1970-01-01 00:00:00.0",
+                                "%Y-%m-%d %H:%M:%S.%f",
+                            )
+                            .unwrap(),
+                        )
                         .num_microseconds()
                         .unwrap()
                 })
@@ -267,7 +298,6 @@ mod test {
         // Test Date32
         let date_array: ArrayRef = Arc::new(Date32Array::from(
             ori_date
-                .clone()
                 .into_iter()
                 .map(|date| {
                     date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
@@ -284,11 +314,28 @@ mod test {
         assert_eq!(res.value(3), expect_day[3]);
 
         // Test TimestampMicrosecond
+        let ori_timestamp = vec![
+            NaiveDateTime::parse_from_str("1970-01-01 12:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2000-04-01 19:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2030-07-01 10:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2060-10-01 11:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+        ];
         let date_array: ArrayRef = Arc::new(TimestampMicrosecondArray::from(
-            ori_date
+            ori_timestamp
                 .into_iter()
-                .map(|date| {
-                    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                .map(|timestamp| {
+                    timestamp
+                        .signed_duration_since(
+                            NaiveDateTime::parse_from_str(
+                                "1970-01-01 00:00:00.0",
+                                "%Y-%m-%d %H:%M:%S.%f",
+                            )
+                            .unwrap(),
+                        )
                         .num_microseconds()
                         .unwrap()
                 })
@@ -306,27 +353,45 @@ mod test {
     #[test]
     fn test_transform_hours() {
         let hour = super::Hour;
-        let ori_date = vec![
-            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2000, 4, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2030, 7, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2060, 10, 1).unwrap(),
+        let ori_timestamp = vec![
+            NaiveDateTime::parse_from_str("1970-01-01 19:01:23.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2000-03-01 12:01:23.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2030-10-02 10:01:23.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
+            NaiveDateTime::parse_from_str("2060-09-01 05:03:23.123", "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap(),
         ];
-        let expect_hour = ori_date
+        let expect_hour = ori_timestamp
             .clone()
             .into_iter()
-            .map(|data| {
-                data.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .map(|timestamp| {
+                timestamp
+                    .signed_duration_since(
+                        NaiveDateTime::parse_from_str(
+                            "1970-01-01 00:00:0.0",
+                            "%Y-%m-%d %H:%M:%S.%f",
+                        )
+                        .unwrap(),
+                    )
                     .num_hours() as i32
             })
             .collect::<Vec<i32>>();
 
         // Test TimestampMicrosecond
         let date_array: ArrayRef = Arc::new(TimestampMicrosecondArray::from(
-            ori_date
+            ori_timestamp
                 .into_iter()
-                .map(|date| {
-                    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                .map(|timestamp| {
+                    timestamp
+                        .signed_duration_since(
+                            NaiveDateTime::parse_from_str(
+                                "1970-01-01 00:00:0.0",
+                                "%Y-%m-%d %H:%M:%S.%f",
+                            )
+                            .unwrap(),
+                        )
                         .num_microseconds()
                         .unwrap()
                 })
