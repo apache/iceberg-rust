@@ -25,14 +25,18 @@ use crate::spec::datatypes::{
 use crate::{ensure_data_valid, Error, ErrorKind};
 use bimap::BiHashMap;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
 
+use _serde::SchemaEnum;
+
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
 /// Defines schema in iceberg.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[serde(try_from = "SchemaEnum", into = "SchemaEnum")]
 pub struct Schema {
     r#struct: StructType,
     schema_id: i32,
@@ -620,6 +624,14 @@ pub(super) mod _serde {
 
     use super::{Schema, DEFAULT_SCHEMA_ID};
 
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(untagged)]
+    /// Enum for Schema serialization/deserializaion
+    pub(super) enum SchemaEnum {
+        V2(SchemaV2),
+        V1(SchemaV1),
+    }
+
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
     #[serde(rename_all = "kebab-case")]
     /// Defines the structure of a v2 schema for serialization/deserialization
@@ -641,6 +653,23 @@ pub(super) mod _serde {
         pub identifier_field_ids: Option<Vec<i32>>,
         #[serde(flatten)]
         pub fields: StructType,
+    }
+
+    /// Helper to serialize/deserializa Schema
+    impl TryFrom<SchemaEnum> for Schema {
+        type Error = Error;
+        fn try_from(value: SchemaEnum) -> Result<Self> {
+            match value {
+                SchemaEnum::V2(value) => value.try_into(),
+                SchemaEnum::V1(value) => value.try_into(),
+            }
+        }
+    }
+
+    impl From<Schema> for SchemaEnum {
+        fn from(value: Schema) -> Self {
+            SchemaEnum::V2(value.into())
+        }
     }
 
     impl TryFrom<SchemaV2> for Schema {
@@ -702,8 +731,41 @@ mod tests {
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
     use crate::spec::schema::Schema;
-    use crate::spec::schema::_serde::SchemaV2;
+    use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
     use std::collections::HashMap;
+
+    use super::DEFAULT_SCHEMA_ID;
+
+    fn check_schema_serde(json: &str, expected_type: Schema, _expected_enum: SchemaEnum) {
+        let desered_type: Schema = serde_json::from_str(json).unwrap();
+        assert_eq!(desered_type, expected_type);
+        assert!(matches!(desered_type.clone(), _expected_enum));
+
+        let sered_json = serde_json::to_string(&expected_type).unwrap();
+        let parsed_json_value = serde_json::from_str::<Schema>(&sered_json).unwrap();
+
+        assert_eq!(parsed_json_value, desered_type);
+    }
+
+    #[test]
+    fn test_serde_with_schema_id() {
+        let (schema, record) = table_schema_simple();
+
+        let x: SchemaV2 = serde_json::from_str(record).unwrap();
+        check_schema_serde(record, schema, SchemaEnum::V2(x));
+    }
+
+    #[test]
+    fn test_serde_without_schema_id() {
+        let (mut schema, record) = table_schema_simple();
+        // we remove the ""schema-id": 1," string from example
+        let new_record = record.replace("\"schema-id\":1,", "");
+        // By default schema_id field is set to DEFAULT_SCHEMA_ID when no value is set in json
+        schema.schema_id = DEFAULT_SCHEMA_ID;
+
+        let x: SchemaV1 = serde_json::from_str(new_record.as_str()).unwrap();
+        check_schema_serde(&new_record, schema, SchemaEnum::V1(x));
+    }
 
     #[test]
     fn test_construct_schema() {
@@ -763,8 +825,8 @@ mod tests {
         assert!(!result.fields[1].required);
     }
 
-    fn table_schema_simple() -> Schema {
-        Schema::builder()
+    fn table_schema_simple<'a>() -> (Schema, &'a str) {
+        let schema = Schema::builder()
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
             .with_fields(vec![
@@ -773,7 +835,33 @@ mod tests {
                 NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
             ])
             .build()
-            .unwrap()
+            .unwrap();
+        let record = r#"{
+            "type":"struct",
+            "schema-id":1,
+            "fields":[
+                {
+                    "id":1,
+                    "name":"foo",
+                    "required":false,
+                    "type":"string"
+                },
+                {
+                    "id":2,
+                    "name":"bar",
+                    "required":true,
+                    "type":"int"
+                },
+                {
+                    "id":3,
+                    "name":"baz",
+                    "required":false,
+                    "type":"boolean"
+                }
+            ],
+            "identifier-field-ids":[2]
+        }"#;
+        (schema, record)
     }
 
     fn table_schema_nested() -> Schema {
@@ -879,7 +967,7 @@ table {
 }
 "#;
 
-        assert_eq!(expected_str, format!("\n{}", table_schema_simple()));
+        assert_eq!(expected_str, format!("\n{}", table_schema_simple().0));
     }
 
     #[test]
@@ -973,7 +1061,7 @@ table {
     fn test_schema_find_column_name_by_id_simple() {
         let expected_id_to_name = HashMap::from([(1, "foo"), (2, "bar"), (3, "baz")]);
 
-        let schema = table_schema_simple();
+        let schema = table_schema_simple().0;
 
         for (id, name) in expected_id_to_name {
             assert_eq!(
@@ -987,7 +1075,7 @@ table {
 
     #[test]
     fn test_schema_find_simple() {
-        let schema = table_schema_simple();
+        let schema = table_schema_simple().0;
 
         assert_eq!(
             Some(schema.r#struct.fields()[0].clone()),
