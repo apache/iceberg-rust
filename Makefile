@@ -18,10 +18,14 @@
 check-fmt:
 	cargo fmt --all -- --check
 
-clippy:
+check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
-check: check-fmt clippy
+cargo-sort:
+	cargo install cargo-sort
+	cargo sort -c -w
+
+check: check-fmt check-clippy cargo-sort
 
 test:
 	cargo test --no-fail-fast --all-targets --all-features --workspace
