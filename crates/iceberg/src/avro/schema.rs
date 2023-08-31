@@ -18,7 +18,7 @@
 //! Conversion between iceberg and avro schema.
 use crate::spec::{
     visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type, DECIMAL_LENGTH,
+    SchemaVisitor, StructType, Type,
 };
 use crate::{ensure_data_valid, Error, ErrorKind, Result};
 use apache_avro::schema::{
@@ -237,7 +237,9 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
     Ok(AvroSchema::Decimal(DecimalSchema {
         precision,
         scale,
-        inner: Box::new(avro_fixed_schema(DECIMAL_LENGTH)?),
+        inner: Box::new(avro_fixed_schema(
+            Type::decimal_required_bytes(precision as u32)? as usize,
+        )?),
     }))
 }
 

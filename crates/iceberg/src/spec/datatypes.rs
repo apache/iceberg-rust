@@ -20,6 +20,7 @@
 */
 use crate::ensure_data_valid;
 use crate::error::Result;
+use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -36,7 +37,43 @@ pub(crate) const LIST_FILED_NAME: &str = "element";
 pub(crate) const MAP_KEY_FIELD_NAME: &str = "key";
 pub(crate) const MAP_VALUE_FIELD_NAME: &str = "value";
 
+pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
+
+mod _decimal {
+    use lazy_static::lazy_static;
+
+    use crate::spec::{MAX_DECIMAL_BYTES, MAX_DECIMAL_PRECISION};
+
+    lazy_static! {
+        // Max precision of bytes, starts from 1
+        pub(super) static ref MAX_PRECISION: [u32; MAX_DECIMAL_BYTES as usize] = {
+            let mut ret: [u32; 24] = [0; 24];
+            for (i, prec) in ret.iter_mut().enumerate() {
+                *prec = 2f64.powi((8 * (i + 1) - 1) as i32).log10().floor() as u32;
+            }
+
+            ret
+        };
+
+        //  Required bytes of precision, starts from 1
+        pub(super) static ref REQUIRED_LENGTH: [u32; MAX_DECIMAL_PRECISION as usize] = {
+            let mut ret: [u32; MAX_DECIMAL_PRECISION as usize] = [0; MAX_DECIMAL_PRECISION as usize];
+
+            for (i, required_len) in ret.iter_mut().enumerate() {
+                for j in 0..MAX_PRECISION.len() {
+                    if MAX_PRECISION[j] >= ((i+1) as u32) {
+                        *required_len = (j+1) as u32;
+                        break;
+                    }
+                }
+            }
+
+            ret
+        };
+
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 /// All data types are either primitives or nested types, which are maps, lists, or structs.
@@ -75,10 +112,27 @@ impl Type {
         matches!(self, Type::Struct(_))
     }
 
+    /// Return max precision for decimal given [`num_bytes`] bytes.
+    #[inline(always)]
+    pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
+        ensure_data_valid!(
+            num_bytes > 0 && num_bytes <= MAX_DECIMAL_BYTES,
+            "Decimal length larger than {MAX_DECIMAL_BYTES} is not supported: {num_bytes}",
+        );
+        Ok(MAX_PRECISION[num_bytes as usize - 1])
+    }
+
+    /// Returns minimum bytes required for decimal with [`precision`].
+    #[inline(always)]
+    pub fn decimal_required_bytes(precision: u32) -> Result<u32> {
+        ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
+        Ok(REQUIRED_LENGTH[precision as usize - 1])
+    }
+
     /// Creates  decimal type.
     #[inline(always)]
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
-        ensure_data_valid!(precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
+        ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
     }
 }
@@ -672,6 +726,7 @@ pub struct MapType {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
     use crate::spec::values::PrimitiveLiteral;
@@ -951,5 +1006,23 @@ mod tests {
                 .into(),
             }),
         );
+    }
+
+    #[test]
+    fn test_decimal_precision() {
+        let expected_max_precision = [
+            2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55,
+            57,
+        ];
+        for (i, max_precision) in expected_max_precision.iter().enumerate() {
+            assert_eq!(
+                *max_precision,
+                Type::decimal_max_precision(i as u32 + 1).unwrap(),
+                "Failed calculate max precision for {i}"
+            );
+        }
+
+        assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
+        assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
     }
 }
