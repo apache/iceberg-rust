@@ -15,17 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
-
-#![deny(missing_docs)]
-
-#[macro_use]
-extern crate derive_builder;
-
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-mod avro;
-pub mod spec;
+//! Avro related codes.
+#[allow(dead_code)]
+mod schema;

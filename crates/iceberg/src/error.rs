@@ -289,6 +289,12 @@ define_from_err!(
     "Failed to convert between uuid und iceberg value"
 );
 
+define_from_err!(
+    apache_avro::Error,
+    ErrorKind::DataInvalid,
+    "Failure in conversion with avro"
+);
+
 /// Helper macro to check arguments.
 ///
 ///
