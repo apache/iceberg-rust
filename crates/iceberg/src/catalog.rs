@@ -74,11 +74,11 @@ pub trait Catalog {
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: TableIdent, dest: TableIdent) -> Result<()>;
 
-    /// Commit a table to the catalog.
-    async fn commit_table(&self, table: TableIdent, commit: TableCommit) -> Result<Table>;
+    /// Update a table to the catalog.
+    async fn update_table(&self, table: TableIdent, commit: TableCommit) -> Result<Table>;
 
-    /// Commit multiple tables to the catalog as an atomic operation.
-    async fn commit_tables(&self, tables: Vec<(TableIdent, TableCommit)>) -> Result<()>;
+    /// Update multiple tables to the catalog as an atomic operation.
+    async fn update_tables(&self, tables: Vec<(TableIdent, TableCommit)>) -> Result<()>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
