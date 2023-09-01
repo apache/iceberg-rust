@@ -15,24 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! Table API for Apache Iceberg
 
-#![deny(missing_docs)]
+use crate::spec::TableMetadata;
+use std::collections::HashMap;
 
-#[macro_use]
-extern crate derive_builder;
-
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-/// There is no implementation for this trait, allow dead code for now, should
-/// be removed after we have one.
-#[allow(dead_code)]
-pub mod catalog;
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod spec;
+/// Table represents a table in the catalog.
+pub struct Table {
+    metadata: TableMetadata,
+    location: String,
+    config: HashMap<String, String>,
+}

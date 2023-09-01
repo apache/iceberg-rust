@@ -17,7 +17,8 @@
 
 //! Catalog API for Apache Iceberg
 
-use crate::spec::{PartitionSpec, Schema, SortOrder, TableMetadata};
+use crate::spec::{PartitionSpec, Schema, SortOrder};
+use crate::table::Table;
 use crate::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -95,13 +96,6 @@ pub struct Namespace {
 pub struct TableIdent {
     namespace: NamespaceIdent,
     name: String,
-}
-
-/// Table represents a table in the catalog.
-pub struct Table {
-    metadata: TableMetadata,
-    location: String,
-    config: HashMap<String, String>,
 }
 
 /// TableCreation represents the creation of a table in the catalog.
