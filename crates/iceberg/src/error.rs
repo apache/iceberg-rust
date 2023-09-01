@@ -295,6 +295,18 @@ define_from_err!(
     "Failure in conversion with avro"
 );
 
+define_from_err!(
+    opendal::Error,
+    ErrorKind::Unexpected,
+    "Failure in doing io operation"
+);
+
+define_from_err!(
+    url::ParseError,
+    ErrorKind::DataInvalid,
+    "Failed to parse url"
+);
+
 /// Helper macro to check arguments.
 ///
 ///

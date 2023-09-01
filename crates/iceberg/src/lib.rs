@@ -28,4 +28,5 @@ pub use error::ErrorKind;
 pub use error::Result;
 
 mod avro;
+pub mod io;
 pub mod spec;
