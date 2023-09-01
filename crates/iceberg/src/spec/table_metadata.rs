@@ -681,6 +681,8 @@ mod tests {
         SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
     };
 
+    use crate::error::{Error, ErrorKind};
+
     use super::{FormatVersion, MetadataLog, SnapshotLog};
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
@@ -1282,7 +1284,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_table_metadata_v2_schema_not_found() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV2CurrentSchemaNotFound.json")
@@ -1290,6 +1291,9 @@ mod tests {
 
         let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
 
-        desered.unwrap();
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "DataInvalid => No schema exists with the current schema id."
+        )
     }
 }
