@@ -26,17 +26,18 @@ use std::collections::HashMap;
 #[async_trait]
 pub trait Catalog {
     /// List namespaces from table.
-    async fn list_namespaces(&self, parent: Option<NamespaceIdent>) -> Result<Vec<NamespaceIdent>>;
+    async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
+        -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
         &self,
-        namespace: NamespaceIdent,
+        namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace>;
 
     /// Get a namespace information from the catalog.
-    async fn get_namespace(&self, namespace: NamespaceIdent) -> Result<Namespace>;
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace>;
 
     /// Update a namespace inside the catalog.
     ///
@@ -45,40 +46,40 @@ pub trait Catalog {
     /// The properties must be the full set of namespace.
     async fn update_namespace(
         &self,
-        namespace: NamespaceIdent,
+        namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()>;
 
     /// Drop a namespace from the catalog.
-    async fn drop_namespace(&self, namespace: NamespaceIdent) -> Result<()>;
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()>;
 
     /// List tables from namespace.
-    async fn list_tables(&self, namespace: NamespaceIdent) -> Result<Vec<TableIdent>>;
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>>;
 
     /// Create a new table inside the namespace.
     async fn create_table(
         &self,
-        namespace: NamespaceIdent,
+        namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table>;
 
     /// Load table from the catalog.
-    async fn load_table(&self, table: TableIdent) -> Result<Table>;
+    async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
     /// Drop a table from the catalog.
-    async fn drop_table(&self, table: TableIdent) -> Result<()>;
+    async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
-    async fn stat_table(&self, table: TableIdent) -> Result<bool>;
+    async fn stat_table(&self, table: &TableIdent) -> Result<bool>;
 
     /// Rename a table in the catalog.
-    async fn rename_table(&self, src: TableIdent, dest: TableIdent) -> Result<()>;
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
 
     /// Update a table to the catalog.
-    async fn update_table(&self, table: TableIdent, commit: TableCommit) -> Result<Table>;
+    async fn update_table(&self, table: &TableIdent, commit: TableCommit) -> Result<Table>;
 
     /// Update multiple tables to the catalog as an atomic operation.
-    async fn update_tables(&self, tables: Vec<(TableIdent, TableCommit)>) -> Result<()>;
+    async fn update_tables(&self, tables: &[(TableIdent, TableCommit)]) -> Result<()>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
