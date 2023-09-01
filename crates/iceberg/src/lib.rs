@@ -27,5 +27,10 @@ pub use error::Error;
 pub use error::ErrorKind;
 pub use error::Result;
 
+/// There is no implementation for this trait, allow dead code for now, should
+/// be removed after we have one.
+#[allow(dead_code)]
+pub mod catalog;
+
 mod avro;
 pub mod spec;

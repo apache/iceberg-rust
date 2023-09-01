@@ -45,6 +45,7 @@ bimap = "0.6"
 derive_builder = "0.12.0"
 either = "1"
 lazy_static = "1"
+async-trait = "0.1"
 
 
 [dev-dependencies]
