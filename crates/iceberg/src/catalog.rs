@@ -25,9 +25,6 @@ use std::collections::HashMap;
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog {
-    /// Get the catalog configuration for specified warehouse.
-    async fn get_config(&self, warehouse: Option<&str>) -> Result<CatalogConfig>;
-
     /// List namespaces from table.
     async fn list_namespaces(&self, parent: Option<NamespaceIdent>) -> Result<Vec<NamespaceIdent>>;
 
@@ -82,12 +79,6 @@ pub trait Catalog {
 
     /// Commit multiple tables to the catalog as an atomic operation.
     async fn commit_tables(&self, tables: Vec<(TableIdent, TableCommit)>) -> Result<()>;
-}
-
-/// The config the catalog.
-pub struct CatalogConfig {
-    defaults: HashMap<String, String>,
-    overrides: HashMap<String, String>,
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
