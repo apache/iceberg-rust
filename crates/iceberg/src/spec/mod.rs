@@ -18,6 +18,7 @@
 //! Spec for Iceberg.
 
 mod datatypes;
+mod manifest_list;
 mod partition;
 mod schema;
 mod snapshot;
@@ -27,6 +28,7 @@ mod transform;
 mod values;
 
 pub use datatypes::*;
+pub use manifest_list::*;
 pub use partition::*;
 pub use schema::*;
 pub use snapshot::*;
