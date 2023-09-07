@@ -215,7 +215,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 }
 
 /// Converting iceberg schema to avro schema.
-pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Result<AvroSchema> {
+pub fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Result<AvroSchema> {
     let mut converter = SchemaToAvroSchema {
         schema: name.to_string(),
     };
@@ -454,7 +454,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 }
 
 /// Converts avro schema to iceberg schema.
-pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
+pub fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
     if let AvroSchema::Record(_) = avro_schema {
         let mut converter = AvroSchemaToSchema { next_id: 0 };
         let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
