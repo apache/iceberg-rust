@@ -52,6 +52,8 @@ serde_json = "^1.0"
 serde_repr = "0.1.16"
 url = "2"
 uuid = "1.4.1"
+murmur3 = "0.5.2"
+
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

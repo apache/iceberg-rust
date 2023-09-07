@@ -19,8 +19,10 @@
 use crate::{spec::Transform, Result};
 use arrow_array::ArrayRef;
 
+mod bucket;
 mod identity;
 mod temporal;
+mod truncate;
 mod void;
 
 /// TransformFunction is a trait that defines the interface for all transform functions.
@@ -43,9 +45,11 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
         Transform::Month => Ok(Box::new(temporal::Month {})),
         Transform::Day => Ok(Box::new(temporal::Day {})),
         Transform::Hour => Ok(Box::new(temporal::Hour {})),
-        _ => Err(crate::error::Error::new(
+        Transform::Bucket(mod_n) => Ok(Box::new(bucket::Bucket::new(*mod_n))),
+        Transform::Truncate(width) => Ok(Box::new(truncate::Truncate::new(*width))),
+        Transform::Unknown => Err(crate::error::Error::new(
             crate::ErrorKind::FeatureUnsupported,
-            format!("Transform {:?} is not implemented", transform),
+            "Transform Unknown is not implemented",
         )),
     }
 }
