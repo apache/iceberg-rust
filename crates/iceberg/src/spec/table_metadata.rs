@@ -354,8 +354,7 @@ pub(super) mod _serde {
                     .schemas
                     .into_iter()
                     .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
-                    .collect::<Result<Vec<_>, Error>>()?
-                    .into_iter(),
+                    .collect::<Result<Vec<_>, Error>>()?,
             );
             Ok(TableMetadata {
                 format_version: FormatVersion::V2,
@@ -680,8 +679,6 @@ mod tests {
         PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
     };
-
-    use crate::error::{Error, ErrorKind};
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
 
