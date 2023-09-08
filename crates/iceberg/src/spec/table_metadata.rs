@@ -368,7 +368,7 @@ pub(super) mod _serde {
                 } else {
                     Err(self::Error::new(
                         ErrorKind::DataInvalid,
-                        &format!(
+                        format!(
                             "No schema exists with the current schema id {}.",
                             value.current_schema_id
                         ),
