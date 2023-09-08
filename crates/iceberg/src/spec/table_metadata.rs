@@ -1339,4 +1339,18 @@ mod tests {
             "data did not match any variant of untagged enum TableMetadataEnum"
         )
     }
+
+    #[test]
+    fn test_table_metadata_v2_missing_schemas() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV2MissingSchemas.json")
+                .unwrap();
+
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum TableMetadataEnum"
+        )
+    }
 }
