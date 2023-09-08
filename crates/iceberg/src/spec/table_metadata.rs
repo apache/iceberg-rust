@@ -368,7 +368,10 @@ pub(super) mod _serde {
                 } else {
                     Err(self::Error::new(
                         ErrorKind::DataInvalid,
-                        "No schema exists with the current schema id.",
+                        &format!(
+                            "No schema exists with the current schema id {}.",
+                            value.current_schema_id
+                        ),
                     ))
                 }?,
                 schemas,
@@ -1290,7 +1293,7 @@ mod tests {
 
         assert_eq!(
             desered.unwrap_err().to_string(),
-            "DataInvalid => No schema exists with the current schema id."
+            "DataInvalid => No schema exists with the current schema id 2."
         )
     }
 
