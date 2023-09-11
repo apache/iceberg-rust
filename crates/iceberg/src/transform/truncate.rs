@@ -48,7 +48,7 @@ impl TransformFunction for Truncate {
                     .as_any()
                     .downcast_ref::<arrow_array::Int32Array>()
                     .unwrap()
-                    .unary(|v| v - (((v % width) + width) % width));
+                    .unary(|v| v - v.rem_euclid(width));
                 Ok(Arc::new(res))
             }
             DataType::Int64 => {
