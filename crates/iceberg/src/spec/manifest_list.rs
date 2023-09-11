@@ -19,10 +19,8 @@
 
 use crate::{avro::schema_to_avro_schema, spec::Literal, Error};
 use apache_avro::{from_value, types::Value, Reader};
-use once_cell::sync::Lazy;
-use std::sync::Arc;
 
-use super::{FormatVersion, ListType, NestedField, NestedFieldRef, Schema, StructType};
+use super::{FormatVersion, Schema, StructType};
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -73,263 +71,273 @@ impl ManifestList {
         &self.entries
     }
 
-    const MANIFEST_PATH: Lazy<NestedFieldRef> = {
+    /// Get the v2 schema of the manifest list entry.
+    pub(crate) fn v2_schema() -> Schema {
+        let fields = vec![
+            _schema::MANIFEST_PATH.clone(),
+            _schema::MANIFEST_LENGTH.clone(),
+            _schema::PARTITION_SPEC_ID.clone(),
+            _schema::CONTENT.clone(),
+            _schema::SEQUENCE_NUMBER.clone(),
+            _schema::MIN_SEQUENCE_NUMBER.clone(),
+            _schema::ADDED_SNAPSHOT_ID.clone(),
+            _schema::ADDED_FILES_COUNT_V2.clone(),
+            _schema::EXISTING_FILES_COUNT_V2.clone(),
+            _schema::DELETED_FILES_COUNT_V2.clone(),
+            _schema::ADDED_ROWS_COUNT_V2.clone(),
+            _schema::EXISTING_ROWS_COUNT_V2.clone(),
+            _schema::DELETED_ROWS_COUNT_V2.clone(),
+            _schema::PARTITIONS.clone(),
+            _schema::KEY_METADATA.clone(),
+        ];
+        Schema::builder().with_fields(fields).build().unwrap()
+    }
+
+    /// Get the v1 schema of the manifest list entry.
+    pub(crate) fn v1_schema() -> Schema {
+        let fields = vec![
+            _schema::MANIFEST_PATH.clone(),
+            _schema::MANIFEST_LENGTH.clone(),
+            _schema::PARTITION_SPEC_ID.clone(),
+            _schema::ADDED_SNAPSHOT_ID.clone(),
+            _schema::ADDED_FILES_COUNT_V1.clone().to_owned(),
+            _schema::EXISTING_FILES_COUNT_V1.clone(),
+            _schema::DELETED_FILES_COUNT_V1.clone(),
+            _schema::ADDED_ROWS_COUNT_V1.clone(),
+            _schema::EXISTING_ROWS_COUNT_V1.clone(),
+            _schema::DELETED_ROWS_COUNT_V1.clone(),
+            _schema::PARTITIONS.clone(),
+            _schema::KEY_METADATA.clone(),
+        ];
+        Schema::builder().with_fields(fields).build().unwrap()
+    }
+}
+
+/// This is a helper module that defines the schema field of the manifest list entry.
+mod _schema {
+    use std::sync::Arc;
+
+    use once_cell::sync::Lazy;
+
+    use crate::spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type};
+
+    pub(crate) static MANIFEST_PATH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 500,
                 "manifest_path",
-                super::Type::Primitive(super::PrimitiveType::String),
+                Type::Primitive(PrimitiveType::String),
             ))
         })
     };
-    const MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
+    pub(crate) static MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 501,
                 "manifest_length",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
+    pub(crate) static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 502,
                 "partition_spec_id",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const CONTENT: Lazy<NestedFieldRef> = {
+    pub(crate) static CONTENT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 517,
                 "content",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    pub(crate) static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 515,
                 "sequence_number",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    pub(crate) static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 516,
                 "min_sequence_number",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
+    pub(crate) static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 503,
                 "added_snapshot_id",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 504,
                 "added_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 504,
                 "added_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 505,
                 "existing_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 505,
                 "existing_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 506,
                 "deleted_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 506,
                 "deleted_data_files_count",
-                super::Type::Primitive(super::PrimitiveType::Int),
+                Type::Primitive(PrimitiveType::Int),
             ))
         })
     };
-    const ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 512,
                 "added_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 512,
                 "added_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 513,
                 "existing_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 513,
                 "existing_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    pub(crate) static DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 514,
                 "deleted_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    pub(crate) static DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 514,
                 "deleted_rows_count",
-                super::Type::Primitive(super::PrimitiveType::Long),
+                Type::Primitive(PrimitiveType::Long),
             ))
         })
     };
-    const PARTITIONS: Lazy<NestedFieldRef> = {
+    pub(crate) static PARTITIONS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             // element type
             let fields = vec![
                 Arc::new(NestedField::required(
                     509,
                     "contains_null",
-                    super::Type::Primitive(super::PrimitiveType::Boolean),
+                    Type::Primitive(PrimitiveType::Boolean),
                 )),
                 Arc::new(NestedField::optional(
                     518,
                     "contains_nan",
-                    super::Type::Primitive(super::PrimitiveType::Boolean),
+                    Type::Primitive(PrimitiveType::Boolean),
                 )),
                 Arc::new(NestedField::optional(
                     510,
                     "lower_bound",
-                    super::Type::Primitive(super::PrimitiveType::Binary),
+                    Type::Primitive(PrimitiveType::Binary),
                 )),
                 Arc::new(NestedField::optional(
                     511,
                     "upper_bound",
-                    super::Type::Primitive(super::PrimitiveType::Binary),
+                    Type::Primitive(PrimitiveType::Binary),
                 )),
             ];
             let element_field = Arc::new(NestedField::required(
                 508,
                 "r_508",
-                super::Type::Struct(StructType::new(fields)),
+                Type::Struct(StructType::new(fields)),
             ));
             Arc::new(NestedField::optional(
                 507,
                 "partitions",
-                super::Type::List(ListType { element_field }),
+                Type::List(ListType { element_field }),
             ))
         })
     };
-    const KEY_METADATA: Lazy<NestedFieldRef> = {
+    pub(crate) static KEY_METADATA: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 519,
                 "key_metadata",
-                super::Type::Primitive(super::PrimitiveType::Binary),
+                Type::Primitive(PrimitiveType::Binary),
             ))
         })
     };
-
-    /// Get the v2 schema of the manifest list entry.
-    pub(crate) fn v2_schema() -> Schema {
-        let fields = vec![
-            Self::MANIFEST_PATH.clone(),
-            Self::MANIFEST_LENGTH.clone(),
-            Self::PARTITION_SPEC_ID.clone(),
-            Self::CONTENT.clone(),
-            Self::SEQUENCE_NUMBER.clone(),
-            Self::MIN_SEQUENCE_NUMBER.clone(),
-            Self::ADDED_SNAPSHOT_ID.clone(),
-            Self::ADDED_FILES_COUNT_V2.clone(),
-            Self::EXISTING_FILES_COUNT_V2.clone(),
-            Self::DELETED_FILES_COUNT_V2.clone(),
-            Self::ADDED_ROWS_COUNT_V2.clone(),
-            Self::EXISTING_ROWS_COUNT_V2.clone(),
-            Self::DELETED_ROWS_COUNT_V2.clone(),
-            Self::PARTITIONS.clone(),
-            Self::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
-    }
-    /// Get the v1 schema of the manifest list entry.
-    pub(crate) fn v1_schema() -> Schema {
-        let fields = vec![
-            Self::MANIFEST_PATH.clone(),
-            Self::MANIFEST_LENGTH.clone(),
-            Self::PARTITION_SPEC_ID.clone(),
-            Self::ADDED_SNAPSHOT_ID.clone(),
-            Self::ADDED_FILES_COUNT_V1.clone().to_owned(),
-            Self::EXISTING_FILES_COUNT_V1.clone(),
-            Self::DELETED_FILES_COUNT_V1.clone(),
-            Self::ADDED_ROWS_COUNT_V1.clone(),
-            Self::EXISTING_ROWS_COUNT_V1.clone(),
-            Self::DELETED_ROWS_COUNT_V1.clone(),
-            Self::PARTITIONS.clone(),
-            Self::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
-    }
 }
 
 /// Entry in a manifest list.
@@ -461,11 +469,11 @@ pub struct FieldSummary {
     upper_bound: Option<Literal>,
 }
 
+/// This is a helper module that defines types to help with serialization/deserialization.
+/// For deserialization the input first gets read into either the [ManifestListEntryV1] or [ManifestListEntryV2] struct
+/// and then converted into the [ManifestListEntry] struct. Serialization works the other way around.
+/// [ManifestListEntryV1] and [ManifestListEntryV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
-    /// This is a helper module that defines types to help with serialization/deserialization.
-    /// For deserialization the input first gets read into either the [ManifestListEntryV1] or [ManifestListEntryV2] struct
-    /// and then converted into the [ManifestListEntry] struct. Serialization works the other way around.
-    /// [ManifestListEntryV1] and [ManifestListEntryV2] are internal struct that are only used for serialization and deserialization.
     pub use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize, Serialize};
 
@@ -606,25 +614,23 @@ pub(super) mod _serde {
         partition_type: &StructType,
     ) -> Result<Vec<super::FieldSummary>, Error> {
         Ok(partitions
-            .and_then(|partitions| {
+            .map(|partitions| {
                 let partition_types = partition_type.fields();
                 if partitions.len() != partition_types.len() {
-                    return Some(Err(Error::new(
+                    return Err(Error::new(
                         crate::ErrorKind::DataInvalid,
                         format!(
                             "Invalid partition spec. Expected {} fields, got {}",
                             partition_types.len(),
                             partitions.len()
                         ),
-                    )));
+                    ));
                 }
-                Some(
-                    partitions
-                        .into_iter()
-                        .zip(partition_types)
-                        .map(|(v, field)| v.try_into(&field.field_type))
-                        .collect::<Result<Vec<_>, _>>(),
-                )
+                partitions
+                    .into_iter()
+                    .zip(partition_types)
+                    .map(|(v, field)| v.try_into(&field.field_type))
+                    .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?
             .unwrap_or_default())
@@ -793,9 +799,11 @@ mod test {
     use std::{fs, sync::Arc};
 
     use crate::spec::{
-        FieldSummary, Literal, ManifestContentType, ManifestList, ManifestListEntry, NestedField,
-        PrimitiveType, StructType, Type,
+        manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
+        ManifestList, ManifestListEntry, NestedField, PrimitiveType, StructType, Type,
     };
+
+    use super::_serde::ManifestListV2;
 
     #[test]
     fn test_parse_manifest_list_v1() {
@@ -876,6 +884,62 @@ mod test {
                 partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
                 key_metadata: vec![],
             }
+        );
+    }
+
+    #[test]
+    fn test_serialize_manifest_list_v1() {
+        let manifest_list:ManifestListV1 = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                manifest_length: 5806,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1646658105718557341,
+                added_data_files_count: Some(3),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![],
+                key_metadata: vec![],
+            }]
+        }.into();
+        let result = serde_json::to_string(&manifest_list).unwrap();
+        assert_eq!(
+            result,
+            r#"[{"manifest_path":"/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro","manifest_length":5806,"partition_spec_id":0,"added_snapshot_id":1646658105718557341,"added_data_files_count":3,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":null,"key_metadata":null}]"#
+        );
+    }
+
+    #[test]
+    fn test_serialize_manifest_list_v2() {
+        let manifest_list:ManifestListV2 = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 377075049360453639,
+                added_data_files_count: Some(1),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                key_metadata: vec![],
+            }]
+        }.try_into().unwrap();
+        let result = serde_json::to_string(&manifest_list).unwrap();
+        assert_eq!(
+            result,
+            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":0,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
         );
     }
 }
