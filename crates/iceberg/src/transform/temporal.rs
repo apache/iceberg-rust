@@ -104,7 +104,7 @@ impl TransformFunction for Day {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
-                        "Should not call internally for unsupport data type {:?}",
+                        "Should not call internally for unsupported data type {:?}",
                         input.data_type()
                     ),
                 ))
@@ -129,7 +129,7 @@ impl TransformFunction for Hour {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!(
-                        "Should not call internally for unsupport data type {:?}",
+                        "Should not call internally for unsupported data type {:?}",
                         input.data_type()
                     ),
                 ))
