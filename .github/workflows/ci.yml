@@ -39,18 +39,17 @@ jobs:
         uses: apache/skywalking-eyes/header@v0.5.0
 
       - name: Cargo format
-        run: cargo fmt --all -- --check
+        run: make check-fmt
 
       - name: Check diff
         run: git diff --exit-code
 
-  check_clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
       - name: Cargo clippy
-        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
+        run: make check-clippy
+
+      - name: Cargo sort
+        run: make cargo-sort
+
 
   build:
     runs-on: ${{ matrix.os }}
