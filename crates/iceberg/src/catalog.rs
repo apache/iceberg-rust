@@ -103,7 +103,7 @@ pub struct TableCreation {
     name: String,
     location: String,
     schema: Schema,
-    partition_spec: PartitionSpec,
+    partition_spec: Option<PartitionSpec>,
     sort_order: SortOrder,
     properties: HashMap<String, String>,
 }
