@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 /// Table represents a table in the catalog.
 pub struct Table {
+    metadata_location: String,
     metadata: TableMetadata,
-    location: String,
     config: HashMap<String, String>,
 }
