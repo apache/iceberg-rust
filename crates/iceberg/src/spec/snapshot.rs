@@ -77,7 +77,7 @@ pub struct Snapshot {
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
-    #[builder(setter(strip_option))]
+    #[builder(setter(strip_option), default = "None")]
     schema_id: Option<i64>,
 }
 
