@@ -243,7 +243,7 @@ impl OutputFile {
     }
 }
 
-// We introduce this becase I don't want to handle unsupported `Scheme` in every method.
+// We introduce this because I don't want to handle unsupported `Scheme` in every method.
 #[derive(Debug)]
 enum Storage {
     LocalFs {
