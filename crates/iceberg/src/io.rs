@@ -17,28 +17,14 @@
 
 //! File io implementation.
 //!
-//! File io is built on top of [`opendal`](https://docs.rs/opendal/latest/opendal/index.html), which already provided an abstraction over all kinds of storage.
-//!
 //! # How to build `FileIO`
 //!
 //! We provided a `FileIOBuilder` to build `FileIO` from scratch. For example:
 //! ```rust
-//! use iceberg::io::{FileIOBuilder, S3_ARGS_BUCKET, S3_ARGS_REGION};
+//! use iceberg::io::{FileIOBuilder, S3_REGION};
 //!
 //! let file_io = FileIOBuilder::new("s3")
-//!     .with_arg(S3_ARGS_BUCKET, "test_bucket")
-//!     .with_arg(S3_ARGS_REGION, "us-east-1")
-//!     .build()
-//!     .unwrap();
-//! ```
-//!
-//! We also provided a convenient method to build `FileIO` from url:
-//!
-//! ```rust
-//! use iceberg::io::{FileIO, S3_ARGS_REGION};
-//! let file_io = FileIO::build_from_url("s3a://test_bucket/warehouse")
-//!     .unwrap()
-//!     .with_arg(S3_ARGS_REGION, "us-east-1")
+//!     .with_prop(S3_REGION, "us-east-1")
 //!     .build()
 //!     .unwrap();
 //! ```
@@ -56,55 +42,51 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{error::Result, Error, ErrorKind};
 use futures::{AsyncRead, AsyncSeek, AsyncWrite};
+use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
 use url::Url;
 
-/// Following are arguments for s3 operator.
-/// s3 root
-pub const S3_ARGS_ROOT: &str = "root";
-/// s3 bucket
-pub const S3_ARGS_BUCKET: &str = "bucket";
-/// s3 endpoint
-pub const S3_ARGS_ENDPOINT: &str = "endpoint";
-/// s3 region
-pub const S3_ARGS_REGION: &str = "region";
-/// s3 access key
-pub const S3_ARGS_ACCESS_KEY_ID: &str = "access_key_id";
-/// s3 access secret
-pub const S3_ARGS_ACCESS_KEY: &str = "secret_access_key";
+/// Following are arguments for s3 file io.
+/// S3 endopint.
+pub const S3_ENDPOINT: &str = "s3.endpoint";
+/// S3 access key id.
+pub const S3_ACCESS_KEY_ID: &str = "s3.access-key-id";
+/// S3 secret access key.
+pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
+/// S3 region.
+pub const S3_REGION: &str = "s3.region";
+
+/// A mapping from iceberg s3 configuration key to [`opendal::Operator`] configuration key.
+static S3_CONFIG_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    let mut m = HashMap::with_capacity(4);
+    m.insert(S3_ENDPOINT, "endpoint");
+    m.insert(S3_ACCESS_KEY_ID, "access_key_id");
+    m.insert(S3_SECRET_ACCESS_KEY, "secret_access_key");
+    m.insert(S3_REGION, "region");
+
+    m
+});
 
 const ROOT_PATH: &str = "/";
-/// FileIO implementation.
+/// FileIO implementation, used to manipulate files in underlying storage.
 ///
 /// # Note
 ///
-/// `FileIO` keep a [`root_uri`](FileIO::root_uri) to indicate the root path of file io. The arguments passed to operations should be in one for following format:
-/// * Absolute path which starts with [`root_uri`](FileIO::root_uri).
-/// * Relative path which is relative to [`root_uri`](FileIO::root_uri).
-///
-/// For example, if `FileIO` is built from `s3a://test_bucket/warehouse`, then [`root_uri`](FileIO::root_uri) is `s3a://test_bucket/`. And then the following paths are valid:
-///
-/// * `s3a://test_bucket/warehouse/iceberg/`
-/// * `warehouse/iceberg/`, it will be treated same as above.
+/// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
+/// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
 #[derive(Clone, Debug)]
 pub struct FileIO {
-    root_uri: Arc<str>,
-    op: Operator,
+    inner: Arc<Storage>,
 }
 
 /// Builder for [`FileIO`].
-///
-/// # Note
-///
-/// We should refer to [`opendal`](https://docs.rs/opendal/0.39.0/opendal/) for what args should be passed to operator.
-/// The special `root` argument will always be set to `/` for file io.
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
     ///
     /// If this is `None`, then [`FileIOBuilder::build`](FileIOBuilder::build) will build a local file io.
     scheme_str: Option<String>,
     /// Arguments for operator.
-    args: HashMap<String, String>,
+    props: HashMap<String, String>,
 }
 
 impl FileIOBuilder {
@@ -112,7 +94,7 @@ impl FileIOBuilder {
     pub fn new(scheme_str: impl ToString) -> Self {
         Self {
             scheme_str: Some(scheme_str.to_string()),
-            args: HashMap::default(),
+            props: HashMap::default(),
         }
     }
 
@@ -120,120 +102,81 @@ impl FileIOBuilder {
     pub fn new_local_file_io() -> Self {
         Self {
             scheme_str: None,
-            args: HashMap::default(),
+            props: HashMap::default(),
         }
     }
 
     /// Add argument for operator.
-    pub fn with_arg(mut self, key: impl ToString, value: impl ToString) -> Self {
-        self.args.insert(key.to_string(), value.to_string());
+    pub fn with_prop(mut self, key: impl ToString, value: impl ToString) -> Self {
+        self.props.insert(key.to_string(), value.to_string());
         self
     }
 
     /// Add argument for operator.
-    pub fn with_args(
+    pub fn with_props(
         mut self,
         args: impl IntoIterator<Item = (impl ToString, impl ToString)>,
     ) -> Self {
-        self.args
+        self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
         self
     }
 
     /// Builds [`FileIO`].
-    pub fn build(mut self) -> Result<FileIO> {
-        let scheme = FileIO::parse_scheme(self.scheme_str.as_deref())?;
-        // Set root to "/" for file io.
-        self.args
-            .insert(S3_ARGS_ROOT.to_string(), ROOT_PATH.to_string());
-        let op = Operator::via_map(scheme, self.args)?;
-        let op_info = op.info();
-
-        let root_uri = match self.scheme_str.as_deref() {
-            Some(s) if op_info.name().is_empty() => format!("{s}:{ROOT_PATH}"),
-            Some(s) => format!("{s}://{}{ROOT_PATH}", op_info.name()),
-            None => ROOT_PATH.to_string(),
-        };
-
+    pub fn build(self) -> Result<FileIO> {
+        let storage = Storage::build(self)?;
         Ok(FileIO {
-            root_uri: Arc::from(root_uri),
-            op,
+            inner: Arc::new(storage),
         })
     }
 }
 
 impl FileIO {
-    /// Creates builder from url.
-    pub fn build_from_url(path: impl AsRef<str>) -> Result<FileIOBuilder> {
-        let url = Url::parse(path.as_ref())?;
-
-        let scheme = Self::parse_scheme(Some(url.scheme()))?;
-
-        let bucket = url.host_str().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid s3 url: {}, missing bucket", path.as_ref()),
-            )
-        });
-
-        match scheme {
-            Scheme::Fs => Ok(FileIOBuilder::new(url.scheme())),
-            Scheme::S3 => Ok(FileIOBuilder::new(url.scheme()).with_arg(S3_ARGS_BUCKET, bucket?)),
-            _ => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now",),
-            )),
-        }
-    }
-
-    /// Parse scheme.
-    fn parse_scheme(scheme: Option<&str>) -> Result<Scheme> {
-        match scheme {
-            Some("file") | None => Ok(Scheme::Fs),
-            Some("s3") | Some("s3a") => Ok(Scheme::S3),
-            Some(s) => Ok(s.parse::<Scheme>()?),
-        }
-    }
-
     /// Deletes file.
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        Ok(self.op.delete(self.relative_path(path.as_ref())).await?)
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        Ok(op.delete(relative_path).await?)
     }
 
     /// Check file exists.
     pub async fn is_exist(&self, path: impl AsRef<str>) -> Result<bool> {
-        Ok(self.op.is_exist(path.as_ref()).await?)
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        Ok(op.is_exist(relative_path).await?)
     }
 
     /// Creates input file.
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let path = path.as_ref().to_string();
+        let relative_path_pos = path.len() - relative_path.len();
         Ok(InputFile {
-            op: self.op.clone(),
-            path: self.relative_path(path.as_ref()).to_string(),
+            op,
+            path,
+            relative_path_pos,
         })
     }
 
     /// Creates output file.
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        let path = path.as_ref().to_string();
+        let relative_path_pos = path.len() - relative_path.len();
         Ok(OutputFile {
-            op: self.op.clone(),
-            path: self.relative_path(path.as_ref()).to_string(),
+            op,
+            path,
+            relative_path_pos,
         })
-    }
-
-    fn relative_path<'a>(&self, path: &'a str) -> &'a str {
-        if path.starts_with(self.root_uri.as_ref()) {
-            &path[self.root_uri.len()..]
-        } else {
-            path
-        }
     }
 }
 
 /// Input file implementation.
+#[derive(Debug)]
 pub struct InputFile {
     op: Operator,
+    // Absolution path of file.
     path: String,
+    // Relative path of file to uri, starts at [`relative_path_pos`]
+    relative_path_pos: usize,
 }
 
 /// Input stream for reading.
@@ -242,26 +185,33 @@ pub trait InputStream: AsyncRead + AsyncSeek {}
 impl<T> InputStream for T where T: AsyncRead + AsyncSeek {}
 
 impl InputFile {
-    /// Relative path to root uri.
+    /// Absolute path to root uri.
     pub fn location(&self) -> &str {
         &self.path
     }
 
     /// Check if file exists.
     pub async fn exists(&self) -> Result<bool> {
-        Ok(self.op.is_exist(&self.path).await?)
+        Ok(self
+            .op
+            .is_exist(&self.path[self.relative_path_pos..])
+            .await?)
     }
 
     /// Creates [`InputStream`] for reading.
     pub async fn reader(&self) -> Result<impl InputStream> {
-        Ok(self.op.reader(&self.path).await?)
+        Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
 
 /// Output file implementation.
+#[derive(Debug)]
 pub struct OutputFile {
     op: Operator,
+    // Absolution path of file.
     path: String,
+    // Relative path of file to uri, starts at [`relative_path_pos`]
+    relative_path_pos: usize,
 }
 
 impl OutputFile {
@@ -272,7 +222,10 @@ impl OutputFile {
 
     /// Checks if file exists.
     pub async fn exists(&self) -> Result<bool> {
-        Ok(self.op.is_exist(&self.path).await?)
+        Ok(self
+            .op
+            .is_exist(&self.path[self.relative_path_pos..])
+            .await?)
     }
 
     /// Converts into [`InputFile`].
@@ -280,12 +233,114 @@ impl OutputFile {
         InputFile {
             op: self.op,
             path: self.path,
+            relative_path_pos: self.relative_path_pos,
         }
     }
 
     /// Creates output file for writing.
     pub async fn writer(&self) -> Result<impl AsyncWrite> {
-        Ok(self.op.writer(&self.path).await?)
+        Ok(self.op.writer(&self.path[self.relative_path_pos..]).await?)
+    }
+}
+
+// We introduce this becase I don't want to handle unsupported `Scheme` in every method.
+#[derive(Debug)]
+enum Storage {
+    LocalFs {
+        op: Operator,
+    },
+    S3 {
+        scheme_str: String,
+        props: HashMap<String, String>,
+    },
+}
+
+impl Storage {
+    /// Creates operator from path.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    ///
+    /// # Returns
+    ///
+    /// The return value consists of two parts:
+    ///
+    /// * An [`opendal::Operator`] instance used to operate on file.
+    /// * Relative path to the root uri of [`opendal::Operator`].
+    ///
+    fn create_operator<'a>(&self, path: &'a impl AsRef<str>) -> Result<(Operator, &'a str)> {
+        let path = path.as_ref();
+        match self {
+            Storage::LocalFs { op } => {
+                if let Some(stripped) = path.strip_prefix("file:/") {
+                    Ok((op.clone(), stripped))
+                } else {
+                    Ok((op.clone(), &path[1..]))
+                }
+            }
+            Storage::S3 { scheme_str, props } => {
+                let mut props = props.clone();
+                let url = Url::parse(path)?;
+                let bucket = url.host_str().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid s3 url: {}, missing bucket", path),
+                    )
+                })?;
+
+                props.insert("bucket".to_string(), bucket.to_string());
+
+                let prefix = format!("{}://{}/", scheme_str, bucket);
+                if path.starts_with(&prefix) {
+                    Ok((Operator::via_map(Scheme::S3, props)?, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid s3 url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Parse scheme.
+    fn parse_scheme(scheme: &str) -> Result<Scheme> {
+        match scheme {
+            "file" | "" => Ok(Scheme::Fs),
+            "s3" | "s3a" => Ok(Scheme::S3),
+            s => Ok(s.parse::<Scheme>()?),
+        }
+    }
+
+    /// Convert iceberg config to opendal config.
+    fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
+        let scheme_str = file_io_builder.scheme_str.unwrap_or("".to_string());
+        let scheme = Self::parse_scheme(&scheme_str)?;
+        let mut new_props = HashMap::default();
+        new_props.insert("root".to_string(), ROOT_PATH.to_string());
+
+        match scheme {
+            Scheme::Fs => Ok(Self::LocalFs {
+                op: Operator::via_map(Scheme::Fs, new_props)?,
+            }),
+            Scheme::S3 => {
+                for prop in file_io_builder.props {
+                    if let Some(op_key) = S3_CONFIG_MAPPING.get(prop.0.as_str()) {
+                        new_props.insert(op_key.to_string(), prop.1);
+                    }
+                }
+
+                Ok(Self::S3 {
+                    scheme_str,
+                    props: new_props,
+                })
+            }
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Constructing file io from scheme: {scheme} not supported now",),
+            )),
+        }
     }
 }
 
@@ -300,8 +355,6 @@ mod tests {
     use futures::{AsyncReadExt, AsyncWriteExt};
 
     use tempdir::TempDir;
-
-    use crate::io::S3_ARGS_REGION;
 
     use super::{FileIO, FileIOBuilder};
 
@@ -336,7 +389,7 @@ mod tests {
 
         assert!(input_file.exists().await.unwrap());
         // Remove heading slash
-        assert_eq!(&full_path[1..], input_file.location());
+        assert_eq!(&full_path, input_file.location());
         let read_content = read_from_file(full_path).await;
 
         assert_eq!(content, &read_content);
@@ -389,38 +442,10 @@ mod tests {
             writer.close().await.unwrap();
         }
 
-        assert_eq!(&full_path[1..], output_file.location());
+        assert_eq!(&full_path, output_file.location());
 
         let read_content = read_from_file(full_path).await;
 
         assert_eq!(content, &read_content);
-    }
-
-    #[tokio::test]
-    async fn test_create_s3_file_io() {
-        let file_io = FileIO::build_from_url("s3a://test_bucket/warehouse")
-            .unwrap()
-            .with_arg("root", "xx")
-            .with_arg(S3_ARGS_REGION, "us-east-1")
-            .build()
-            .unwrap();
-
-        assert_eq!("s3a://test_bucket/", file_io.root_uri.as_ref());
-    }
-
-    #[tokio::test]
-    async fn test_create_local_file_io() {
-        let file_io = FileIO::build_from_url("file:/warehouse")
-            .unwrap()
-            .build()
-            .unwrap();
-
-        assert_eq!("file:/", file_io.root_uri.as_ref());
-
-        let file_io = FileIO::build_from_url("/warehouse");
-        assert!(file_io.is_err());
-
-        let file_io = FileIOBuilder::new_local_file_io().build().unwrap();
-        assert_eq!("/", file_io.root_uri.as_ref());
     }
 }
