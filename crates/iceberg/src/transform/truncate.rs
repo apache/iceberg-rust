@@ -32,6 +32,13 @@ impl Truncate {
     pub fn new(width: u32) -> Self {
         Self { width }
     }
+
+    fn truncate_str_by_char(s: &str, max_chars: usize) -> &str {
+        match s.char_indices().nth(max_chars) {
+            None => s,
+            Some((idx, _)) => &s[..idx],
+        }
+    }
 }
 
 impl TransformFunction for Truncate {
@@ -79,7 +86,7 @@ impl TransformFunction for Truncate {
                         .downcast_ref::<arrow_array::StringArray>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| &v[..len])),
+                        .map(|v| v.map(|v| Self::truncate_str_by_char(v, len))),
                 );
                 Ok(Arc::new(res))
             }
@@ -91,7 +98,7 @@ impl TransformFunction for Truncate {
                         .downcast_ref::<arrow_array::LargeStringArray>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| &v[..len])),
+                        .map(|v| v.map(|v| Self::truncate_str_by_char(v, len))),
                 );
                 Ok(Arc::new(res))
             }
@@ -112,7 +119,7 @@ mod test {
 
     // Test case ref from: https://iceberg.apache.org/spec/#truncate-transform-details
     #[test]
-    fn test_truncate() {
+    fn test_truncate_simple() {
         // test truncate int
         let input = Arc::new(Int32Array::from(vec![1, -1]));
         let res = super::Truncate::new(10).transform(input).unwrap();
@@ -172,6 +179,39 @@ mod test {
                 .unwrap()
                 .value(0),
             "ice"
+        );
+    }
+
+    #[test]
+    fn test_string_truncate() {
+        let test1 = "イロハニホヘト";
+        let test1_2_expected = "イロ";
+        assert_eq!(
+            super::Truncate::truncate_str_by_char(test1, 2),
+            test1_2_expected
+        );
+
+        let test1_3_expected = "イロハ";
+        assert_eq!(
+            super::Truncate::truncate_str_by_char(test1, 3),
+            test1_3_expected
+        );
+
+        let test2 = "щщаεはчωいにπάほхεろへσκζ";
+        let test2_7_expected = "щщаεはчω";
+        assert_eq!(
+            super::Truncate::truncate_str_by_char(test2, 7),
+            test2_7_expected
+        );
+
+        let test3 = "\u{FFFF}\u{FFFF}";
+        assert_eq!(super::Truncate::truncate_str_by_char(test3, 2), test3);
+
+        let test4 = "\u{10000}\u{10000}";
+        let test4_1_expected = "\u{10000}";
+        assert_eq!(
+            super::Truncate::truncate_str_by_char(test4, 1),
+            test4_1_expected
         );
     }
 }
