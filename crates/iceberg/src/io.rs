@@ -179,7 +179,7 @@ pub struct InputFile {
     relative_path_pos: usize,
 }
 
-/// Input stream for reading.
+/// Trait for reading file.
 pub trait FileRead: AsyncRead + AsyncSeek {}
 
 impl<T> FileRead for T where T: AsyncRead + AsyncSeek {}
@@ -203,6 +203,11 @@ impl InputFile {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
+
+/// Trait for writing file.
+pub trait FileWrite: AsyncWrite {}
+
+impl<T> FileWrite for T where T: AsyncWrite {}
 
 /// Output file is used for writing to files..
 #[derive(Debug)]
@@ -238,7 +243,7 @@ impl OutputFile {
     }
 
     /// Creates output file for writing.
-    pub async fn writer(&self) -> Result<impl AsyncWrite> {
+    pub async fn writer(&self) -> Result<impl FileWrite> {
         Ok(self.op.writer(&self.path[self.relative_path_pos..]).await?)
     }
 }
