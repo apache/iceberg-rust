@@ -180,9 +180,9 @@ pub struct InputFile {
 }
 
 /// Input stream for reading.
-pub trait InputStream: AsyncRead + AsyncSeek {}
+pub trait FileRead: AsyncRead + AsyncSeek {}
 
-impl<T> InputStream for T where T: AsyncRead + AsyncSeek {}
+impl<T> FileRead for T where T: AsyncRead + AsyncSeek {}
 
 impl InputFile {
     /// Absolute path to root uri.
@@ -199,7 +199,7 @@ impl InputFile {
     }
 
     /// Creates [`InputStream`] for reading.
-    pub async fn reader(&self) -> Result<impl InputStream> {
+    pub async fn reader(&self) -> Result<impl FileRead> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
