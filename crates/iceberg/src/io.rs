@@ -46,7 +46,7 @@ use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
 use url::Url;
 
-/// Following are arguments for s3 file io.
+/// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
 /// S3 endopint.
 pub const S3_ENDPOINT: &str = "s3.endpoint";
 /// S3 access key id.
@@ -67,7 +67,7 @@ static S3_CONFIG_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(
     m
 });
 
-const ROOT_PATH: &str = "/";
+const DEFAULT_ROOT_PATH: &str = "/";
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
 /// # Note
@@ -99,7 +99,7 @@ impl FileIOBuilder {
     }
 
     /// Creates a new builder for local file io.
-    pub fn new_local_file_io() -> Self {
+    pub fn new_fs_io() -> Self {
         Self {
             scheme_str: None,
             props: HashMap::default(),
@@ -169,7 +169,7 @@ impl FileIO {
     }
 }
 
-/// Input file implementation.
+/// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
     op: Operator,
@@ -204,7 +204,7 @@ impl InputFile {
     }
 }
 
-/// Output file implementation.
+/// Output file is used for writing to files..
 #[derive(Debug)]
 pub struct OutputFile {
     op: Operator,
@@ -318,7 +318,7 @@ impl Storage {
         let scheme_str = file_io_builder.scheme_str.unwrap_or("".to_string());
         let scheme = Self::parse_scheme(&scheme_str)?;
         let mut new_props = HashMap::default();
-        new_props.insert("root".to_string(), ROOT_PATH.to_string());
+        new_props.insert("root".to_string(), DEFAULT_ROOT_PATH.to_string());
 
         match scheme {
             Scheme::Fs => Ok(Self::LocalFs {
@@ -359,7 +359,7 @@ mod tests {
     use super::{FileIO, FileIOBuilder};
 
     fn create_local_file_io() -> FileIO {
-        FileIOBuilder::new_local_file_io().build().unwrap()
+        FileIOBuilder::new_fs_io().build().unwrap()
     }
 
     fn write_to_file<P: AsRef<Path>>(s: &str, path: P) {
