@@ -24,5 +24,4 @@ use std::collections::HashMap;
 pub struct Table {
     metadata_location: String,
     metadata: TableMetadata,
-    config: HashMap<String, String>,
 }
