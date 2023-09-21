@@ -18,7 +18,6 @@
 //! Table API for Apache Iceberg
 
 use crate::spec::TableMetadata;
-use std::collections::HashMap;
 
 /// Table represents a table in the catalog.
 pub struct Table {
