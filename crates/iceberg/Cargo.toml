@@ -29,6 +29,7 @@ keywords = ["iceberg"]
 [dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.15"
+async-trait = "0.1"
 bimap = "0.6"
 bitvec = "1.0.1"
 chrono = "0.4"
