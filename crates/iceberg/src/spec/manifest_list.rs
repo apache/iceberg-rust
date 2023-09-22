@@ -72,21 +72,21 @@ impl ManifestList {
     /// Get the v2 schema of the manifest list entry.
     pub(crate) fn v2_schema() -> Schema {
         let fields = vec![
-            _schema::MANIFEST_PATH.clone(),
-            _schema::MANIFEST_LENGTH.clone(),
-            _schema::PARTITION_SPEC_ID.clone(),
-            _schema::CONTENT.clone(),
-            _schema::SEQUENCE_NUMBER.clone(),
-            _schema::MIN_SEQUENCE_NUMBER.clone(),
-            _schema::ADDED_SNAPSHOT_ID.clone(),
-            _schema::ADDED_FILES_COUNT_V2.clone(),
-            _schema::EXISTING_FILES_COUNT_V2.clone(),
-            _schema::DELETED_FILES_COUNT_V2.clone(),
-            _schema::ADDED_ROWS_COUNT_V2.clone(),
-            _schema::EXISTING_ROWS_COUNT_V2.clone(),
-            _schema::DELETED_ROWS_COUNT_V2.clone(),
-            _schema::PARTITIONS.clone(),
-            _schema::KEY_METADATA.clone(),
+            _const_fields::MANIFEST_PATH.clone(),
+            _const_fields::MANIFEST_LENGTH.clone(),
+            _const_fields::PARTITION_SPEC_ID.clone(),
+            _const_fields::CONTENT.clone(),
+            _const_fields::SEQUENCE_NUMBER.clone(),
+            _const_fields::MIN_SEQUENCE_NUMBER.clone(),
+            _const_fields::ADDED_SNAPSHOT_ID.clone(),
+            _const_fields::ADDED_FILES_COUNT_V2.clone(),
+            _const_fields::EXISTING_FILES_COUNT_V2.clone(),
+            _const_fields::DELETED_FILES_COUNT_V2.clone(),
+            _const_fields::ADDED_ROWS_COUNT_V2.clone(),
+            _const_fields::EXISTING_ROWS_COUNT_V2.clone(),
+            _const_fields::DELETED_ROWS_COUNT_V2.clone(),
+            _const_fields::PARTITIONS.clone(),
+            _const_fields::KEY_METADATA.clone(),
         ];
         Schema::builder().with_fields(fields).build().unwrap()
     }
@@ -94,25 +94,25 @@ impl ManifestList {
     /// Get the v1 schema of the manifest list entry.
     pub(crate) fn v1_schema() -> Schema {
         let fields = vec![
-            _schema::MANIFEST_PATH.clone(),
-            _schema::MANIFEST_LENGTH.clone(),
-            _schema::PARTITION_SPEC_ID.clone(),
-            _schema::ADDED_SNAPSHOT_ID.clone(),
-            _schema::ADDED_FILES_COUNT_V1.clone().to_owned(),
-            _schema::EXISTING_FILES_COUNT_V1.clone(),
-            _schema::DELETED_FILES_COUNT_V1.clone(),
-            _schema::ADDED_ROWS_COUNT_V1.clone(),
-            _schema::EXISTING_ROWS_COUNT_V1.clone(),
-            _schema::DELETED_ROWS_COUNT_V1.clone(),
-            _schema::PARTITIONS.clone(),
-            _schema::KEY_METADATA.clone(),
+            _const_fields::MANIFEST_PATH.clone(),
+            _const_fields::MANIFEST_LENGTH.clone(),
+            _const_fields::PARTITION_SPEC_ID.clone(),
+            _const_fields::ADDED_SNAPSHOT_ID.clone(),
+            _const_fields::ADDED_FILES_COUNT_V1.clone().to_owned(),
+            _const_fields::EXISTING_FILES_COUNT_V1.clone(),
+            _const_fields::DELETED_FILES_COUNT_V1.clone(),
+            _const_fields::ADDED_ROWS_COUNT_V1.clone(),
+            _const_fields::EXISTING_ROWS_COUNT_V1.clone(),
+            _const_fields::DELETED_ROWS_COUNT_V1.clone(),
+            _const_fields::PARTITIONS.clone(),
+            _const_fields::KEY_METADATA.clone(),
         ];
         Schema::builder().with_fields(fields).build().unwrap()
     }
 }
 
 /// This is a helper module that defines the schema field of the manifest list entry.
-mod _schema {
+mod _const_fields {
     use std::sync::Arc;
 
     use once_cell::sync::Lazy;
