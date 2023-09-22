@@ -43,8 +43,6 @@ pub struct ManifestList {
 
 impl ManifestList {
     /// Parse manifest list from bytes.
-    ///
-    /// QUESTION: Will we have more than one manifest list in a single file?
     pub fn parse_with_version(
         bs: &[u8],
         version: FormatVersion,
@@ -609,7 +607,7 @@ pub(super) mod _serde {
         }
     }
 
-    fn try_convert_to_field_sumary(
+    fn try_convert_to_field_summary(
         partitions: Option<Vec<FieldSummary>>,
         partition_type: &StructType,
     ) -> Result<Vec<super::FieldSummary>, Error> {
@@ -640,7 +638,7 @@ pub(super) mod _serde {
         /// Converts the [ManifestListEntryV2] into a [ManifestListEntry].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
         pub fn try_into(self, partition_type: &StructType) -> Result<ManifestListEntry, Error> {
-            let partitions = try_convert_to_field_sumary(self.partitions, partition_type)?;
+            let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
             Ok(ManifestListEntry {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
@@ -665,7 +663,7 @@ pub(super) mod _serde {
         /// Converts the [ManifestListEntryV1] into a [ManifestListEntry].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
         pub fn try_into(self, partition_type: &StructType) -> Result<ManifestListEntry, Error> {
-            let partitions = try_convert_to_field_sumary(self.partitions, partition_type)?;
+            let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
             Ok(ManifestListEntry {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
@@ -733,37 +731,37 @@ pub(super) mod _serde {
                 added_data_files_count: value.added_data_files_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "added_data_files_count in ManifestListEntryV2 shold be require",
+                        "added_data_files_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 existing_data_files_count: value.existing_data_files_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "existing_data_files_count in ManifestListEntryV2 shold be require",
+                        "existing_data_files_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 deleted_data_files_count: value.deleted_data_files_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "deleted_data_files_count in ManifestListEntryV2 shold be require",
+                        "deleted_data_files_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 added_rows_count: value.added_rows_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "added_rows_count in ManifestListEntryV2 shold be require",
+                        "added_rows_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 existing_rows_count: value.existing_rows_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "existing_rows_count in ManifestListEntryV2 shold be require",
+                        "existing_rows_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 deleted_rows_count: value.deleted_rows_count.ok_or_else(|| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
-                        "deleted_rows_count in ManifestListEntryV2 shold be require",
+                        "deleted_rows_count in ManifestListEntryV2 should be require",
                     )
                 })?,
                 partitions,
