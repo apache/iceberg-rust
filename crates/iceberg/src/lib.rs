@@ -27,10 +27,16 @@ pub use error::Error;
 pub use error::ErrorKind;
 pub use error::Result;
 
-/// There is no implementation for this trait, allow dead code for now, should
-/// be removed after we have one.
-#[allow(dead_code)]
-pub mod catalog;
+mod catalog;
+pub use catalog::Catalog;
+pub use catalog::Namespace;
+pub use catalog::NamespaceIdent;
+pub use catalog::TableCommit;
+pub use catalog::TableCreation;
+pub use catalog::TableIdent;
+pub use catalog::TableRequirement;
+pub use catalog::TableUpdate;
+
 #[allow(dead_code)]
 pub mod table;
 
