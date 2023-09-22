@@ -29,6 +29,9 @@ keywords = ["iceberg"]
 [dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.15"
+arrow-arith = { version = ">=46" }
+arrow-array = { version = ">=46" }
+arrow-schema = { version = ">=46" }
 async-trait = "0.1"
 bimap = "0.6"
 bitvec = "1.0.1"
@@ -38,6 +41,7 @@ either = "1"
 futures = "0.3"
 itertools = "0.11"
 lazy_static = "1"
+murmur3 = "0.5.2"
 once_cell = "1"
 opendal = "0.39"
 ordered-float = "3.7.0"

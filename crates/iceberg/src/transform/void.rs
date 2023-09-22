@@ -15,27 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+use crate::Result;
+use arrow_array::{new_null_array, ArrayRef};
 
-#![deny(missing_docs)]
+use super::TransformFunction;
 
-#[macro_use]
-extern crate derive_builder;
+pub struct Void {}
 
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-/// There is no implementation for this trait, allow dead code for now, should
-/// be removed after we have one.
-#[allow(dead_code)]
-pub mod catalog;
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-pub mod transform;
+impl TransformFunction for Void {
+    fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
+        Ok(new_null_array(input.data_type(), input.len()))
+    }
+}
