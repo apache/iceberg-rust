@@ -84,12 +84,56 @@ pub trait Catalog {
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
+///
+/// The namespace identifier is a list of strings, where each string is a
+/// component of the namespace. It's catalog implementer's responsibility to
+/// handle the namespace identifier correctly.
 pub struct NamespaceIdent(Vec<String>);
+
+impl NamespaceIdent {
+    /// Create a new namespace identifier with only one level.
+    pub fn new(name: String) -> Self {
+        Self(vec![name])
+    }
+
+    /// Create a multi-level namespace identifier from vector.
+    pub fn from_vec(names: Vec<String>) -> Self {
+        Self(names)
+    }
+}
+
+impl AsRef<Vec<String>> for NamespaceIdent {
+    fn as_ref(&self) -> &Vec<String> {
+        &self.0
+    }
+}
 
 /// Namespace represents a namespace in the catalog.
 pub struct Namespace {
     name: NamespaceIdent,
     properties: HashMap<String, String>,
+}
+
+impl Namespace {
+    /// Create a new namespace.
+    pub fn new(name: NamespaceIdent) -> Self {
+        Self::with_properties(name, HashMap::default())
+    }
+
+    /// Create a new namespace with properties.
+    pub fn with_properties(name: NamespaceIdent, properties: HashMap<String, String>) -> Self {
+        Self { name, properties }
+    }
+
+    /// Get the name of the namespace.
+    pub fn name(&self) -> &NamespaceIdent {
+        &self.name
+    }
+
+    /// Get the properties of the namespace.
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
 }
 
 /// TableIdent represents the identifier of a table in the catalog.
@@ -98,21 +142,49 @@ pub struct TableIdent {
     name: String,
 }
 
+impl TableIdent {
+    /// Create a new table identifier.
+    pub fn new(namespace: NamespaceIdent, name: String) -> Self {
+        Self { namespace, name }
+    }
+
+    /// Get the namespace of the table.
+    pub fn namespace(&self) -> &NamespaceIdent {
+        &self.namespace
+    }
+
+    /// Get the name of the table.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// TableCreation represents the creation of a table in the catalog.
 pub struct TableCreation {
-    name: String,
-    location: String,
-    schema: Schema,
-    partition_spec: Option<PartitionSpec>,
-    sort_order: SortOrder,
-    properties: HashMap<String, String>,
+    /// The name of the table.
+    pub name: String,
+    /// The location of the table.
+    pub location: String,
+    /// The schema of the table.
+    pub schema: Schema,
+    /// The partition spec of the table, could be None.
+    pub partition_spec: Option<PartitionSpec>,
+    /// The sort order of the table.
+    pub sort_order: SortOrder,
+    /// The properties of the table.
+    pub properties: HashMap<String, String>,
 }
 
 /// TableCommit represents the commit of a table in the catalog.
 pub struct TableCommit {
-    ident: TableIdent,
-    requirements: Vec<TableRequirement>,
-    updates: Vec<TableUpdate>,
+    /// The table ident.
+    pub ident: TableIdent,
+    /// The requirements of the table.
+    ///
+    /// Commit will fail if the requirements are not met.
+    pub requirements: Vec<TableRequirement>,
+    /// The updates of the table.
+    pub updates: Vec<TableUpdate>,
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
