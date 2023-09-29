@@ -60,7 +60,7 @@ pub struct SchemaBuilder {
 }
 
 impl SchemaBuilder {
-    /// Add fields to schem builder.
+    /// Add fields to schema builder.
     pub fn with_fields(mut self, fields: impl IntoIterator<Item = NestedFieldRef>) -> Self {
         self.fields.extend(fields);
         self
