@@ -44,7 +44,10 @@ static DEFAULT_SORT_ORDER_ID: i64 = 0;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone, Builder)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
-#[builder(setter(prefix = "with"), build_fn(validate = "Self::validate", error = "Error"))]
+#[builder(
+    setter(prefix = "with"),
+    build_fn(validate = "Self::validate", error = "Error")
+)]
 /// Fields for the version 2 of the table metadata.
 pub struct TableMetadata {
     /// Integer Version for the format.
@@ -68,7 +71,9 @@ pub struct TableMetadata {
     /// ID of the table’s current schema.
     current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
-    #[builder(default = "HashMap::from([(DEFAULT_SPEC_ID, PartitionSpec::builder().build().unwrap())])")]
+    #[builder(
+        default = "HashMap::from([(DEFAULT_SPEC_ID, PartitionSpec::builder().build().unwrap())])"
+    )]
     partition_specs: HashMap<i32, PartitionSpec>,
     /// ID of the “current” spec that writers should use by default.
     #[builder(default = "DEFAULT_SPEC_ID")]
@@ -128,39 +133,50 @@ pub struct TableMetadata {
 // We define a from implementation from builder Error to Iceberg Error
 impl From<UninitializedFieldError> for Error {
     fn from(ufe: UninitializedFieldError) -> Error {
-        Error::new(
-            ErrorKind::DataInvalid,
-            ufe.to_string(),
-        )
+        Error::new(ErrorKind::DataInvalid, ufe.to_string())
     }
 }
 
 impl TableMetadataBuilder {
     /// Create setter with TableCreation
-    pub fn with_table_creation(&mut self, tc: TableCreation)  {
+    pub fn with_table_creation(&mut self, tc: TableCreation) {
         self.with_location(tc.location)
             .with_properties(tc.properties)
             .with_default_sort_order_id(tc.sort_order.order_id)
             .with_sort_orders(HashMap::from([(tc.sort_order.order_id, tc.sort_order)]))
             .with_current_schema_id(tc.schema.schema_id())
             .with_last_column_id(tc.schema.highest_field_id())
-            .with_schemas(HashMap::from([(tc.schema.schema_id(), Arc::new(tc.schema))]));
-        
+            .with_schemas(HashMap::from([(
+                tc.schema.schema_id(),
+                Arc::new(tc.schema),
+            )]));
+
         if tc.partition_spec.is_some() {
             let partition_spec = tc.partition_spec.unwrap();
             self.with_default_spec_id(partition_spec.spec_id)
-                .with_last_partition_id(partition_spec.fields.iter().map(|field| field.field_id).max().unwrap_or(-1))
+                .with_last_partition_id(
+                    partition_spec
+                        .fields
+                        .iter()
+                        .map(|field| field.field_id)
+                        .max()
+                        .unwrap_or(-1),
+                )
                 .with_partition_specs(HashMap::from([(partition_spec.spec_id, partition_spec)]));
         }
     }
 
     /// validate the content of the TableMetada Struct
-    fn validate(&self) -> Result<(),Error> {
+    fn validate(&self) -> Result<(), Error> {
         // default_spec_id should match an entry inside the partition_specs HashMap if set
         if self.partition_specs.is_some() {
             if self.default_spec_id.is_some() {
                 // partition_specs map should contain an entry for the default_spec_id
-                let partition_spec = self.partition_specs.as_ref().unwrap().get(&self.default_spec_id.unwrap());
+                let partition_spec = self
+                    .partition_specs
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.default_spec_id.unwrap());
                 if partition_spec.is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
@@ -170,34 +186,46 @@ impl TableMetadataBuilder {
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Partitions are defined but there are no default partition spec id set"),
+                    "Partitions are defined but there are no default partition spec id set",
                 ));
             }
-        } else {
-            if self.default_spec_id.is_some_and(|x| x != -1) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Default spec id {:?} is provided but there are no partition defined",self.default_spec_id.unwrap()),
-                ));
-            }
+        } else if self.default_spec_id.is_some_and(|x| x != -1) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Default spec id {:?} is provided but there are no partition defined",
+                    self.default_spec_id.unwrap()
+                ),
+            ));
         }
 
         // current_schema_id should match an entry inside schemas HashMap
         if self.schemas.is_some() && self.current_schema_id.is_some() {
-            let current_schema = self.schemas.as_ref().unwrap().get(&self.current_schema_id.unwrap());
+            let current_schema = self
+                .schemas
+                .as_ref()
+                .unwrap()
+                .get(&self.current_schema_id.unwrap());
             if current_schema.is_none() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Current schema id {:?} is provided but there are no corresponding schemas",self.current_schema_id.unwrap()),
+                    format!(
+                        "Current schema id {:?} is provided but there are no corresponding schemas",
+                        self.current_schema_id.unwrap()
+                    ),
                 ));
             }
-            // As current_schema_id and schemas are mandatory builder itself will throw an error if not set.   
+            // As current_schema_id and schemas are mandatory builder itself will throw an error if not set.
         }
 
         // default_sort_order_id should match and entry inside sort_orders HashMap if set
         if self.sort_orders.is_some() {
             if self.default_sort_order_id.is_some() {
-                let default_sort_order = self.sort_orders.as_ref().unwrap().get(&self.default_sort_order_id.unwrap());
+                let default_sort_order = self
+                    .sort_orders
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.default_sort_order_id.unwrap());
                 if default_sort_order.is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
@@ -207,24 +235,27 @@ impl TableMetadataBuilder {
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Sort order is defined but there are no default sort order id set"),
+                    "Sort order is defined but there are no default sort order id set",
                 ));
             }
-        } else {
-            if self.default_sort_order_id.is_some() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Default sort order id {:?} is provided but there are no sort order defined",self.default_sort_order_id.unwrap()),
-                ));
-            }
-            // sort_orders and default_sort_order_id are not set, so we have default value.
+        } else if self.default_sort_order_id.is_some() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Default sort order id {:?} is provided but there are no sort order defined",
+                    self.default_sort_order_id.unwrap()
+                ),
+            ));
         }
 
         // current_snapshot_id should match and entry inside current_snapshot HashMap if set
         if self.snapshots.as_ref().is_some_and(|x| x.is_some()) {
             if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
                 let inner_snapshots = self.snapshots.as_ref().unwrap();
-                let default_snapshot = inner_snapshots.as_ref().unwrap().get(&self.current_snapshot_id.unwrap().unwrap());
+                let default_snapshot = inner_snapshots
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.current_snapshot_id.unwrap().unwrap());
                 if default_snapshot.is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
@@ -234,18 +265,19 @@ impl TableMetadataBuilder {
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("snapshot is defined but there are no default current snapshot id set"),
+                    "snapshot is defined but there are no default current snapshot id set",
                 ));
             }
-        } else {
-            if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Current snapshot id {} is provided but there are no snapshot set",self.current_snapshot_id.unwrap().unwrap()),
-                ));
-            }
-            // current snapshot id and snapshots are not set, so we have default value.
+        } else if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Current snapshot id {} is provided but there are no snapshot set",
+                    self.current_snapshot_id.unwrap().unwrap()
+                ),
+            ));
         }
+
         Ok(())
     }
 }
@@ -539,7 +571,10 @@ pub(super) mod _serde {
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: HashMap::from_iter(
-                    value.sort_orders.into_iter().map(|x: SortOrder| (x.order_id, x)),
+                    value
+                        .sort_orders
+                        .into_iter()
+                        .map(|x: SortOrder| (x.order_id, x)),
                 ),
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
