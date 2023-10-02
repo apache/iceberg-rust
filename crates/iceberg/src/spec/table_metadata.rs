@@ -20,13 +20,14 @@ Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
 The main struct here is [TableMetadataV2] which defines the data for a table.
 */
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
+use derive_builder::UninitializedFieldError;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, TableCreation};
 
 use super::{
     partition::PartitionSpec,
@@ -41,19 +42,27 @@ static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone, Builder)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
+#[builder(
+    setter(prefix = "with"),
+    build_fn(validate = "Self::validate", error = "Error")
+)]
 /// Fields for the version 2 of the table metadata.
 pub struct TableMetadata {
     /// Integer Version for the format.
+    #[builder(default = "FormatVersion::V2")]
     format_version: FormatVersion,
     /// A UUID that identifies the table
+    #[builder(default = "Uuid::new_v4()")]
     table_uuid: Uuid,
     /// Location tables base location
+    #[builder(setter(into))]
     location: String,
     /// The tables highest sequence number
     last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
+    #[builder(default = "UNIX_EPOCH.elapsed().unwrap().as_millis().try_into().unwrap()")]
     last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
     last_column_id: i32,
@@ -62,22 +71,30 @@ pub struct TableMetadata {
     /// ID of the table’s current schema.
     current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
+    #[builder(
+        default = "HashMap::from([(DEFAULT_SPEC_ID, PartitionSpec::builder().build().unwrap())])"
+    )]
     partition_specs: HashMap<i32, PartitionSpec>,
     /// ID of the “current” spec that writers should use by default.
+    #[builder(default = "DEFAULT_SPEC_ID")]
     default_spec_id: i32,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
+    #[builder(default = "-1")]
     last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
+    #[builder(default)]
     properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
+    #[builder(setter(strip_option), default = "None")]
     current_snapshot_id: Option<i64>,
     ///A list of valid snapshots. Valid snapshots are snapshots for which all
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
+    #[builder(setter(strip_option), default = "None")]
     snapshots: Option<HashMap<i64, Arc<Snapshot>>>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
@@ -85,6 +102,7 @@ pub struct TableMetadata {
     /// and the new current-snapshot-id. When snapshots are expired from
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
+    #[builder(default)]
     snapshot_log: Vec<SnapshotLog>,
 
     /// A list (optional) of timestamp and metadata file location pairs
@@ -93,22 +111,183 @@ pub struct TableMetadata {
     /// previous metadata file location should be added to the list.
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
+    #[builder(default)]
     metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
+    #[builder(default)]
     sort_orders: HashMap<i64, SortOrder>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
+    #[builder(default = "DEFAULT_SORT_ORDER_ID")]
     default_sort_order_id: i64,
     ///A map of snapshot references. The map keys are the unique snapshot reference
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
+    #[builder(default)]
     refs: HashMap<String, SnapshotReference>,
 }
 
+// We define a from implementation from builder Error to Iceberg Error
+impl From<UninitializedFieldError> for Error {
+    fn from(ufe: UninitializedFieldError) -> Error {
+        Error::new(ErrorKind::DataInvalid, ufe.to_string())
+    }
+}
+
+impl TableMetadataBuilder {
+    /// Create setter with TableCreation
+    pub fn with_table_creation(&mut self, tc: TableCreation) {
+        self.with_location(tc.location)
+            .with_properties(tc.properties)
+            .with_default_sort_order_id(tc.sort_order.order_id)
+            .with_sort_orders(HashMap::from([(tc.sort_order.order_id, tc.sort_order)]))
+            .with_current_schema_id(tc.schema.schema_id())
+            .with_last_column_id(tc.schema.highest_field_id())
+            .with_schemas(HashMap::from([(
+                tc.schema.schema_id(),
+                Arc::new(tc.schema),
+            )]));
+
+        if tc.partition_spec.is_some() {
+            let partition_spec = tc.partition_spec.unwrap();
+            self.with_default_spec_id(partition_spec.spec_id)
+                .with_last_partition_id(
+                    partition_spec
+                        .fields
+                        .iter()
+                        .map(|field| field.field_id)
+                        .max()
+                        .unwrap_or(-1),
+                )
+                .with_partition_specs(HashMap::from([(partition_spec.spec_id, partition_spec)]));
+        }
+    }
+
+    /// validate the content of the TableMetada Struct
+    fn validate(&self) -> Result<(), Error> {
+        // default_spec_id should match an entry inside the partition_specs HashMap if set
+        if self.partition_specs.is_some() {
+            if self.default_spec_id.is_some() {
+                // partition_specs map should contain an entry for the default_spec_id
+                let partition_spec = self
+                    .partition_specs
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.default_spec_id.unwrap());
+                if partition_spec.is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Default spec id {:?} is provided but there are no corresponding partition",self.default_spec_id.unwrap()),
+                    ));
+                }
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Partitions are defined but there are no default partition spec id set",
+                ));
+            }
+        } else if self.default_spec_id.is_some_and(|x| x != -1) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Default spec id {:?} is provided but there are no partition defined",
+                    self.default_spec_id.unwrap()
+                ),
+            ));
+        }
+
+        // current_schema_id should match an entry inside schemas HashMap
+        if self.schemas.is_some() && self.current_schema_id.is_some() {
+            let current_schema = self
+                .schemas
+                .as_ref()
+                .unwrap()
+                .get(&self.current_schema_id.unwrap());
+            if current_schema.is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Current schema id {:?} is provided but there are no corresponding schemas",
+                        self.current_schema_id.unwrap()
+                    ),
+                ));
+            }
+            // As current_schema_id and schemas are mandatory builder itself will throw an error if not set.
+        }
+
+        // default_sort_order_id should match and entry inside sort_orders HashMap if set
+        if self.sort_orders.is_some() {
+            if self.default_sort_order_id.is_some() {
+                let default_sort_order = self
+                    .sort_orders
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.default_sort_order_id.unwrap());
+                if default_sort_order.is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Default sort order id {:?} is provided but there are no corresponding sort order",self.default_sort_order_id.unwrap()),
+                    ));
+                }
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Sort order is defined but there are no default sort order id set",
+                ));
+            }
+        } else if self.default_sort_order_id.is_some() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Default sort order id {:?} is provided but there are no sort order defined",
+                    self.default_sort_order_id.unwrap()
+                ),
+            ));
+        }
+
+        // current_snapshot_id should match and entry inside current_snapshot HashMap if set
+        if self.snapshots.as_ref().is_some_and(|x| x.is_some()) {
+            if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
+                let inner_snapshots = self.snapshots.as_ref().unwrap();
+                let default_snapshot = inner_snapshots
+                    .as_ref()
+                    .unwrap()
+                    .get(&self.current_snapshot_id.unwrap().unwrap());
+                if default_snapshot.is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Current snapshot id {} is provided but there are no corresponding snapshot",self.current_snapshot_id.unwrap().unwrap()),
+                    ));
+                }
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "snapshot is defined but there are no default current snapshot id set",
+                ));
+            }
+        } else if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Current snapshot id {} is provided but there are no snapshot set",
+                    self.current_snapshot_id.unwrap().unwrap()
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 impl TableMetadata {
+    /// Create partition spec builer
+    pub fn builder() -> TableMetadataBuilder {
+        TableMetadataBuilder::default()
+    }
+
     /// Get current schema
     #[inline]
     pub fn current_schema(&self) -> Result<Arc<Schema>, Error> {
@@ -392,7 +571,10 @@ pub(super) mod _serde {
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: HashMap::from_iter(
-                    value.sort_orders.into_iter().map(|x| (x.order_id, x)),
+                    value
+                        .sort_orders
+                        .into_iter()
+                        .map(|x: SortOrder| (x.order_id, x)),
                 ),
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
@@ -1366,5 +1548,78 @@ mod tests {
             desered.unwrap_err().to_string(),
             "data did not match any variant of untagged enum TableMetadataEnum"
         )
+    }
+
+    #[test]
+    fn test_metadata_builder() {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(
+                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
+                        .with_doc("comment"),
+                ),
+                Arc::new(NestedField::required(
+                    3,
+                    "z",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .with_partition_field(PartitionField {
+                name: "x".to_string(),
+                transform: Transform::Identity,
+                source_id: 1,
+                field_id: 1000,
+            })
+            .build()
+            .unwrap();
+
+        let built_table_metadata = TableMetadata::builder()
+            .with_location("s3://bucket/test/location")
+            .with_last_sequence_number(0)
+            .with_last_column_id(3)
+            .with_schemas(HashMap::from_iter(vec![(0, Arc::new(schema))]))
+            .with_current_schema_id(0)
+            .with_partition_specs(HashMap::from_iter(vec![(0, partition_spec)]))
+            .with_default_spec_id(0)
+            .with_last_partition_id(0)
+            .with_refs(HashMap::from_iter(vec![(
+                "main".to_string(),
+                SnapshotReference {
+                    snapshot_id: -1,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            )]))
+            .build()
+            .unwrap();
+
+        assert_eq!(built_table_metadata.format_version, FormatVersion::V2);
+        assert_eq!(
+            built_table_metadata.location,
+            "s3://bucket/test/location".to_string()
+        );
+        assert_eq!(built_table_metadata.last_column_id, 3);
+        assert_eq!(built_table_metadata.current_schema_id, 0);
+        assert_eq!(built_table_metadata.default_spec_id, 0);
+        assert_eq!(built_table_metadata.last_partition_id, 0);
+        assert_eq!(
+            built_table_metadata.refs.get("main").unwrap().snapshot_id,
+            -1
+        );
+        assert_eq!(built_table_metadata.snapshots, None);
     }
 }
