@@ -73,7 +73,7 @@ pub struct Snapshot {
     timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
-    manifest_list: ManifestList,
+    manifest_list: ManifestListLocation,
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
@@ -84,7 +84,7 @@ pub struct Snapshot {
 /// Type to distinguish between a path to a manifestlist file or a vector of manifestfile locations
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(untagged)]
-pub enum ManifestList {
+pub enum ManifestListLocation {
     /// Location of manifestlist file
     ManifestListFile(String),
     /// Manifestfile locations
@@ -104,7 +104,7 @@ impl Snapshot {
     }
     /// Get location of manifest_list file
     #[inline]
-    pub fn manifest_list(&self) -> &ManifestList {
+    pub fn manifest_list(&self) -> &ManifestListLocation {
         &self.manifest_list
     }
     /// Get summary of the snapshot
@@ -141,7 +141,7 @@ pub(super) mod _serde {
 
     use crate::{Error, ErrorKind};
 
-    use super::{ManifestList, Operation, Snapshot, Summary};
+    use super::{ManifestListLocation, Operation, Snapshot, Summary};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -183,7 +183,7 @@ pub(super) mod _serde {
                 parent_snapshot_id: v2.parent_snapshot_id,
                 sequence_number: v2.sequence_number,
                 timestamp_ms: v2.timestamp_ms,
-                manifest_list: ManifestList::ManifestListFile(v2.manifest_list),
+                manifest_list: ManifestListLocation::ManifestListFile(v2.manifest_list),
                 summary: v2.summary,
                 schema_id: v2.schema_id,
             }
@@ -198,8 +198,8 @@ pub(super) mod _serde {
             sequence_number: v2.sequence_number,
             timestamp_ms: v2.timestamp_ms,
             manifest_list: match v2.manifest_list {
-                ManifestList::ManifestListFile(file) => file,
-                ManifestList::ManifestFiles(_) => panic!("Wrong table format version. Can't convert a list of manifest files into a location of a manifest file.")
+                ManifestListLocation::ManifestListFile(file) => file,
+                ManifestListLocation::ManifestFiles(_) => panic!("Wrong table format version. Can't convert a list of manifest files into a location of a manifest file.")
             },
             summary: v2.summary,
             schema_id: v2.schema_id,
@@ -217,8 +217,8 @@ pub(super) mod _serde {
                 sequence_number: 0,
                 timestamp_ms: v1.timestamp_ms,
                 manifest_list: match (v1.manifest_list, v1.manifests) {
-                    (Some(file), _) => ManifestList::ManifestListFile(file),
-                    (None, Some(files)) => ManifestList::ManifestFiles(files),
+                    (Some(file), _) => ManifestListLocation::ManifestListFile(file),
+                    (None, Some(files)) => ManifestListLocation::ManifestFiles(files),
                     (None, None) => {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
@@ -238,8 +238,8 @@ pub(super) mod _serde {
     impl From<Snapshot> for SnapshotV1 {
         fn from(v2: Snapshot) -> Self {
             let (manifest_list, manifests) = match v2.manifest_list {
-                ManifestList::ManifestListFile(file) => (Some(file), None),
-                ManifestList::ManifestFiles(files) => (None, Some(files)),
+                ManifestListLocation::ManifestListFile(file) => (Some(file), None),
+                ManifestListLocation::ManifestFiles(files) => (None, Some(files)),
             };
             SnapshotV1 {
                 snapshot_id: v2.snapshot_id,
@@ -309,7 +309,9 @@ pub enum SnapshotRetention {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::spec::snapshot::{ManifestList, Operation, Snapshot, Summary, _serde::SnapshotV1};
+    use crate::spec::snapshot::{
+        ManifestListLocation, Operation, Snapshot, Summary, _serde::SnapshotV1,
+    };
 
     #[test]
     fn schema() {
@@ -339,7 +341,7 @@ mod tests {
             *result.summary()
         );
         assert_eq!(
-            ManifestList::ManifestListFile("s3://b/wh/.../s1.avro".to_string()),
+            ManifestListLocation::ManifestListFile("s3://b/wh/.../s1.avro".to_string()),
             *result.manifest_list()
         );
     }
