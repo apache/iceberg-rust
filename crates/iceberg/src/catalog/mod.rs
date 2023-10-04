@@ -23,6 +23,9 @@ use crate::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod memory;
+
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog {
@@ -83,6 +86,7 @@ pub trait Catalog {
     async fn update_tables(&self, tables: &[(TableIdent, TableCommit)]) -> Result<()>;
 }
 
+#[derive(Clone)]
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
 ///
 /// The namespace identifier is a list of strings, where each string is a

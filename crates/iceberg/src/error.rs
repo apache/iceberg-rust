@@ -307,6 +307,20 @@ define_from_err!(
     "Failed to parse url"
 );
 
+#[cfg(not(target_arch = "wasm32"))]
+define_from_err!(
+    rusqlite::Error,
+    ErrorKind::DataInvalid,
+    "Failure in catalog database"
+);
+
+#[cfg(not(target_arch = "wasm32"))]
+define_from_err!(
+    serde_json::Error,
+    ErrorKind::DataInvalid,
+    "Failure during deserializatino of json"
+);
+
 /// Helper macro to check arguments.
 ///
 ///

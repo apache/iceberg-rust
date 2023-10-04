@@ -37,6 +37,9 @@ pub use catalog::TableIdent;
 pub use catalog::TableRequirement;
 pub use catalog::TableUpdate;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use catalog::memory::MemoryCatalog;
+
 #[allow(dead_code)]
 pub mod table;
 
