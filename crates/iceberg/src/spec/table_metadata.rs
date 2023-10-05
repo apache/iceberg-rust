@@ -60,6 +60,7 @@ pub struct TableMetadata {
     #[builder(setter(into))]
     location: String,
     /// The tables highest sequence number
+    #[builder(default)]
     last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
     #[builder(default = "UNIX_EPOCH.elapsed().unwrap().as_millis().try_into().unwrap()")]
@@ -138,147 +139,255 @@ impl From<UninitializedFieldError> for Error {
 }
 
 impl TableMetadataBuilder {
-    /// Create setter with TableCreation
-    pub fn with_table_creation(&mut self, tc: TableCreation) {
+    /// Initialize a TableMetadata with a TableCreation struct
+    /// the Schema, sortOrder and PartitionSpec will be set as current
+    pub fn with_table_creation(&mut self, tc: TableCreation) -> &mut Self {
         self.with_location(tc.location)
             .with_properties(tc.properties)
-            .with_default_sort_order_id(tc.sort_order.order_id)
-            .with_sort_orders(HashMap::from([(tc.sort_order.order_id, tc.sort_order)]))
-            .with_current_schema_id(tc.schema.schema_id())
-            .with_last_column_id(tc.schema.highest_field_id())
-            .with_schemas(HashMap::from([(
-                tc.schema.schema_id(),
-                Arc::new(tc.schema),
-            )]));
+            .with_sort_order(tc.sort_order, true)
+            .with_schema(tc.schema, true);
 
-        if tc.partition_spec.is_some() {
-            let partition_spec = tc.partition_spec.unwrap();
-            self.with_default_spec_id(partition_spec.spec_id)
-                .with_last_partition_id(
-                    partition_spec
-                        .fields
-                        .iter()
-                        .map(|field| field.field_id)
-                        .max()
-                        .unwrap_or(-1),
-                )
-                .with_partition_specs(HashMap::from([(partition_spec.spec_id, partition_spec)]));
+        if let Some(partition_spec) = tc.partition_spec {
+            self.with_partition_spec(partition_spec, true);
+        }
+        self
+    }
+
+    /// Add a schema to the TableMetadata
+    /// schema : Schema to be added or replaced
+    /// current : True if the schema is the current one
+    pub fn with_schema(&mut self, schema: Schema, current: bool) -> &mut Self {
+        if current {
+            self.current_schema_id = Some(schema.schema_id());
+            self.last_column_id = Some(schema.highest_field_id());
+        }
+        if let Some(map) = self.schemas.as_mut() {
+            map.insert(schema.schema_id(), Arc::new(schema));
+        } else {
+            self.schemas = Some(HashMap::from([(schema.schema_id(), Arc::new(schema))]));
+        };
+        self
+    }
+
+    /// Add a partition_spec to the TableMetadata and update the last_partition_id accordinlgy
+    /// partition_spec : PartitionSpec to be added or replaced
+    /// default: True if this PartitionSpec is the default one
+    pub fn with_partition_spec(
+        &mut self,
+        partition_spec: PartitionSpec,
+        default: bool,
+    ) -> &mut Self {
+        if default {
+            self.default_spec_id = Some(partition_spec.spec_id);
+        }
+        let max_id = partition_spec
+            .fields
+            .iter()
+            .map(|field| field.field_id)
+            .max();
+        if max_id > self.last_partition_id {
+            self.last_partition_id = max_id;
+        }
+        if let Some(map) = self.partition_specs.as_mut() {
+            map.insert(partition_spec.spec_id, partition_spec);
+        } else {
+            self.partition_specs = Some(HashMap::from([(partition_spec.spec_id, partition_spec)]));
+        };
+        self
+    }
+
+    /// Add a snapshot to the TableMetadata and update last_sequence_number
+    /// snapshot : Snapshot to be added or replaced
+    /// current : True if the snapshot is the current one
+    pub fn with_snapshot(&mut self, snapshot: Snapshot, current: bool) -> &mut Self {
+        if current {
+            self.current_snapshot_id = Some(Some(snapshot.snapshot_id()))
+        }
+        if Some(snapshot.sequence_number()) > self.last_sequence_number {
+            self.last_sequence_number = Some(snapshot.sequence_number())
+        }
+        if let Some(Some(map)) = self.snapshots.as_mut() {
+            map.insert(snapshot.snapshot_id(), Arc::new(snapshot));
+        } else {
+            self.snapshots = Some(Some(HashMap::from([(
+                snapshot.snapshot_id(),
+                Arc::new(snapshot),
+            )])));
+        };
+
+        self
+    }
+
+    /// Add a sort_order to the TableMetadata
+    /// sort_order : SortOrder to be added or replaced
+    /// default: True if this SortOrder is the default one
+    pub fn with_sort_order(&mut self, sort_order: SortOrder, default: bool) -> &mut Self {
+        if default {
+            self.default_sort_order_id = Some(sort_order.order_id)
+        }
+        if let Some(map) = self.sort_orders.as_mut() {
+            map.insert(sort_order.order_id, sort_order);
+        } else {
+            self.sort_orders = Some(HashMap::from([(sort_order.order_id, sort_order)]));
+        };
+        self
+    }
+
+    /// Add a snapshot_reference to the TableMetadata
+    /// key_ref : reference id of the snapshot
+    /// snapshot_ref : SnapshotReference to add or update
+    pub fn with_ref(&mut self, key_ref: String, snapshot_ref: SnapshotReference) -> &mut Self {
+        if let Some(map) = self.refs.as_mut() {
+            map.insert(key_ref, snapshot_ref);
+        } else {
+            self.refs = Some(HashMap::from([(key_ref, snapshot_ref)]));
+        };
+        self
+    }
+
+    /// Check if the default key exists in the map.
+    /// Verify incoherent behavior and throw Error if :
+    /// - the map is not defined but the key exists
+    /// - the default key exists but there is no map
+    ///     except if key is a default value
+    /// Params :
+    /// - key : the key to look for in the map
+    /// - map : the map to scan
+    /// - default : default value for the key if any
+    /// - field : map name for throwing a better error
+    fn check_id_in_map<K: std::hash::Hash + Eq + std::fmt::Display + Copy, T>(
+        key: Option<K>,
+        map: &Option<HashMap<K, T>>,
+        default: Option<K>,
+        field: &str,
+    ) -> Result<(), Error> {
+        if map.is_some() {
+            if let Some(k) = key {
+                // partition_specs map should contain an entry for the default_spec_id
+                let entry = map.as_ref().unwrap().get(&k);
+                if entry.is_none() {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Default id {} is provided but there are no corresponding entry in {}",
+                            k, field
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "{} are defined but there are no default partition spec id set",
+                        field
+                    ),
+                ))
+            }
+        } else if let Some(k) = key {
+            if default.is_some_and(|def| k == def) {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Default spec id {} is provided but there are no {} defined",
+                        k, field
+                    ),
+                ))
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check if last_column_id is coherent with the default schema fields ids
+    fn check_schema_last_column_id(
+        schemas: &Option<HashMap<i32, Arc<Schema>>>,
+        schema_id: Option<i32>,
+        last_column_id: Option<i32>,
+    ) -> Result<(), Error> {
+        let expected_id = schemas
+            .as_ref()
+            .unwrap()
+            .get(&schema_id.unwrap())
+            .unwrap()
+            .highest_field_id();
+
+        if expected_id == last_column_id.unwrap() {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                "last_column_id and default schema highest field id does not match",
+            ))
+        }
+    }
+
+    /// Check if last_partition_id is coherent with the all partition spec field ids
+    fn check_last_partition_id(
+        partition_specs: &Option<HashMap<i32, PartitionSpec>>,
+        last_partition_id: Option<i32>,
+    ) -> Result<(), Error> {
+        let expected_id = partition_specs
+            .as_ref()
+            .map(|specs| {
+                specs
+                    .values()
+                    .map(|spec: &PartitionSpec| {
+                        spec.fields.iter().map(|field| field.field_id).max()
+                    })
+                    .max()
+            })
+            .unwrap_or(None)
+            .unwrap_or(None);
+        if expected_id == last_partition_id {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                "last_partittion_id and default partition highest field id does not match",
+            ))
         }
     }
 
     /// validate the content of the TableMetada Struct
     fn validate(&self) -> Result<(), Error> {
-        // default_spec_id should match an entry inside the partition_specs HashMap if set
-        if self.partition_specs.is_some() {
-            if self.default_spec_id.is_some() {
-                // partition_specs map should contain an entry for the default_spec_id
-                let partition_spec = self
-                    .partition_specs
-                    .as_ref()
-                    .unwrap()
-                    .get(&self.default_spec_id.unwrap());
-                if partition_spec.is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Default spec id {:?} is provided but there are no corresponding partition",self.default_spec_id.unwrap()),
-                    ));
-                }
-            } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Partitions are defined but there are no default partition spec id set",
-                ));
-            }
-        } else if self.default_spec_id.is_some_and(|x| x != -1) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Default spec id {:?} is provided but there are no partition defined",
-                    self.default_spec_id.unwrap()
-                ),
-            ));
-        }
-
-        // current_schema_id should match an entry inside schemas HashMap
-        if self.schemas.is_some() && self.current_schema_id.is_some() {
-            let current_schema = self
-                .schemas
-                .as_ref()
-                .unwrap()
-                .get(&self.current_schema_id.unwrap());
-            if current_schema.is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Current schema id {:?} is provided but there are no corresponding schemas",
-                        self.current_schema_id.unwrap()
-                    ),
-                ));
-            }
-            // As current_schema_id and schemas are mandatory builder itself will throw an error if not set.
-        }
-
-        // default_sort_order_id should match and entry inside sort_orders HashMap if set
-        if self.sort_orders.is_some() {
-            if self.default_sort_order_id.is_some() {
-                let default_sort_order = self
-                    .sort_orders
-                    .as_ref()
-                    .unwrap()
-                    .get(&self.default_sort_order_id.unwrap());
-                if default_sort_order.is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Default sort order id {:?} is provided but there are no corresponding sort order",self.default_sort_order_id.unwrap()),
-                    ));
-                }
-            } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Sort order is defined but there are no default sort order id set",
-                ));
-            }
-        } else if self.default_sort_order_id.is_some() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Default sort order id {:?} is provided but there are no sort order defined",
-                    self.default_sort_order_id.unwrap()
-                ),
-            ));
-        }
-
-        // current_snapshot_id should match and entry inside current_snapshot HashMap if set
-        if self.snapshots.as_ref().is_some_and(|x| x.is_some()) {
-            if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
-                let inner_snapshots = self.snapshots.as_ref().unwrap();
-                let default_snapshot = inner_snapshots
-                    .as_ref()
-                    .unwrap()
-                    .get(&self.current_snapshot_id.unwrap().unwrap());
-                if default_snapshot.is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Current snapshot id {} is provided but there are no corresponding snapshot",self.current_snapshot_id.unwrap().unwrap()),
-                    ));
-                }
-            } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "snapshot is defined but there are no default current snapshot id set",
-                ));
-            }
-        } else if self.current_snapshot_id.is_some_and(|x| x.is_some()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Current snapshot id {} is provided but there are no snapshot set",
-                    self.current_snapshot_id.unwrap().unwrap()
-                ),
-            ));
-        }
-
-        Ok(())
+        // check default key and maps are coherents
+        Self::check_id_in_map(
+            self.default_spec_id,
+            &self.partition_specs,
+            None,
+            "partitions",
+        )
+        .and(Self::check_id_in_map(
+            self.current_schema_id,
+            &self.schemas,
+            None,
+            "schemas",
+        ))
+        .and(Self::check_id_in_map(
+            self.default_sort_order_id,
+            &self.sort_orders,
+            None,
+            "sort_order",
+        ))
+        .and(Self::check_id_in_map(
+            self.current_snapshot_id.unwrap_or(None),
+            self.snapshots.as_ref().unwrap_or(&None),
+            Some(-1),
+            "snapshots",
+        ))
+        .and(Self::check_schema_last_column_id(
+            &self.schemas,
+            self.current_schema_id,
+            self.last_column_id,
+        ))
+        .and(Self::check_last_partition_id(
+            &self.partition_specs,
+            self.last_partition_id,
+        ))
     }
 }
 
@@ -859,10 +968,13 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::spec::{
-        table_metadata::TableMetadata, ManifestList, NestedField, NullOrder, Operation,
-        PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
-        SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+    use crate::{
+        spec::{
+            table_metadata::TableMetadata, ManifestList, NestedField, NullOrder, Operation,
+            PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
+            SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        },
+        TableCreation,
     };
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
@@ -1177,48 +1289,10 @@ mod tests {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV2Valid.json").unwrap();
 
-        let schema1 = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![Arc::new(NestedField::required(
-                1,
-                "x",
-                Type::Primitive(PrimitiveType::Long),
-            ))])
-            .build()
-            .unwrap();
+        let schema1 = generate_schema(0, 1, None);
+        let schema2 = generate_schema(1, 3, Some(vec![1, 2]));
 
-        let schema2 = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(
-                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
-                        .with_doc("comment"),
-                ),
-                Arc::new(NestedField::required(
-                    3,
-                    "z",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            ])
-            .with_identifier_field_ids(vec![1, 2])
-            .build()
-            .unwrap();
-
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(0)
-            .with_partition_field(PartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: 1000,
-            })
-            .build()
-            .unwrap();
+        let partition_spec = generate_partition_spec(0, 1);
 
         let sort_order = SortOrder::builder()
             .with_order_id(3)
@@ -1319,37 +1393,9 @@ mod tests {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV2ValidMinimal.json").unwrap();
 
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(
-                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
-                        .with_doc("comment"),
-                ),
-                Arc::new(NestedField::required(
-                    3,
-                    "z",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            ])
-            .build()
-            .unwrap();
+        let schema = generate_schema(0, 3, None);
 
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(0)
-            .with_partition_field(PartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: 1000,
-            })
-            .build()
-            .unwrap();
+        let partition_spec = generate_partition_spec(0, 1);
 
         let sort_order = SortOrder::builder()
             .with_order_id(3)
@@ -1398,37 +1444,8 @@ mod tests {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
 
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(
-                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
-                        .with_doc("comment"),
-                ),
-                Arc::new(NestedField::required(
-                    3,
-                    "z",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            ])
-            .build()
-            .unwrap();
-
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(0)
-            .with_partition_field(PartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: 1000,
-            })
-            .build()
-            .unwrap();
+        let schema = generate_schema(0, 3, None);
+        let partition_spec = generate_partition_spec(0, 1);
 
         let expected = TableMetadata {
             format_version: FormatVersion::V1,
@@ -1550,49 +1567,71 @@ mod tests {
         )
     }
 
+    fn generate_schema(id: i32, length: usize, identifier_fields_id: Option<Vec<i32>>) -> Schema {
+        let mut test_data: Vec<(i32, &str, PrimitiveType, Option<&str>)> = vec![
+            (1, "x", PrimitiveType::Long, None),
+            (2, "y", PrimitiveType::Long, Some("comment")),
+            (3, "z", PrimitiveType::Long, None),
+        ];
+        test_data.truncate(length);
+        let data: Vec<Arc<NestedField>> = test_data
+            .iter()
+            .map(|x| {
+                (
+                    NestedField::required(x.0, x.1, Type::Primitive(x.2.clone())),
+                    x.3,
+                )
+            })
+            .map(|x| {
+                if x.1.is_some() {
+                    x.0.with_doc(x.1.unwrap())
+                } else {
+                    x.0
+                }
+            })
+            .map(|x| Arc::new(x))
+            .collect();
+        Schema::builder()
+            .with_schema_id(id)
+            .with_fields(data)
+            .with_identifier_field_ids(identifier_fields_id.unwrap_or_default())
+            .build()
+            .unwrap()
+    }
+
+    fn generate_partition_spec(id: i32, length: usize) -> PartitionSpec {
+        let mut test_data = vec![
+            ("x", Transform::Identity, 1, 1000),
+            ("y", Transform::Identity, 2, 1001),
+            ("z", Transform::Identity, 3, 1002),
+        ];
+        test_data.truncate(length);
+        let data: Vec<PartitionField> = test_data
+            .iter()
+            .map(|x| PartitionField {
+                name: x.0.to_string(),
+                transform: x.1,
+                source_id: x.2,
+                field_id: x.3,
+            })
+            .collect();
+        PartitionSpec::builder()
+            .with_spec_id(id)
+            .with_fields(data)
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn test_metadata_builder() {
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "x",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-                Arc::new(
-                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long))
-                        .with_doc("comment"),
-                ),
-                Arc::new(NestedField::required(
-                    3,
-                    "z",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
-            ])
-            .build()
-            .unwrap();
-
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(0)
-            .with_partition_field(PartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: 1000,
-            })
-            .build()
-            .unwrap();
+        let schema = generate_schema(0, 3, None);
+        let partition_spec = generate_partition_spec(0, 1);
 
         let built_table_metadata = TableMetadata::builder()
             .with_location("s3://bucket/test/location")
             .with_last_sequence_number(0)
-            .with_last_column_id(3)
-            .with_schemas(HashMap::from_iter(vec![(0, Arc::new(schema))]))
-            .with_current_schema_id(0)
-            .with_partition_specs(HashMap::from_iter(vec![(0, partition_spec)]))
-            .with_default_spec_id(0)
-            .with_last_partition_id(0)
+            .with_schema(schema, true)
+            .with_partition_spec(partition_spec, true)
             .with_refs(HashMap::from_iter(vec![(
                 "main".to_string(),
                 SnapshotReference {
@@ -1615,11 +1654,25 @@ mod tests {
         assert_eq!(built_table_metadata.last_column_id, 3);
         assert_eq!(built_table_metadata.current_schema_id, 0);
         assert_eq!(built_table_metadata.default_spec_id, 0);
-        assert_eq!(built_table_metadata.last_partition_id, 0);
+        assert_eq!(built_table_metadata.last_partition_id, 1000);
         assert_eq!(
             built_table_metadata.refs.get("main").unwrap().snapshot_id,
             -1
         );
         assert_eq!(built_table_metadata.snapshots, None);
+
+        let table_creation = TableCreation {
+            name: "test".to_string(),
+            location: "s3://bucket/test/location".to_string(),
+            schema: generate_schema(0, 3, None),
+            partition_spec: Some(generate_partition_spec(0, 1)),
+            sort_order: SortOrder::builder().with_order_id(0).build().unwrap(),
+            properties: HashMap::new(),
+        };
+        let built_table_metadata = TableMetadata::builder()
+            .with_table_creation(table_creation)
+            .build();
+
+        assert!(built_table_metadata.is_ok())
     }
 }
