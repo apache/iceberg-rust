@@ -17,8 +17,14 @@
 
 //! ManifestList for Iceberg.
 
-use crate::{avro::schema_to_avro_schema, spec::Literal, Error};
-use apache_avro::{from_value, types::Value, Reader};
+use std::collections::HashMap;
+
+use crate::{avro::schema_to_avro_schema, io::OutputFile, spec::Literal, Error};
+use apache_avro::{from_value, types::Value, Reader, Schema as AvroSchema, Writer};
+use futures::AsyncWriteExt;
+use once_cell::sync::Lazy;
+
+use self::_serde::{ManifestListEntryV1, ManifestListEntryV2};
 
 use super::{FormatVersion, Schema, StructType};
 
@@ -35,7 +41,7 @@ use super::{FormatVersion, Schema, StructType};
 /// This includes the number of added, existing, and deleted files, and a
 /// summary of values for each field of the partition spec used to write the
 /// manifest.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ManifestList {
     /// Entries in a manifest list.
     entries: Vec<ManifestListEntry>,
@@ -49,17 +55,15 @@ impl ManifestList {
         partition_type: &StructType,
     ) -> Result<ManifestList, Error> {
         match version {
-            FormatVersion::V2 => {
-                let schema = schema_to_avro_schema("manifest_list", &Self::v2_schema()).unwrap();
-                let reader = Reader::with_schema(&schema, bs)?;
-                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type)
-            }
             FormatVersion::V1 => {
-                let schema = schema_to_avro_schema("manifest_list", &Self::v1_schema()).unwrap();
-                let reader = Reader::with_schema(&schema, bs)?;
+                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
                 let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type)
+            }
+            FormatVersion::V2 => {
+                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
+                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
+                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type)
             }
         }
     }
@@ -67,6 +71,25 @@ impl ManifestList {
     /// Get the entries in the manifest list.
     pub fn entries(&self) -> &[ManifestListEntry] {
         &self.entries
+    }
+
+    /// Get the v1 schema of the manifest list entry.
+    pub(crate) fn v1_schema() -> Schema {
+        let fields = vec![
+            _const_fields::MANIFEST_PATH.clone(),
+            _const_fields::MANIFEST_LENGTH.clone(),
+            _const_fields::PARTITION_SPEC_ID.clone(),
+            _const_fields::ADDED_SNAPSHOT_ID.clone(),
+            _const_fields::ADDED_FILES_COUNT_V1.clone().to_owned(),
+            _const_fields::EXISTING_FILES_COUNT_V1.clone(),
+            _const_fields::DELETED_FILES_COUNT_V1.clone(),
+            _const_fields::ADDED_ROWS_COUNT_V1.clone(),
+            _const_fields::EXISTING_ROWS_COUNT_V1.clone(),
+            _const_fields::DELETED_ROWS_COUNT_V1.clone(),
+            _const_fields::PARTITIONS.clone(),
+            _const_fields::KEY_METADATA.clone(),
+        ];
+        Schema::builder().with_fields(fields).build().unwrap()
     }
 
     /// Get the v2 schema of the manifest list entry.
@@ -90,24 +113,72 @@ impl ManifestList {
         ];
         Schema::builder().with_fields(fields).build().unwrap()
     }
+}
 
-    /// Get the v1 schema of the manifest list entry.
-    pub(crate) fn v1_schema() -> Schema {
-        let fields = vec![
-            _const_fields::MANIFEST_PATH.clone(),
-            _const_fields::MANIFEST_LENGTH.clone(),
-            _const_fields::PARTITION_SPEC_ID.clone(),
-            _const_fields::ADDED_SNAPSHOT_ID.clone(),
-            _const_fields::ADDED_FILES_COUNT_V1.clone().to_owned(),
-            _const_fields::EXISTING_FILES_COUNT_V1.clone(),
-            _const_fields::DELETED_FILES_COUNT_V1.clone(),
-            _const_fields::ADDED_ROWS_COUNT_V1.clone(),
-            _const_fields::EXISTING_ROWS_COUNT_V1.clone(),
-            _const_fields::DELETED_ROWS_COUNT_V1.clone(),
-            _const_fields::PARTITIONS.clone(),
-            _const_fields::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
+pub(crate) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
+    Lazy::new(|| schema_to_avro_schema("manifest_list", &ManifestList::v1_schema()).unwrap());
+
+pub(crate) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
+    Lazy::new(|| schema_to_avro_schema("manfiest_list", &ManifestList::v2_schema()).unwrap());
+
+/// A manifest list writer.
+pub struct ManifestListWriter {
+    output_file: OutputFile,
+    format_version: FormatVersion,
+    avro_writer: Writer<'static, Vec<u8>>,
+}
+
+impl ManifestListWriter {
+    /// Construct a new [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn new(
+        output_file: OutputFile,
+        format_version: FormatVersion,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        let avro_schema = match format_version {
+            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
+            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
+        };
+        let mut avro_writer = Writer::new(avro_schema, Vec::new());
+        for (key, value) in metadata {
+            avro_writer.add_user_metadata(key, value).unwrap();
+        }
+        Self {
+            output_file,
+            format_version,
+            avro_writer,
+        }
+    }
+
+    /// Append manifests to be written.
+    pub fn add_manifests(
+        &mut self,
+        manifests: impl Iterator<Item = ManifestListEntry>,
+    ) -> Result<(), Error> {
+        match self.format_version {
+            FormatVersion::V1 => {
+                for manifest in manifests {
+                    let manifest: ManifestListEntryV1 = manifest.into();
+                    self.avro_writer.append_ser(manifest)?;
+                }
+            }
+            FormatVersion::V2 => {
+                for manifest in manifests {
+                    let manifest: ManifestListEntryV2 = manifest.try_into()?;
+                    self.avro_writer.append_ser(manifest)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Write the manifest list to the output file.
+    pub async fn close(self) -> Result<(), Error> {
+        let data = self.avro_writer.into_inner()?;
+        let mut writer = self.output_file.writer().await?;
+        writer.write_all(&data).await.unwrap();
+        writer.close().await.unwrap();
+        Ok(())
     }
 }
 
@@ -794,11 +865,17 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, sync::Arc};
+    use std::{collections::HashMap, fs, sync::Arc};
 
-    use crate::spec::{
-        manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
-        ManifestList, ManifestListEntry, NestedField, PrimitiveType, StructType, Type,
+    use tempdir::TempDir;
+
+    use crate::{
+        io::FileIOBuilder,
+        spec::{
+            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
+            ManifestList, ManifestListEntry, ManifestListWriter, NestedField, PrimitiveType,
+            StructType, Type,
+        },
     };
 
     use super::_serde::ManifestListV2;
@@ -939,5 +1016,105 @@ mod test {
             result,
             r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":0,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
         );
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v1() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                manifest_length: 5806,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1646658105718557341,
+                added_data_files_count: Some(3),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![],
+                key_metadata: vec![],
+            }]
+        };
+
+        let temp_dir = TempDir::new("manifest_list_v1").unwrap();
+        let path = temp_dir.path().join("manifest_list_v1.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut metadata = HashMap::new();
+        metadata.insert(String::from("format-version"), String::from("1"));
+        let mut writer =
+            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V1, metadata);
+        writer
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list = ManifestList::parse_with_version(
+            &bs,
+            crate::spec::FormatVersion::V1,
+            &StructType::new(vec![]),
+        )
+        .unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v2() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 377075049360453639,
+                added_data_files_count: Some(1),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                key_metadata: vec![],
+            }]
+        };
+
+        let temp_dir = TempDir::new("manifest_list_v2").unwrap();
+        let path = temp_dir.path().join("manifest_list_v2.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut metadata = HashMap::new();
+        metadata.insert(String::from("format-version"), String::from("2"));
+        let mut writer =
+            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V2, metadata);
+        writer
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list = ManifestList::parse_with_version(
+            &bs,
+            crate::spec::FormatVersion::V2,
+            &StructType::new(vec![Arc::new(NestedField::required(
+                1,
+                "test",
+                Type::Primitive(PrimitiveType::Long),
+            ))]),
+        )
+        .unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
     }
 }
