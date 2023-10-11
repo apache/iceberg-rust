@@ -60,27 +60,31 @@ pub struct TableMetadata {
     #[builder(setter(into))]
     location: String,
     /// The tables highest sequence number
-    #[builder(default)]
+    #[builder(default, setter(custom))]
     last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    #[builder(default = "UNIX_EPOCH.elapsed().unwrap().as_millis().try_into().unwrap()")]
+    #[builder(default = "Self::current_time_ms()", setter(custom))]
     last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
+    #[builder(setter(custom))]
     last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
+    #[builder(setter(custom))]
     schemas: HashMap<i32, Arc<Schema>>,
     /// ID of the table’s current schema.
+    #[builder(setter(custom))]
     current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
     #[builder(
-        default = "HashMap::from([(DEFAULT_SPEC_ID, PartitionSpec::builder().build().unwrap())])"
+        default = "HashMap::from([(DEFAULT_SPEC_ID, PartitionSpec::builder().build().unwrap())])",
+        setter(custom)
     )]
     partition_specs: HashMap<i32, PartitionSpec>,
     /// ID of the “current” spec that writers should use by default.
-    #[builder(default = "DEFAULT_SPEC_ID")]
+    #[builder(default = "DEFAULT_SPEC_ID", setter(custom))]
     default_spec_id: i32,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
-    #[builder(default = "-1")]
+    #[builder(default = "-1", setter(custom))]
     last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
@@ -89,13 +93,13 @@ pub struct TableMetadata {
     properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
-    #[builder(setter(strip_option), default = "None")]
+    #[builder(default = "None", setter(custom))]
     current_snapshot_id: Option<i64>,
     ///A list of valid snapshots. Valid snapshots are snapshots for which all
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    #[builder(setter(strip_option), default = "None")]
+    #[builder(default = "None", setter(custom))]
     snapshots: Option<HashMap<i64, Arc<Snapshot>>>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
@@ -103,7 +107,7 @@ pub struct TableMetadata {
     /// and the new current-snapshot-id. When snapshots are expired from
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
-    #[builder(default)]
+    #[builder(default, setter(custom))]
     snapshot_log: Vec<SnapshotLog>,
 
     /// A list (optional) of timestamp and metadata file location pairs
@@ -112,22 +116,22 @@ pub struct TableMetadata {
     /// previous metadata file location should be added to the list.
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
-    #[builder(default)]
+    #[builder(default, setter(custom))]
     metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
-    #[builder(default)]
+    #[builder(default, setter(custom))]
     sort_orders: HashMap<i64, SortOrder>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
-    #[builder(default = "DEFAULT_SORT_ORDER_ID")]
+    #[builder(default = "DEFAULT_SORT_ORDER_ID", setter(custom))]
     default_sort_order_id: i64,
     ///A map of snapshot references. The map keys are the unique snapshot reference
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
-    #[builder(default)]
+    #[builder(default = "Self::default_ref()", setter(custom))]
     refs: HashMap<String, SnapshotReference>,
 }
 
@@ -139,47 +143,92 @@ impl From<UninitializedFieldError> for Error {
 }
 
 impl TableMetadataBuilder {
-    /// Initialize a TableMetadata with a TableCreation struct
-    /// the Schema, sortOrder and PartitionSpec will be set as current
-    pub fn with_table_creation(&mut self, tc: TableCreation) -> &mut Self {
-        self.with_location(tc.location)
-            .with_properties(tc.properties)
-            .with_sort_order(tc.sort_order, true)
-            .with_schema(tc.schema, true);
+    /// Get current time in ms
+    fn current_time_ms() -> i64 {
+        UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap()
+    }
 
-        if let Some(partition_spec) = tc.partition_spec {
-            self.with_partition_spec(partition_spec, true);
+    fn default_ref() -> HashMap<String, SnapshotReference> {
+        HashMap::from([(
+            "main".to_string(),
+            SnapshotReference {
+                snapshot_id: -1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            },
+        )])
+    }
+
+    /// Add or replace a snapshot_reference
+    /// branch : branch id of the snapshot
+    /// snapshot_ref : SnapshotReference to add or update
+    fn with_ref(&mut self, branch: String, snapshot_ref: SnapshotReference) -> &mut Self {
+        if branch == "main" {
+            self.current_snapshot_id = Some(Some(snapshot_ref.snapshot_id));
+            if let Some(vec) = self.snapshot_log.as_mut() {
+                vec.push(SnapshotLog {
+                    snapshot_id: snapshot_ref.snapshot_id,
+                    timestamp_ms: self.last_updated_ms.unwrap_or(Self::current_time_ms()),
+                })
+            } else {
+                self.snapshot_log = Some(vec![SnapshotLog {
+                    snapshot_id: snapshot_ref.snapshot_id,
+                    timestamp_ms: self.last_updated_ms.unwrap_or(Self::current_time_ms()),
+                }])
+            }
+        }
+        if let Some(map) = self.refs.as_mut() {
+            map.insert(branch, snapshot_ref);
+        } else {
+            self.refs = Some(HashMap::from([(branch, snapshot_ref)]));
         }
         self
     }
 
-    /// Add a schema to the TableMetadata
-    /// schema : Schema to be added or replaced
-    /// current : True if the schema is the current one
-    pub fn with_schema(&mut self, schema: Schema, current: bool) -> &mut Self {
-        if current {
-            self.current_schema_id = Some(schema.schema_id());
-            self.last_column_id = Some(schema.highest_field_id());
+    /// Initialize a TableMetadata with a TableCreation struct
+    /// the Schema, sortOrder and PartitionSpec will be set as current
+    pub fn from_table_creation(&mut self, tc: TableCreation) -> &mut Self {
+        self.with_location(tc.location)
+            .with_properties(tc.properties)
+            .with_default_sort_order(tc.sort_order)
+            .with_current_schema(tc.schema);
+
+        if let Some(partition_spec) = tc.partition_spec {
+            self.with_default_partition_spec(partition_spec);
         }
+        self
+    }
+
+    /// Add or replace a schema
+    /// schema : Schema to be added or replaced
+    pub fn with_schema(&mut self, schema: Schema) -> &mut Self {
         if let Some(map) = self.schemas.as_mut() {
             map.insert(schema.schema_id(), Arc::new(schema));
         } else {
             self.schemas = Some(HashMap::from([(schema.schema_id(), Arc::new(schema))]));
-        };
+        }
         self
     }
 
-    /// Add a partition_spec to the TableMetadata and update the last_partition_id accordinlgy
+    /// Add or replace a schema and set current schema to this one
+    /// schema : Schema to be added or replaced
+    pub fn with_current_schema(&mut self, schema: Schema) -> &mut Self {
+        self.current_schema_id = Some(schema.schema_id());
+        self.last_column_id = Some(schema.highest_field_id());
+        self.with_schema(schema)
+    }
+
+    /// Add or replace a partition_spec and update the last_partition_id accordingly
     /// partition_spec : PartitionSpec to be added or replaced
-    /// default: True if this PartitionSpec is the default one
-    pub fn with_partition_spec(
-        &mut self,
-        partition_spec: PartitionSpec,
-        default: bool,
-    ) -> &mut Self {
-        if default {
-            self.default_spec_id = Some(partition_spec.spec_id);
-        }
+    pub fn with_partition_spec(&mut self, partition_spec: PartitionSpec) -> &mut Self {
         let max_id = partition_spec
             .fields
             .iter()
@@ -192,20 +241,38 @@ impl TableMetadataBuilder {
             map.insert(partition_spec.spec_id, partition_spec);
         } else {
             self.partition_specs = Some(HashMap::from([(partition_spec.spec_id, partition_spec)]));
-        };
+        }
         self
     }
 
-    /// Add a snapshot to the TableMetadata and update last_sequence_number
+    /// Add or replace a partition_spec, update the last_partition_id accordingly
+    /// and set the default spec id to the partition_spec id
+    /// partition_spec : PartitionSpec to be added or replaced
+    pub fn with_default_partition_spec(&mut self, partition_spec: PartitionSpec) -> &mut Self {
+        self.default_spec_id = Some(partition_spec.spec_id);
+        self.with_partition_spec(partition_spec)
+    }
+
+    /// Add or replace a snapshot to the main branch, update last_sequence_number
     /// snapshot : Snapshot to be added or replaced
-    /// current : True if the snapshot is the current one
-    pub fn with_snapshot(&mut self, snapshot: Snapshot, current: bool) -> &mut Self {
-        if current {
-            self.current_snapshot_id = Some(Some(snapshot.snapshot_id()))
-        }
+    pub fn with_branch_snapshot(&mut self, branch: String, snapshot: Snapshot) -> &mut Self {
         if Some(snapshot.sequence_number()) > self.last_sequence_number {
-            self.last_sequence_number = Some(snapshot.sequence_number())
+            self.last_sequence_number = Some(snapshot.sequence_number());
         }
+        if self.last_updated_ms < Some(snapshot.timestamp()) {
+            self.last_updated_ms = Some(snapshot.timestamp());
+        }
+        self.with_ref(
+            branch,
+            SnapshotReference::new(
+                snapshot.snapshot_id(),
+                SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            ),
+        );
         if let Some(Some(map)) = self.snapshots.as_mut() {
             map.insert(snapshot.snapshot_id(), Arc::new(snapshot));
         } else {
@@ -213,18 +280,19 @@ impl TableMetadataBuilder {
                 snapshot.snapshot_id(),
                 Arc::new(snapshot),
             )])));
-        };
-
+        }
         self
     }
 
-    /// Add a sort_order to the TableMetadata
+    /// Add or replace a snapshot to the main branch, update last_sequence_number
+    /// snapshot : Snapshot to be added or replaced
+    pub fn with_snapshot(&mut self, snapshot: Snapshot) -> &mut Self {
+        self.with_branch_snapshot("main".to_string(), snapshot)
+    }
+
+    /// Add or replace a sort_order
     /// sort_order : SortOrder to be added or replaced
-    /// default: True if this SortOrder is the default one
-    pub fn with_sort_order(&mut self, sort_order: SortOrder, default: bool) -> &mut Self {
-        if default {
-            self.default_sort_order_id = Some(sort_order.order_id)
-        }
+    pub fn with_sort_order(&mut self, sort_order: SortOrder) -> &mut Self {
         if let Some(map) = self.sort_orders.as_mut() {
             map.insert(sort_order.order_id, sort_order);
         } else {
@@ -233,16 +301,11 @@ impl TableMetadataBuilder {
         self
     }
 
-    /// Add a snapshot_reference to the TableMetadata
-    /// key_ref : reference id of the snapshot
-    /// snapshot_ref : SnapshotReference to add or update
-    pub fn with_ref(&mut self, key_ref: String, snapshot_ref: SnapshotReference) -> &mut Self {
-        if let Some(map) = self.refs.as_mut() {
-            map.insert(key_ref, snapshot_ref);
-        } else {
-            self.refs = Some(HashMap::from([(key_ref, snapshot_ref)]));
-        };
-        self
+    /// Add or replace a sort_order and set the default sort order to this one.
+    /// sort_order : SortOrder to be added or replaced
+    pub fn with_default_sort_order(&mut self, sort_order: SortOrder) -> &mut Self {
+        self.default_sort_order_id = Some(sort_order.order_id);
+        self.with_sort_order(sort_order)
     }
 
     /// Check if the default key exists in the map.
@@ -258,136 +321,64 @@ impl TableMetadataBuilder {
     fn check_id_in_map<K: std::hash::Hash + Eq + std::fmt::Display + Copy, T>(
         key: Option<K>,
         map: &Option<HashMap<K, T>>,
-        default: Option<K>,
         field: &str,
     ) -> Result<(), Error> {
-        if map.is_some() {
-            if let Some(k) = key {
-                // partition_specs map should contain an entry for the default_spec_id
-                let entry = map.as_ref().unwrap().get(&k);
+        if let Some(k) = key {
+            if let Some(m) = map {
+                // Key and map exists, let check if entry for the given key exists in map
+                let entry = m.get(&k);
                 if entry.is_none() {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Default id {} is provided but there are no corresponding entry in {}",
-                            k, field
+                            "Default {} id {} is provided but there are no corresponding entry in {}",
+                            field, k, field
                         ),
                     ))
                 } else {
                     Ok(())
                 }
             } else {
+                // Key exist and map does not
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "{} are defined but there are no default partition spec id set",
-                        field
+                        "Default {} id {} is provided but there are no {} defined",
+                        field, k, field
                     ),
                 ))
             }
-        } else if let Some(k) = key {
-            if default.is_some_and(|def| k == def) {
-                Ok(())
-            } else {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Default spec id {} is provided but there are no {} defined",
-                        k, field
-                    ),
-                ))
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Check if last_column_id is coherent with the default schema fields ids
-    fn check_schema_last_column_id(
-        schemas: &Option<HashMap<i32, Arc<Schema>>>,
-        schema_id: Option<i32>,
-        last_column_id: Option<i32>,
-    ) -> Result<(), Error> {
-        let expected_id = schemas
-            .as_ref()
-            .unwrap()
-            .get(&schema_id.unwrap())
-            .unwrap()
-            .highest_field_id();
-
-        if expected_id == last_column_id.unwrap() {
-            Ok(())
-        } else {
+        } else if map.is_some() {
+            // Key does not exist but map does
             Err(Error::new(
                 ErrorKind::DataInvalid,
-                "last_column_id and default schema highest field id does not match",
+                format!("Default id is not provided for the field {}", field),
             ))
-        }
-    }
-
-    /// Check if last_partition_id is coherent with the all partition spec field ids
-    fn check_last_partition_id(
-        partition_specs: &Option<HashMap<i32, PartitionSpec>>,
-        last_partition_id: Option<i32>,
-    ) -> Result<(), Error> {
-        let expected_id = partition_specs
-            .as_ref()
-            .map(|specs| {
-                specs
-                    .values()
-                    .map(|spec: &PartitionSpec| {
-                        spec.fields.iter().map(|field| field.field_id).max()
-                    })
-                    .max()
-            })
-            .unwrap_or(None)
-            .unwrap_or(None);
-        if expected_id == last_partition_id {
-            Ok(())
         } else {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                "last_partittion_id and default partition highest field id does not match",
-            ))
+            // Key and map does not exist, builder will handle required fields
+            Ok(())
         }
     }
 
     /// validate the content of the TableMetada Struct
     fn validate(&self) -> Result<(), Error> {
         // check default key and maps are coherents
-        Self::check_id_in_map(
-            self.default_spec_id,
-            &self.partition_specs,
-            None,
-            "partitions",
-        )
-        .and(Self::check_id_in_map(
-            self.current_schema_id,
-            &self.schemas,
-            None,
-            "schemas",
-        ))
-        .and(Self::check_id_in_map(
-            self.default_sort_order_id,
-            &self.sort_orders,
-            None,
-            "sort_order",
-        ))
-        .and(Self::check_id_in_map(
-            self.current_snapshot_id.unwrap_or(None),
-            self.snapshots.as_ref().unwrap_or(&None),
-            Some(-1),
-            "snapshots",
-        ))
-        .and(Self::check_schema_last_column_id(
-            &self.schemas,
-            self.current_schema_id,
-            self.last_column_id,
-        ))
-        .and(Self::check_last_partition_id(
-            &self.partition_specs,
-            self.last_partition_id,
-        ))
+        Self::check_id_in_map(self.default_spec_id, &self.partition_specs, "partitions")
+            .and(Self::check_id_in_map(
+                self.current_schema_id,
+                &self.schemas,
+                "schemas",
+            ))
+            .and(Self::check_id_in_map(
+                self.default_sort_order_id,
+                &self.sort_orders,
+                "sort_order",
+            ))
+            .and(Self::check_id_in_map(
+                self.current_snapshot_id.unwrap_or(None),
+                self.snapshots.as_ref().unwrap_or(&None),
+                "snapshots",
+            ))
     }
 }
 
@@ -1629,20 +1620,8 @@ mod tests {
 
         let built_table_metadata = TableMetadata::builder()
             .with_location("s3://bucket/test/location")
-            .with_last_sequence_number(0)
-            .with_schema(schema, true)
-            .with_partition_spec(partition_spec, true)
-            .with_refs(HashMap::from_iter(vec![(
-                "main".to_string(),
-                SnapshotReference {
-                    snapshot_id: -1,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                },
-            )]))
+            .with_current_schema(schema)
+            .with_default_partition_spec(partition_spec)
             .build()
             .unwrap();
 
@@ -1670,7 +1649,7 @@ mod tests {
             properties: HashMap::new(),
         };
         let built_table_metadata = TableMetadata::builder()
-            .with_table_creation(table_creation)
+            .from_table_creation(table_creation)
             .build();
 
         assert!(built_table_metadata.is_ok())
