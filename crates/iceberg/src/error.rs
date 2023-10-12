@@ -307,6 +307,18 @@ define_from_err!(
     "Failed to parse url"
 );
 
+define_from_err!(
+    reqwest::Error,
+    ErrorKind::Unexpected,
+    "Failed to execute http request"
+);
+
+define_from_err!(
+    serde_json::Error,
+    ErrorKind::DataInvalid,
+    "Failed to parse json string"
+);
+
 /// Helper macro to check arguments.
 ///
 ///

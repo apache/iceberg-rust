@@ -17,6 +17,10 @@
 
 //! Catalog API for Apache Iceberg
 
+mod rest;
+pub use rest::*;
+use serde_derive::{Deserialize, Serialize};
+
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
 use crate::Result;
@@ -88,6 +92,8 @@ pub trait Catalog {
 /// The namespace identifier is a list of strings, where each string is a
 /// component of the namespace. It's catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NamespaceIdent(Vec<String>);
 
 impl NamespaceIdent {
@@ -137,6 +143,7 @@ impl Namespace {
 }
 
 /// TableIdent represents the identifier of a table in the catalog.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableIdent {
     namespace: NamespaceIdent,
     name: String,
