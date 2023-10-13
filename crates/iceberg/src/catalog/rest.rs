@@ -121,7 +121,7 @@ impl NamespaceIdent {
 struct HttpClient(Client);
 
 impl HttpClient {
-    async fn execute<
+    async fn query<
         R: DeserializeOwned,
         E: DeserializeOwned + Into<Error>,
         const SUCCESS_CODE: u16,
@@ -155,7 +155,7 @@ impl HttpClient {
         }
     }
 
-    async fn execute2<E: DeserializeOwned + Into<Error>, const SUCCESS_CODE: u16>(
+    async fn execute<E: DeserializeOwned + Into<Error>, const SUCCESS_CODE: u16>(
         &self,
         request: Request,
     ) -> Result<()> {
@@ -197,7 +197,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .execute::<ListNamespaceResponse, ErrorModel, OK>(request.build()?)
+            .query::<ListNamespaceResponse, ErrorModel, OK>(request.build()?)
             .await?;
 
         resp.namespaces
@@ -224,7 +224,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .execute::<NamespaceSerde, ErrorModel, OK>(request)
+            .query::<NamespaceSerde, ErrorModel, OK>(request)
             .await?;
 
         Namespace::try_from(resp)
@@ -240,7 +240,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .execute::<NamespaceSerde, ErrorModel, OK>(request)
+            .query::<NamespaceSerde, ErrorModel, OK>(request)
             .await?;
         Namespace::try_from(resp)
     }
@@ -269,9 +269,7 @@ impl Catalog for RestCatalog {
             .delete(self.config.namespace_endpoint(namespace))
             .build()?;
 
-        self.client
-            .execute2::<ErrorModel, NO_CONTENT>(request)
-            .await
+        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
     }
 
     /// List tables from namespace.
@@ -284,7 +282,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .execute::<ListTableResponse, ErrorModel, OK>(request)
+            .query::<ListTableResponse, ErrorModel, OK>(request)
             .await?;
 
         Ok(resp.identifiers)
@@ -318,9 +316,7 @@ impl Catalog for RestCatalog {
             .delete(self.config.table_endpoint(table))
             .build()?;
 
-        self.client
-            .execute2::<ErrorModel, NO_CONTENT>(request)
-            .await
+        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
     }
 
     /// Check if a table exists in the catalog.
@@ -332,7 +328,7 @@ impl Catalog for RestCatalog {
             .build()?;
 
         self.client
-            .execute2::<ErrorModel, NO_CONTENT>(request)
+            .execute::<ErrorModel, NO_CONTENT>(request)
             .await
             .map(|_| true)
     }
@@ -349,9 +345,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        self.client
-            .execute2::<ErrorModel, NO_CONTENT>(request)
-            .await
+        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
     }
 
     /// Update a table to the catalog.
@@ -387,7 +381,7 @@ impl RestCatalog {
         }
         let mut config = self
             .client
-            .execute::<CatalogConfig, ErrorResponse, OK>(request.build()?)
+            .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
 
         config.defaults.extend(self.config.props.clone());
