@@ -32,7 +32,7 @@ use crate::{
 };
 
 use self::_serde::{
-    CatalogConfig, ErrorModel, ErrorReponse, ListNamespaceResponse, ListTableResponse,
+    CatalogConfig, ErrorModel, ErrorResponse, ListNamespaceResponse, ListTableResponse,
     NamespaceSerde, RenameTableRequest, NO_CONTENT, OK,
 };
 
@@ -398,7 +398,7 @@ impl RestCatalog {
         }
         let mut config = self
             .client
-            .execute::<CatalogConfig, ErrorReponse, OK>(request.build()?)
+            .execute::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
 
         config.defaults.extend(self.config.props.clone());
@@ -427,12 +427,12 @@ mod _serde {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct ErrorReponse {
+    pub(super) struct ErrorResponse {
         error: ErrorModel,
     }
 
-    impl From<ErrorReponse> for Error {
-        fn from(resp: ErrorReponse) -> Error {
+    impl From<ErrorResponse> for Error {
+        fn from(resp: ErrorResponse) -> Error {
             resp.error.into()
         }
     }
