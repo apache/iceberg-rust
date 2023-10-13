@@ -24,7 +24,7 @@ use apache_avro::{from_value, types::Value, Reader, Writer};
 use futures::AsyncWriteExt;
 
 use self::{
-    _const_fields::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
+    _const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
     _serde::{ManifestListEntryV1, ManifestListEntryV2},
 };
 
@@ -105,22 +105,22 @@ impl ManifestListWriter {
         }
     }
 
-    /// Append manifests to be written.
-    pub fn add_manifests(
+    /// Append manifest entries to be written.
+    pub fn add_manifest_entries(
         &mut self,
-        manifests: impl Iterator<Item = ManifestListEntry>,
+        manifest_entries: impl Iterator<Item = ManifestListEntry>,
     ) -> Result<(), Error> {
         match self.format_version {
             FormatVersion::V1 => {
-                for manifest in manifests {
-                    let manifest: ManifestListEntryV1 = manifest.into();
-                    self.avro_writer.append_ser(manifest)?;
+                for manifest_entry in manifest_entries {
+                    let manifest_entry: ManifestListEntryV1 = manifest_entry.into();
+                    self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
             FormatVersion::V2 => {
-                for manifest in manifests {
-                    let manifest: ManifestListEntryV2 = manifest.try_into()?;
-                    self.avro_writer.append_ser(manifest)?;
+                for manifest_entry in manifest_entries {
+                    let manifest_entry: ManifestListEntryV2 = manifest_entry.try_into()?;
+                    self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
         }
@@ -138,7 +138,7 @@ impl ManifestListWriter {
 }
 
 /// This is a helper module that defines the schema field of the manifest list entry.
-mod _const_fields {
+mod _const_schema {
     use std::sync::Arc;
 
     use apache_avro::Schema as AvroSchema;
@@ -1058,7 +1058,7 @@ mod test {
         let mut writer =
             ManifestListWriter::new(output_file, crate::spec::FormatVersion::V1, metadata);
         writer
-            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
@@ -1110,7 +1110,7 @@ mod test {
         let mut writer =
             ManifestListWriter::new(output_file, crate::spec::FormatVersion::V2, metadata);
         writer
-            .add_manifests(expected_manifest_list.entries.clone().into_iter())
+            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
