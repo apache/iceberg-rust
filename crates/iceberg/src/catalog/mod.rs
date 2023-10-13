@@ -17,6 +17,7 @@
 
 //! Catalog API for Apache Iceberg
 
+#[allow(dead_code)]
 mod rest;
 pub use rest::*;
 use serde_derive::{Deserialize, Serialize};
@@ -115,6 +116,7 @@ impl AsRef<Vec<String>> for NamespaceIdent {
 }
 
 /// Namespace represents a namespace in the catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Namespace {
     name: NamespaceIdent,
     properties: HashMap<String, String>,

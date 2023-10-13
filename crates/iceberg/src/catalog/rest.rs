@@ -33,14 +33,11 @@ use crate::{
 
 use self::_serde::{
     CatalogConfig, ErrorModel, ErrorReponse, ListNamespaceResponse, ListTableResponse,
-    NamespaceSerde, RenameTableRequest,
+    NamespaceSerde, RenameTableRequest, NO_CONTENT, OK,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const PATH_V1: &str = "v1";
-
-const OK_STATUS_CODE: u16 = 200u16;
-const NO_CONTENT_STATUS_CODE: u16 = 204u16;
 
 #[derive(Debug, Builder)]
 pub struct RestCatalogConfig {
@@ -92,7 +89,7 @@ impl RestCatalogConfig {
         .join("/"))
     }
 
-    fn try_create_rest_client(&self) -> Result<Client> {
+    fn try_create_rest_client(&self) -> Result<HttpClient> {
         //TODO: We will add oauth, ssl config, sigv4 later
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -108,7 +105,9 @@ impl RestCatalogConfig {
             HeaderValue::from_str(&format!("iceberg-rs/{}", env!("CARGO_PKG_VERSION"))).unwrap(),
         );
 
-        Ok(Client::builder().default_headers(headers).build()?)
+        Ok(HttpClient(
+            Client::builder().default_headers(headers).build()?,
+        ))
     }
 }
 
@@ -126,9 +125,72 @@ impl NamespaceIdent {
     }
 }
 
+struct HttpClient(Client);
+
+impl HttpClient {
+    async fn execute<
+        R: DeserializeOwned,
+        E: DeserializeOwned + Into<Error>,
+        const SUCCESS_CODE: u16,
+    >(
+        &self,
+        request: Request,
+    ) -> Result<R> {
+        let resp = self.0.execute(request).await?;
+
+        if resp.status().as_u16() == SUCCESS_CODE {
+            let text = resp.text().await?;
+            log::debug!("Response text is: {text}");
+            Ok(serde_json::from_slice::<R>(text.as_bytes()).map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to parse response from rest catalog server!",
+                )
+                .with_context("json", text)
+                .with_source(e)
+            })?)
+        } else {
+            let text = resp.text().await?;
+            log::debug!("Response text is: {text}");
+            let e = serde_json::from_slice::<E>(text.as_bytes()).map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to parse response from rest catalog server!",
+                )
+                .with_context("json", text)
+                .with_source(e)
+            })?;
+            Err(e.into())
+        }
+    }
+
+    async fn execute2<E: DeserializeOwned + Into<Error>, const SUCCESS_CODE: u16>(
+        &self,
+        request: Request,
+    ) -> Result<()> {
+        let resp = self.0.execute(request).await?;
+
+        if resp.status().as_u16() == SUCCESS_CODE {
+            Ok(())
+        } else {
+            let text = resp.text().await?;
+            log::debug!("Response text is: {text}");
+            let e = serde_json::from_slice::<E>(text.as_bytes()).map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to parse response from rest catalog server!",
+                )
+                .with_context("json", text)
+                .with_source(e)
+            })?;
+            Err(e.into())
+        }
+    }
+}
+
 pub struct RestCatalog {
     config: RestCatalogConfig,
-    client: Client,
+    client: HttpClient,
 }
 
 #[async_trait]
@@ -138,16 +200,15 @@ impl Catalog for RestCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let mut request = self.client.get(self.config.namespaces_endpoint());
+        let mut request = self.client.0.get(self.config.namespaces_endpoint());
         if let Some(ns) = parent {
             request = request.query(&[("parent", ns.encode_in_url()?)]);
         }
 
-        let resp = execute_request::<ListNamespaceResponse, ErrorModel, OK_STATUS_CODE>(
-            &self.client,
-            request.build()?,
-        )
-        .await?;
+        let resp = self
+            .client
+            .execute::<ListNamespaceResponse, ErrorModel, OK>(request.build()?)
+            .await?;
 
         Ok(resp
             .namespaces
@@ -164,6 +225,7 @@ impl Catalog for RestCatalog {
     ) -> Result<Namespace> {
         let request = self
             .client
+            .0
             .post(self.config.namespaces_endpoint())
             .json(&NamespaceSerde {
                 namespace: namespace.0.clone(),
@@ -171,9 +233,10 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp =
-            execute_request::<NamespaceSerde, ErrorModel, OK_STATUS_CODE>(&self.client, request)
-                .await?;
+        let resp = self
+            .client
+            .execute::<NamespaceSerde, ErrorModel, OK>(request)
+            .await?;
 
         Ok(Namespace::from(resp))
     }
@@ -182,12 +245,14 @@ impl Catalog for RestCatalog {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
         let request = self
             .client
+            .0
             .get(self.config.namespace_endpoint(namespace)?)
             .build()?;
 
-        let resp =
-            execute_request::<NamespaceSerde, ErrorModel, OK_STATUS_CODE>(&self.client, request)
-                .await?;
+        let resp = self
+            .client
+            .execute::<NamespaceSerde, ErrorModel, OK>(request)
+            .await?;
         Ok(Namespace::from(resp))
     }
 
@@ -211,22 +276,27 @@ impl Catalog for RestCatalog {
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let request = self
             .client
+            .0
             .delete(self.config.namespace_endpoint(namespace)?)
             .build()?;
 
-        execute_request::<(), ErrorModel, NO_CONTENT_STATUS_CODE>(&self.client, request).await
+        self.client
+            .execute2::<ErrorModel, NO_CONTENT>(request)
+            .await
     }
 
     /// List tables from namespace.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let request = self
             .client
+            .0
             .get(self.config.tables_endpoint(namespace)?)
             .build()?;
 
-        let resp =
-            execute_request::<ListTableResponse, ErrorModel, OK_STATUS_CODE>(&self.client, request)
-                .await?;
+        let resp = self
+            .client
+            .execute::<ListTableResponse, ErrorModel, OK>(request)
+            .await?;
 
         Ok(resp.identifiers)
     }
@@ -255,20 +325,25 @@ impl Catalog for RestCatalog {
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let request = self
             .client
+            .0
             .delete(self.config.table_endpoint(table)?)
             .build()?;
 
-        execute_request::<(), ErrorModel, NO_CONTENT_STATUS_CODE>(&self.client, request).await
+        self.client
+            .execute2::<ErrorModel, NO_CONTENT>(request)
+            .await
     }
 
     /// Check if a table exists in the catalog.
     async fn stat_table(&self, table: &TableIdent) -> Result<bool> {
         let request = self
             .client
-            .delete(self.config.table_endpoint(table)?)
+            .0
+            .head(self.config.table_endpoint(table)?)
             .build()?;
 
-        execute_request::<(), ErrorModel, NO_CONTENT_STATUS_CODE>(&self.client, request)
+        self.client
+            .execute2::<ErrorModel, NO_CONTENT>(request)
             .await
             .map(|_| true)
     }
@@ -277,6 +352,7 @@ impl Catalog for RestCatalog {
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         let request = self
             .client
+            .0
             .post(self.config.rename_table_endpoint()?)
             .json(&RenameTableRequest {
                 source: src.clone(),
@@ -284,7 +360,9 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        execute_request::<(), ErrorModel, NO_CONTENT_STATUS_CODE>(&self.client, request).await
+        self.client
+            .execute2::<ErrorModel, NO_CONTENT>(request)
+            .await
     }
 
     /// Update a table to the catalog.
@@ -313,16 +391,15 @@ impl RestCatalog {
     }
 
     async fn update_config(&mut self) -> Result<()> {
-        let mut request = self.client.get(self.config.config_endpoint());
+        let mut request = self.client.0.get(self.config.config_endpoint());
 
         if let Some(warehouse_location) = &self.config.warehouse {
             request = request.query(&[("warehouse", warehouse_location)]);
         }
-        let mut config = execute_request::<CatalogConfig, ErrorReponse, OK_STATUS_CODE>(
-            &self.client,
-            request.build()?,
-        )
-        .await?;
+        let mut config = self
+            .client
+            .execute::<CatalogConfig, ErrorReponse, OK>(request.build()?)
+            .await?;
 
         config.defaults.extend(self.config.props.clone());
         config.defaults.extend(config.overrides);
@@ -333,39 +410,6 @@ impl RestCatalog {
     }
 }
 
-async fn execute_request<T: DeserializeOwned, E: DeserializeOwned + Into<Error>, const OK: u16>(
-    client: &Client,
-    request: Request,
-) -> Result<T> {
-    log::debug!("Executing request: {request:?}");
-
-    let resp = client.execute(request).await?;
-
-    if resp.status().as_u16() == OK {
-        let text = resp.text().await?;
-        log::debug!("Response text is: {text}");
-        Ok(serde_json::from_slice::<T>(text.as_bytes()).map_err(|e| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "Failed to parse response from rest catalog server!",
-            )
-            .with_context("json", text)
-            .with_source(e)
-        })?)
-    } else {
-        let text = resp.text().await?;
-        log::debug!("Response text is: {text}");
-        let e = serde_json::from_slice::<E>(text.as_bytes()).map_err(|e| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "Failed to parse response from rest catalog server!",
-            )
-            .with_context("json", text)
-            .with_source(e)
-        })?;
-        Err(e.into())
-    }
-}
 /// Requests and responses for rest api.
 mod _serde {
     use std::collections::HashMap;
@@ -374,6 +418,8 @@ mod _serde {
 
     use crate::{Error, ErrorKind, Namespace, TableIdent};
 
+    pub(super) const OK: u16 = 200u16;
+    pub(super) const NO_CONTENT: u16 = 204u16;
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub(super) struct CatalogConfig {
         pub(super) overrides: HashMap<String, String>,
@@ -591,5 +637,276 @@ mod tests {
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_namespace() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let create_ns_mock = server
+            .mock("POST", "/v1/namespaces")
+            .with_body(
+                r#"{
+                "namespace": [ "ns1", "ns11"],
+                "properties" : {
+                    "key1": "value1"
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let namespaces = catalog
+            .create_namespace(
+                &NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]),
+                HashMap::from([("key1".to_string(), "value1".to_string())]),
+            )
+            .await
+            .unwrap();
+
+        let expected_ns = Namespace::with_properties(
+            NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]),
+            HashMap::from([("key1".to_string(), "value1".to_string())]),
+        );
+
+        assert_eq!(expected_ns, namespaces);
+
+        config_mock.assert_async().await;
+        create_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_namespace() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let get_ns_mock = server
+            .mock("GET", "/v1/namespaces/ns1")
+            .with_body(
+                r#"{
+                "namespace": [ "ns1"],
+                "properties" : {
+                    "key1": "value1"
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let namespaces = catalog
+            .get_namespace(&NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap();
+
+        let expected_ns = Namespace::with_properties(
+            NamespaceIdent::new("ns1".to_string()),
+            HashMap::from([("key1".to_string(), "value1".to_string())]),
+        );
+
+        assert_eq!(expected_ns, namespaces);
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_drop_namespace() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let drop_ns_mock = server
+            .mock("DELETE", "/v1/namespaces/ns1")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        catalog
+            .drop_namespace(&NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        drop_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_list_tables() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let list_tables_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    },
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table2"
+                    }
+                ]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let tables = catalog
+            .list_tables(&NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap();
+
+        let expected_tables = vec![
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string()),
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table2".to_string()),
+        ];
+
+        assert_eq!(tables, expected_tables);
+
+        config_mock.assert_async().await;
+        list_tables_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_drop_tables() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let delete_table_mock = server
+            .mock("DELETE", "/v1/namespaces/ns1/tables/table1")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        catalog
+            .drop_table(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "table1".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        delete_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_check_table_exists() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let check_table_exists_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1/tables/table1")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(catalog
+            .stat_table(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "table1".to_string(),
+            ))
+            .await
+            .unwrap());
+
+        config_mock.assert_async().await;
+        check_table_exists_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_rename_table() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let rename_table_mock = server
+            .mock("POST", "/v1/tables/rename")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfigBuilder::default()
+                .uri(server.url())
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        catalog
+            .rename_table(
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string()),
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table2".to_string()),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        rename_table_mock.assert_async().await;
     }
 }
