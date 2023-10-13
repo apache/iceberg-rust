@@ -19,14 +19,16 @@
 
 use std::collections::HashMap;
 
-use crate::{avro::schema_to_avro_schema, io::OutputFile, spec::Literal, Error};
-use apache_avro::{from_value, types::Value, Reader, Schema as AvroSchema, Writer};
+use crate::{io::OutputFile, spec::Literal, Error};
+use apache_avro::{from_value, types::Value, Reader, Writer};
 use futures::AsyncWriteExt;
-use once_cell::sync::Lazy;
 
-use self::_serde::{ManifestListEntryV1, ManifestListEntryV2};
+use self::{
+    _const_fields::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
+    _serde::{ManifestListEntryV1, ManifestListEntryV2},
+};
 
-use super::{FormatVersion, Schema, StructType};
+use super::{FormatVersion, StructType};
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -72,54 +74,7 @@ impl ManifestList {
     pub fn entries(&self) -> &[ManifestListEntry] {
         &self.entries
     }
-
-    /// Get the v1 schema of the manifest list entry.
-    pub(crate) fn v1_schema() -> Schema {
-        let fields = vec![
-            _const_fields::MANIFEST_PATH.clone(),
-            _const_fields::MANIFEST_LENGTH.clone(),
-            _const_fields::PARTITION_SPEC_ID.clone(),
-            _const_fields::ADDED_SNAPSHOT_ID.clone(),
-            _const_fields::ADDED_FILES_COUNT_V1.clone().to_owned(),
-            _const_fields::EXISTING_FILES_COUNT_V1.clone(),
-            _const_fields::DELETED_FILES_COUNT_V1.clone(),
-            _const_fields::ADDED_ROWS_COUNT_V1.clone(),
-            _const_fields::EXISTING_ROWS_COUNT_V1.clone(),
-            _const_fields::DELETED_ROWS_COUNT_V1.clone(),
-            _const_fields::PARTITIONS.clone(),
-            _const_fields::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
-    }
-
-    /// Get the v2 schema of the manifest list entry.
-    pub(crate) fn v2_schema() -> Schema {
-        let fields = vec![
-            _const_fields::MANIFEST_PATH.clone(),
-            _const_fields::MANIFEST_LENGTH.clone(),
-            _const_fields::PARTITION_SPEC_ID.clone(),
-            _const_fields::CONTENT.clone(),
-            _const_fields::SEQUENCE_NUMBER.clone(),
-            _const_fields::MIN_SEQUENCE_NUMBER.clone(),
-            _const_fields::ADDED_SNAPSHOT_ID.clone(),
-            _const_fields::ADDED_FILES_COUNT_V2.clone(),
-            _const_fields::EXISTING_FILES_COUNT_V2.clone(),
-            _const_fields::DELETED_FILES_COUNT_V2.clone(),
-            _const_fields::ADDED_ROWS_COUNT_V2.clone(),
-            _const_fields::EXISTING_ROWS_COUNT_V2.clone(),
-            _const_fields::DELETED_ROWS_COUNT_V2.clone(),
-            _const_fields::PARTITIONS.clone(),
-            _const_fields::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
-    }
 }
-
-pub(crate) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
-    Lazy::new(|| schema_to_avro_schema("manifest_list", &ManifestList::v1_schema()).unwrap());
-
-pub(crate) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
-    Lazy::new(|| schema_to_avro_schema("manfiest_list", &ManifestList::v2_schema()).unwrap());
 
 /// A manifest list writer.
 pub struct ManifestListWriter {
@@ -186,11 +141,15 @@ impl ManifestListWriter {
 mod _const_fields {
     use std::sync::Arc;
 
+    use apache_avro::Schema as AvroSchema;
     use once_cell::sync::Lazy;
 
-    use crate::spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type};
+    use crate::{
+        avro::schema_to_avro_schema,
+        spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type},
+    };
 
-    pub(crate) static MANIFEST_PATH: Lazy<NestedFieldRef> = {
+    static MANIFEST_PATH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 500,
@@ -199,7 +158,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
+    static MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 501,
@@ -208,7 +167,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
+    static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 502,
@@ -217,7 +176,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static CONTENT: Lazy<NestedFieldRef> = {
+    static CONTENT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 517,
@@ -226,7 +185,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 515,
@@ -235,7 +194,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 516,
@@ -244,7 +203,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
+    static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 503,
@@ -253,7 +212,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 504,
@@ -262,7 +221,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 504,
@@ -271,7 +230,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 505,
@@ -280,7 +239,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 505,
@@ -289,7 +248,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 506,
@@ -298,7 +257,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 506,
@@ -307,7 +266,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 512,
@@ -316,7 +275,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 512,
@@ -325,7 +284,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 513,
@@ -334,7 +293,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 513,
@@ -343,7 +302,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 514,
@@ -352,7 +311,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 514,
@@ -361,7 +320,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static PARTITIONS: Lazy<NestedFieldRef> = {
+    static PARTITIONS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             // element type
             let fields = vec![
@@ -398,7 +357,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static KEY_METADATA: Lazy<NestedFieldRef> = {
+    static KEY_METADATA: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 519,
@@ -407,6 +366,55 @@ mod _const_fields {
             ))
         })
     };
+
+    static V1_SCHEMA: Lazy<Schema> = {
+        Lazy::new(|| {
+            let fields = vec![
+                MANIFEST_PATH.clone(),
+                MANIFEST_LENGTH.clone(),
+                PARTITION_SPEC_ID.clone(),
+                ADDED_SNAPSHOT_ID.clone(),
+                ADDED_FILES_COUNT_V1.clone().to_owned(),
+                EXISTING_FILES_COUNT_V1.clone(),
+                DELETED_FILES_COUNT_V1.clone(),
+                ADDED_ROWS_COUNT_V1.clone(),
+                EXISTING_ROWS_COUNT_V1.clone(),
+                DELETED_ROWS_COUNT_V1.clone(),
+                PARTITIONS.clone(),
+                KEY_METADATA.clone(),
+            ];
+            Schema::builder().with_fields(fields).build().unwrap()
+        })
+    };
+
+    static V2_SCHEMA: Lazy<Schema> = {
+        Lazy::new(|| {
+            let fields = vec![
+                MANIFEST_PATH.clone(),
+                MANIFEST_LENGTH.clone(),
+                PARTITION_SPEC_ID.clone(),
+                CONTENT.clone(),
+                SEQUENCE_NUMBER.clone(),
+                MIN_SEQUENCE_NUMBER.clone(),
+                ADDED_SNAPSHOT_ID.clone(),
+                ADDED_FILES_COUNT_V2.clone(),
+                EXISTING_FILES_COUNT_V2.clone(),
+                DELETED_FILES_COUNT_V2.clone(),
+                ADDED_ROWS_COUNT_V2.clone(),
+                EXISTING_ROWS_COUNT_V2.clone(),
+                DELETED_ROWS_COUNT_V2.clone(),
+                PARTITIONS.clone(),
+                KEY_METADATA.clone(),
+            ];
+            Schema::builder().with_fields(fields).build().unwrap()
+        })
+    };
+
+    pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
+        Lazy::new(|| schema_to_avro_schema("manifest_list", &V1_SCHEMA).unwrap());
+
+    pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
+        Lazy::new(|| schema_to_avro_schema("manfiest_list", &V2_SCHEMA).unwrap());
 }
 
 /// Entry in a manifest list.
@@ -1035,7 +1043,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
                 key_metadata: vec![],
             }]
         };
@@ -1058,7 +1066,11 @@ mod test {
         let manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V1,
-            &StructType::new(vec![]),
+            &StructType::new(vec![Arc::new(NestedField::required(
+                1,
+                "test",
+                Type::Primitive(PrimitiveType::Long),
+            ))]),
         )
         .unwrap();
         assert_eq!(manifest_list, expected_manifest_list);
