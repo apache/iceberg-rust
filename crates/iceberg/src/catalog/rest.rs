@@ -58,35 +58,35 @@ impl RestCatalogConfig {
         [&self.uri, PATH_V1, "namespaces"].join("/")
     }
 
-    fn namespace_endpoint(&self, ns: &NamespaceIdent) -> Result<String> {
-        Ok([&self.uri, PATH_V1, "namespaces", &ns.encode_in_url()?].join("/"))
+    fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
+        [&self.uri, PATH_V1, "namespaces", &ns.encode_in_url()].join("/")
     }
 
-    fn tables_endpoint(&self, ns: &NamespaceIdent) -> Result<String> {
-        Ok([
+    fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
+        [
             &self.uri,
             PATH_V1,
             "namespaces",
-            &ns.encode_in_url()?,
+            &ns.encode_in_url(),
             "tables",
         ]
-        .join("/"))
+        .join("/")
     }
 
-    fn rename_table_endpoint(&self) -> Result<String> {
-        Ok([&self.uri, PATH_V1, "tables", "rename"].join("/"))
+    fn rename_table_endpoint(&self) -> String {
+        [&self.uri, PATH_V1, "tables", "rename"].join("/")
     }
 
-    fn table_endpoint(&self, table: &TableIdent) -> Result<String> {
-        Ok([
+    fn table_endpoint(&self, table: &TableIdent) -> String {
+        [
             &self.uri,
             PATH_V1,
             "namespaces",
-            &table.namespace.encode_in_url()?,
+            &table.namespace.encode_in_url(),
             "tables",
             encode(&table.name).as_ref(),
         ]
-        .join("/"))
+        .join("/")
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
@@ -113,15 +113,8 @@ impl RestCatalogConfig {
 
 impl NamespaceIdent {
     /// Returns url encoded format.
-    pub fn encode_in_url(&self) -> Result<String> {
-        if self.0.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Can't encode empty namespace in url!",
-            ));
-        }
-
-        Ok(encode(&self.0.join("\u{1F}")).to_string())
+    pub fn encode_in_url(&self) -> String {
+        encode(&self.0.join("\u{1F}")).to_string()
     }
 }
 
@@ -139,25 +132,23 @@ impl HttpClient {
         let resp = self.0.execute(request).await?;
 
         if resp.status().as_u16() == SUCCESS_CODE {
-            let text = resp.text().await?;
-            log::debug!("Response text is: {text}");
-            Ok(serde_json::from_slice::<R>(text.as_bytes()).map_err(|e| {
+            let text = resp.bytes().await?;
+            Ok(serde_json::from_slice::<R>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", text)
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?)
         } else {
-            let text = resp.text().await?;
-            log::debug!("Response text is: {text}");
-            let e = serde_json::from_slice::<E>(text.as_bytes()).map_err(|e| {
+            let text = resp.bytes().await?;
+            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", text)
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
             Err(e.into())
@@ -173,14 +164,13 @@ impl HttpClient {
         if resp.status().as_u16() == SUCCESS_CODE {
             Ok(())
         } else {
-            let text = resp.text().await?;
-            log::debug!("Response text is: {text}");
-            let e = serde_json::from_slice::<E>(text.as_bytes()).map_err(|e| {
+            let text = resp.bytes().await?;
+            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", text)
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
             Err(e.into())
@@ -202,7 +192,7 @@ impl Catalog for RestCatalog {
     ) -> Result<Vec<NamespaceIdent>> {
         let mut request = self.client.0.get(self.config.namespaces_endpoint());
         if let Some(ns) = parent {
-            request = request.query(&[("parent", ns.encode_in_url()?)]);
+            request = request.query(&[("parent", ns.encode_in_url())]);
         }
 
         let resp = self
@@ -210,11 +200,10 @@ impl Catalog for RestCatalog {
             .execute::<ListNamespaceResponse, ErrorModel, OK>(request.build()?)
             .await?;
 
-        Ok(resp
-            .namespaces
+        resp.namespaces
             .into_iter()
             .map(NamespaceIdent::from_vec)
-            .collect())
+            .collect::<Result<Vec<NamespaceIdent>>>()
     }
 
     /// Create a new namespace inside the catalog.
@@ -238,7 +227,7 @@ impl Catalog for RestCatalog {
             .execute::<NamespaceSerde, ErrorModel, OK>(request)
             .await?;
 
-        Ok(Namespace::from(resp))
+        Namespace::try_from(resp)
     }
 
     /// Get a namespace information from the catalog.
@@ -246,14 +235,14 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .get(self.config.namespace_endpoint(namespace)?)
+            .get(self.config.namespace_endpoint(namespace))
             .build()?;
 
         let resp = self
             .client
             .execute::<NamespaceSerde, ErrorModel, OK>(request)
             .await?;
-        Ok(Namespace::from(resp))
+        Namespace::try_from(resp)
     }
 
     /// Update a namespace inside the catalog.
@@ -277,7 +266,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .delete(self.config.namespace_endpoint(namespace)?)
+            .delete(self.config.namespace_endpoint(namespace))
             .build()?;
 
         self.client
@@ -290,7 +279,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .get(self.config.tables_endpoint(namespace)?)
+            .get(self.config.tables_endpoint(namespace))
             .build()?;
 
         let resp = self
@@ -326,7 +315,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .delete(self.config.table_endpoint(table)?)
+            .delete(self.config.table_endpoint(table))
             .build()?;
 
         self.client
@@ -339,7 +328,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .head(self.config.table_endpoint(table)?)
+            .head(self.config.table_endpoint(table))
             .build()?;
 
         self.client
@@ -353,7 +342,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .post(self.config.rename_table_endpoint()?)
+            .post(self.config.rename_table_endpoint())
             .json(&RenameTableRequest {
                 source: src.clone(),
                 destination: dest.clone(),
@@ -491,12 +480,13 @@ mod _serde {
         pub(super) properties: Option<HashMap<String, String>>,
     }
 
-    impl From<NamespaceSerde> for super::Namespace {
-        fn from(value: NamespaceSerde) -> Self {
-            super::Namespace::with_properties(
-                super::NamespaceIdent::from_vec(value.namespace),
+    impl TryFrom<NamespaceSerde> for super::Namespace {
+        type Error = Error;
+        fn try_from(value: NamespaceSerde) -> std::result::Result<Self, Self::Error> {
+            Ok(super::Namespace::with_properties(
+                super::NamespaceIdent::from_vec(value.namespace)?,
                 value.properties.unwrap_or_default(),
-            )
+            ))
         }
     }
 
@@ -608,8 +598,7 @@ mod tests {
                 r#"{
                 "namespaces": [
                     ["ns1", "ns11"],
-                    ["ns2"],
-                    [""]
+                    ["ns2"]
                 ]
             }"#,
             )
@@ -628,9 +617,8 @@ mod tests {
         let namespaces = catalog.list_namespaces(None).await.unwrap();
 
         let expected_ns = vec![
-            NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]),
-            NamespaceIdent::from_vec(vec!["ns2".to_string()]),
-            NamespaceIdent::new("".to_string()),
+            NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
+            NamespaceIdent::from_vec(vec!["ns2".to_string()]).unwrap(),
         ];
 
         assert_eq!(expected_ns, namespaces);
@@ -669,14 +657,14 @@ mod tests {
 
         let namespaces = catalog
             .create_namespace(
-                &NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]),
+                &NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
                 HashMap::from([("key1".to_string(), "value1".to_string())]),
             )
             .await
             .unwrap();
 
         let expected_ns = Namespace::with_properties(
-            NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]),
+            NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
             HashMap::from([("key1".to_string(), "value1".to_string())]),
         );
 

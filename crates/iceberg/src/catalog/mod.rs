@@ -24,7 +24,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -104,8 +104,14 @@ impl NamespaceIdent {
     }
 
     /// Create a multi-level namespace identifier from vector.
-    pub fn from_vec(names: Vec<String>) -> Self {
-        Self(names)
+    pub fn from_vec(names: Vec<String>) -> Result<Self> {
+        if names.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace identifier can't be empty!",
+            ));
+        }
+        Ok(Self(names))
     }
 }
 
