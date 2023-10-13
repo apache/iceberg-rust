@@ -74,7 +74,7 @@ impl RestCatalogConfig {
     }
 
     fn rename_table_endpoint(&self) -> Result<String> {
-        Ok([&self.uri, PATH_V1, "tables"].join("/"))
+        Ok([&self.uri, PATH_V1, "tables", "rename"].join("/"))
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> Result<String> {
