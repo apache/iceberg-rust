@@ -34,6 +34,9 @@ use uuid::Uuid;
 use crate::{Error, ErrorKind};
 
 use super::datatypes::{PrimitiveType, Type};
+use super::MAX_DECIMAL_PRECISION;
+
+pub use serde::RawLiteral;
 
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
@@ -64,9 +67,8 @@ pub enum PrimitiveLiteral {
     Fixed(Vec<u8>),
     /// Binary value (without length)
     Binary(Vec<u8>),
-    /// Stores unscaled value as two’s-complement big-endian binary,
-    /// using the minimum number of bytes for the value
-    Decimal(Decimal),
+    /// Stores unscaled value as big int. According to iceberg spec, the precision must less than 38(`MAX_DECIMAL_PRECISION`) , so i128 is suit here.
+    Decimal(i128),
 }
 
 /// Values present in iceberg type
@@ -420,7 +422,7 @@ impl Literal {
     }
 
     /// Creates a decimal literal.
-    pub fn decimal(decimal: Decimal) -> Self {
+    pub fn decimal(decimal: i128) -> Self {
         Self::Primitive(PrimitiveLiteral::Decimal(decimal))
     }
 
@@ -440,7 +442,7 @@ impl Literal {
         let decimal = Decimal::from_str_exact(s.as_ref()).map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse decimal.").with_source(e)
         })?;
-        Ok(Self::decimal(decimal))
+        Ok(Self::decimal(decimal.mantissa()))
     }
 }
 
@@ -594,7 +596,7 @@ impl From<&Literal> for JsonValue {
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Default, Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
@@ -617,6 +619,16 @@ impl Struct {
             .map(|(((null, value), id), name)| {
                 (id, if *null { None } else { Some(value) }, name.as_str())
             })
+    }
+
+    /// Create a iterator to comsume the field in order of (field_id, field_value, field_name).
+    pub fn comsume_iter(self) -> impl Iterator<Item = (i32, Option<Literal>, String)> {
+        self.null_bitmap
+            .into_iter()
+            .zip(self.fields)
+            .zip(self.field_ids)
+            .zip(self.field_names)
+            .map(|(((null, value), id), name)| (id, if null { None } else { Some(value) }, name))
     }
 }
 
@@ -893,9 +905,9 @@ impl Literal {
                 PrimitiveLiteral::Binary(_) => Type::Primitive(PrimitiveType::Binary),
                 PrimitiveLiteral::String(_) => Type::Primitive(PrimitiveType::String),
                 PrimitiveLiteral::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
-                PrimitiveLiteral::Decimal(dec) => Type::Primitive(PrimitiveType::Decimal {
-                    precision: 38,
-                    scale: dec.scale(),
+                PrimitiveLiteral::Decimal(_) => Type::Primitive(PrimitiveType::Decimal {
+                    precision: MAX_DECIMAL_PRECISION,
+                    scale: 0,
                 }),
             },
             _ => unimplemented!(),
@@ -993,6 +1005,545 @@ mod timestamptz {
             // This shouldn't fail until the year 262000
             &NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap(),
         )
+    }
+}
+
+mod serde {
+    use std::collections::{BTreeMap, HashMap};
+
+    use crate::{
+        spec::{PrimitiveType, Type},
+        Error, ErrorKind,
+    };
+
+    use super::{Literal, PrimitiveLiteral};
+    use serde::{
+        de::Visitor,
+        ser::{SerializeSeq, SerializeStruct},
+        Deserialize, Serialize,
+    };
+    use serde_derive::Deserialize as DeserializeDerive;
+    use serde_derive::Serialize as SerializeDerive;
+
+    #[derive(SerializeDerive, DeserializeDerive)]
+    #[serde(transparent)]
+    /// Raw literal representation used for serde. The seriailize way is used for avro serializer.
+    pub struct RawLiteral(RawLiteralEnum);
+
+    impl RawLiteral {
+        /// Covert literal to raw literal.
+        pub fn try_from(literal: Literal, ty: &Type) -> Result<Self, Error> {
+            Ok(Self(RawLiteralEnum::try_from(literal, ty)?))
+        }
+
+        /// Convert raw literal to literal.
+        pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
+            self.0.try_into(ty)
+        }
+    }
+
+    #[derive(SerializeDerive, Clone)]
+    enum RawLiteralEnum {
+        Null,
+        Boolean(bool),
+        Int(i32),
+        Long(i64),
+        Float(f32),
+        Double(f64),
+        String(String),
+        Bytes(Vec<u8>),
+        List(Vec<Option<RawLiteralEnum>>),
+        Map(Map),
+        StringMap(HashMap<String, Option<RawLiteralEnum>>),
+        Record(Record),
+    }
+
+    #[derive(Clone)]
+    struct Record {
+        required: Vec<(String, RawLiteralEnum)>,
+        optional: Vec<(String, Option<RawLiteralEnum>)>,
+    }
+
+    impl Serialize for Record {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let len = self.required.len() + self.optional.len();
+            let mut record = serializer.serialize_struct("", len)?;
+            for (k, v) in &self.required {
+                record.serialize_field(Box::leak(k.clone().into_boxed_str()), &v)?;
+            }
+            for (k, v) in &self.optional {
+                record.serialize_field(Box::leak(k.clone().into_boxed_str()), &v)?;
+            }
+            record.end()
+        }
+    }
+
+    #[derive(Clone)]
+    struct Map {
+        k_v: Vec<(RawLiteralEnum, Option<RawLiteralEnum>)>,
+    }
+
+    impl Serialize for Map {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut seq = serializer.serialize_seq(Some(self.k_v.len()))?;
+            for (k, v) in &self.k_v {
+                let record = Record {
+                    required: vec![("key".to_string(), k.clone())],
+                    optional: vec![("value".to_string(), v.clone())],
+                };
+                seq.serialize_element(&record)?;
+            }
+            seq.end()
+        }
+    }
+
+    impl<'de> Deserialize<'de> for RawLiteralEnum {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct RawLiteralVisitor;
+            impl<'de> Visitor<'de> for RawLiteralVisitor {
+                type Value = RawLiteralEnum;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("expect")
+                }
+
+                fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Boolean(v))
+                }
+
+                fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Int(v))
+                }
+
+                fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Long(v))
+                }
+
+                /// Used in json
+                fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Long(v as i64))
+                }
+
+                fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Float(v))
+                }
+
+                fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Double(v))
+                }
+
+                fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::String(v.to_string()))
+                }
+
+                fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Bytes(v.to_vec()))
+                }
+
+                fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::String(v.to_string()))
+                }
+
+                fn visit_unit<E>(self) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(RawLiteralEnum::Null)
+                }
+
+                fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+                where
+                    A: serde::de::MapAccess<'de>,
+                {
+                    let mut required = Vec::new();
+                    while let Some(key) = map.next_key::<String>()? {
+                        let value = map.next_value::<RawLiteralEnum>()?;
+                        required.push((key, value));
+                    }
+                    Ok(RawLiteralEnum::Record(Record {
+                        required,
+                        optional: Vec::new(),
+                    }))
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: serde::de::SeqAccess<'de>,
+                {
+                    let mut list = Vec::new();
+                    while let Some(value) = seq.next_element::<RawLiteralEnum>()? {
+                        list.push(Some(value));
+                    }
+                    Ok(RawLiteralEnum::List(list))
+                }
+            }
+            deserializer.deserialize_any(RawLiteralVisitor)
+        }
+    }
+
+    impl RawLiteralEnum {
+        pub fn try_from(literal: Literal, ty: &Type) -> Result<Self, Error> {
+            let raw = match literal {
+                Literal::Primitive(prim) => match prim {
+                    super::PrimitiveLiteral::Boolean(v) => RawLiteralEnum::Boolean(v),
+                    super::PrimitiveLiteral::Int(v) => RawLiteralEnum::Int(v),
+                    super::PrimitiveLiteral::Long(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::Float(v) => RawLiteralEnum::Float(v.0),
+                    super::PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
+                    super::PrimitiveLiteral::Date(v) => RawLiteralEnum::Int(v),
+                    super::PrimitiveLiteral::Time(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::TimestampTZ(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
+                    super::PrimitiveLiteral::UUID(v) => RawLiteralEnum::String(v.to_string()),
+                    super::PrimitiveLiteral::Fixed(v) => RawLiteralEnum::Bytes(v),
+                    super::PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(v),
+                    super::PrimitiveLiteral::Decimal(v) => {
+                        RawLiteralEnum::Bytes(v.to_le_bytes().to_vec())
+                    }
+                },
+                Literal::Struct(r#struct) => {
+                    let mut required = Vec::new();
+                    let mut optional = Vec::new();
+                    if let Type::Struct(sturct_ty) = ty {
+                        for (id, value, field_name) in r#struct.comsume_iter() {
+                            let field = sturct_ty.field_by_id(id).ok_or_else(|| {
+                                Error::new(ErrorKind::DataInvalid, "field not found")
+                            })?;
+                            if field.required {
+                                if let Some(value) = value {
+                                    required.push((
+                                        field_name,
+                                        RawLiteralEnum::try_from(value, &field.field_type)?,
+                                    ));
+                                } else {
+                                    return Err(Error::new(
+                                        ErrorKind::DataInvalid,
+                                        "Can't convert null to required field",
+                                    ));
+                                }
+                            } else if let Some(value) = value {
+                                optional.push((
+                                    field_name,
+                                    Some(RawLiteralEnum::try_from(value, &field.field_type)?),
+                                ));
+                            } else {
+                                optional.push((field_name, None));
+                            }
+                        }
+                    } else {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Type {} should be a struct", ty),
+                        ));
+                    }
+                    RawLiteralEnum::Record(Record { required, optional })
+                }
+                Literal::List(list) => RawLiteralEnum::List(if let Type::List(list_ty) = ty {
+                    list.into_iter()
+                        .map(|v| {
+                            v.map(|v| {
+                                RawLiteralEnum::try_from(v, &list_ty.element_field.field_type)
+                            })
+                            .transpose()
+                        })
+                        .collect::<Result<_, Error>>()?
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Type {} should be a list", ty),
+                    ));
+                }),
+                Literal::Map(map) => {
+                    if let Type::Map(map_ty) = ty {
+                        if let Type::Primitive(PrimitiveType::String) = *map_ty.key_field.field_type
+                        {
+                            let mut raw_map = HashMap::with_capacity(map.len());
+                            for (k, v) in map {
+                                if let Literal::Primitive(PrimitiveLiteral::String(k)) = k {
+                                    raw_map.insert(
+                                        k,
+                                        v.map(|v| {
+                                            RawLiteralEnum::try_from(
+                                                v,
+                                                &map_ty.value_field.field_type,
+                                            )
+                                        })
+                                        .transpose()?,
+                                    );
+                                } else {
+                                    return Err(Error::new(
+                                        ErrorKind::DataInvalid,
+                                        "literal type is inconsistent with type",
+                                    ));
+                                }
+                            }
+                            RawLiteralEnum::StringMap(raw_map)
+                        } else {
+                            RawLiteralEnum::Map(Map {
+                                k_v: map
+                                    .into_iter()
+                                    .map(|(k, v)| {
+                                        Ok((
+                                            RawLiteralEnum::try_from(
+                                                k,
+                                                &map_ty.key_field.field_type,
+                                            )?,
+                                            v.map(|v| {
+                                                RawLiteralEnum::try_from(
+                                                    v,
+                                                    &map_ty.value_field.field_type,
+                                                )
+                                            })
+                                            .transpose()?,
+                                        ))
+                                    })
+                                    .collect::<Result<_, Error>>()?,
+                            })
+                        }
+                    } else {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Type {} should be a map", ty),
+                        ));
+                    }
+                }
+            };
+            Ok(raw)
+        }
+
+        fn as_u8(&self) -> Result<u8, Error> {
+            match self {
+                Self::Int(v) => {
+                    if *v >= 0 && *v <= u8::MAX as i32 {
+                        Ok(*v as u8)
+                    } else {
+                        Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Fail to convert i32 to u8",
+                        ))
+                    }
+                }
+                Self::Long(v) => {
+                    if *v >= 0 && *v <= u8::MAX as i64 {
+                        Ok(*v as u8)
+                    } else {
+                        Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Fail to convert i32 to u8",
+                        ))
+                    }
+                }
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "raw literal is not integer",
+                )),
+            }
+        }
+
+        pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
+            let invalid_err = |v: &str| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("raw literal ({}) fail convert to {:?}", v, ty),
+                )
+            };
+            match self {
+                RawLiteralEnum::Null => Ok(None),
+                RawLiteralEnum::Boolean(v) => Ok(Some(Literal::bool(v))),
+                RawLiteralEnum::Int(v) => match ty {
+                    Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(v))),
+                    Type::Primitive(PrimitiveType::Date) => Ok(Some(Literal::date(v))),
+                    _ => Err(invalid_err("int")),
+                },
+                RawLiteralEnum::Long(v) => match ty {
+                    Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(
+                        i32::try_from(v).map_err(|err| invalid_err("long").with_source(err))?,
+                    ))),
+                    Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(v))),
+                    Type::Primitive(PrimitiveType::Time) => Ok(Some(Literal::time(v))),
+                    Type::Primitive(PrimitiveType::Timestamp) => Ok(Some(Literal::timestamp(v))),
+                    Type::Primitive(PrimitiveType::Timestamptz) => {
+                        Ok(Some(Literal::timestamptz(v)))
+                    }
+                    Type::Primitive(PrimitiveType::Date) => Ok(Some(Literal::date(
+                        v.try_into()
+                            .map_err(|err| invalid_err("long").with_source(err))?,
+                    ))),
+                    _ => Err(invalid_err("long")),
+                },
+                RawLiteralEnum::Float(v) => match ty {
+                    Type::Primitive(PrimitiveType::Float) => Ok(Some(Literal::float(v))),
+                    Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
+                    _ => Err(invalid_err("float")),
+                },
+                RawLiteralEnum::Double(v) => match ty {
+                    Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
+                    _ => Err(invalid_err("double")),
+                },
+                RawLiteralEnum::String(v) => match ty {
+                    Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    Type::Primitive(PrimitiveType::Uuid) => Ok(Some(Literal::uuid_from_str(&v)?)),
+                    _ => Err(invalid_err("string")),
+                },
+                // # TODO
+                // rust avro don't support deserialize any bytes representation now.
+                RawLiteralEnum::Bytes(_) => Err(invalid_err("bytes")),
+                RawLiteralEnum::List(v) => match ty {
+                    Type::List(ty) => Ok(Some(Literal::List(
+                        v.into_iter()
+                            .map(|v| {
+                                if let Some(v) = v {
+                                    v.try_into(&ty.element_field.field_type)
+                                } else {
+                                    Ok(None)
+                                }
+                            })
+                            .collect::<Result<_, Error>>()?,
+                    ))),
+                    Type::Map(map_ty) => {
+                        let key_ty = map_ty.key_field.field_type.as_ref();
+                        let value_ty = map_ty.value_field.field_type.as_ref();
+                        let mut map = BTreeMap::new();
+                        for k_v in v {
+                            // In deserialize, the element always be `Som`e. `None` will be represented
+                            // as `Some(RawLiteral::Null)`
+                            let k_v = k_v.ok_or_else(|| invalid_err("list"))?;
+                            if let RawLiteralEnum::Record(Record {
+                                required,
+                                optional: _,
+                            }) = k_v
+                            {
+                                if required.len() != 2 {
+                                    return Err(invalid_err("list"));
+                                }
+                                let mut key = None;
+                                let mut value = None;
+                                required.into_iter().for_each(|(k, v)| {
+                                    if k == "key" {
+                                        key = Some(v);
+                                    } else if k == "value" {
+                                        value = Some(v);
+                                    }
+                                });
+                                match (key, value) {
+                                    (Some(k), Some(v)) => {
+                                        map.insert(
+                                            k.try_into(key_ty)?
+                                                .ok_or_else(|| invalid_err("list"))?,
+                                            v.try_into(value_ty)?,
+                                        );
+                                    }
+                                    _ => return Err(invalid_err("list")),
+                                }
+                            } else {
+                                return Err(invalid_err("list"));
+                            }
+                        }
+                        Ok(Some(Literal::Map(map)))
+                    }
+                    Type::Primitive(PrimitiveType::Binary) => {
+                        let bytes: Vec<u8> = v
+                            .into_iter()
+                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
+                            .collect::<Result<_, Error>>()?;
+                        Ok(Some(Literal::binary(bytes)))
+                    }
+                    Type::Primitive(PrimitiveType::Fixed(len)) => {
+                        let bytes: Vec<u8> = v
+                            .into_iter()
+                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
+                            .collect::<Result<_, Error>>()?;
+                        if bytes.len() as u64 > *len {
+                            return Err(invalid_err("list"));
+                        }
+                        Ok(Some(Literal::fixed(bytes)))
+                    }
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: _,
+                        scale: _,
+                    }) => {
+                        let bytes: Vec<u8> = v
+                            .into_iter()
+                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
+                            .collect::<Result<_, Error>>()?;
+                        let bytes: [u8; 16] = bytes.try_into().map_err(|_| invalid_err("list"))?;
+                        Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
+                    }
+                    _ => Err(invalid_err("list")),
+                },
+                RawLiteralEnum::Record(Record {
+                    required,
+                    optional: _,
+                }) => match ty {
+                    Type::Struct(struct_ty) => {
+                        let iters: Vec<(i32, Option<Literal>, String)> = required
+                            .into_iter()
+                            .map(|(field_name, value)| {
+                                let field = struct_ty
+                                    .field_by_name(field_name.as_str())
+                                    .ok_or_else(|| invalid_err("record"))?;
+                                let value = value.try_into(&field.field_type)?;
+                                Ok((field.id, value, field.name.clone()))
+                            })
+                            .collect::<Result<_, Error>>()?;
+                        Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
+                    }
+                    Type::Map(map_ty) => {
+                        if *map_ty.key_field.field_type != Type::Primitive(PrimitiveType::String) {
+                            return Err(invalid_err("record"));
+                        }
+                        let mut map = BTreeMap::new();
+                        for (k, v) in required {
+                            map.insert(
+                                Literal::string(k),
+                                v.try_into(&map_ty.value_field.field_type)?,
+                            );
+                        }
+                        Ok(Some(Literal::Map(map)))
+                    }
+                    _ => Err(invalid_err("record")),
+                },
+                RawLiteralEnum::StringMap(_) => Err(invalid_err("string map")),
+                RawLiteralEnum::Map(_) => Err(invalid_err("map")),
+            }
+        }
     }
 }
 
