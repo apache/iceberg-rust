@@ -17,16 +17,15 @@
 
 //! Catalog API for Apache Iceberg
 
-#[allow(dead_code)]
-mod rest;
-pub use rest::*;
 use serde_derive::{Deserialize, Serialize};
+use urlencoding::encode;
 
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
@@ -113,10 +112,28 @@ impl NamespaceIdent {
         }
         Ok(Self(names))
     }
+
+    /// Returns url encoded format.
+    pub fn encode_in_url(&self) -> String {
+        encode(&self.as_ref().join("\u{1F}")).to_string()
+    }
+
+    /// Returns inner strings.
+    pub fn inner(self) -> Vec<String> {
+        self.0
+    }
 }
 
 impl AsRef<Vec<String>> for NamespaceIdent {
     fn as_ref(&self) -> &Vec<String> {
+        &self.0
+    }
+}
+
+impl Deref for NamespaceIdent {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
@@ -153,8 +170,10 @@ impl Namespace {
 /// TableIdent represents the identifier of a table in the catalog.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableIdent {
-    namespace: NamespaceIdent,
-    name: String,
+    /// Namespace of the table.
+    pub namespace: NamespaceIdent,
+    /// Table name.
+    pub name: String,
 }
 
 impl TableIdent {
