@@ -17,4 +17,4 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/iceberg", "crates/catalog/rest"]
+members = ["crates/catalog/*", "crates/iceberg"]
