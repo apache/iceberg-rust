@@ -58,7 +58,6 @@ urlencoding = "2"
 uuid = "1.4.1"
 
 [dev-dependencies]
-mockito = "^1"
 pretty_assertions = "1.4.0"
 tempdir = "0.3"
 tokio = { version = "1", features = ["macros"] }
