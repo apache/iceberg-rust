@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "iceberg-rest"
+name = "iceberg-catalog-rest"
 version = "0.1.0"
 edition = "2021"
 
@@ -24,11 +24,11 @@ categories = ["database"]
 description = "Apache Iceberg Rust REST API"
 repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
-keywords = ["iceberg", "rest"]
+keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
 async-trait = "0.1"
-iceberg = { path = "../iceberg" }
+iceberg = { path = "../../iceberg" }
 reqwest = { version = "^0.11", features = ["json"] }
 serde = { version = "^1.0", features = ["rc"] }
 serde_derive = "^1.0"
