@@ -414,7 +414,7 @@ mod _const_schema {
         Lazy::new(|| schema_to_avro_schema("manifest_list", &V1_SCHEMA).unwrap());
 
     pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
-        Lazy::new(|| schema_to_avro_schema("manfiest_list", &V2_SCHEMA).unwrap());
+        Lazy::new(|| schema_to_avro_schema("manifest_list", &V2_SCHEMA).unwrap());
 }
 
 /// Entry in a manifest list.
@@ -953,7 +953,7 @@ mod test {
             ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 1,
                 min_sequence_number: 1,
@@ -1004,7 +1004,7 @@ mod test {
             entries: vec![ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 1,
                 min_sequence_number: 1,
@@ -1022,7 +1022,7 @@ mod test {
         let result = serde_json::to_string(&manifest_list).unwrap();
         assert_eq!(
             result,
-            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":0,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
+            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
         );
     }
 
@@ -1032,7 +1032,7 @@ mod test {
             entries: vec![ManifestListEntry {
                 manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                 manifest_length: 5806,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 0,
                 min_sequence_number: 0,
@@ -1053,10 +1053,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut metadata = HashMap::new();
-        metadata.insert(String::from("format-version"), String::from("1"));
         let mut writer =
-            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V1, metadata);
+            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V1, HashMap::new());
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1084,7 +1082,7 @@ mod test {
             entries: vec![ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 1,
                 min_sequence_number: 1,
@@ -1105,10 +1103,8 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut metadata = HashMap::new();
-        metadata.insert(String::from("format-version"), String::from("2"));
         let mut writer =
-            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V2, metadata);
+            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V2, HashMap::new());
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
