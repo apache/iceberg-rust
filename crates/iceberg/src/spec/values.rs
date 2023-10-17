@@ -450,9 +450,9 @@ impl From<Literal> for ByteBuf {
             Literal::Primitive(prim) => match prim {
                 PrimitiveLiteral::Boolean(val) => {
                     if val {
-                        ByteBuf::from([0u8])
-                    } else {
                         ByteBuf::from([1u8])
+                    } else {
+                        ByteBuf::from([0u8])
                     }
                 }
                 PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
@@ -995,7 +995,7 @@ mod tests {
         assert_eq!(literal, expected_literal);
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        writer.append_ser(bytes).unwrap();
+        writer.append_ser(Into::<ByteBuf>::into(literal)).unwrap();
         let encoded = writer.into_inner().unwrap();
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
