@@ -1009,7 +1009,7 @@ mod timestamptz {
 }
 
 mod serde {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use crate::{
         spec::{PrimitiveType, Type},
@@ -1019,9 +1019,10 @@ mod serde {
     use super::{Literal, PrimitiveLiteral};
     use serde::{
         de::Visitor,
-        ser::{SerializeSeq, SerializeStruct},
+        ser::{SerializeMap, SerializeSeq, SerializeStruct},
         Deserialize, Serialize,
     };
+    use serde_bytes::ByteBuf;
     use serde_derive::Deserialize as DeserializeDerive;
     use serde_derive::Serialize as SerializeDerive;
 
@@ -1043,6 +1044,7 @@ mod serde {
     }
 
     #[derive(SerializeDerive, Clone)]
+    #[serde(untagged)]
     enum RawLiteralEnum {
         Null,
         Boolean(bool),
@@ -1051,10 +1053,9 @@ mod serde {
         Float(f32),
         Double(f64),
         String(String),
-        Bytes(Vec<u8>),
-        List(Vec<Option<RawLiteralEnum>>),
-        Map(Map),
-        StringMap(HashMap<String, Option<RawLiteralEnum>>),
+        Bytes(ByteBuf),
+        List(List),
+        StringMap(StringMap),
         Record(Record),
     }
 
@@ -1082,24 +1083,59 @@ mod serde {
     }
 
     #[derive(Clone)]
-    struct Map {
-        k_v: Vec<(RawLiteralEnum, Option<RawLiteralEnum>)>,
+    struct List {
+        list: Vec<Option<RawLiteralEnum>>,
+        required: bool,
     }
 
-    impl Serialize for Map {
+    impl Serialize for List {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: serde::Serializer,
         {
-            let mut seq = serializer.serialize_seq(Some(self.k_v.len()))?;
-            for (k, v) in &self.k_v {
-                let record = Record {
-                    required: vec![("key".to_string(), k.clone())],
-                    optional: vec![("value".to_string(), v.clone())],
-                };
-                seq.serialize_element(&record)?;
+            let mut seq = serializer.serialize_seq(Some(self.list.len()))?;
+            for value in &self.list {
+                if self.required {
+                    seq.serialize_element(value.as_ref().ok_or_else(|| {
+                        serde::ser::Error::custom(
+                            "List element is required, element cannot be null",
+                        )
+                    })?)?;
+                } else {
+                    seq.serialize_element(&value)?;
+                }
             }
             seq.end()
+        }
+    }
+
+    #[derive(Clone)]
+    struct StringMap {
+        raw: Vec<(String, Option<RawLiteralEnum>)>,
+        required: bool,
+    }
+
+    impl Serialize for StringMap {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut map = serializer.serialize_map(Some(self.raw.len()))?;
+            for (k, v) in &self.raw {
+                if self.required {
+                    map.serialize_entry(
+                        k,
+                        v.as_ref().ok_or_else(|| {
+                            serde::ser::Error::custom(
+                                "Map element is required, element cannot be null",
+                            )
+                        })?,
+                    )?;
+                } else {
+                    map.serialize_entry(k, v)?;
+                }
+            }
+            map.end()
         }
     }
 
@@ -1170,7 +1206,7 @@ mod serde {
                 where
                     E: serde::de::Error,
                 {
-                    Ok(RawLiteralEnum::Bytes(v.to_vec()))
+                    Ok(RawLiteralEnum::Bytes(ByteBuf::from(v)))
                 }
 
                 fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
@@ -1210,7 +1246,11 @@ mod serde {
                     while let Some(value) = seq.next_element::<RawLiteralEnum>()? {
                         list.push(Some(value));
                     }
-                    Ok(RawLiteralEnum::List(list))
+                    Ok(RawLiteralEnum::List(List {
+                        list,
+                        // `required` only used in serialize, just set default in deserialize.
+                        required: false,
+                    }))
                 }
             }
             deserializer.deserialize_any(RawLiteralVisitor)
@@ -1231,11 +1271,13 @@ mod serde {
                     super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::TimestampTZ(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
-                    super::PrimitiveLiteral::UUID(v) => RawLiteralEnum::String(v.to_string()),
-                    super::PrimitiveLiteral::Fixed(v) => RawLiteralEnum::Bytes(v),
-                    super::PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(v),
+                    super::PrimitiveLiteral::UUID(v) => {
+                        RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))
+                    }
+                    super::PrimitiveLiteral::Fixed(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
+                    super::PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     super::PrimitiveLiteral::Decimal(v) => {
-                        RawLiteralEnum::Bytes(v.to_le_bytes().to_vec())
+                        RawLiteralEnum::Bytes(ByteBuf::from(v.to_le_bytes()))
                     }
                 },
                 Literal::Struct(r#struct) => {
@@ -1275,29 +1317,36 @@ mod serde {
                     }
                     RawLiteralEnum::Record(Record { required, optional })
                 }
-                Literal::List(list) => RawLiteralEnum::List(if let Type::List(list_ty) = ty {
-                    list.into_iter()
-                        .map(|v| {
-                            v.map(|v| {
-                                RawLiteralEnum::try_from(v, &list_ty.element_field.field_type)
+                Literal::List(list) => {
+                    if let Type::List(list_ty) = ty {
+                        let list = list
+                            .into_iter()
+                            .map(|v| {
+                                v.map(|v| {
+                                    RawLiteralEnum::try_from(v, &list_ty.element_field.field_type)
+                                })
+                                .transpose()
                             })
-                            .transpose()
+                            .collect::<Result<_, Error>>()?;
+                        RawLiteralEnum::List(List {
+                            list,
+                            required: list_ty.element_field.required,
                         })
-                        .collect::<Result<_, Error>>()?
-                } else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Type {} should be a list", ty),
-                    ));
-                }),
+                    } else {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Type {} should be a list", ty),
+                        ));
+                    }
+                }
                 Literal::Map(map) => {
                     if let Type::Map(map_ty) = ty {
                         if let Type::Primitive(PrimitiveType::String) = *map_ty.key_field.field_type
                         {
-                            let mut raw_map = HashMap::with_capacity(map.len());
+                            let mut raw = Vec::with_capacity(map.len());
                             for (k, v) in map {
                                 if let Literal::Primitive(PrimitiveLiteral::String(k)) = k {
-                                    raw_map.insert(
+                                    raw.push((
                                         k,
                                         v.map(|v| {
                                             RawLiteralEnum::try_from(
@@ -1306,7 +1355,7 @@ mod serde {
                                             )
                                         })
                                         .transpose()?,
-                                    );
+                                    ));
                                 } else {
                                     return Err(Error::new(
                                         ErrorKind::DataInvalid,
@@ -1314,27 +1363,41 @@ mod serde {
                                     ));
                                 }
                             }
-                            RawLiteralEnum::StringMap(raw_map)
+                            RawLiteralEnum::StringMap(StringMap {
+                                raw,
+                                required: map_ty.value_field.required,
+                            })
                         } else {
-                            RawLiteralEnum::Map(Map {
-                                k_v: map
-                                    .into_iter()
-                                    .map(|(k, v)| {
-                                        Ok((
-                                            RawLiteralEnum::try_from(
-                                                k,
-                                                &map_ty.key_field.field_type,
-                                            )?,
-                                            v.map(|v| {
-                                                RawLiteralEnum::try_from(
-                                                    v,
-                                                    &map_ty.value_field.field_type,
-                                                )
-                                            })
-                                            .transpose()?,
-                                        ))
+                            let list = map.into_iter().map(|(k,v)| {
+                                let raw_k =
+                                    RawLiteralEnum::try_from(k, &map_ty.key_field.field_type)?;
+                                let raw_v = v
+                                    .map(|v| {
+                                        RawLiteralEnum::try_from(v, &map_ty.value_field.field_type)
                                     })
-                                    .collect::<Result<_, Error>>()?,
+                                    .transpose()?;
+                                if map_ty.value_field.required {
+                                    Ok(Some(RawLiteralEnum::Record(Record {
+                                        required: vec![
+                                            ("key".to_string(), raw_k),
+                                            ("value".to_string(), raw_v.ok_or_else(||Error::new(ErrorKind::DataInvalid, "Map value is required, value cannot be null"))?),
+                                        ],
+                                        optional: vec![],
+                                    })))
+                                } else {
+                                    Ok(Some(RawLiteralEnum::Record(Record {
+                                        required: vec![
+                                            ("key".to_string(), raw_k),
+                                        ],
+                                        optional: vec![
+                                            ("value".to_string(), raw_v)
+                                        ],
+                                    })))
+                                }
+                            }).collect::<Result<_, Error>>()?;
+                            RawLiteralEnum::List(List {
+                                list,
+                                required: true,
                             })
                         }
                     } else {
@@ -1346,35 +1409,6 @@ mod serde {
                 }
             };
             Ok(raw)
-        }
-
-        fn as_u8(&self) -> Result<u8, Error> {
-            match self {
-                Self::Int(v) => {
-                    if *v >= 0 && *v <= u8::MAX as i32 {
-                        Ok(*v as u8)
-                    } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Fail to convert i32 to u8",
-                        ))
-                    }
-                }
-                Self::Long(v) => {
-                    if *v >= 0 && *v <= u8::MAX as i64 {
-                        Ok(*v as u8)
-                    } else {
-                        Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Fail to convert i32 to u8",
-                        ))
-                    }
-                }
-                _ => Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "raw literal is not integer",
-                )),
-            }
         }
 
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
@@ -1393,24 +1427,16 @@ mod serde {
                     _ => Err(invalid_err("int")),
                 },
                 RawLiteralEnum::Long(v) => match ty {
-                    Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(
-                        i32::try_from(v).map_err(|err| invalid_err("long").with_source(err))?,
-                    ))),
                     Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(v))),
                     Type::Primitive(PrimitiveType::Time) => Ok(Some(Literal::time(v))),
                     Type::Primitive(PrimitiveType::Timestamp) => Ok(Some(Literal::timestamp(v))),
                     Type::Primitive(PrimitiveType::Timestamptz) => {
                         Ok(Some(Literal::timestamptz(v)))
                     }
-                    Type::Primitive(PrimitiveType::Date) => Ok(Some(Literal::date(
-                        v.try_into()
-                            .map_err(|err| invalid_err("long").with_source(err))?,
-                    ))),
                     _ => Err(invalid_err("long")),
                 },
                 RawLiteralEnum::Float(v) => match ty {
                     Type::Primitive(PrimitiveType::Float) => Ok(Some(Literal::float(v))),
-                    Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
                     _ => Err(invalid_err("float")),
                 },
                 RawLiteralEnum::Double(v) => match ty {
@@ -1419,7 +1445,6 @@ mod serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
-                    Type::Primitive(PrimitiveType::Uuid) => Ok(Some(Literal::uuid_from_str(&v)?)),
                     _ => Err(invalid_err("string")),
                 },
                 // # TODO
@@ -1427,7 +1452,8 @@ mod serde {
                 RawLiteralEnum::Bytes(_) => Err(invalid_err("bytes")),
                 RawLiteralEnum::List(v) => match ty {
                     Type::List(ty) => Ok(Some(Literal::List(
-                        v.into_iter()
+                        v.list
+                            .into_iter()
                             .map(|v| {
                                 if let Some(v) = v {
                                     v.try_into(&ty.element_field.field_type)
@@ -1441,7 +1467,7 @@ mod serde {
                         let key_ty = map_ty.key_field.field_type.as_ref();
                         let value_ty = map_ty.value_field.field_type.as_ref();
                         let mut map = BTreeMap::new();
-                        for k_v in v {
+                        for k_v in v.list {
                             // In deserialize, the element always be `Som`e. `None` will be represented
                             // as `Some(RawLiteral::Null)`
                             let k_v = k_v.ok_or_else(|| invalid_err("list"))?;
@@ -1478,34 +1504,6 @@ mod serde {
                         }
                         Ok(Some(Literal::Map(map)))
                     }
-                    Type::Primitive(PrimitiveType::Binary) => {
-                        let bytes: Vec<u8> = v
-                            .into_iter()
-                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
-                            .collect::<Result<_, Error>>()?;
-                        Ok(Some(Literal::binary(bytes)))
-                    }
-                    Type::Primitive(PrimitiveType::Fixed(len)) => {
-                        let bytes: Vec<u8> = v
-                            .into_iter()
-                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
-                            .collect::<Result<_, Error>>()?;
-                        if bytes.len() as u64 > *len {
-                            return Err(invalid_err("list"));
-                        }
-                        Ok(Some(Literal::fixed(bytes)))
-                    }
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: _,
-                        scale: _,
-                    }) => {
-                        let bytes: Vec<u8> = v
-                            .into_iter()
-                            .map(|v| v.ok_or_else(|| invalid_err("list"))?.as_u8())
-                            .collect::<Result<_, Error>>()?;
-                        let bytes: [u8; 16] = bytes.try_into().map_err(|_| invalid_err("list"))?;
-                        Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
-                    }
                     _ => Err(invalid_err("list")),
                 },
                 RawLiteralEnum::Record(Record {
@@ -1541,7 +1539,6 @@ mod serde {
                     _ => Err(invalid_err("record")),
                 },
                 RawLiteralEnum::StringMap(_) => Err(invalid_err("string map")),
-                RawLiteralEnum::Map(_) => Err(invalid_err("map")),
             }
         }
     }
@@ -1550,7 +1547,13 @@ mod serde {
 #[cfg(test)]
 mod tests {
 
-    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
+    use crate::{
+        avro::schema_to_avro_schema,
+        spec::{
+            datatypes::{ListType, MapType, NestedField, StructType},
+            Schema,
+        },
+    };
 
     use super::*;
 
@@ -1584,6 +1587,33 @@ mod tests {
             let result = apache_avro::from_value::<ByteBuf>(&record.unwrap()).unwrap();
             let desered_literal = Literal::try_from_bytes(&result, expected_type).unwrap();
             assert_eq!(desered_literal, expected_literal);
+        }
+    }
+
+    fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
+        let fields = vec![NestedField::required(1, "col", expected_type.clone()).into()];
+        let schema = Schema::builder()
+            .with_fields(fields.clone())
+            .build()
+            .unwrap();
+        let avro_schema = schema_to_avro_schema("test", &schema).unwrap();
+        let struct_type = Type::Struct(StructType::new(fields));
+        let struct_literal = Literal::Struct(Struct::from_iter(vec![(
+            1,
+            Some(expected_literal.clone()),
+            "col".to_string(),
+        )]));
+
+        let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        let raw_literal = RawLiteral::try_from(struct_literal.clone(), &struct_type).unwrap();
+        writer.append_ser(raw_literal).unwrap();
+        let encoded = writer.into_inner().unwrap();
+
+        let reader = apache_avro::Reader::new(&*encoded).unwrap();
+        for record in reader {
+            let result = apache_avro::from_value::<RawLiteral>(&record.unwrap()).unwrap();
+            let desered_literal = result.try_into(&struct_type).unwrap().unwrap();
+            assert_eq!(desered_literal, struct_literal);
         }
     }
 
@@ -1860,4 +1890,256 @@ mod tests {
             &Type::Primitive(PrimitiveType::String),
         );
     }
+
+    #[test]
+    fn avro_convert_test_int() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Int(32)),
+            &Type::Primitive(PrimitiveType::Int),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_long() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Long(32)),
+            &Type::Primitive(PrimitiveType::Long),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_float() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Float),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_double() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
+            &Type::Primitive(PrimitiveType::Double),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_string() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
+            &Type::Primitive(PrimitiveType::String),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_date() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Date(17486)),
+            &Type::Primitive(PrimitiveType::Date),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_time() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Time(81068123456)),
+            &Type::Primitive(PrimitiveType::Time),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_timestamp() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::Timestamp(1510871468123456)),
+            &Type::Primitive(PrimitiveType::Timestamp),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_timestamptz() {
+        check_convert_with_avro(
+            Literal::Primitive(PrimitiveLiteral::TimestampTZ(1510871468123456)),
+            &Type::Primitive(PrimitiveType::Timestamptz),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_list() {
+        check_convert_with_avro(
+            Literal::List(vec![
+                Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
+                None,
+            ]),
+            &Type::List(ListType {
+                element_field: NestedField::list_element(
+                    0,
+                    Type::Primitive(PrimitiveType::Int),
+                    false,
+                )
+                .into(),
+            }),
+        );
+
+        check_convert_with_avro(
+            Literal::List(vec![
+                Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
+            ]),
+            &Type::List(ListType {
+                element_field: NestedField::list_element(
+                    0,
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .into(),
+            }),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_map() {
+        check_convert_with_avro(
+            Literal::Map(BTreeMap::from([
+                (
+                    Literal::Primitive(PrimitiveLiteral::Int(1)),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(1))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::Int(2)),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(2))),
+                ),
+                (Literal::Primitive(PrimitiveLiteral::Int(3)), None),
+            ])),
+            &Type::Map(MapType {
+                key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::Int))
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    1,
+                    Type::Primitive(PrimitiveType::Long),
+                    false,
+                )
+                .into(),
+            }),
+        );
+
+        check_convert_with_avro(
+            Literal::Map(BTreeMap::from([
+                (
+                    Literal::Primitive(PrimitiveLiteral::Int(1)),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(1))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::Int(2)),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(2))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::Int(3)),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(3))),
+                ),
+            ])),
+            &Type::Map(MapType {
+                key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::Int))
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    1,
+                    Type::Primitive(PrimitiveType::Long),
+                    true,
+                )
+                .into(),
+            }),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_string_map() {
+        check_convert_with_avro(
+            Literal::Map(BTreeMap::from([
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("b".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("c".to_string())),
+                    None,
+                ),
+            ])),
+            &Type::Map(MapType {
+                key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::String))
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    1,
+                    Type::Primitive(PrimitiveType::Int),
+                    false,
+                )
+                .into(),
+            }),
+        );
+
+        check_convert_with_avro(
+            Literal::Map(BTreeMap::from([
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("b".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(2))),
+                ),
+                (
+                    Literal::Primitive(PrimitiveLiteral::String("c".to_string())),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
+                ),
+            ])),
+            &Type::Map(MapType {
+                key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::String))
+                    .into(),
+                value_field: NestedField::map_value_element(
+                    1,
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .into(),
+            }),
+        );
+    }
+
+    #[test]
+    fn avro_convert_test_record() {
+        check_convert_with_avro(
+            Literal::Struct(Struct::from_iter(vec![
+                (
+                    1,
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+                    "id".to_string(),
+                ),
+                (
+                    2,
+                    Some(Literal::Primitive(PrimitiveLiteral::String(
+                        "bar".to_string(),
+                    ))),
+                    "name".to_string(),
+                ),
+                (3, None, "address".to_string()),
+            ])),
+            &Type::Struct(StructType::new(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "address", Type::Primitive(PrimitiveType::String)).into(),
+            ])),
+        );
+    }
+
+    // # TODO
+    // rust avro don't support deserialize any bytes representation now:
+    // - binary
+    // - fixed
+    // - decimal
+    // - uuid
 }

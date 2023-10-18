@@ -154,7 +154,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             // not string type.
             let key_field = {
                 let mut field = AvroRecordField {
-                    name: map.key_field.name.clone(),
+                    name: "key".into(),
                     doc: None,
                     aliases: None,
                     default: None,
@@ -172,7 +172,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 
             let value_field = {
                 let mut field = AvroRecordField {
-                    name: map.key_field.name.clone(),
+                    name: "value".to_string(),
                     doc: None,
                     aliases: None,
                     default: None,
@@ -188,16 +188,23 @@ impl SchemaVisitor for SchemaToAvroSchema {
                 field
             };
 
+            let fields = vec![key_field, value_field];
+            let lookup = fields
+                .iter()
+                .enumerate()
+                .map(|f| (f.1.name.clone(), f.0))
+                .collect();
+
             let item_avro_schema = AvroSchema::Record(RecordSchema {
                 name: Name::from(format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str()),
                 aliases: None,
                 doc: None,
-                fields: vec![key_field, value_field],
-                lookup: Default::default(),
+                fields,
+                lookup,
                 attributes: Default::default(),
             });
 
-            Ok(Either::Left(item_avro_schema))
+            Ok(Either::Left(AvroSchema::Array(item_avro_schema.into())))
         }
     }
 
