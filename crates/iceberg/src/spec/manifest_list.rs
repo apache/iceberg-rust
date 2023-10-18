@@ -78,16 +78,45 @@ impl ManifestList {
 
 /// A manifest list writer.
 pub struct ManifestListWriter {
-    output_file: OutputFile,
     format_version: FormatVersion,
+    output_file: OutputFile,
     avro_writer: Writer<'static, Vec<u8>>,
 }
 
 impl ManifestListWriter {
-    /// Construct a new [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    pub fn new(
+    /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {
+        let mut metadata = HashMap::new();
+        metadata.insert("snapshot-id".to_string(), snapshot_id.to_string());
+        metadata.insert(
+            "parent-snapshot-id".to_string(),
+            parent_snapshot_id.to_string(),
+        );
+        metadata.insert("format-version".to_string(), "1".to_string());
+        Self::new(FormatVersion::V1, output_file, metadata)
+    }
+
+    /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn v2(
         output_file: OutputFile,
+        snapshot_id: i64,
+        parent_snapshot_id: i64,
+        sequence_number: i64,
+    ) -> Self {
+        let mut metadata = HashMap::new();
+        metadata.insert("snapshot-id".to_string(), snapshot_id.to_string());
+        metadata.insert(
+            "parent-snapshot-id".to_string(),
+            parent_snapshot_id.to_string(),
+        );
+        metadata.insert("sequence-number".to_string(), sequence_number.to_string());
+        metadata.insert("format-version".to_string(), "2".to_string());
+        Self::new(FormatVersion::V2, output_file, metadata)
+    }
+
+    fn new(
         format_version: FormatVersion,
+        output_file: OutputFile,
         metadata: HashMap<String, String>,
     ) -> Self {
         let avro_schema = match format_version {
@@ -99,8 +128,8 @@ impl ManifestListWriter {
             avro_writer.add_user_metadata(key, value).unwrap();
         }
         Self {
-            output_file,
             format_version,
+            output_file,
             avro_writer,
         }
     }
@@ -873,7 +902,7 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, fs, sync::Arc};
+    use std::{fs, sync::Arc};
 
     use tempdir::TempDir;
 
@@ -1053,8 +1082,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V1, HashMap::new());
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, 0);
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1103,8 +1131,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer =
-            ManifestListWriter::new(output_file, crate::spec::FormatVersion::V2, HashMap::new());
+        let mut writer = ManifestListWriter::v2(output_file, 377075049360453639, 0, 1);
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
