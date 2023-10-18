@@ -22,7 +22,6 @@ The main struct here is [TableMetadataV2] which defines the data for a table.
 
 use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
-use derive_builder::UninitializedFieldError;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -133,13 +132,6 @@ pub struct TableMetadata {
     /// even if the refs map is null.
     #[builder(default = "Self::default_ref()", setter(custom))]
     refs: HashMap<String, SnapshotReference>,
-}
-
-// We define a from implementation from builder Error to Iceberg Error
-impl From<UninitializedFieldError> for Error {
-    fn from(ufe: UninitializedFieldError) -> Error {
-        Error::new(ErrorKind::DataInvalid, ufe.to_string())
-    }
 }
 
 impl TableMetadataBuilder {

@@ -21,6 +21,8 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
+use derive_builder::UninitializedFieldError;
+
 /// Result that is a wrapper of `Result<T, iceberg::Error>`
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -189,6 +191,14 @@ impl Debug for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source.as_ref().map(|v| v.as_ref())
+    }
+}
+
+// We define a from implementation from builder Error to Iceberg Error
+impl From<UninitializedFieldError> for Error {
+    fn from(ufe: UninitializedFieldError) -> Error {
+        Error::new(ErrorKind::DataInvalid, "Some fields of table metadata not inited")
+        .with_source(ufe)
     }
 }
 
