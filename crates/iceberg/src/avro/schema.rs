@@ -213,8 +213,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::Timestamp => AvroSchema::TimestampMicros,
             PrimitiveType::Timestamptz => AvroSchema::TimestampMicros,
             PrimitiveType::String => AvroSchema::String,
-            PrimitiveType::Uuid => AvroSchema::Uuid,
-            PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize)?,
+            PrimitiveType::Uuid => avro_fixed_schema(16, Some("uuid"))?,
+            PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize, None)?,
             PrimitiveType::Binary => AvroSchema::Bytes,
             PrimitiveType::Decimal { precision, scale } => {
                 avro_decimal_schema(*precision as usize, *scale as usize)?
@@ -233,13 +233,21 @@ pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Res
     visit_schema(schema, &mut converter).map(Either::unwrap_left)
 }
 
-pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
+pub(crate) fn avro_fixed_schema(len: usize, logical_type: Option<&str>) -> Result<AvroSchema> {
+    let attributes = if let Some(logical_type) = logical_type {
+        BTreeMap::from([(
+            "logicalType".to_string(),
+            Value::String(logical_type.to_string()),
+        )])
+    } else {
+        Default::default()
+    };
     Ok(AvroSchema::Fixed(FixedSchema {
         name: Name::new(format!("fixed_{len}").as_str())?,
         aliases: None,
         doc: None,
         size: len,
-        attributes: Default::default(),
+        attributes,
     }))
 }
 
@@ -249,6 +257,7 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
         scale,
         inner: Box::new(avro_fixed_schema(
             Type::decimal_required_bytes(precision as u32)? as usize,
+            None,
         )?),
     }))
 }
@@ -441,14 +450,35 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             AvroSchema::Date => Type::Primitive(PrimitiveType::Date),
             AvroSchema::TimeMicros => Type::Primitive(PrimitiveType::Time),
             AvroSchema::TimestampMicros => Type::Primitive(PrimitiveType::Timestamp),
-            AvroSchema::Uuid => Type::Primitive(PrimitiveType::Uuid),
             AvroSchema::Boolean => Type::Primitive(PrimitiveType::Boolean),
             AvroSchema::Int => Type::Primitive(PrimitiveType::Int),
             AvroSchema::Long => Type::Primitive(PrimitiveType::Long),
             AvroSchema::Float => Type::Primitive(PrimitiveType::Float),
             AvroSchema::Double => Type::Primitive(PrimitiveType::Double),
             AvroSchema::String | AvroSchema::Enum(_) => Type::Primitive(PrimitiveType::String),
-            AvroSchema::Fixed(fixed) => Type::Primitive(PrimitiveType::Fixed(fixed.size as u64)),
+            AvroSchema::Fixed(fixed) => {
+                if let Some(logical_type) = fixed.attributes.get("logicalType") {
+                    let logical_type = logical_type.as_str().ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "logicalType in attributes of avro schema is not a string type",
+                        )
+                    })?;
+                    match logical_type {
+                        "uuid" => Type::Primitive(PrimitiveType::Uuid),
+                        ty => {
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "Logical type {ty} is not support in iceberg primitive type.",
+                                ),
+                            ))
+                        }
+                    }
+                } else {
+                    Type::Primitive(PrimitiveType::Fixed(fixed.size as u64))
+                }
+            }
             AvroSchema::Bytes => Type::Primitive(PrimitiveType::Binary),
             AvroSchema::Null => return Ok(None),
             _ => {
@@ -503,7 +533,6 @@ mod tests {
         ))
         .unwrap();
 
-        println!("Input is {input}");
         AvroSchema::parse_str(input.as_str()).unwrap()
     }
 
