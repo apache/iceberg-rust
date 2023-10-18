@@ -1027,7 +1027,7 @@ mod serde {
 
     #[derive(SerializeDerive, DeserializeDerive)]
     #[serde(transparent)]
-    /// Raw literal representation used for serde. The seriailize way is used for avro serializer.
+    /// Raw literal representation used for serde. The serialize way is used for Avro serializer.
     pub struct RawLiteral(RawLiteralEnum);
 
     impl RawLiteral {
