@@ -450,9 +450,9 @@ impl From<Literal> for ByteBuf {
             Literal::Primitive(prim) => match prim {
                 PrimitiveLiteral::Boolean(val) => {
                     if val {
-                        ByteBuf::from([0u8])
-                    } else {
                         ByteBuf::from([1u8])
+                    } else {
+                        ByteBuf::from([0u8])
                     }
                 }
                 PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
@@ -467,6 +467,36 @@ impl From<Literal> for ByteBuf {
                 PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
                 PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
                 PrimitiveLiteral::Binary(val) => ByteBuf::from(val),
+                PrimitiveLiteral::Decimal(_) => todo!(),
+            },
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl From<Literal> for Vec<u8> {
+    fn from(value: Literal) -> Self {
+        match value {
+            Literal::Primitive(prim) => match prim {
+                PrimitiveLiteral::Boolean(val) => {
+                    if val {
+                        Vec::from([1u8])
+                    } else {
+                        Vec::from([0u8])
+                    }
+                }
+                PrimitiveLiteral::Int(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Long(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Float(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Double(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Date(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Time(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::Timestamp(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::TimestampTZ(val) => Vec::from(val.to_le_bytes()),
+                PrimitiveLiteral::String(val) => Vec::from(val.as_bytes()),
+                PrimitiveLiteral::UUID(val) => Vec::from(val.as_u128().to_be_bytes()),
+                PrimitiveLiteral::Fixed(val) => val,
+                PrimitiveLiteral::Binary(val) => val,
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
             _ => unimplemented!(),
@@ -995,7 +1025,7 @@ mod tests {
         assert_eq!(literal, expected_literal);
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        writer.append_ser(bytes).unwrap();
+        writer.append_ser(ByteBuf::from(literal)).unwrap();
         let encoded = writer.into_inner().unwrap();
         let reader = apache_avro::Reader::new(&*encoded).unwrap();
 
