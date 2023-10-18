@@ -86,13 +86,14 @@ pub struct ManifestListWriter {
 impl ManifestListWriter {
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {
-        let mut metadata = HashMap::new();
-        metadata.insert("snapshot-id".to_string(), snapshot_id.to_string());
-        metadata.insert(
-            "parent-snapshot-id".to_string(),
-            parent_snapshot_id.to_string(),
-        );
-        metadata.insert("format-version".to_string(), "1".to_string());
+        let metadata = HashMap::from_iter([
+            ("snapshot-id".to_string(), snapshot_id.to_string()),
+            (
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            ),
+            ("format-version".to_string(), "1".to_string()),
+        ]);
         Self::new(FormatVersion::V1, output_file, metadata)
     }
 
@@ -103,14 +104,15 @@ impl ManifestListWriter {
         parent_snapshot_id: i64,
         sequence_number: i64,
     ) -> Self {
-        let mut metadata = HashMap::new();
-        metadata.insert("snapshot-id".to_string(), snapshot_id.to_string());
-        metadata.insert(
-            "parent-snapshot-id".to_string(),
-            parent_snapshot_id.to_string(),
-        );
-        metadata.insert("sequence-number".to_string(), sequence_number.to_string());
-        metadata.insert("format-version".to_string(), "2".to_string());
+        let metadata = HashMap::from_iter([
+            ("snapshot-id".to_string(), snapshot_id.to_string()),
+            (
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            ),
+            ("sequence-number".to_string(), sequence_number.to_string()),
+            ("format-version".to_string(), "2".to_string()),
+        ]);
         Self::new(FormatVersion::V2, output_file, metadata)
     }
 
@@ -125,7 +127,9 @@ impl ManifestListWriter {
         };
         let mut avro_writer = Writer::new(avro_schema, Vec::new());
         for (key, value) in metadata {
-            avro_writer.add_user_metadata(key, value).unwrap();
+            avro_writer
+                .add_user_metadata(key, value)
+                .expect("Avro metadata should be added to the writer before the first record.");
         }
         Self {
             format_version,

@@ -101,10 +101,12 @@ impl SchemaVisitor for SchemaToAvroSchema {
         let avro_fields: Vec<AvroRecordField> =
             results.into_iter().map(|r| r.unwrap_right()).collect();
 
-        let mut lookup = BTreeMap::new();
-        for (i, field) in avro_fields.iter().enumerate() {
-            lookup.insert(field.name.clone(), i);
-        }
+        let lookup = BTreeMap::from_iter(
+            avro_fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| (field.name.clone(), i)),
+        );
 
         Ok(Either::Left(AvroSchema::Record(RecordSchema {
             // The name of this record schema should be determined later, by schema name or field
