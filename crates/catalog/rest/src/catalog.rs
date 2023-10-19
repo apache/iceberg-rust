@@ -37,7 +37,8 @@ use self::_serde::{
     NamespaceSerde, RenameTableRequest, NO_CONTENT, OK,
 };
 
-const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
+const ICEBERG_REST_SPEC_VERSION: &str = "1.14";
+const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Rest catalog configuration.
@@ -93,19 +94,20 @@ impl RestCatalogConfig {
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
         //TODO: We will add oauth, ssl config, sigv4 later
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-client-version"),
-            HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
-        );
-        headers.insert(
-            header::USER_AGENT,
-            HeaderValue::from_str(&format!("iceberg-rs/{}", env!("CARGO_PKG_VERSION"))).unwrap(),
-        );
+        let headers = HeaderMap::from_iter([
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                HeaderName::from_static("x-client-version"),
+                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+            ),
+            (
+                header::USER_AGENT,
+                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+        ]);
 
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
@@ -255,6 +257,19 @@ impl Catalog for RestCatalog {
             ErrorKind::FeatureUnsupported,
             "Updating namespace not supported yet!",
         ))
+    }
+
+    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
+        let request = self
+            .client
+            .0
+            .head(self.config.namespace_endpoint(ns))
+            .build()?;
+
+        self.client
+            .execute::<ErrorModel, NO_CONTENT>(request)
+            .await
+            .map(|_| true)
     }
 
     /// Drop a namespace from the catalog.
@@ -683,6 +698,31 @@ mod tests {
         );
 
         assert_eq!(expected_ns, namespaces);
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn check_namespace_exists() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let get_ns_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        assert!(catalog
+            .namespace_exists(&NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap());
 
         config_mock.assert_async().await;
         get_ns_mock.assert_async().await;

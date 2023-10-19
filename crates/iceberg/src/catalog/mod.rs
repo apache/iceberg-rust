@@ -44,6 +44,9 @@ pub trait Catalog {
     /// Get a namespace information from the catalog.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace>;
 
+    /// Check if namespace exists in catalog.
+    async fn namespace_exists(&self, namesace: &NamespaceIdent) -> Result<bool>;
+
     /// Update a namespace inside the catalog.
     ///
     /// # Behavior
