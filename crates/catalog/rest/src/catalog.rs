@@ -390,15 +390,17 @@ impl RestCatalog {
         if let Some(warehouse_location) = &self.config.warehouse {
             request = request.query(&[("warehouse", warehouse_location)]);
         }
-        let mut config = self
+
+        let config = self
             .client
             .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
 
-        config.defaults.extend(self.config.props.clone());
-        config.defaults.extend(config.overrides);
+        let mut props = config.defaults;
+        props.extend(self.config.props.clone());
+        props.extend(config.overrides);
 
-        self.config.props = config.defaults;
+        self.config.props = props;
 
         Ok(())
     }
@@ -435,7 +437,7 @@ mod _serde {
     pub(super) struct ErrorModel {
         pub(super) message: String,
         pub(super) r#type: String,
-        pub(super) code: i32,
+        pub(super) code: u16,
         pub(super) stack: Option<Vec<String>>,
     }
 
