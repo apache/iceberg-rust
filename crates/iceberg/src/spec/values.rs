@@ -36,7 +36,7 @@ use crate::{Error, ErrorKind};
 use super::datatypes::{PrimitiveType, Type};
 use super::MAX_DECIMAL_PRECISION;
 
-pub use serde::RawLiteral;
+pub use _serde::RawLiteral;
 
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
@@ -596,7 +596,7 @@ impl From<&Literal> for JsonValue {
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
-#[derive(Default, Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
@@ -620,15 +620,46 @@ impl Struct {
                 (id, if *null { None } else { Some(value) }, name.as_str())
             })
     }
+}
 
-    /// Create a iterator to comsume the field in order of (field_id, field_value, field_name).
-    pub fn comsume_iter(self) -> impl Iterator<Item = (i32, Option<Literal>, String)> {
-        self.null_bitmap
-            .into_iter()
-            .zip(self.fields)
-            .zip(self.field_ids)
-            .zip(self.field_names)
-            .map(|(((null, value), id), name)| (id, if null { None } else { Some(value) }, name))
+/// An iterator that moves out of a struct.
+pub struct StructIntoIter {
+    null_bitmap: bitvec::boxed::IntoIter,
+    fields: std::vec::IntoIter<Literal>,
+    field_ids: std::vec::IntoIter<i32>,
+    field_names: std::vec::IntoIter<String>,
+}
+
+impl Iterator for StructIntoIter {
+    type Item = (i32, Option<Literal>, String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (
+            self.null_bitmap.next(),
+            self.fields.next(),
+            self.field_ids.next(),
+            self.field_names.next(),
+        ) {
+            (Some(null), Some(value), Some(id), Some(name)) => {
+                Some((id, if null { None } else { Some(value) }, name))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl IntoIterator for Struct {
+    type Item = (i32, Option<Literal>, String);
+
+    type IntoIter = StructIntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        StructIntoIter {
+            null_bitmap: self.null_bitmap.into_iter(),
+            fields: self.fields.into_iter(),
+            field_ids: self.field_ids.into_iter(),
+            field_names: self.field_names.into_iter(),
+        }
     }
 }
 
@@ -1008,7 +1039,7 @@ mod timestamptz {
     }
 }
 
-mod serde {
+mod _serde {
     use std::collections::BTreeMap;
 
     use crate::{
@@ -1284,7 +1315,7 @@ mod serde {
                     let mut required = Vec::new();
                     let mut optional = Vec::new();
                     if let Type::Struct(sturct_ty) = ty {
-                        for (id, value, field_name) in r#struct.comsume_iter() {
+                        for (id, value, field_name) in r#struct.into_iter() {
                             let field = sturct_ty.field_by_id(id).ok_or_else(|| {
                                 Error::new(ErrorKind::DataInvalid, "field not found")
                             })?;

@@ -98,26 +98,13 @@ impl SchemaVisitor for SchemaToAvroSchema {
         _struct: &StructType,
         results: Vec<AvroSchemaOrField>,
     ) -> Result<AvroSchemaOrField> {
-        let avro_fields: Vec<AvroRecordField> =
-            results.into_iter().map(|r| r.unwrap_right()).collect();
+        let avro_fields = results.into_iter().map(|r| r.unwrap_right()).collect_vec();
 
-        let lookup = BTreeMap::from_iter(
-            avro_fields
-                .iter()
-                .enumerate()
-                .map(|(i, field)| (field.name.clone(), i)),
-        );
-
-        Ok(Either::Left(AvroSchema::Record(RecordSchema {
+        Ok(Either::Left(
             // The name of this record schema should be determined later, by schema name or field
             // name, here we use a temporary placeholder to do it.
-            name: Name::new("null")?,
-            aliases: None,
-            doc: None,
-            fields: avro_fields,
-            lookup,
-            attributes: Default::default(),
-        })))
+            avro_record_schema("null", avro_fields)?,
+        ))
     }
 
     fn list(&mut self, list: &ListType, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
@@ -154,7 +141,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             // not string type.
             let key_field = {
                 let mut field = AvroRecordField {
-                    name: "key".into(),
+                    name: map.key_field.name.clone(),
                     doc: None,
                     aliases: None,
                     default: None,
@@ -172,7 +159,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 
             let value_field = {
                 let mut field = AvroRecordField {
-                    name: "value".to_string(),
+                    name: map.value_field.name.clone(),
                     doc: None,
                     aliases: None,
                     default: None,
@@ -189,20 +176,10 @@ impl SchemaVisitor for SchemaToAvroSchema {
             };
 
             let fields = vec![key_field, value_field];
-            let lookup = fields
-                .iter()
-                .enumerate()
-                .map(|f| (f.1.name.clone(), f.0))
-                .collect();
-
-            let item_avro_schema = AvroSchema::Record(RecordSchema {
-                name: Name::from(format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str()),
-                aliases: None,
-                doc: None,
+            let item_avro_schema = avro_record_schema(
+                format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str(),
                 fields,
-                lookup,
-                attributes: Default::default(),
-            });
+            )?;
 
             Ok(Either::Left(AvroSchema::Array(item_avro_schema.into())))
         }
@@ -238,6 +215,23 @@ pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Res
     };
 
     visit_schema(schema, &mut converter).map(Either::unwrap_left)
+}
+
+fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSchema> {
+    let lookup = fields
+        .iter()
+        .enumerate()
+        .map(|f| (f.1.name.clone(), f.0))
+        .collect();
+
+    Ok(AvroSchema::Record(RecordSchema {
+        name: Name::new(name)?,
+        aliases: None,
+        doc: None,
+        fields,
+        lookup,
+        attributes: Default::default(),
+    }))
 }
 
 pub(crate) fn avro_fixed_schema(len: usize, logical_type: Option<&str>) -> Result<AvroSchema> {
