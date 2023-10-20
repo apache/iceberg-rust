@@ -162,7 +162,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 
             let value_field = {
                 let mut field = AvroRecordField {
-                    name: map.key_field.name.clone(),
+                    name: map.value_field.name.clone(),
                     doc: None,
                     aliases: None,
                     default: None,
@@ -178,14 +178,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
                 field
             };
 
-            let item_avro_schema = AvroSchema::Record(RecordSchema {
+            let item_avro_schema = AvroSchema::Array(Box::new(AvroSchema::Record(RecordSchema {
                 name: Name::from(format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str()),
                 aliases: None,
                 doc: None,
                 fields: vec![key_field, value_field],
                 lookup: Default::default(),
                 attributes: Default::default(),
-            });
+            })));
 
             Ok(Either::Left(item_avro_schema))
         }
