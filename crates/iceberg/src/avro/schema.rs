@@ -32,6 +32,11 @@ use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 const FILED_ID_PROP: &str = "field-id";
+const UUID_BYTES: usize = 16;
+const UUID_LOGICAL_TYPE: &str = "uuid";
+// # TODO
+// This const may better to maintain in avro-rs.
+const LOGICAL_TYPE: &str = "logicalType";
 
 struct SchemaToAvroSchema {
     schema: String,
@@ -197,7 +202,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::Timestamp => AvroSchema::TimestampMicros,
             PrimitiveType::Timestamptz => AvroSchema::TimestampMicros,
             PrimitiveType::String => AvroSchema::String,
-            PrimitiveType::Uuid => avro_fixed_schema(16, Some("uuid"))?,
+            PrimitiveType::Uuid => avro_fixed_schema(UUID_BYTES, Some(UUID_LOGICAL_TYPE))?,
             PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize, None)?,
             PrimitiveType::Binary => AvroSchema::Bytes,
             PrimitiveType::Decimal { precision, scale } => {
@@ -237,7 +242,7 @@ fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSc
 pub(crate) fn avro_fixed_schema(len: usize, logical_type: Option<&str>) -> Result<AvroSchema> {
     let attributes = if let Some(logical_type) = logical_type {
         BTreeMap::from([(
-            "logicalType".to_string(),
+            LOGICAL_TYPE.to_string(),
             Value::String(logical_type.to_string()),
         )])
     } else {
@@ -458,7 +463,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             AvroSchema::Double => Type::Primitive(PrimitiveType::Double),
             AvroSchema::String | AvroSchema::Enum(_) => Type::Primitive(PrimitiveType::String),
             AvroSchema::Fixed(fixed) => {
-                if let Some(logical_type) = fixed.attributes.get("logicalType") {
+                if let Some(logical_type) = fixed.attributes.get(LOGICAL_TYPE) {
                     let logical_type = logical_type.as_str().ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,

@@ -433,7 +433,7 @@ impl Literal {
     /// ```rust
     /// use rust_decimal::Decimal;
     /// use iceberg::spec::Literal;
-    /// let t1 = Literal::decimal(Decimal::new(12345, 2));
+    /// let t1 = Literal::decimal(12345);
     /// let t2 = Literal::decimal_from_str("123.45").unwrap();
     ///
     /// assert_eq!(t1, t2);
@@ -623,14 +623,14 @@ impl Struct {
 }
 
 /// An iterator that moves out of a struct.
-pub struct StructIntoIter {
+pub struct StructValueIntoIter {
     null_bitmap: bitvec::boxed::IntoIter,
     fields: std::vec::IntoIter<Literal>,
     field_ids: std::vec::IntoIter<i32>,
     field_names: std::vec::IntoIter<String>,
 }
 
-impl Iterator for StructIntoIter {
+impl Iterator for StructValueIntoIter {
     type Item = (i32, Option<Literal>, String);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -651,10 +651,10 @@ impl Iterator for StructIntoIter {
 impl IntoIterator for Struct {
     type Item = (i32, Option<Literal>, String);
 
-    type IntoIter = StructIntoIter;
+    type IntoIter = StructValueIntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        StructIntoIter {
+        StructValueIntoIter {
             null_bitmap: self.null_bitmap.into_iter(),
             fields: self.fields.into_iter(),
             field_ids: self.field_ids.into_iter(),
@@ -1446,7 +1446,10 @@ mod _serde {
             let invalid_err = |v: &str| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("raw literal ({}) fail convert to {:?}", v, ty),
+                    format!(
+                        "Unable to convert raw literal ({}) fail convert to type {}",
+                        v, ty
+                    ),
                 )
             };
             match self {
@@ -1499,7 +1502,7 @@ mod _serde {
                         let value_ty = map_ty.value_field.field_type.as_ref();
                         let mut map = BTreeMap::new();
                         for k_v in v.list {
-                            // In deserialize, the element always be `Som`e. `None` will be represented
+                            // In deserialize, the element always be `Some`. `None` will be represented
                             // as `Some(RawLiteral::Null)`
                             let k_v = k_v.ok_or_else(|| invalid_err("list"))?;
                             if let RawLiteralEnum::Record(Record {
@@ -1521,11 +1524,14 @@ mod _serde {
                                 });
                                 match (key, value) {
                                     (Some(k), Some(v)) => {
-                                        map.insert(
-                                            k.try_into(key_ty)?
-                                                .ok_or_else(|| invalid_err("list"))?,
-                                            v.try_into(value_ty)?,
-                                        );
+                                        let key = k
+                                            .try_into(key_ty)?
+                                            .ok_or_else(|| invalid_err("list"))?;
+                                        let value = v.try_into(value_ty)?;
+                                        if map_ty.value_field.required && value.is_none() {
+                                            return Err(invalid_err("list"));
+                                        }
+                                        map.insert(key, value);
                                     }
                                     _ => return Err(invalid_err("list")),
                                 }
@@ -1560,10 +1566,11 @@ mod _serde {
                         }
                         let mut map = BTreeMap::new();
                         for (k, v) in required {
-                            map.insert(
-                                Literal::string(k),
-                                v.try_into(&map_ty.value_field.field_type)?,
-                            );
+                            let value = v.try_into(&map_ty.value_field.field_type)?;
+                            if map_ty.value_field.required && value.is_none() {
+                                return Err(invalid_err("record"));
+                            }
+                            map.insert(Literal::string(k), value);
                         }
                         Ok(Some(Literal::Map(map)))
                     }
@@ -1612,7 +1619,7 @@ mod tests {
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
         writer.append_ser(ByteBuf::from(literal)).unwrap();
         let encoded = writer.into_inner().unwrap();
-        let reader = apache_avro::Reader::new(&*encoded).unwrap();
+        let reader = apache_avro::Reader::with_schema(&schema, &*encoded).unwrap();
 
         for record in reader {
             let result = apache_avro::from_value::<ByteBuf>(&record.unwrap()).unwrap();
