@@ -261,10 +261,7 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
     Ok(AvroSchema::Decimal(DecimalSchema {
         precision,
         scale,
-        inner: Box::new(avro_fixed_schema(
-            Type::decimal_required_bytes(precision as u32)? as usize,
-            None,
-        )?),
+        inner: Box::new(AvroSchema::Bytes),
     }))
 }
 
@@ -471,7 +468,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                         )
                     })?;
                     match logical_type {
-                        "uuid" => Type::Primitive(PrimitiveType::Uuid),
+                        UUID_LOGICAL_TYPE => Type::Primitive(PrimitiveType::Uuid),
                         ty => {
                             return Err(Error::new(
                                 ErrorKind::FeatureUnsupported,
