@@ -17,10 +17,18 @@
 
 //! ManifestList for Iceberg.
 
-use crate::{avro::schema_to_avro_schema, spec::Literal, Error};
-use apache_avro::{from_value, types::Value, Reader};
+use std::collections::HashMap;
 
-use super::{FormatVersion, Schema, StructType};
+use crate::{io::OutputFile, spec::Literal, Error};
+use apache_avro::{from_value, types::Value, Reader, Writer};
+use futures::AsyncWriteExt;
+
+use self::{
+    _const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
+    _serde::{ManifestListEntryV1, ManifestListEntryV2},
+};
+
+use super::{FormatVersion, StructType};
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -35,7 +43,7 @@ use super::{FormatVersion, Schema, StructType};
 /// This includes the number of added, existing, and deleted files, and a
 /// summary of values for each field of the partition spec used to write the
 /// manifest.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ManifestList {
     /// Entries in a manifest list.
     entries: Vec<ManifestListEntry>,
@@ -49,17 +57,15 @@ impl ManifestList {
         partition_type: &StructType,
     ) -> Result<ManifestList, Error> {
         match version {
-            FormatVersion::V2 => {
-                let schema = schema_to_avro_schema("manifest_list", &Self::v2_schema()).unwrap();
-                let reader = Reader::with_schema(&schema, bs)?;
-                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type)
-            }
             FormatVersion::V1 => {
-                let schema = schema_to_avro_schema("manifest_list", &Self::v1_schema()).unwrap();
-                let reader = Reader::with_schema(&schema, bs)?;
+                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
                 let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type)
+            }
+            FormatVersion::V2 => {
+                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
+                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
+                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type)
             }
         }
     }
@@ -68,58 +74,115 @@ impl ManifestList {
     pub fn entries(&self) -> &[ManifestListEntry] {
         &self.entries
     }
+}
 
-    /// Get the v2 schema of the manifest list entry.
-    pub(crate) fn v2_schema() -> Schema {
-        let fields = vec![
-            _const_fields::MANIFEST_PATH.clone(),
-            _const_fields::MANIFEST_LENGTH.clone(),
-            _const_fields::PARTITION_SPEC_ID.clone(),
-            _const_fields::CONTENT.clone(),
-            _const_fields::SEQUENCE_NUMBER.clone(),
-            _const_fields::MIN_SEQUENCE_NUMBER.clone(),
-            _const_fields::ADDED_SNAPSHOT_ID.clone(),
-            _const_fields::ADDED_FILES_COUNT_V2.clone(),
-            _const_fields::EXISTING_FILES_COUNT_V2.clone(),
-            _const_fields::DELETED_FILES_COUNT_V2.clone(),
-            _const_fields::ADDED_ROWS_COUNT_V2.clone(),
-            _const_fields::EXISTING_ROWS_COUNT_V2.clone(),
-            _const_fields::DELETED_ROWS_COUNT_V2.clone(),
-            _const_fields::PARTITIONS.clone(),
-            _const_fields::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
+/// A manifest list writer.
+pub struct ManifestListWriter {
+    format_version: FormatVersion,
+    output_file: OutputFile,
+    avro_writer: Writer<'static, Vec<u8>>,
+}
+
+impl ManifestListWriter {
+    /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {
+        let metadata = HashMap::from_iter([
+            ("snapshot-id".to_string(), snapshot_id.to_string()),
+            (
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            ),
+            ("format-version".to_string(), "1".to_string()),
+        ]);
+        Self::new(FormatVersion::V1, output_file, metadata)
     }
 
-    /// Get the v1 schema of the manifest list entry.
-    pub(crate) fn v1_schema() -> Schema {
-        let fields = vec![
-            _const_fields::MANIFEST_PATH.clone(),
-            _const_fields::MANIFEST_LENGTH.clone(),
-            _const_fields::PARTITION_SPEC_ID.clone(),
-            _const_fields::ADDED_SNAPSHOT_ID.clone(),
-            _const_fields::ADDED_FILES_COUNT_V1.clone().to_owned(),
-            _const_fields::EXISTING_FILES_COUNT_V1.clone(),
-            _const_fields::DELETED_FILES_COUNT_V1.clone(),
-            _const_fields::ADDED_ROWS_COUNT_V1.clone(),
-            _const_fields::EXISTING_ROWS_COUNT_V1.clone(),
-            _const_fields::DELETED_ROWS_COUNT_V1.clone(),
-            _const_fields::PARTITIONS.clone(),
-            _const_fields::KEY_METADATA.clone(),
-        ];
-        Schema::builder().with_fields(fields).build().unwrap()
+    /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
+    pub fn v2(
+        output_file: OutputFile,
+        snapshot_id: i64,
+        parent_snapshot_id: i64,
+        sequence_number: i64,
+    ) -> Self {
+        let metadata = HashMap::from_iter([
+            ("snapshot-id".to_string(), snapshot_id.to_string()),
+            (
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            ),
+            ("sequence-number".to_string(), sequence_number.to_string()),
+            ("format-version".to_string(), "2".to_string()),
+        ]);
+        Self::new(FormatVersion::V2, output_file, metadata)
+    }
+
+    fn new(
+        format_version: FormatVersion,
+        output_file: OutputFile,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        let avro_schema = match format_version {
+            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
+            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
+        };
+        let mut avro_writer = Writer::new(avro_schema, Vec::new());
+        for (key, value) in metadata {
+            avro_writer
+                .add_user_metadata(key, value)
+                .expect("Avro metadata should be added to the writer before the first record.");
+        }
+        Self {
+            format_version,
+            output_file,
+            avro_writer,
+        }
+    }
+
+    /// Append manifest entries to be written.
+    pub fn add_manifest_entries(
+        &mut self,
+        manifest_entries: impl Iterator<Item = ManifestListEntry>,
+    ) -> Result<(), Error> {
+        match self.format_version {
+            FormatVersion::V1 => {
+                for manifest_entry in manifest_entries {
+                    let manifest_entry: ManifestListEntryV1 = manifest_entry.into();
+                    self.avro_writer.append_ser(manifest_entry)?;
+                }
+            }
+            FormatVersion::V2 => {
+                for manifest_entry in manifest_entries {
+                    let manifest_entry: ManifestListEntryV2 = manifest_entry.try_into()?;
+                    self.avro_writer.append_ser(manifest_entry)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Write the manifest list to the output file.
+    pub async fn close(self) -> Result<(), Error> {
+        let data = self.avro_writer.into_inner()?;
+        let mut writer = self.output_file.writer().await?;
+        writer.write_all(&data).await.unwrap();
+        writer.close().await.unwrap();
+        Ok(())
     }
 }
 
 /// This is a helper module that defines the schema field of the manifest list entry.
-mod _const_fields {
+mod _const_schema {
     use std::sync::Arc;
 
+    use apache_avro::Schema as AvroSchema;
     use once_cell::sync::Lazy;
 
-    use crate::spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type};
+    use crate::{
+        avro::schema_to_avro_schema,
+        spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type},
+    };
 
-    pub(crate) static MANIFEST_PATH: Lazy<NestedFieldRef> = {
+    static MANIFEST_PATH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 500,
@@ -128,7 +191,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
+    static MANIFEST_LENGTH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 501,
@@ -137,7 +200,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
+    static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 502,
@@ -146,7 +209,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static CONTENT: Lazy<NestedFieldRef> = {
+    static CONTENT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 517,
@@ -155,7 +218,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 515,
@@ -164,7 +227,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 516,
@@ -173,7 +236,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
+    static ADDED_SNAPSHOT_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 503,
@@ -182,7 +245,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static ADDED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 504,
@@ -191,7 +254,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static ADDED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 504,
@@ -200,7 +263,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static EXISTING_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 505,
@@ -209,7 +272,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static EXISTING_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 505,
@@ -218,7 +281,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
+    static DELETED_FILES_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 506,
@@ -227,7 +290,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
+    static DELETED_FILES_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 506,
@@ -236,7 +299,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static ADDED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 512,
@@ -245,7 +308,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static ADDED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 512,
@@ -254,7 +317,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static EXISTING_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 513,
@@ -263,7 +326,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static EXISTING_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 513,
@@ -272,7 +335,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
+    static DELETED_ROWS_COUNT_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 514,
@@ -281,7 +344,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
+    static DELETED_ROWS_COUNT_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 514,
@@ -290,7 +353,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static PARTITIONS: Lazy<NestedFieldRef> = {
+    static PARTITIONS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             // element type
             let fields = vec![
@@ -327,7 +390,7 @@ mod _const_fields {
             ))
         })
     };
-    pub(crate) static KEY_METADATA: Lazy<NestedFieldRef> = {
+    static KEY_METADATA: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 519,
@@ -336,6 +399,55 @@ mod _const_fields {
             ))
         })
     };
+
+    static V1_SCHEMA: Lazy<Schema> = {
+        Lazy::new(|| {
+            let fields = vec![
+                MANIFEST_PATH.clone(),
+                MANIFEST_LENGTH.clone(),
+                PARTITION_SPEC_ID.clone(),
+                ADDED_SNAPSHOT_ID.clone(),
+                ADDED_FILES_COUNT_V1.clone().to_owned(),
+                EXISTING_FILES_COUNT_V1.clone(),
+                DELETED_FILES_COUNT_V1.clone(),
+                ADDED_ROWS_COUNT_V1.clone(),
+                EXISTING_ROWS_COUNT_V1.clone(),
+                DELETED_ROWS_COUNT_V1.clone(),
+                PARTITIONS.clone(),
+                KEY_METADATA.clone(),
+            ];
+            Schema::builder().with_fields(fields).build().unwrap()
+        })
+    };
+
+    static V2_SCHEMA: Lazy<Schema> = {
+        Lazy::new(|| {
+            let fields = vec![
+                MANIFEST_PATH.clone(),
+                MANIFEST_LENGTH.clone(),
+                PARTITION_SPEC_ID.clone(),
+                CONTENT.clone(),
+                SEQUENCE_NUMBER.clone(),
+                MIN_SEQUENCE_NUMBER.clone(),
+                ADDED_SNAPSHOT_ID.clone(),
+                ADDED_FILES_COUNT_V2.clone(),
+                EXISTING_FILES_COUNT_V2.clone(),
+                DELETED_FILES_COUNT_V2.clone(),
+                ADDED_ROWS_COUNT_V2.clone(),
+                EXISTING_ROWS_COUNT_V2.clone(),
+                DELETED_ROWS_COUNT_V2.clone(),
+                PARTITIONS.clone(),
+                KEY_METADATA.clone(),
+            ];
+            Schema::builder().with_fields(fields).build().unwrap()
+        })
+    };
+
+    pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
+        Lazy::new(|| schema_to_avro_schema("manifest_list", &V1_SCHEMA).unwrap());
+
+    pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
+        Lazy::new(|| schema_to_avro_schema("manifest_list", &V2_SCHEMA).unwrap());
 }
 
 /// Entry in a manifest list.
@@ -796,9 +908,15 @@ pub(super) mod _serde {
 mod test {
     use std::{fs, sync::Arc};
 
-    use crate::spec::{
-        manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
-        ManifestList, ManifestListEntry, NestedField, PrimitiveType, StructType, Type,
+    use tempdir::TempDir;
+
+    use crate::{
+        io::FileIOBuilder,
+        spec::{
+            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
+            ManifestList, ManifestListEntry, ManifestListWriter, NestedField, PrimitiveType,
+            StructType, Type,
+        },
     };
 
     use super::_serde::ManifestListV2;
@@ -868,7 +986,7 @@ mod test {
             ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 1,
                 min_sequence_number: 1,
@@ -919,7 +1037,7 @@ mod test {
             entries: vec![ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
-                partition_spec_id: 0,
+                partition_spec_id: 1,
                 content: ManifestContentType::Data,
                 sequence_number: 1,
                 min_sequence_number: 1,
@@ -937,7 +1055,105 @@ mod test {
         let result = serde_json::to_string(&manifest_list).unwrap();
         assert_eq!(
             result,
-            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":0,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
+            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
         );
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v1() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                manifest_length: 5806,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1646658105718557341,
+                added_data_files_count: Some(3),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                key_metadata: vec![],
+            }]
+        };
+
+        let temp_dir = TempDir::new("manifest_list_v1").unwrap();
+        let path = temp_dir.path().join("manifest_list_v1.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, 0);
+        writer
+            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list = ManifestList::parse_with_version(
+            &bs,
+            crate::spec::FormatVersion::V1,
+            &StructType::new(vec![Arc::new(NestedField::required(
+                1,
+                "test",
+                Type::Primitive(PrimitiveType::Long),
+            ))]),
+        )
+        .unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v2() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 377075049360453639,
+                added_data_files_count: Some(1),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                key_metadata: vec![],
+            }]
+        };
+
+        let temp_dir = TempDir::new("manifest_list_v2").unwrap();
+        let path = temp_dir.path().join("manifest_list_v2.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = ManifestListWriter::v2(output_file, 377075049360453639, 0, 1);
+        writer
+            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list = ManifestList::parse_with_version(
+            &bs,
+            crate::spec::FormatVersion::V2,
+            &StructType::new(vec![Arc::new(NestedField::required(
+                1,
+                "test",
+                Type::Primitive(PrimitiveType::Long),
+            ))]),
+        )
+        .unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
     }
 }

@@ -16,6 +16,8 @@
 // under the License.
 
 //! Conversion between iceberg and avro schema.
+use std::collections::BTreeMap;
+
 use crate::spec::{
     visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema,
     SchemaVisitor, StructType, Type,
@@ -96,7 +98,15 @@ impl SchemaVisitor for SchemaToAvroSchema {
         _struct: &StructType,
         results: Vec<AvroSchemaOrField>,
     ) -> Result<AvroSchemaOrField> {
-        let avro_fields = results.into_iter().map(|r| r.unwrap_right()).collect();
+        let avro_fields: Vec<AvroRecordField> =
+            results.into_iter().map(|r| r.unwrap_right()).collect();
+
+        let lookup = BTreeMap::from_iter(
+            avro_fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| (field.name.clone(), i)),
+        );
 
         Ok(Either::Left(AvroSchema::Record(RecordSchema {
             // The name of this record schema should be determined later, by schema name or field
@@ -105,7 +115,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             aliases: None,
             doc: None,
             fields: avro_fields,
-            lookup: Default::default(),
+            lookup,
             attributes: Default::default(),
         })))
     }
