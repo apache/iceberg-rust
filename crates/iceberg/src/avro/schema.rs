@@ -34,7 +34,7 @@ use serde_json::{Number, Value};
 const FILED_ID_PROP: &str = "field-id";
 const UUID_BYTES: usize = 16;
 const UUID_LOGICAL_TYPE: &str = "uuid";
-// # TODO
+// # TODO: https://github.com/apache/iceberg-rust/issues/86
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 

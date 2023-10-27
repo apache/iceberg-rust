@@ -1476,7 +1476,7 @@ mod _serde {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
                     _ => Err(invalid_err("string")),
                 },
-                // # TODO
+                // # TODO:https://github.com/apache/iceberg-rust/issues/86
                 // rust avro don't support deserialize any bytes representation now.
                 RawLiteralEnum::Bytes(_) => Err(invalid_err_with_reason(
                     "bytes",
@@ -2227,7 +2227,7 @@ mod tests {
         );
     }
 
-    // # TODO
+    // # TODO:https://github.com/apache/iceberg-rust/issues/86
     // rust avro don't support deserialize any bytes representation now:
     // - binary
     // - decimal
@@ -2250,7 +2250,7 @@ mod tests {
         check_serialzie_avro(literal, &ty, expect_value);
     }
 
-    // # TODO
+    // # TODO:https://github.com/apache/iceberg-rust/issues/86
     // rust avro can't support to convert any byte-like type to fixed in avro now.
     // - uuid ser/de
     // - fixed ser/de
