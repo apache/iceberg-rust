@@ -16,48 +16,26 @@
 # under the License.
 
 [package]
-name = "iceberg"
+name = "iceberg-catalog-rest"
 version = "0.1.0"
 edition = "2021"
 
 categories = ["database"]
-description = "Apache Iceberg Rust implementation"
+description = "Apache Iceberg Rust REST API"
 repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
-keywords = ["iceberg"]
+keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
-anyhow = "1.0.72"
-apache-avro = "0.16"
-arrow-arith = { version = ">=46" }
-arrow-array = { version = ">=46" }
-arrow-schema = { version = ">=46" }
 async-trait = "0.1"
-bimap = "0.6"
-bitvec = "1.0.1"
-chrono = "0.4"
-derive_builder = "0.12.0"
-either = "1"
-futures = "0.3"
-itertools = "0.11"
-lazy_static = "1"
-log = "^0.4"
-murmur3 = "0.5.2"
-once_cell = "1"
-opendal = "0.41"
-ordered-float = "4.0.0"
+iceberg = { path = "../../iceberg" }
 reqwest = { version = "^0.11", features = ["json"] }
-rust_decimal = "1.31.0"
 serde = { version = "^1.0", features = ["rc"] }
-serde_bytes = "0.11.8"
 serde_derive = "^1.0"
 serde_json = "^1.0"
-serde_repr = "0.1.16"
-url = "2"
+typed-builder = "^0.17"
 urlencoding = "2"
-uuid = "1.4.1"
 
 [dev-dependencies]
-pretty_assertions = "1.4.0"
-tempdir = "0.3"
+mockito = "^1"
 tokio = { version = "1", features = ["macros"] }

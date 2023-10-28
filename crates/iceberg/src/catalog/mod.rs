@@ -17,11 +17,15 @@
 
 //! Catalog API for Apache Iceberg
 
+use serde_derive::{Deserialize, Serialize};
+use urlencoding::encode;
+
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
-use crate::Result;
+use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
@@ -39,6 +43,9 @@ pub trait Catalog {
 
     /// Get a namespace information from the catalog.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace>;
+
+    /// Check if namespace exists in catalog.
+    async fn namespace_exists(&self, namesace: &NamespaceIdent) -> Result<bool>;
 
     /// Update a namespace inside the catalog.
     ///
@@ -88,6 +95,8 @@ pub trait Catalog {
 /// The namespace identifier is a list of strings, where each string is a
 /// component of the namespace. It's catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NamespaceIdent(Vec<String>);
 
 impl NamespaceIdent {
@@ -97,8 +106,24 @@ impl NamespaceIdent {
     }
 
     /// Create a multi-level namespace identifier from vector.
-    pub fn from_vec(names: Vec<String>) -> Self {
-        Self(names)
+    pub fn from_vec(names: Vec<String>) -> Result<Self> {
+        if names.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Namespace identifier can't be empty!",
+            ));
+        }
+        Ok(Self(names))
+    }
+
+    /// Returns url encoded format.
+    pub fn encode_in_url(&self) -> String {
+        encode(&self.as_ref().join("\u{1F}")).to_string()
+    }
+
+    /// Returns inner strings.
+    pub fn inner(self) -> Vec<String> {
+        self.0
     }
 }
 
@@ -108,7 +133,16 @@ impl AsRef<Vec<String>> for NamespaceIdent {
     }
 }
 
+impl Deref for NamespaceIdent {
+    type Target = [String];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Namespace represents a namespace in the catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Namespace {
     name: NamespaceIdent,
     properties: HashMap<String, String>,
@@ -137,9 +171,12 @@ impl Namespace {
 }
 
 /// TableIdent represents the identifier of a table in the catalog.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableIdent {
-    namespace: NamespaceIdent,
-    name: String,
+    /// Namespace of the table.
+    pub namespace: NamespaceIdent,
+    /// Table name.
+    pub name: String,
 }
 
 impl TableIdent {
