@@ -31,6 +31,8 @@ use iceberg::Result;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
 };
+use iceberg::io::{FileIO, FileIOBuilder};
+use crate::catalog::_serde::LoadTableResponse;
 
 use self::_serde::{
     CatalogConfig, ErrorModel, ErrorResponse, ListNamespaceResponse, ListTableResponse,
@@ -73,7 +75,7 @@ impl RestCatalogConfig {
             &ns.encode_in_url(),
             "tables",
         ]
-        .join("/")
+            .join("/")
     }
 
     fn rename_table_endpoint(&self) -> String {
@@ -89,7 +91,7 @@ impl RestCatalogConfig {
             "tables",
             encode(&table.name).as_ref(),
         ]
-        .join("/")
+            .join("/")
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
@@ -135,8 +137,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?)
         } else {
             let text = resp.bytes().await?;
@@ -145,8 +147,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?;
             Err(e.into())
         }
@@ -167,8 +169,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?;
             Err(e.into())
         }
@@ -312,11 +314,31 @@ impl Catalog for RestCatalog {
     }
 
     /// Load table from the catalog.
-    async fn load_table(&self, _table: &TableIdent) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Creating table not supported yet!",
-        ))
+    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+        let request = self.client.0
+            .get(self.config.table_endpoint(table))
+            .build()?;
+
+        let resp = self.client.query::<LoadTableResponse, ErrorModel, OK>(request).await?;
+
+        let mut props = self.config.props.clone();
+        if let Some(config) = resp.config {
+            props.extend(config);
+        }
+
+        let file_io = match self.config.warehouse.as_ref().or_else(|| resp.metadata_location.as_ref()) {
+            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
+            None => FileIOBuilder::new("s3").with_props(props).build()?
+        };
+
+
+        let mut table_builder = Table::builder().identifier(table.clone()).file_io(file_io).metadata(resp.metadata);
+
+        if let Some(metadata_location) = resp.metadata_location {
+            Ok(table_builder.metadata_location(metadata_location).build())
+        } else {
+            Ok(table_builder.build())
+        }
     }
 
     /// Drop a table from the catalog.
@@ -413,9 +435,11 @@ mod _serde {
     use serde_derive::{Deserialize, Serialize};
 
     use iceberg::{Error, ErrorKind, Namespace, TableIdent};
+    use iceberg::spec::TableMetadata;
 
     pub(super) const OK: u16 = 200u16;
     pub(super) const NO_CONTENT: u16 = 204u16;
+
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub(super) struct CatalogConfig {
         pub(super) overrides: HashMap<String, String>,
@@ -533,6 +557,14 @@ mod _serde {
     pub(super) struct RenameTableRequest {
         pub(super) source: TableIdent,
         pub(super) destination: TableIdent,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) struct LoadTableResponse {
+        pub(super) metadata_location: Option<String>,
+        pub(super) metadata: TableMetadata,
+        pub(super) config: Option<HashMap<String, String>>,
     }
 }
 
@@ -880,6 +912,37 @@ mod tests {
             )
             .await
             .unwrap();
+
+        config_mock.assert_async().await;
+        rename_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let rename_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!("{}/testdata/{}", env!("CARGO_MANIFEST_DIR"), "load_table_response.json"))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table = catalog
+            .load_table(
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string()),
+            )
+            .await
+            .unwrap();
+
+
+        assert_eq!(&TableIdent::try_from(vec!["ns1"]))
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;

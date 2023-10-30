@@ -28,18 +28,14 @@ use uuid::Uuid;
 
 use crate::{Error, ErrorKind};
 
-use super::{
-    partition::PartitionSpec,
-    schema::Schema,
-    snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    sort::SortOrder,
-};
+use super::{partition::PartitionSpec, PartitionSpecRef, schema::Schema, SchemaRef, snapshot::{Snapshot, SnapshotReference, SnapshotRetention}, SnapshotRef, sort::SortOrder, SortOrderRef};
 
 use _serde::TableMetadataEnum;
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
+
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -58,11 +54,11 @@ pub struct TableMetadata {
     /// An integer; the highest assigned column ID for the table.
     last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    schemas: HashMap<i32, Arc<Schema>>,
+    schemas: HashMap<i32, SchemaRef>,
     /// ID of the table’s current schema.
     current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
-    partition_specs: HashMap<i32, PartitionSpec>,
+    partition_specs: HashMap<i32, PartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
     default_spec_id: i32,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
@@ -78,7 +74,7 @@ pub struct TableMetadata {
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    snapshots: Option<HashMap<i64, Arc<Snapshot>>>,
+    snapshots: HashMap<i64, SnapshotRef>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
     /// is changed, a new entry should be added with the last-updated-ms
@@ -96,7 +92,7 @@ pub struct TableMetadata {
     metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
-    sort_orders: HashMap<i64, SortOrder>,
+    sort_orders: HashMap<i64, SortOrderRef>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
@@ -109,49 +105,123 @@ pub struct TableMetadata {
 }
 
 impl TableMetadata {
+    /// Returns format version of this metadata.
+    #[inline]
+    pub fn format_version(&self) -> FormatVersion {
+        self.format_version.clone()
+    }
+
+    /// Returns uuid of current table.
+    #[inline]
+    pub fn uuid(&self) -> &Uuid {
+        &self.table_uuid
+    }
+
+    /// Returns table location.
+    #[inline]
+    pub fn location(&self) -> &str {
+        self.location.as_str()
+    }
+
+    /// Returns last sequence number.
+    #[inline]
+    pub fn last_sequence_number(&self) -> i64 {
+        self.last_sequence_number
+    }
+
+    /// Returns last updated time.
+    #[inline]
+    pub fn last_updated_ms(&self) -> i64 {
+        self.last_updated_ms
+    }
+
+    /// Returns schemas
+    #[inline]
+    pub fn schemas(&self) -> impl Iterator<Item=&SchemaRef> {
+        self.schemas.values()
+    }
+
+    /// Lookup schema by id.
+    #[inline]
+    pub fn schema_by_id(&self, schema_id: i32) -> Option<&SchemaRef> {
+        self.schemas.get(&schema_id)
+    }
+
     /// Get current schema
     #[inline]
-    pub fn current_schema(&self) -> Result<Arc<Schema>, Error> {
-        self.schemas
-            .get(&self.current_schema_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Schema id {} not found!", self.current_schema_id),
-                )
-            })
-            .cloned()
+    pub fn current_schema(&self) -> &SchemaRef {
+        self.schema_by_id(self.current_schema_id).expect("Current schema id set, but not found in table metadata")
     }
+
+    /// Returns all partition specs.
+    #[inline]
+    pub fn partition_specs(&self) -> impl Iterator<Item = &PartitionSpecRef> {
+        self.partition_specs.values()
+    }
+
+    /// Lookup partition spec by id.
+    #[inline]
+    pub fn partition_spec_by_id(&self, spec_id: i32) -> Option<&PartitionSpecRef> {
+        self.partition_specs.get(&spec_id)
+    }
+
     /// Get default partition spec
     #[inline]
-    pub fn default_partition_spec(&self) -> Result<&PartitionSpec, Error> {
-        self.partition_specs
-            .get(&self.default_spec_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Partition spec id {} not found!", self.default_spec_id),
-                )
-            })
+    pub fn default_partition_spec(&self) -> Option<&PartitionSpecRef> {
+        if self.default_spec_id == DEFAULT_SPEC_ID {
+            self.partition_spec_by_id(DEFAULT_SPEC_ID)
+        } else {
+            Some(self.partition_spec_by_id(DEFAULT_SPEC_ID).expect("Default partition spec id set, but not found in table metadata"))
+        }
+    }
+
+    /// Returns all snapshots
+    #[inline]
+    pub fn snapshots(&self) -> impl Iterator<Item = &SnapshotRef> {
+        self.snapshots.values()
+    }
+
+    /// Lookup snapshot by id.
+    #[inline]
+    pub fn snapshot_by_id(&self, snapshot_id: i64) -> Option<&SnapshotRef>  {
+        self.snapshots.get(&snapshot_id)
+    }
+
+    /// Returns snapshot history.
+    #[inline]
+    pub fn history(&self) -> &[SnapshotLog] {
+        &self.snapshot_log
     }
 
     /// Get current snapshot
     #[inline]
-    pub fn current_snapshot(&self) -> Result<Option<Arc<Snapshot>>, Error> {
-        match (&self.current_snapshot_id, &self.snapshots) {
-            (Some(snapshot_id), Some(snapshots)) => Ok(snapshots.get(snapshot_id).cloned()),
-            (Some(-1), None) => Ok(None),
-            (None, None) => Ok(None),
-            (Some(_), None) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Snapshot id is provided but there are no snapshots".to_string(),
-            )),
-            (None, Some(_)) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "There are snapshots but no snapshot id is provided".to_string(),
-            )),
+    pub fn current_snapshot(&self) -> Option<&SnapshotRef> {
+        self.current_snapshot_id.map(|s| self.snapshot_by_id(s).expect("Current snapshot id has been set, but doesn't exist in metadata"))
+    }
+
+    /// Return all sort orders.
+    #[inline]
+    pub fn sort_orders(&self) -> impl Iterator<Item = &SortOrderRef> {
+        self.sort_orders.values()
+    }
+
+    /// Lookup sort order by id.
+    #[inline]
+    pub fn sort_order_by_id(&self, sort_order_id: i64) -> Option<&SortOrderRef> {
+        self.sort_orders.get(&sort_order_id)
+    }
+
+    /// Returns default sort order id.
+    #[inline]
+    pub fn default_sort_order(&self) -> Option<&SortOrderRef> {
+        if self.default_sort_order_id == DEFAULT_SORT_ORDER_ID {
+            self.sort_orders.get(&DEFAULT_SORT_ORDER_ID)
+        } else {
+            Some(self.sort_orders.get(&self.default_sort_order_id)
+                .expect("Default order id has been set, but not found in table metadata!"))
         }
     }
+
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) -> Result<(), Error> {
@@ -174,23 +244,8 @@ impl TableMetadata {
                 )
             });
 
-        if let Some(snapshots) = &mut self.snapshots {
-            self.snapshot_log.push(snapshot.log());
-            snapshots.insert(snapshot.snapshot_id(), Arc::new(snapshot));
-        } else {
-            if !self.snapshot_log.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Snapshot logs is empty while snapshots is not!",
-                ));
-            }
-
-            self.snapshot_log = vec![snapshot.log()];
-            self.snapshots = Some(HashMap::from_iter(vec![(
-                snapshot.snapshot_id(),
-                Arc::new(snapshot),
-            )]));
-        }
+        self.snapshot_log.push(snapshot.log());
+        self.snapshots.insert(snapshot.snapshot_id(), Arc::new(snapshot));
 
         Ok(())
     }
@@ -202,6 +257,7 @@ pub(super) mod _serde {
     /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
     use std::{collections::HashMap, sync::Arc};
+    use arrow_array::Array;
 
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
@@ -215,6 +271,7 @@ pub(super) mod _serde {
         },
         Error, ErrorKind,
     };
+    use crate::spec::{PartitionSpecRef, Snapshot};
 
     use super::{
         FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
@@ -376,7 +433,7 @@ pub(super) mod _serde {
                 }?,
                 schemas,
                 partition_specs: HashMap::from_iter(
-                    value.partition_specs.into_iter().map(|x| (x.spec_id, x)),
+                    value.partition_specs.into_iter().map(|x| (x.spec_id, Arc::new(x))),
                 ),
                 default_spec_id: value.default_spec_id,
                 last_partition_id: value.last_partition_id,
@@ -388,11 +445,11 @@ pub(super) mod _serde {
                             .into_iter()
                             .map(|x| (x.snapshot_id, Arc::new(x.into()))),
                     )
-                }),
+                }).unwrap_or_default(),
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: HashMap::from_iter(
-                    value.sort_orders.into_iter().map(|x| (x.order_id, x)),
+                    value.sort_orders.into_iter().map(|x| (x.order_id, Arc::new(x))),
                 ),
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
@@ -453,7 +510,7 @@ pub(super) mod _serde {
                         }]
                     })
                     .into_iter()
-                    .map(|x| (x.spec_id, x)),
+                    .map(|x| (x.spec_id, Arc::new(x))),
             );
             Ok(TableMetadata {
                 format_version: FormatVersion::V1,
@@ -490,12 +547,12 @@ pub(super) mod _serde {
                                 .collect::<Result<Vec<_>, Error>>()?,
                         ))
                     })
-                    .transpose()?,
+                    .transpose()?.unwrap_or_default(),
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: match value.sort_orders {
                     Some(sort_orders) => {
-                        HashMap::from_iter(sort_orders.into_iter().map(|x| (x.order_id, x)))
+                        HashMap::from_iter(sort_orders.into_iter().map(|x| (x.order_id, Arc::new( x))))
                     }
                     None => HashMap::new(),
                 },
@@ -543,16 +600,17 @@ pub(super) mod _serde {
                     Some(v.properties)
                 },
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
-                snapshots: v.snapshots.map(|snapshots| {
-                    snapshots
+                snapshots: if v.snapshots.is_empty() {
+                    None
+                } else {
+                    Some(v.snapshots
                         .into_values()
                         .map(|x| {
                             Arc::try_unwrap(x)
                                 .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
                                 .into()
                         })
-                        .collect()
-                }),
+                        .collect())},
                 snapshot_log: if v.snapshot_log.is_empty() {
                     None
                 } else {
@@ -610,16 +668,16 @@ pub(super) mod _serde {
                     Some(v.properties)
                 },
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
-                snapshots: v.snapshots.map(|snapshots| {
-                    snapshots
+                snapshots: if v.snapshots.is_empty() {
+                    None
+                } else {
+                    Some(v.snapshots
                         .into_values()
                         .map(|x| {
-                            Arc::try_unwrap(x)
-                                .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
-                                .into()
+                            Snapshot::clone(&x).into()
                         })
-                        .collect()
-                }),
+                        .collect())
+                },
                 snapshot_log: if v.snapshot_log.is_empty() {
                     None
                 } else {
@@ -778,12 +836,12 @@ mod tests {
             last_column_id: 1,
             schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
             current_schema_id: 1,
-            partition_specs: HashMap::from_iter(vec![(1, partition_spec)]),
+            partition_specs: HashMap::from_iter(vec![(1, partition_spec.into())]),
             default_spec_id: 1,
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![]),
-            snapshots: None,
+            snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
             properties: HashMap::from_iter(vec![(
@@ -948,12 +1006,12 @@ mod tests {
             last_column_id: 5,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
             default_spec_id: 0,
             last_partition_id: 1000,
             default_sort_order_id: 0,
-            sort_orders: HashMap::from_iter(vec![(0, sort_order)]),
-            snapshots: Some(HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))])),
+            sort_orders: HashMap::from_iter(vec![(0, sort_order.into())]),
+            snapshots: HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))]),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
             properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
@@ -1093,15 +1151,15 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema1)), (1, Arc::new(schema2))]),
             current_schema_id: 1,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
             default_spec_id: 0,
             last_partition_id: 1000,
             default_sort_order_id: 3,
-            sort_orders: HashMap::from_iter(vec![(3, sort_order)]),
-            snapshots: Some(HashMap::from_iter(vec![
+            sort_orders: HashMap::from_iter(vec![(3, sort_order.into())]),
+            snapshots: HashMap::from_iter(vec![
                 (3051729675574597004, Arc::new(snapshot1)),
                 (3055729675574597004, Arc::new(snapshot2)),
-            ])),
+            ]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
             properties: HashMap::new(),
@@ -1194,12 +1252,12 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
             default_spec_id: 0,
             last_partition_id: 1000,
             default_sort_order_id: 3,
-            sort_orders: HashMap::from_iter(vec![(3, sort_order)]),
-            snapshots: None,
+            sort_orders: HashMap::from_iter(vec![(3, sort_order.into())]),
+            snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 34,
             properties: HashMap::new(),
@@ -1256,12 +1314,12 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec)]),
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
             default_spec_id: 0,
             last_partition_id: 0,
             default_sort_order_id: 0,
             sort_orders: HashMap::new(),
-            snapshots: Some(HashMap::new()),
+            snapshots: HashMap::new(),
             current_snapshot_id: None,
             last_sequence_number: 0,
             properties: HashMap::new(),

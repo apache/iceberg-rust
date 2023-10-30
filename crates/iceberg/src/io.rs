@@ -29,6 +29,16 @@
 //!     .unwrap();
 //! ```
 //!
+//! Or you can pass a path to ask `FileIO` to infer schema for you:
+//! ```rust
+//! use iceberg::io::{FileIO, S3_REGION};
+//! let file_io = FileIO::from_path("s3://bucket/a")
+//!     .unwrap()
+//!     .with_prop(S3_REGION, "us-east-1")
+//!     .build()
+//!     .unwrap();
+//! ```
+//!
 //! # How to use `FileIO`
 //!
 //! Currently `FileIO` provides simple methods for file operations:
@@ -39,6 +49,7 @@
 //! - `new_output`: Create output file for writing.
 
 use std::{collections::HashMap, sync::Arc};
+use anyhow::Context;
 
 use crate::{error::Result, Error, ErrorKind};
 use futures::{AsyncRead, AsyncSeek, AsyncWrite};
@@ -68,6 +79,7 @@ static S3_CONFIG_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(
 });
 
 const DEFAULT_ROOT_PATH: &str = "/";
+
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
 /// # Note
@@ -115,7 +127,7 @@ impl FileIOBuilder {
     /// Add argument for operator.
     pub fn with_props(
         mut self,
-        args: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+        args: impl IntoIterator<Item=(impl ToString, impl ToString)>,
     ) -> Self {
         self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
@@ -132,6 +144,20 @@ impl FileIOBuilder {
 }
 
 impl FileIO {
+    /// Try to infer file io scheme from path.
+    ///
+    /// If it's a valid url, for example http://example.org, url scheme will be used.
+    /// If it's not a valid url, will try to detect if it's a file path.
+    ///
+    /// Otherwise will return parsing error.
+    pub fn from_path(path: impl AsRef<str>) -> Result<FileIOBuilder> {
+        let url = Url::parse(path.as_ref())
+            .map_err(|e| Error::from(e))
+            .or_else(|e| Url::from_file_path(path.as_ref()).map_err(|_| Error::new(ErrorKind::DataInvalid, "Input is neither a valid url nor path").with_context("input", path.as_ref().to_string()).with_source(e)))?;
+
+        Ok(FileIOBuilder::new(url.scheme()))
+    }
+
     /// Deletes file.
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
@@ -343,7 +369,7 @@ impl Storage {
             }
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now",),
+                format!("Constructing file io from scheme: {scheme} not supported now", ),
             )),
         }
     }
@@ -351,7 +377,6 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-
     use std::io::Write;
 
     use std::{fs::File, path::Path};
@@ -361,7 +386,7 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use super::{FileIO, FileIOBuilder};
+    use super::{FileIO, FileIOBuilder, Storage};
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()
@@ -452,5 +477,23 @@ mod tests {
         let read_content = read_from_file(full_path).await;
 
         assert_eq!(content, &read_content);
+    }
+
+    #[test]
+    fn test_create_file_from_path() {
+        let io = FileIO::from_path("/tmp/a").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("file:/tmp/b").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("file:///tmp/c").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("s3://bucket/a").unwrap();
+        assert_eq!("s3", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("tmp/||c");
+        assert!(io.is_err());
     }
 }

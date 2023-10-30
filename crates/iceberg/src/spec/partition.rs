@@ -18,10 +18,13 @@
 /*!
  * Partitioning
 */
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::transform::Transform;
 
+/// Reference to [`PartitionSpec`].
+pub type PartitionSpecRef = Arc<PartitionSpec>;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Partition fields capture the transform from table data to partition values.

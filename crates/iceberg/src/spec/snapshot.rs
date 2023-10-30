@@ -19,11 +19,14 @@
  * Snapshots
 */
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use super::table_metadata::SnapshotLog;
 
+/// Reference to [`Snapshot`].
+pub type SnapshotRef = Arc<Snapshot>;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.

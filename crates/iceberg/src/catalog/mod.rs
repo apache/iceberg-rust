@@ -22,17 +22,18 @@ use urlencoding::encode;
 
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
-use crate::{Error, ErrorKind, Result};
+use crate::{ensure_data_valid, Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::vec::IntoIter;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog {
     /// List namespaces from table.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+                             -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -95,7 +96,6 @@ pub trait Catalog {
 /// The namespace identifier is a list of strings, where each string is a
 /// component of the namespace. It's catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NamespaceIdent(Vec<String>);
 
@@ -114,6 +114,12 @@ impl NamespaceIdent {
             ));
         }
         Ok(Self(names))
+    }
+
+    pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self>
+    {
+
+        Self::from_vec(iter.into_iter().map(|s| s.to_string()).collect())
     }
 
     /// Returns url encoded format.
@@ -194,6 +200,17 @@ impl TableIdent {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
+        let mut vec: Vec<String> = iter.into_iter().map(|s| s.to_string()).collect();
+        let table_name = vec.pop().ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Table identifier can't be empty!"))?;
+        let namespace_ident = NamespaceIdent::from_vec(vec)?;
+
+        Ok(Self {
+            namespace: namespace_ident,
+            name: table_name,
+        })
+    }
 }
 
 /// TableCreation represents the creation of a table in the catalog.
@@ -256,3 +273,18 @@ pub enum TableRequirement {
 ///
 /// TODO: we should fill with UpgradeFormatVersionUpdate, AddSchemaUpdate and so on.
 pub enum TableUpdate {}
+
+#[cfg(test)]
+mod tests {
+    use crate::{NamespaceIdent, TableIdent};
+
+    #[test]
+    fn test_create_table_id() {
+        let table_id = TableIdent {
+            namespace: NamespaceIdent::from_iter(vec!["ns1"]).unwrap(),
+            name: "t1".to_string()
+        };
+
+        assert_eq!(table_id, TableIdent::from_iter(vec!["ns1", "t1"]).unwrap());
+    }
+}

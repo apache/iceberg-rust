@@ -17,10 +17,30 @@
 
 //! Table API for Apache Iceberg
 
+use typed_builder::TypedBuilder;
+use crate::io::FileIO;
 use crate::spec::TableMetadata;
+use crate::TableIdent;
 
 /// Table represents a table in the catalog.
+#[derive(TypedBuilder)]
 pub struct Table {
-    metadata_location: String,
+    file_io: FileIO,
+    #[builder(default, setter(strip_option))]
+    metadata_location: Option<String>,
     metadata: TableMetadata,
+    identifier: TableIdent,
+}
+
+impl Table {
+    pub fn identifier(&self) -> &TableIdent {
+        &self.identifier
+    }
+    pub fn metadata(&self) -> &TableMetadata {
+        &self.metadata
+    }
+
+    pub fn metadata_location(&self) -> Option<&str> {
+        self.metadata_location.as_deref()
+    }
 }

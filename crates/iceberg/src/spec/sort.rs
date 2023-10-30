@@ -18,10 +18,13 @@
 /*!
  * Sorting
 */
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::transform::Transform;
 
+/// Reference to [`SortOrder`].
+pub type SortOrderRef = Arc<SortOrder>;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Sort direction in a partition, either ascending or descending
 pub enum SortDirection {

@@ -56,6 +56,7 @@ serde_repr = "0.1.16"
 url = "2"
 urlencoding = "2"
 uuid = "1.4.1"
+typed-builder = "^0.17"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
