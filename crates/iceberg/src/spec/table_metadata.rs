@@ -40,6 +40,9 @@ static DEFAULT_SORT_ORDER_ID: i64 = 0;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
+///
+/// We assume that this data structure is always valid, so we will panic when invalid error happens.
+/// We check the validity of this data structure when constructing.
 pub struct TableMetadata {
     /// Integer Version for the format.
     format_version: FormatVersion,
