@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
-use crate::{Error};
+use crate::Error;
 
 use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
@@ -283,7 +283,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::{Snapshot};
+    use crate::spec::Snapshot;
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -624,10 +624,7 @@ pub(super) mod _serde {
                 partition_specs: v
                     .partition_specs
                     .into_values()
-                    .map(|x| {
-                        Arc::try_unwrap(x)
-                            .unwrap_or_else(|s| s.as_ref().clone())
-                    })
+                    .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                     .collect(),
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
@@ -664,10 +661,7 @@ pub(super) mod _serde {
                 sort_orders: v
                     .sort_orders
                     .into_values()
-                    .map(|x| {
-                        Arc::try_unwrap(x)
-                            .unwrap_or_else(|s| s.as_ref().clone())
-                    })
+                    .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                     .collect(),
                 default_sort_order_id: v.default_sort_order_id,
                 refs: Some(v.refs),
@@ -709,10 +703,7 @@ pub(super) mod _serde {
                 partition_specs: Some(
                     v.partition_specs
                         .into_values()
-                        .map(|x| {
-                            Arc::try_unwrap(x)
-                                .unwrap_or_else(|s| s.as_ref().clone())
-                        })
+                        .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                         .collect(),
                 ),
                 default_spec_id: Some(v.default_spec_id),
@@ -746,10 +737,7 @@ pub(super) mod _serde {
                 sort_orders: Some(
                     v.sort_orders
                         .into_values()
-                        .map(|s| {
-                            Arc::try_unwrap(s)
-                                .unwrap_or_else(|s| s.as_ref().clone())
-                        })
+                        .map(|s| Arc::try_unwrap(s).unwrap_or_else(|s| s.as_ref().clone()))
                         .collect(),
                 ),
                 default_sort_order_id: Some(v.default_sort_order_id),

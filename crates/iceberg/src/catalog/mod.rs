@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::ops::Deref;
 
-
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog {
