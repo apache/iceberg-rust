@@ -966,7 +966,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            &TableIdent::from_iter(vec!["ns1", "test1"]).unwrap(),
+            &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
             table.identifier()
         );
         assert_eq!("s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json", table.metadata_location().unwrap());

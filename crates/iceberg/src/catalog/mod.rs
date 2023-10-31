@@ -116,7 +116,7 @@ impl NamespaceIdent {
     }
 
     /// Try to create namespace identifier from an iterator of string.
-    pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
+    pub fn from_strs(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
         Self::from_vec(iter.into_iter().map(|s| s.to_string()).collect())
     }
 
@@ -200,7 +200,7 @@ impl TableIdent {
     }
 
     /// Try to create table identifier from an iterator of string.
-    pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
+    pub fn from_strs(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
         let mut vec: Vec<String> = iter.into_iter().map(|s| s.to_string()).collect();
         let table_name = vec.pop().ok_or_else(|| {
             Error::new(ErrorKind::DataInvalid, "Table identifier can't be empty!")
@@ -282,10 +282,10 @@ mod tests {
     #[test]
     fn test_create_table_id() {
         let table_id = TableIdent {
-            namespace: NamespaceIdent::from_iter(vec!["ns1"]).unwrap(),
+            namespace: NamespaceIdent::from_strs(vec!["ns1"]).unwrap(),
             name: "t1".to_string(),
         };
 
-        assert_eq!(table_id, TableIdent::from_iter(vec!["ns1", "t1"]).unwrap());
+        assert_eq!(table_id, TableIdent::from_strs(vec!["ns1", "t1"]).unwrap());
     }
 }
