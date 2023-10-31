@@ -197,7 +197,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .query::<ListNamespaceResponse, ErrorModel, OK>(request.build()?)
+            .query::<ListNamespaceResponse, ErrorResponse, OK>(request.build()?)
             .await?;
 
         resp.namespaces
@@ -224,7 +224,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .query::<NamespaceSerde, ErrorModel, OK>(request)
+            .query::<NamespaceSerde, ErrorResponse, OK>(request)
             .await?;
 
         Namespace::try_from(resp)
@@ -240,7 +240,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .query::<NamespaceSerde, ErrorModel, OK>(request)
+            .query::<NamespaceSerde, ErrorResponse, OK>(request)
             .await?;
         Namespace::try_from(resp)
     }
@@ -269,7 +269,7 @@ impl Catalog for RestCatalog {
             .build()?;
 
         self.client
-            .execute::<ErrorModel, NO_CONTENT>(request)
+            .execute::<ErrorResponse, NO_CONTENT>(request)
             .await
             .map(|_| true)
     }
@@ -282,7 +282,7 @@ impl Catalog for RestCatalog {
             .delete(self.config.namespace_endpoint(namespace))
             .build()?;
 
-        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
+        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
     }
 
     /// List tables from namespace.
@@ -295,7 +295,7 @@ impl Catalog for RestCatalog {
 
         let resp = self
             .client
-            .query::<ListTableResponse, ErrorModel, OK>(request)
+            .query::<ListTableResponse, ErrorResponse, OK>(request)
             .await?;
 
         Ok(resp.identifiers)
@@ -361,7 +361,7 @@ impl Catalog for RestCatalog {
             .delete(self.config.table_endpoint(table))
             .build()?;
 
-        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
+        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
     }
 
     /// Check if a table exists in the catalog.
@@ -373,7 +373,7 @@ impl Catalog for RestCatalog {
             .build()?;
 
         self.client
-            .execute::<ErrorModel, NO_CONTENT>(request)
+            .execute::<ErrorResponse, NO_CONTENT>(request)
             .await
             .map(|_| true)
     }
@@ -390,7 +390,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        self.client.execute::<ErrorModel, NO_CONTENT>(request).await
+        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
     }
 
     /// Update a table to the catalog.
