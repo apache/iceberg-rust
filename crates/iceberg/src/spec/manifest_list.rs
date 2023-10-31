@@ -918,7 +918,7 @@ pub(super) mod _serde {
 mod test {
     use std::{fs, sync::Arc};
 
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         io::FileIOBuilder,
@@ -1091,7 +1091,7 @@ mod test {
             }]
         };
 
-        let temp_dir = TempDir::new("manifest_list_v1").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
@@ -1140,7 +1140,7 @@ mod test {
             }]
         };
 
-        let temp_dir = TempDir::new("manifest_list_v2").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();

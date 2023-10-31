@@ -393,7 +393,7 @@ mod tests {
     use futures::io::AllowStdIo;
     use futures::{AsyncReadExt, AsyncWriteExt};
 
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
 
@@ -415,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_input_file() {
-        let tmp_dir = TempDir::new("test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_name = "a.txt";
         let content = "Iceberg loves rust.";
@@ -436,7 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_local_file() {
-        let tmp_dir = TempDir::new("test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_name = "a.txt";
         let content = "Iceberg loves rust.";
@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_non_exist_file() {
-        let tmp_dir = TempDir::new("test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_name = "a.txt";
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
@@ -464,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_output_file() {
-        let tmp_dir = TempDir::new("test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_name = "a.txt";
         let content = "Iceberg loves rust.";

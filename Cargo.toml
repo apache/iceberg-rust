@@ -50,7 +50,7 @@ serde_bytes = "0.11.8"
 serde_derive = "^1.0"
 serde_json = "^1.0"
 serde_repr = "0.1.16"
-tempdir = "0.3"
+tempfile = "3.8"
 tokio = { version = "1", features = ["macros"] }
 typed-builder = "^0.18"
 url = "2"
