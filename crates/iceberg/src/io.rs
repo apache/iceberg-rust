@@ -48,7 +48,6 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
-use anyhow::Context;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{error::Result, Error, ErrorKind};
@@ -152,7 +151,7 @@ impl FileIO {
     /// Otherwise will return parsing error.
     pub fn from_path(path: impl AsRef<str>) -> Result<FileIOBuilder> {
         let url = Url::parse(path.as_ref())
-            .map_err(|e| Error::from(e))
+            .map_err(Error::from)
             .or_else(|e| {
                 Url::from_file_path(path.as_ref()).map_err(|_| {
                     Error::new(
@@ -395,7 +394,7 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use super::{FileIO, FileIOBuilder, Storage};
+    use super::{FileIO, FileIOBuilder};
 
     fn create_local_file_io() -> FileIO {
         FileIOBuilder::new_fs_io().build().unwrap()

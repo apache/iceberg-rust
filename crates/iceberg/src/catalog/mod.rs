@@ -22,11 +22,11 @@ use urlencoding::encode;
 
 use crate::spec::{PartitionSpec, Schema, SortOrder};
 use crate::table::Table;
-use crate::{ensure_data_valid, Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::vec::IntoIter;
+
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]

@@ -26,13 +26,10 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
-use crate::{Error, ErrorKind};
+use crate::{Error};
 
 use super::{
-    partition::PartitionSpec,
-    schema::Schema,
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    sort::SortOrder,
     PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef,
 };
 
@@ -276,7 +273,6 @@ impl TableMetadata {
 }
 
 pub(super) mod _serde {
-    use arrow_array::Array;
     /// This is a helper module that defines types to help with serialization/deserialization.
     /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
     /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
@@ -287,7 +283,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::{PartitionSpecRef, Snapshot};
+    use crate::spec::{Snapshot};
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -631,7 +627,6 @@ pub(super) mod _serde {
                     .map(|x| {
                         Arc::try_unwrap(x)
                             .unwrap_or_else(|s| s.as_ref().clone())
-                            .into()
                     })
                     .collect(),
                 default_spec_id: v.default_spec_id,
@@ -672,7 +667,6 @@ pub(super) mod _serde {
                     .map(|x| {
                         Arc::try_unwrap(x)
                             .unwrap_or_else(|s| s.as_ref().clone())
-                            .into()
                     })
                     .collect(),
                 default_sort_order_id: v.default_sort_order_id,
@@ -718,7 +712,6 @@ pub(super) mod _serde {
                         .map(|x| {
                             Arc::try_unwrap(x)
                                 .unwrap_or_else(|s| s.as_ref().clone())
-                                .into()
                         })
                         .collect(),
                 ),
@@ -756,7 +749,6 @@ pub(super) mod _serde {
                         .map(|s| {
                             Arc::try_unwrap(s)
                                 .unwrap_or_else(|s| s.as_ref().clone())
-                                .into()
                         })
                         .collect(),
                 ),

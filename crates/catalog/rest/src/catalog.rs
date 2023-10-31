@@ -341,7 +341,7 @@ impl Catalog for RestCatalog {
             None => FileIOBuilder::new("s3").with_props(props).build()?,
         };
 
-        let mut table_builder = Table::builder()
+        let table_builder = Table::builder()
             .identifier(table.clone())
             .file_io(file_io)
             .metadata(resp.metadata);
