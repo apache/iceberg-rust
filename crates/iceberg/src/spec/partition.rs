@@ -18,8 +18,8 @@
 /*!
  * Partitioning
 */
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::transform::Transform;
 

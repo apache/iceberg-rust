@@ -26,13 +26,13 @@ use serde::de::DeserializeOwned;
 use typed_builder::TypedBuilder;
 use urlencoding::encode;
 
+use crate::catalog::_serde::LoadTableResponse;
+use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::table::Table;
 use iceberg::Result;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
 };
-use iceberg::io::{FileIO, FileIOBuilder};
-use crate::catalog::_serde::LoadTableResponse;
 
 use self::_serde::{
     CatalogConfig, ErrorModel, ErrorResponse, ListNamespaceResponse, ListTableResponse,
@@ -75,7 +75,7 @@ impl RestCatalogConfig {
             &ns.encode_in_url(),
             "tables",
         ]
-            .join("/")
+        .join("/")
     }
 
     fn rename_table_endpoint(&self) -> String {
@@ -91,7 +91,7 @@ impl RestCatalogConfig {
             "tables",
             encode(&table.name).as_ref(),
         ]
-            .join("/")
+        .join("/")
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
@@ -137,8 +137,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
+                .with_context("json", String::from_utf8_lossy(&text))
+                .with_source(e)
             })?)
         } else {
             let text = resp.bytes().await?;
@@ -147,8 +147,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
+                .with_context("json", String::from_utf8_lossy(&text))
+                .with_source(e)
             })?;
             Err(e.into())
         }
@@ -169,8 +169,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
+                .with_context("json", String::from_utf8_lossy(&text))
+                .with_source(e)
             })?;
             Err(e.into())
         }
@@ -315,24 +315,36 @@ impl Catalog for RestCatalog {
 
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
-        let request = self.client.0
+        let request = self
+            .client
+            .0
             .get(self.config.table_endpoint(table))
             .build()?;
 
-        let resp = self.client.query::<LoadTableResponse, ErrorResponse, OK>(request).await?;
+        let resp = self
+            .client
+            .query::<LoadTableResponse, ErrorResponse, OK>(request)
+            .await?;
 
         let mut props = self.config.props.clone();
         if let Some(config) = resp.config {
             props.extend(config);
         }
 
-        let file_io = match self.config.warehouse.as_ref().or_else(|| resp.metadata_location.as_ref()) {
+        let file_io = match self
+            .config
+            .warehouse
+            .as_ref()
+            .or_else(|| resp.metadata_location.as_ref())
+        {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
-            None => FileIOBuilder::new("s3").with_props(props).build()?
+            None => FileIOBuilder::new("s3").with_props(props).build()?,
         };
 
-
-        let mut table_builder = Table::builder().identifier(table.clone()).file_io(file_io).metadata(resp.metadata);
+        let mut table_builder = Table::builder()
+            .identifier(table.clone())
+            .file_io(file_io)
+            .metadata(resp.metadata);
 
         if let Some(metadata_location) = resp.metadata_location {
             Ok(table_builder.metadata_location(metadata_location).build())
@@ -434,8 +446,8 @@ mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
-    use iceberg::{Error, ErrorKind, Namespace, TableIdent};
     use iceberg::spec::TableMetadata;
+    use iceberg::{Error, ErrorKind, Namespace, TableIdent};
 
     pub(super) const OK: u16 = 200u16;
     pub(super) const NO_CONTENT: u16 = 204u16;
@@ -570,11 +582,14 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use mockito::{Mock, Server, ServerGuard};
-    use iceberg::spec::{FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog, SortOrder, Summary, Type};
-    use uuid::{uuid};
     use iceberg::spec::ManifestListLocation::ManifestListFile;
+    use iceberg::spec::{
+        FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog,
+        SortOrder, Summary, Type,
+    };
+    use mockito::{Mock, Server, ServerGuard};
+    use std::sync::Arc;
+    use uuid::uuid;
 
     use super::*;
 
@@ -930,7 +945,11 @@ mod tests {
         let rename_table_mock = server
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .with_status(200)
-            .with_body_from_file(format!("{}/testdata/{}", env!("CARGO_MANIFEST_DIR"), "load_table_response.json"))
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
             .create_async()
             .await;
 
@@ -939,29 +958,48 @@ mod tests {
             .unwrap();
 
         let table = catalog
-            .load_table(
-                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string()),
-            )
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "test1".to_string(),
+            ))
             .await
             .unwrap();
 
-
-        assert_eq!(&TableIdent::from_iter(vec!["ns1", "test1"]).unwrap(), table.identifier());
+        assert_eq!(
+            &TableIdent::from_iter(vec!["ns1", "test1"]).unwrap(),
+            table.identifier()
+        );
         assert_eq!("s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json", table.metadata_location().unwrap());
         assert_eq!(FormatVersion::V1, table.metadata().format_version());
         assert_eq!("s3://warehouse/database/table", table.metadata().location());
-        assert_eq!(&uuid!("b55d9dda-6561-423a-8bfc-787980ce421f"), table.metadata().uuid());
+        assert_eq!(
+            &uuid!("b55d9dda-6561-423a-8bfc-787980ce421f"),
+            table.metadata().uuid()
+        );
         assert_eq!(1646787054459, table.metadata().last_updated_ms());
-        assert_eq!(vec![&Arc::new(Schema::builder().with_fields(
-            vec![
-                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String)).into(),
-            ]
-        ).build().unwrap())], table.metadata().schemas().collect::<Vec<_>>());
-        assert_eq!(&HashMap::from([
-            ("owner".to_string(), "bryan".to_string()),
-            ("write.metadata.compression-codec".to_string(), "gzip".to_string())
-        ]), table.metadata().properties());
+        assert_eq!(
+            vec![&Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(2, "data", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap()
+            )],
+            table.metadata().schemas().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &HashMap::from([
+                ("owner".to_string(), "bryan".to_string()),
+                (
+                    "write.metadata.compression-codec".to_string(),
+                    "gzip".to_string()
+                )
+            ]),
+            table.metadata().properties()
+        );
         assert_eq!(vec![&Arc::new(Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
             .with_timestamp_ms(1646787054459)
@@ -985,17 +1023,20 @@ mod tests {
                 ].iter().map(|p|(p.0.to_string(), p.1.to_string())))
             }).build().unwrap()
         )], table.metadata().snapshots().collect::<Vec<_>>());
-        assert_eq!(&[SnapshotLog {
-            timestamp_ms: 1646787054459,
-            snapshot_id: 3497810964824022504
-        }], table.metadata().history());
-        assert_eq!(vec![
-            &Arc::new(SortOrder {
+        assert_eq!(
+            &[SnapshotLog {
+                timestamp_ms: 1646787054459,
+                snapshot_id: 3497810964824022504
+            }],
+            table.metadata().history()
+        );
+        assert_eq!(
+            vec![&Arc::new(SortOrder {
                 order_id: 0,
                 fields: vec![]
-            })
-        ], table.metadata().sort_orders().collect::<Vec<_>>());
-
+            })],
+            table.metadata().sort_orders().collect::<Vec<_>>()
+        );
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
@@ -1027,14 +1068,18 @@ mod tests {
             .unwrap();
 
         let table = catalog
-            .load_table(
-                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string()),
-            )
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "test1".to_string(),
+            ))
             .await;
 
         assert!(table.is_err());
-        assert!(table.err().unwrap().message().contains("Table does not exist"));
-
+        assert!(table
+            .err()
+            .unwrap()
+            .message()
+            .contains("Table does not exist"));
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;

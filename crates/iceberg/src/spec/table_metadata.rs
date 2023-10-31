@@ -28,14 +28,19 @@ use uuid::Uuid;
 
 use crate::{Error, ErrorKind};
 
-use super::{partition::PartitionSpec, PartitionSpecRef, schema::Schema, SchemaRef, snapshot::{Snapshot, SnapshotReference, SnapshotRetention}, SnapshotRef, sort::SortOrder, SortOrderRef};
+use super::{
+    partition::PartitionSpec,
+    schema::Schema,
+    snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
+    sort::SortOrder,
+    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef,
+};
 
 use _serde::TableMetadataEnum;
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
-
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -140,7 +145,7 @@ impl TableMetadata {
 
     /// Returns schemas
     #[inline]
-    pub fn schemas(&self) -> impl Iterator<Item=&SchemaRef> {
+    pub fn schemas(&self) -> impl Iterator<Item = &SchemaRef> {
         self.schemas.values()
     }
 
@@ -153,7 +158,8 @@ impl TableMetadata {
     /// Get current schema
     #[inline]
     pub fn current_schema(&self) -> &SchemaRef {
-        self.schema_by_id(self.current_schema_id).expect("Current schema id set, but not found in table metadata")
+        self.schema_by_id(self.current_schema_id)
+            .expect("Current schema id set, but not found in table metadata")
     }
 
     /// Returns all partition specs.
@@ -174,7 +180,10 @@ impl TableMetadata {
         if self.default_spec_id == DEFAULT_SPEC_ID {
             self.partition_spec_by_id(DEFAULT_SPEC_ID)
         } else {
-            Some(self.partition_spec_by_id(DEFAULT_SPEC_ID).expect("Default partition spec id set, but not found in table metadata"))
+            Some(
+                self.partition_spec_by_id(DEFAULT_SPEC_ID)
+                    .expect("Default partition spec id set, but not found in table metadata"),
+            )
         }
     }
 
@@ -186,7 +195,7 @@ impl TableMetadata {
 
     /// Lookup snapshot by id.
     #[inline]
-    pub fn snapshot_by_id(&self, snapshot_id: i64) -> Option<&SnapshotRef>  {
+    pub fn snapshot_by_id(&self, snapshot_id: i64) -> Option<&SnapshotRef> {
         self.snapshots.get(&snapshot_id)
     }
 
@@ -199,7 +208,10 @@ impl TableMetadata {
     /// Get current snapshot
     #[inline]
     pub fn current_snapshot(&self) -> Option<&SnapshotRef> {
-        self.current_snapshot_id.map(|s| self.snapshot_by_id(s).expect("Current snapshot id has been set, but doesn't exist in metadata"))
+        self.current_snapshot_id.map(|s| {
+            self.snapshot_by_id(s)
+                .expect("Current snapshot id has been set, but doesn't exist in metadata")
+        })
     }
 
     /// Return all sort orders.
@@ -220,8 +232,11 @@ impl TableMetadata {
         if self.default_sort_order_id == DEFAULT_SORT_ORDER_ID {
             self.sort_orders.get(&DEFAULT_SORT_ORDER_ID)
         } else {
-            Some(self.sort_orders.get(&self.default_sort_order_id)
-                .expect("Default order id has been set, but not found in table metadata!"))
+            Some(
+                self.sort_orders
+                    .get(&self.default_sort_order_id)
+                    .expect("Default order id has been set, but not found in table metadata!"),
+            )
         }
     }
 
@@ -230,7 +245,6 @@ impl TableMetadata {
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
     }
-
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) -> Result<(), Error> {
@@ -254,24 +268,26 @@ impl TableMetadata {
             });
 
         self.snapshot_log.push(snapshot.log());
-        self.snapshots.insert(snapshot.snapshot_id(), Arc::new(snapshot));
+        self.snapshots
+            .insert(snapshot.snapshot_id(), Arc::new(snapshot));
 
         Ok(())
     }
 }
 
 pub(super) mod _serde {
+    use arrow_array::Array;
     /// This is a helper module that defines types to help with serialization/deserialization.
     /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
     /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
     use std::{collections::HashMap, sync::Arc};
-    use arrow_array::Array;
 
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
+    use crate::spec::{PartitionSpecRef, Snapshot};
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -280,7 +296,6 @@ pub(super) mod _serde {
         },
         Error, ErrorKind,
     };
-    use crate::spec::{PartitionSpecRef, Snapshot};
 
     use super::{
         FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
@@ -442,23 +457,32 @@ pub(super) mod _serde {
                 }?,
                 schemas,
                 partition_specs: HashMap::from_iter(
-                    value.partition_specs.into_iter().map(|x| (x.spec_id, Arc::new(x))),
+                    value
+                        .partition_specs
+                        .into_iter()
+                        .map(|x| (x.spec_id, Arc::new(x))),
                 ),
                 default_spec_id: value.default_spec_id,
                 last_partition_id: value.last_partition_id,
                 properties: value.properties.unwrap_or_default(),
                 current_snapshot_id,
-                snapshots: value.snapshots.map(|snapshots| {
-                    HashMap::from_iter(
-                        snapshots
-                            .into_iter()
-                            .map(|x| (x.snapshot_id, Arc::new(x.into()))),
-                    )
-                }).unwrap_or_default(),
+                snapshots: value
+                    .snapshots
+                    .map(|snapshots| {
+                        HashMap::from_iter(
+                            snapshots
+                                .into_iter()
+                                .map(|x| (x.snapshot_id, Arc::new(x.into()))),
+                        )
+                    })
+                    .unwrap_or_default(),
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: HashMap::from_iter(
-                    value.sort_orders.into_iter().map(|x| (x.order_id, Arc::new(x))),
+                    value
+                        .sort_orders
+                        .into_iter()
+                        .map(|x| (x.order_id, Arc::new(x))),
                 ),
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
@@ -556,13 +580,14 @@ pub(super) mod _serde {
                                 .collect::<Result<Vec<_>, Error>>()?,
                         ))
                     })
-                    .transpose()?.unwrap_or_default(),
+                    .transpose()?
+                    .unwrap_or_default(),
                 snapshot_log: value.snapshot_log.unwrap_or_default(),
                 metadata_log: value.metadata_log.unwrap_or_default(),
                 sort_orders: match value.sort_orders {
-                    Some(sort_orders) => {
-                        HashMap::from_iter(sort_orders.into_iter().map(|x| (x.order_id, Arc::new( x))))
-                    }
+                    Some(sort_orders) => HashMap::from_iter(
+                        sort_orders.into_iter().map(|x| (x.order_id, Arc::new(x))),
+                    ),
                     None => HashMap::new(),
                 },
                 default_sort_order_id: value.default_sort_order_id.unwrap_or(DEFAULT_SORT_ORDER_ID),
@@ -600,7 +625,9 @@ pub(super) mod _serde {
                     })
                     .collect(),
                 current_schema_id: v.current_schema_id,
-                partition_specs: v.partition_specs.into_values()
+                partition_specs: v
+                    .partition_specs
+                    .into_values()
                     .map(|x| {
                         Arc::try_unwrap(x)
                             .unwrap_or_else(|s| s.as_ref().clone())
@@ -618,14 +645,17 @@ pub(super) mod _serde {
                 snapshots: if v.snapshots.is_empty() {
                     None
                 } else {
-                    Some(v.snapshots
-                        .into_values()
-                        .map(|x| {
-                            Arc::try_unwrap(x)
-                                .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
-                                .into()
-                        })
-                        .collect())},
+                    Some(
+                        v.snapshots
+                            .into_values()
+                            .map(|x| {
+                                Arc::try_unwrap(x)
+                                    .unwrap_or_else(|snapshot| snapshot.as_ref().clone())
+                                    .into()
+                            })
+                            .collect(),
+                    )
+                },
                 snapshot_log: if v.snapshot_log.is_empty() {
                     None
                 } else {
@@ -636,7 +666,9 @@ pub(super) mod _serde {
                 } else {
                     Some(v.metadata_log)
                 },
-                sort_orders: v.sort_orders.into_values()
+                sort_orders: v
+                    .sort_orders
+                    .into_values()
                     .map(|x| {
                         Arc::try_unwrap(x)
                             .unwrap_or_else(|s| s.as_ref().clone())
@@ -680,9 +712,16 @@ pub(super) mod _serde {
                     .get(&v.default_spec_id)
                     .map(|x| x.fields.clone())
                     .unwrap_or_default(),
-                partition_specs: Some(v.partition_specs.into_values()
-                    .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()).into())
-                    .collect()),
+                partition_specs: Some(
+                    v.partition_specs
+                        .into_values()
+                        .map(|x| {
+                            Arc::try_unwrap(x)
+                                .unwrap_or_else(|s| s.as_ref().clone())
+                                .into()
+                        })
+                        .collect(),
+                ),
                 default_spec_id: Some(v.default_spec_id),
                 last_partition_id: Some(v.last_partition_id),
                 properties: if v.properties.is_empty() {
@@ -694,12 +733,12 @@ pub(super) mod _serde {
                 snapshots: if v.snapshots.is_empty() {
                     None
                 } else {
-                    Some(v.snapshots
-                        .into_values()
-                        .map(|x| {
-                            Snapshot::clone(&x).into()
-                        })
-                        .collect())
+                    Some(
+                        v.snapshots
+                            .into_values()
+                            .map(|x| Snapshot::clone(&x).into())
+                            .collect(),
+                    )
                 },
                 snapshot_log: if v.snapshot_log.is_empty() {
                     None
@@ -711,9 +750,16 @@ pub(super) mod _serde {
                 } else {
                     Some(v.metadata_log)
                 },
-                sort_orders: Some(v.sort_orders.into_values()
-                    .map(|s| Arc::try_unwrap(s).unwrap_or_else(|s| s.as_ref().clone()).into())
-                    .collect()),
+                sort_orders: Some(
+                    v.sort_orders
+                        .into_values()
+                        .map(|s| {
+                            Arc::try_unwrap(s)
+                                .unwrap_or_else(|s| s.as_ref().clone())
+                                .into()
+                        })
+                        .collect(),
+                ),
                 default_sort_order_id: Some(v.default_sort_order_id),
             }
         }

@@ -48,8 +48,8 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
-use std::{collections::HashMap, sync::Arc};
 use anyhow::Context;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{error::Result, Error, ErrorKind};
 use futures::{AsyncRead, AsyncSeek, AsyncWrite};
@@ -127,7 +127,7 @@ impl FileIOBuilder {
     /// Add argument for operator.
     pub fn with_props(
         mut self,
-        args: impl IntoIterator<Item=(impl ToString, impl ToString)>,
+        args: impl IntoIterator<Item = (impl ToString, impl ToString)>,
     ) -> Self {
         self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
@@ -153,7 +153,16 @@ impl FileIO {
     pub fn from_path(path: impl AsRef<str>) -> Result<FileIOBuilder> {
         let url = Url::parse(path.as_ref())
             .map_err(|e| Error::from(e))
-            .or_else(|e| Url::from_file_path(path.as_ref()).map_err(|_| Error::new(ErrorKind::DataInvalid, "Input is neither a valid url nor path").with_context("input", path.as_ref().to_string()).with_source(e)))?;
+            .or_else(|e| {
+                Url::from_file_path(path.as_ref()).map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Input is neither a valid url nor path",
+                    )
+                    .with_context("input", path.as_ref().to_string())
+                    .with_source(e)
+                })
+            })?;
 
         Ok(FileIOBuilder::new(url.scheme()))
     }
@@ -369,7 +378,7 @@ impl Storage {
             }
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                format!("Constructing file io from scheme: {scheme} not supported now", ),
+                format!("Constructing file io from scheme: {scheme} not supported now",),
             )),
         }
     }

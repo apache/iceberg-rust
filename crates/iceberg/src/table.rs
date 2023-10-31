@@ -17,10 +17,10 @@
 
 //! Table API for Apache Iceberg
 
-use typed_builder::TypedBuilder;
 use crate::io::FileIO;
 use crate::spec::TableMetadata;
 use crate::TableIdent;
+use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.
 #[derive(TypedBuilder)]
