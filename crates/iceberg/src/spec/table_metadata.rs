@@ -225,6 +225,12 @@ impl TableMetadata {
         }
     }
 
+    /// Returns properties of table.
+    #[inline]
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
+
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) -> Result<(), Error> {
@@ -594,7 +600,13 @@ pub(super) mod _serde {
                     })
                     .collect(),
                 current_schema_id: v.current_schema_id,
-                partition_specs: v.partition_specs.into_values().collect(),
+                partition_specs: v.partition_specs.into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|s| s.as_ref().clone())
+                            .into()
+                    })
+                    .collect(),
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
                 properties: if v.properties.is_empty() {
@@ -624,7 +636,13 @@ pub(super) mod _serde {
                 } else {
                     Some(v.metadata_log)
                 },
-                sort_orders: v.sort_orders.into_values().collect(),
+                sort_orders: v.sort_orders.into_values()
+                    .map(|x| {
+                        Arc::try_unwrap(x)
+                            .unwrap_or_else(|s| s.as_ref().clone())
+                            .into()
+                    })
+                    .collect(),
                 default_sort_order_id: v.default_sort_order_id,
                 refs: Some(v.refs),
             }
@@ -662,7 +680,9 @@ pub(super) mod _serde {
                     .get(&v.default_spec_id)
                     .map(|x| x.fields.clone())
                     .unwrap_or_default(),
-                partition_specs: Some(v.partition_specs.into_values().collect()),
+                partition_specs: Some(v.partition_specs.into_values()
+                    .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()).into())
+                    .collect()),
                 default_spec_id: Some(v.default_spec_id),
                 last_partition_id: Some(v.last_partition_id),
                 properties: if v.properties.is_empty() {
@@ -691,7 +711,9 @@ pub(super) mod _serde {
                 } else {
                     Some(v.metadata_log)
                 },
-                sort_orders: Some(v.sort_orders.into_values().collect()),
+                sort_orders: Some(v.sort_orders.into_values()
+                    .map(|s| Arc::try_unwrap(s).unwrap_or_else(|s| s.as_ref().clone()).into())
+                    .collect()),
                 default_sort_order_id: Some(v.default_sort_order_id),
             }
         }

@@ -33,13 +33,16 @@ pub struct Table {
 }
 
 impl Table {
+    /// Returns table identifier.
     pub fn identifier(&self) -> &TableIdent {
         &self.identifier
     }
+    /// Returns current metadata.
     pub fn metadata(&self) -> &TableMetadata {
         &self.metadata
     }
 
+    /// Returns current metadata location.
     pub fn metadata_location(&self) -> Option<&str> {
         self.metadata_location.as_deref()
     }

@@ -116,6 +116,7 @@ impl NamespaceIdent {
         Ok(Self(names))
     }
 
+    /// Try to create namespace identifier from an iterator of string.
     pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self>
     {
 
@@ -201,6 +202,7 @@ impl TableIdent {
         &self.name
     }
 
+    /// Try to create table identifier from an iterator of string.
     pub fn from_iter(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
         let mut vec: Vec<String> = iter.into_iter().map(|s| s.to_string()).collect();
         let table_name = vec.pop().ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Table identifier can't be empty!"))?;
