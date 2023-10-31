@@ -35,8 +35,8 @@ use iceberg::{
 };
 
 use self::_serde::{
-    CatalogConfig, ErrorModel, ErrorResponse, ListNamespaceResponse, ListTableResponse,
-    NamespaceSerde, RenameTableRequest, NO_CONTENT, OK,
+    CatalogConfig, ErrorResponse, ListNamespaceResponse, ListTableResponse, NamespaceSerde,
+    RenameTableRequest, NO_CONTENT, OK,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "1.14";
@@ -282,7 +282,9 @@ impl Catalog for RestCatalog {
             .delete(self.config.namespace_endpoint(namespace))
             .build()?;
 
-        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
+        self.client
+            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .await
     }
 
     /// List tables from namespace.
@@ -361,7 +363,9 @@ impl Catalog for RestCatalog {
             .delete(self.config.table_endpoint(table))
             .build()?;
 
-        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
+        self.client
+            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .await
     }
 
     /// Check if a table exists in the catalog.
@@ -390,7 +394,9 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        self.client.execute::<ErrorResponse, NO_CONTENT>(request).await
+        self.client
+            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .await
     }
 
     /// Update a table to the catalog.
