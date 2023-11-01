@@ -1678,7 +1678,7 @@ mod tests {
         }
     }
 
-    fn check_serialzie_avro(literal: Literal, ty: &Type, expect_value: Value) {
+    fn check_serialize_avro(literal: Literal, ty: &Type, expect_value: Value) {
         let expect_value = Value::Record(vec![("col".to_string(), expect_value)]);
 
         let fields = vec![NestedField::required(1, "col", ty.clone()).into()];
@@ -2236,7 +2236,7 @@ mod tests {
         let literal = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3, 4, 5]));
         let ty = Type::Primitive(PrimitiveType::Binary);
         let expect_value = Value::Bytes(vec![1, 2, 3, 4, 5]);
-        check_serialzie_avro(literal, &ty, expect_value);
+        check_serialize_avro(literal, &ty, expect_value);
     }
 
     #[test]
@@ -2247,7 +2247,7 @@ mod tests {
             scale: 8,
         });
         let expect_value = Value::Decimal(apache_avro::Decimal::from(12345_i128.to_be_bytes()));
-        check_serialzie_avro(literal, &ty, expect_value);
+        check_serialize_avro(literal, &ty, expect_value);
     }
 
     // # TODO:https://github.com/apache/iceberg-rust/issues/86
