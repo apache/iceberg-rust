@@ -36,6 +36,7 @@ serde_json = "^1.0"
 typed-builder = "^0.17"
 urlencoding = "2"
 uuid = { version = "1.5.0", features = ["v4"] }
+chrono = "0.4"
 
 [dev-dependencies]
 mockito = "^1"

@@ -21,6 +21,7 @@ The main struct here is [TableMetadataV2] which defines the data for a table.
 */
 
 use std::{collections::HashMap, sync::Arc};
+use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -55,7 +56,7 @@ pub struct TableMetadata {
     /// The tables highest sequence number
     last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    last_updated_ms: i64,
+    last_updated_ms: DateTime<Utc>,
     /// An integer; the highest assigned column ID for the table.
     last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
@@ -118,8 +119,8 @@ impl TableMetadata {
 
     /// Returns uuid of current table.
     #[inline]
-    pub fn uuid(&self) -> &Uuid {
-        &self.table_uuid
+    pub fn uuid(&self) -> Uuid {
+        self.table_uuid
     }
 
     /// Returns table location.
@@ -136,8 +137,8 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> i64 {
-        self.last_updated_ms
+    pub fn last_updated_ms(&self) -> &DateTime<Utc> {
+        &self.last_updated_ms
     }
 
     /// Returns schemas
@@ -244,7 +245,7 @@ impl TableMetadata {
     }
 
     /// Append snapshot to table
-    pub fn append_snapshot(&mut self, snapshot: Snapshot) -> Result<(), Error> {
+    pub fn append_snapshot(&mut self, snapshot: Snapshot)  {
         self.last_updated_ms = snapshot.timestamp();
         self.last_sequence_number = snapshot.sequence_number();
 
@@ -267,8 +268,6 @@ impl TableMetadata {
         self.snapshot_log.push(snapshot.log());
         self.snapshots
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
-
-        Ok(())
     }
 }
 
@@ -746,7 +745,7 @@ pub(super) mod _serde {
     }
 }
 
-#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 /// Iceberg format version
 pub enum FormatVersion {

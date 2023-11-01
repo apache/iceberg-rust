@@ -1058,13 +1058,13 @@ mod tests {
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .with_status(404)
             .with_body(r#"
-            {
-            "error": {
-                "message": "Table does not exist: ns1.test1 in warehouse 8bcb0838-50fc-472d-9ddb-8feb89ef5f1e",
-                "type": "NoSuchNamespaceErrorException",
-                "code": 404
-            }
-            }
+{
+    "error": {
+        "message": "Table does not exist: ns1.test1 in warehouse 8bcb0838-50fc-472d-9ddb-8feb89ef5f1e",
+        "type": "NoSuchNamespaceErrorException",
+        "code": 404
+    }
+}
             "#)
             .create_async()
             .await;
