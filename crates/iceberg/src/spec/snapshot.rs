@@ -18,11 +18,9 @@
 /*!
  * Snapshots
 */
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
-
-use serde::{Deserialize, Serialize};
 
 use super::table_metadata::SnapshotLog;
 
@@ -74,7 +72,7 @@ pub struct Snapshot {
     sequence_number: i64,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection
-    timestamp_ms: DateTime<Utc>,
+    timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
     manifest_list: ManifestListLocation,
@@ -118,8 +116,8 @@ impl Snapshot {
     }
     /// Get the timestamp of when the snapshot was created
     #[inline]
-    pub fn timestamp(&self) -> &DateTime<Utc> {
-        &self.timestamp_ms
+    pub fn timestamp(&self) -> i64 {
+        self.timestamp_ms
     }
     /// Create snapshot builder
     pub fn builder() -> SnapshotBuilder {
