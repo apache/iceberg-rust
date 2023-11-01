@@ -139,7 +139,7 @@ impl TableMetadata {
 
     /// Returns schemas
     #[inline]
-    pub fn schemas(&self) -> impl Iterator<Item = &SchemaRef> {
+    pub fn schemas_iter(&self) -> impl Iterator<Item = &SchemaRef> {
         self.schemas.values()
     }
 
@@ -158,7 +158,7 @@ impl TableMetadata {
 
     /// Returns all partition specs.
     #[inline]
-    pub fn partition_specs(&self) -> impl Iterator<Item = &PartitionSpecRef> {
+    pub fn partition_specs_iter(&self) -> impl Iterator<Item = &PartitionSpecRef> {
         self.partition_specs.values()
     }
 
@@ -210,7 +210,7 @@ impl TableMetadata {
 
     /// Return all sort orders.
     #[inline]
-    pub fn sort_orders(&self) -> impl Iterator<Item = &SortOrderRef> {
+    pub fn sort_orders_iter(&self) -> impl Iterator<Item = &SortOrderRef> {
         self.sort_orders.values()
     }
 

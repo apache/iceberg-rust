@@ -994,7 +994,7 @@ mod tests {
                     .build()
                     .unwrap()
             )],
-            table.metadata().schemas().collect::<Vec<_>>()
+            table.metadata().schemas_iter().collect::<Vec<_>>()
         );
         assert_eq!(
             &HashMap::from([
@@ -1041,7 +1041,7 @@ mod tests {
                 order_id: 0,
                 fields: vec![]
             })],
-            table.metadata().sort_orders().collect::<Vec<_>>()
+            table.metadata().sort_orders_iter().collect::<Vec<_>>()
         );
 
         config_mock.assert_async().await;
