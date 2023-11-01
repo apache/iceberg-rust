@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(FormatVersion::V1, table.metadata().format_version());
         assert_eq!("s3://warehouse/database/table", table.metadata().location());
         assert_eq!(
-            &uuid!("b55d9dda-6561-423a-8bfc-787980ce421f"),
+            uuid!("b55d9dda-6561-423a-8bfc-787980ce421f"),
             table.metadata().uuid()
         );
         assert_eq!(1646787054459, table.metadata().last_updated_ms());
