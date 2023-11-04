@@ -22,6 +22,7 @@ use arrow_schema::{DataType, TimeUnit};
 
 use super::TransformFunction;
 
+#[derive(Debug)]
 pub struct Bucket {
     mod_n: u32,
 }

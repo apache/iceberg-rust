@@ -117,6 +117,7 @@ impl RestCatalogConfig {
     }
 }
 
+#[derive(Debug)]
 struct HttpClient(Client);
 
 impl HttpClient {
@@ -178,6 +179,7 @@ impl HttpClient {
 }
 
 /// Rest catalog implementation.
+#[derive(Debug)]
 pub struct RestCatalog {
     config: RestCatalogConfig,
     client: HttpClient,

@@ -24,6 +24,7 @@ use crate::Error;
 
 use super::TransformFunction;
 
+#[derive(Debug)]
 pub struct Truncate {
     width: u32,
 }

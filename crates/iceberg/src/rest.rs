@@ -17,6 +17,7 @@
 
 //! This module provide rest catalog implementation.
 
+#[derive(Debug)]
 pub struct RestCatalog {
     url: String,
 }

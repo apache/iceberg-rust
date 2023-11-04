@@ -21,6 +21,7 @@ use arrow_array::ArrayRef;
 use super::TransformFunction;
 
 /// Return identity array.
+#[derive(Debug)]
 pub struct Identity {}
 
 impl TransformFunction for Identity {

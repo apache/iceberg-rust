@@ -38,6 +38,7 @@ const DAY_PER_SECOND: f64 = 1.0_f64 / 24.0_f64 / 3600.0_f64;
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
 /// Extract a date or timestamp year, as years from 1970
+#[derive(Debug)]
 pub struct Year;
 
 impl TransformFunction for Year {
@@ -55,6 +56,7 @@ impl TransformFunction for Year {
 }
 
 /// Extract a date or timestamp month, as months from 1970-01-01
+#[derive(Debug)]
 pub struct Month;
 
 impl TransformFunction for Month {
@@ -81,6 +83,7 @@ impl TransformFunction for Month {
 }
 
 /// Extract a date or timestamp day, as days from 1970-01-01
+#[derive(Debug)]
 pub struct Day;
 
 impl TransformFunction for Day {
@@ -115,6 +118,7 @@ impl TransformFunction for Day {
 }
 
 /// Extract a timestamp hour, as hours from 1970-01-01 00:00:00
+#[derive(Debug)]
 pub struct Hour;
 
 impl TransformFunction for Hour {

@@ -23,7 +23,7 @@ use crate::TableIdent;
 use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.
-#[derive(TypedBuilder)]
+#[derive(TypedBuilder, Debug)]
 pub struct Table {
     file_io: FileIO,
     #[builder(default, setter(strip_option))]
