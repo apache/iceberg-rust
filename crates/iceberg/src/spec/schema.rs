@@ -28,10 +28,12 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use _serde::SchemaEnum;
 
+/// Reference to [`Schema`].
+pub type SchemaRef = Arc<Schema>;
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
 /// Defines schema in iceberg.

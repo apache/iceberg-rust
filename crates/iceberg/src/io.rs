@@ -29,6 +29,16 @@
 //!     .unwrap();
 //! ```
 //!
+//! Or you can pass a path to ask `FileIO` to infer schema for you:
+//! ```rust
+//! use iceberg::io::{FileIO, S3_REGION};
+//! let file_io = FileIO::from_path("s3://bucket/a")
+//!     .unwrap()
+//!     .with_prop(S3_REGION, "us-east-1")
+//!     .build()
+//!     .unwrap();
+//! ```
+//!
 //! # How to use `FileIO`
 //!
 //! Currently `FileIO` provides simple methods for file operations:
@@ -68,6 +78,7 @@ static S3_CONFIG_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(
 });
 
 const DEFAULT_ROOT_PATH: &str = "/";
+
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
 /// # Note
@@ -132,6 +143,29 @@ impl FileIOBuilder {
 }
 
 impl FileIO {
+    /// Try to infer file io scheme from path.
+    ///
+    /// If it's a valid url, for example http://example.org, url scheme will be used.
+    /// If it's not a valid url, will try to detect if it's a file path.
+    ///
+    /// Otherwise will return parsing error.
+    pub fn from_path(path: impl AsRef<str>) -> Result<FileIOBuilder> {
+        let url = Url::parse(path.as_ref())
+            .map_err(Error::from)
+            .or_else(|e| {
+                Url::from_file_path(path.as_ref()).map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Input is neither a valid url nor path",
+                    )
+                    .with_context("input", path.as_ref().to_string())
+                    .with_source(e)
+                })
+            })?;
+
+        Ok(FileIOBuilder::new(url.scheme()))
+    }
+
     /// Deletes file.
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
@@ -351,7 +385,6 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-
     use std::io::Write;
 
     use std::{fs::File, path::Path};
@@ -452,5 +485,23 @@ mod tests {
         let read_content = read_from_file(full_path).await;
 
         assert_eq!(content, &read_content);
+    }
+
+    #[test]
+    fn test_create_file_from_path() {
+        let io = FileIO::from_path("/tmp/a").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("file:/tmp/b").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("file:///tmp/c").unwrap();
+        assert_eq!("file", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("s3://bucket/a").unwrap();
+        assert_eq!("s3", io.scheme_str.unwrap().as_str());
+
+        let io = FileIO::from_path("tmp/||c");
+        assert!(io.is_err());
     }
 }
