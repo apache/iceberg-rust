@@ -24,6 +24,7 @@ mod schema;
 mod snapshot;
 mod sort;
 mod table_metadata;
+mod timestamp;
 mod transform;
 mod values;
 
@@ -34,5 +35,6 @@ pub use schema::*;
 pub use snapshot::*;
 pub use sort::*;
 pub use table_metadata::*;
+pub use timestamp::*;
 pub use transform::*;
 pub use values::*;

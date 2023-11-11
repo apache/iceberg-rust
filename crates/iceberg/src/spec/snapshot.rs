@@ -18,6 +18,7 @@
 /*!
  * Snapshots
 */
+use crate::spec::timestamp::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -72,7 +73,7 @@ pub struct Snapshot {
     sequence_number: i64,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection
-    timestamp_ms: i64,
+    timestamp_ms: Timestamp,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
     manifest_list: ManifestListLocation,
@@ -116,7 +117,7 @@ impl Snapshot {
     }
     /// Get the timestamp of when the snapshot was created
     #[inline]
-    pub fn timestamp(&self) -> i64 {
+    pub fn timestamp(&self) -> Timestamp {
         self.timestamp_ms
     }
     /// Create snapshot builder
@@ -145,6 +146,8 @@ pub(super) mod _serde {
 
     use super::{ManifestListLocation, Operation, Snapshot, Summary};
 
+    use crate::spec::timestamp::Timestamp;
+
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
     /// Defines the structure of a v2 snapshot for serialization/deserialization
@@ -153,7 +156,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
         pub sequence_number: i64,
-        pub timestamp_ms: i64,
+        pub timestamp_ms: Timestamp,
         pub manifest_list: String,
         pub summary: Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +170,7 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
-        pub timestamp_ms: i64,
+        pub timestamp_ms: Timestamp,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub manifest_list: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,6 +317,7 @@ mod tests {
     use crate::spec::snapshot::{
         ManifestListLocation, Operation, Snapshot, Summary, _serde::SnapshotV1,
     };
+    use crate::spec::timestamp::Timestamp;
 
     #[test]
     fn schema() {
@@ -334,7 +338,7 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(3051729675574597004, result.snapshot_id());
-        assert_eq!(1515100955770, result.timestamp());
+        assert_eq!(Timestamp::new(1515100955770).unwrap(), result.timestamp());
         assert_eq!(
             Summary {
                 operation: Operation::Append,
