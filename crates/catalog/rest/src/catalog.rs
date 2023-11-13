@@ -593,7 +593,7 @@ mod tests {
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
         FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog,
-        SortOrder, Summary, Timestamp, Type,
+        SortOrder, Summary, TimestampMillis, Type,
     };
     use mockito::{Mock, Server, ServerGuard};
     use std::sync::Arc;
@@ -985,7 +985,7 @@ mod tests {
             table.metadata().uuid()
         );
         assert_eq!(
-            Timestamp::new(1646787054459).unwrap(),
+            TimestampMillis::new(1646787054459),
             table.metadata().last_updated_ms()
         );
         assert_eq!(
@@ -1013,7 +1013,7 @@ mod tests {
         );
         assert_eq!(vec![&Arc::new(Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
-            .with_timestamp_ms(Timestamp::new(1646787054459).unwrap())
+            .with_timestamp_ms(1646787054459)
             .with_manifest_list(ManifestListFile("s3://warehouse/database/table/metadata/snap-3497810964824022504-1-c4f68204-666b-4e50-a9df-b10c34bf6b82.avro".to_string()))
             .with_sequence_number(0)
             .with_schema_id(0)
@@ -1036,7 +1036,7 @@ mod tests {
         )], table.metadata().snapshots().collect::<Vec<_>>());
         assert_eq!(
             &[SnapshotLog {
-                timestamp_ms: Timestamp::new(1646787054459).unwrap(),
+                timestamp_ms: TimestampMillis::new(1646787054459),
                 snapshot_id: 3497810964824022504
             }],
             table.metadata().history()

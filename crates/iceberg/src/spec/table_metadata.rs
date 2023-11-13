@@ -20,7 +20,7 @@ Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
 The main struct here is [TableMetadataV2] which defines the data for a table.
 */
 
-use crate::spec::timestamp::Timestamp;
+use crate::spec::timestamp_millis::TimestampMillis;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{collections::HashMap, sync::Arc};
@@ -53,7 +53,7 @@ pub struct TableMetadata {
     /// The tables highest sequence number
     last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    last_updated_ms: Timestamp,
+    last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
     last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
@@ -134,8 +134,8 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> Timestamp {
-        self.last_updated_ms
+    pub fn last_updated_ms(&self) -> TimestampMillis {
+        TimestampMillis::new(self.last_updated_ms)
     }
 
     /// Returns schemas
@@ -243,7 +243,7 @@ impl TableMetadata {
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) {
-        self.last_updated_ms = snapshot.timestamp();
+        self.last_updated_ms = snapshot.timestamp().to_date_time().timestamp_millis();
         self.last_sequence_number = snapshot.sequence_number();
 
         self.refs
@@ -279,7 +279,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::Snapshot;
+    use crate::spec::{Snapshot, TimestampMillis};
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -293,8 +293,6 @@ pub(super) mod _serde {
         FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
         DEFAULT_SPEC_ID, MAIN_BRANCH,
     };
-
-    use crate::spec::timestamp::Timestamp;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -311,7 +309,7 @@ pub(super) mod _serde {
         pub table_uuid: Uuid,
         pub location: String,
         pub last_sequence_number: i64,
-        pub last_updated_ms: Timestamp,
+        pub last_updated_ms: TimestampMillis,
         pub last_column_id: i32,
         pub schemas: Vec<SchemaV2>,
         pub current_schema_id: i32,
@@ -342,7 +340,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub table_uuid: Option<Uuid>,
         pub location: String,
-        pub last_updated_ms: Timestamp,
+        pub last_updated_ms: TimestampMillis,
         pub last_column_id: i32,
         pub schema: SchemaV1,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,7 +434,7 @@ pub(super) mod _serde {
                 table_uuid: value.table_uuid,
                 location: value.location,
                 last_sequence_number: value.last_sequence_number,
-                last_updated_ms: value.last_updated_ms,
+                last_updated_ms: value.last_updated_ms.to_date_time().timestamp_millis(),
                 last_column_id: value.last_column_id,
                 current_schema_id: if schemas.keys().contains(&value.current_schema_id) {
                     Ok(value.current_schema_id)
@@ -544,7 +542,7 @@ pub(super) mod _serde {
                 table_uuid: value.table_uuid.unwrap_or_default(),
                 location: value.location,
                 last_sequence_number: 0,
-                last_updated_ms: value.last_updated_ms,
+                last_updated_ms: value.last_updated_ms.to_date_time().timestamp_millis(),
                 last_column_id: value.last_column_id,
                 current_schema_id: value
                     .current_schema_id
@@ -607,7 +605,7 @@ pub(super) mod _serde {
                 table_uuid: v.table_uuid,
                 location: v.location,
                 last_sequence_number: v.last_sequence_number,
-                last_updated_ms: v.last_updated_ms,
+                last_updated_ms: TimestampMillis::new(v.last_updated_ms),
                 last_column_id: v.last_column_id,
                 schemas: v
                     .schemas
@@ -673,7 +671,7 @@ pub(super) mod _serde {
                 format_version: VersionNumber::<1>,
                 table_uuid: Some(v.table_uuid),
                 location: v.location,
-                last_updated_ms: v.last_updated_ms,
+                last_updated_ms: TimestampMillis::new(v.last_updated_ms),
                 last_column_id: v.last_column_id,
                 schema: v
                     .schemas
@@ -771,7 +769,7 @@ pub struct SnapshotLog {
     /// Id of the snapshot.
     pub snapshot_id: i64,
     /// Last updated timestamp
-    pub timestamp_ms: Timestamp,
+    pub timestamp_ms: TimestampMillis,
 }
 
 #[cfg(test)]
@@ -790,7 +788,7 @@ mod tests {
         SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
     };
 
-    use crate::spec::timestamp::Timestamp;
+    use crate::spec::timestamp_millis::TimestampMillis;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
 
@@ -883,7 +881,7 @@ mod tests {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
             location: "s3://b/wh/data.db/table".to_string(),
-            last_updated_ms: Timestamp::new(1515100955770).unwrap(),
+            last_updated_ms: 1515100955770,
             last_column_id: 1,
             schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
             current_schema_id: 1,
@@ -1042,7 +1040,7 @@ mod tests {
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(638933773299822130)
-            .with_timestamp_ms(Timestamp::new(1662532818843).unwrap())
+            .with_timestamp_ms(1662532818843)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list(ManifestListLocation::ManifestListFile("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string()))
@@ -1053,7 +1051,7 @@ mod tests {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str("df838b92-0b32-465d-a44e-d39936e538b7").unwrap(),
             location: "/home/iceberg/warehouse/nyc/taxis".to_string(),
-            last_updated_ms: Timestamp::new(1662532818843).unwrap(),
+            last_updated_ms: 1662532818843,
             last_column_id: 5,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
@@ -1068,7 +1066,7 @@ mod tests {
             properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
             snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
-                timestamp_ms: Timestamp::new(1662532818843).unwrap(),
+                timestamp_ms: TimestampMillis::new(1662532818843),
             }],
             metadata_log: vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}],
             refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
@@ -1166,7 +1164,7 @@ mod tests {
 
         let snapshot1 = Snapshot::builder()
             .with_snapshot_id(3051729675574597004)
-            .with_timestamp_ms(Timestamp::new(1515100955770).unwrap())
+            .with_timestamp_ms(1515100955770)
             .with_sequence_number(0)
             .with_manifest_list(ManifestListLocation::ManifestListFile(
                 "s3://a/b/1.avro".to_string(),
@@ -1181,7 +1179,7 @@ mod tests {
         let snapshot2 = Snapshot::builder()
             .with_snapshot_id(3055729675574597004)
             .with_parent_snapshot_id(Some(3051729675574597004))
-            .with_timestamp_ms(Timestamp::new(1555100955770).unwrap())
+            .with_timestamp_ms(1555100955770)
             .with_sequence_number(1)
             .with_schema_id(1)
             .with_manifest_list(ManifestListLocation::ManifestListFile(
@@ -1198,7 +1196,7 @@ mod tests {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
             location: "s3://bucket/test/location".to_string(),
-            last_updated_ms: Timestamp::new(1602638573590).unwrap(),
+            last_updated_ms: 1602638573590,
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema1)), (1, Arc::new(schema2))]),
             current_schema_id: 1,
@@ -1217,11 +1215,11 @@ mod tests {
             snapshot_log: vec![
                 SnapshotLog {
                     snapshot_id: 3051729675574597004,
-                    timestamp_ms: Timestamp::new(1515100955770).unwrap(),
+                    timestamp_ms: TimestampMillis::new(1515100955770),
                 },
                 SnapshotLog {
                     snapshot_id: 3055729675574597004,
-                    timestamp_ms: Timestamp::new(1555100955770).unwrap(),
+                    timestamp_ms: TimestampMillis::new(1555100955770),
                 },
             ],
             metadata_log: Vec::new(),
@@ -1299,7 +1297,7 @@ mod tests {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
             location: "s3://bucket/test/location".to_string(),
-            last_updated_ms: Timestamp::new(1602638573590).unwrap(),
+            last_updated_ms: 1602638573590,
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
@@ -1361,7 +1359,7 @@ mod tests {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap(),
             location: "s3://bucket/test/location".to_string(),
-            last_updated_ms: Timestamp::new(1602638573874).unwrap(),
+            last_updated_ms: 1602638573874,
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
