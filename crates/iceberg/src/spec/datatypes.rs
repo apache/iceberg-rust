@@ -333,6 +333,8 @@ pub struct StructType {
     /// Lookup for index by field id
     #[serde(skip_serializing)]
     id_lookup: OnceLock<HashMap<i32, usize>>,
+    #[serde(skip_serializing)]
+    name_lookup: OnceLock<HashMap<String, usize>>,
 }
 
 impl<'de> Deserialize<'de> for StructType {
@@ -390,8 +392,10 @@ impl StructType {
         Self {
             fields,
             id_lookup: OnceLock::new(),
+            name_lookup: OnceLock::new(),
         }
     }
+
     /// Get struct field with certain id
     pub fn field_by_id(&self, id: i32) -> Option<&NestedFieldRef> {
         self.field_id_to_index(id).map(|idx| &self.fields[idx])
@@ -403,6 +407,25 @@ impl StructType {
                 HashMap::from_iter(self.fields.iter().enumerate().map(|(i, x)| (x.id, i)))
             })
             .get(&field_id)
+            .copied()
+    }
+
+    /// Get struct field with certain field name
+    pub fn field_by_name(&self, name: &str) -> Option<&NestedFieldRef> {
+        self.field_name_to_index(name).map(|idx| &self.fields[idx])
+    }
+
+    fn field_name_to_index(&self, name: &str) -> Option<usize> {
+        self.name_lookup
+            .get_or_init(|| {
+                HashMap::from_iter(
+                    self.fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, x)| (x.name.clone(), i)),
+                )
+            })
+            .get(name)
             .copied()
     }
 
@@ -773,6 +796,7 @@ mod tests {
                 )
                 .into()],
                 id_lookup: OnceLock::default(),
+                name_lookup: OnceLock::default(),
             }),
         )
     }
@@ -803,6 +827,7 @@ mod tests {
                 )
                 .into()],
                 id_lookup: OnceLock::default(),
+                name_lookup: OnceLock::default(),
             }),
         )
     }
@@ -845,6 +870,7 @@ mod tests {
                     NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
                 ],
                 id_lookup: HashMap::from([(1, 0), (2, 1)]).into(),
+                name_lookup: HashMap::from([("id".to_string(), 0), ("data".to_string(), 1)]).into(),
             }),
         )
     }
