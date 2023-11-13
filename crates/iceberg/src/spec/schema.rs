@@ -54,6 +54,7 @@ pub struct Schema {
 }
 
 /// Schema builder.
+#[derive(Debug)]
 pub struct SchemaBuilder {
     schema_id: i32,
     fields: Vec<NestedFieldRef>,

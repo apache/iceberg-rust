@@ -29,7 +29,7 @@ use std::ops::Deref;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
-pub trait Catalog {
+pub trait Catalog: std::fmt::Debug {
     /// List namespaces from table.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
         -> Result<Vec<NamespaceIdent>>;
@@ -215,6 +215,7 @@ impl TableIdent {
 }
 
 /// TableCreation represents the creation of a table in the catalog.
+#[derive(Debug)]
 pub struct TableCreation {
     /// The name of the table.
     pub name: String,
@@ -231,6 +232,7 @@ pub struct TableCreation {
 }
 
 /// TableCommit represents the commit of a table in the catalog.
+#[derive(Debug)]
 pub struct TableCommit {
     /// The table ident.
     pub ident: TableIdent,
@@ -243,6 +245,7 @@ pub struct TableCommit {
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
+#[derive(Debug)]
 pub enum TableRequirement {
     /// The table must not already exist; used for create transactions
     NotExist,
@@ -273,6 +276,7 @@ pub enum TableRequirement {
 /// TableUpdate represents an update to a table in the catalog.
 ///
 /// TODO: we should fill with UpgradeFormatVersionUpdate, AddSchemaUpdate and so on.
+#[derive(Debug)]
 pub enum TableUpdate {}
 
 #[cfg(test)]

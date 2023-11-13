@@ -20,6 +20,7 @@ use arrow_array::{new_null_array, ArrayRef};
 
 use super::TransformFunction;
 
+#[derive(Debug)]
 pub struct Void {}
 
 impl TransformFunction for Void {

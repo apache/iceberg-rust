@@ -83,6 +83,16 @@ pub struct ManifestListWriter {
     avro_writer: Writer<'static, Vec<u8>>,
 }
 
+impl std::fmt::Debug for ManifestListWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManifestListWriter")
+            .field("format_version", &self.format_version)
+            .field("output_file", &self.output_file)
+            .field("avro_writer", &self.avro_writer.schema())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ManifestListWriter {
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
     pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {

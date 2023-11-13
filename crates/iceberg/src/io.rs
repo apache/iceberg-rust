@@ -91,6 +91,7 @@ pub struct FileIO {
 }
 
 /// Builder for [`FileIO`].
+#[derive(Debug)]
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
     ///
