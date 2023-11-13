@@ -27,17 +27,18 @@ license = "Apache-2.0"
 keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
-async-trait = "0.1"
-chrono = "0.4"
-iceberg = { path = "../../iceberg" }
-reqwest = { version = "^0.11", features = ["json"] }
-serde = { version = "^1.0", features = ["rc"] }
-serde_derive = "^1.0"
-serde_json = "^1.0"
-typed-builder = "^0.18"
-urlencoding = "2"
-uuid = { version = "1.5.0", features = ["v4"] }
+# async-trait = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+iceberg = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
+serde_json = { workspace = true }
+typed-builder = { workspace = true }
+urlencoding = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-mockito = "^1"
-tokio = { version = "1", features = ["macros"] }
+mockito = { workspace = true }
+tokio = { workspace = true }
