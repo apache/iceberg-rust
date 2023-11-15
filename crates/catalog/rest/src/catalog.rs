@@ -590,10 +590,11 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
         FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog,
-        SortOrder, Summary, TimestampMillis, Type,
+        SortOrder, Summary, Type,
     };
     use mockito::{Mock, Server, ServerGuard};
     use std::sync::Arc;
@@ -985,7 +986,7 @@ mod tests {
             table.metadata().uuid()
         );
         assert_eq!(
-            TimestampMillis::new(1646787054459),
+            Utc.timestamp_millis_opt(1646787054459).unwrap(),
             table.metadata().last_updated_ms()
         );
         assert_eq!(
@@ -1036,7 +1037,7 @@ mod tests {
         )], table.metadata().snapshots().collect::<Vec<_>>());
         assert_eq!(
             &[SnapshotLog {
-                timestamp_ms: TimestampMillis::new(1646787054459),
+                timestamp_ms: 1646787054459,
                 snapshot_id: 3497810964824022504
             }],
             table.metadata().history()

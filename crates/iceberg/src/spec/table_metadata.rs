@@ -20,7 +20,6 @@ Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
 The main struct here is [TableMetadataV2] which defines the data for a table.
 */
 
-use crate::spec::timestamp_millis::TimestampMillis;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{collections::HashMap, sync::Arc};
@@ -32,6 +31,8 @@ use super::{
 };
 
 use _serde::TableMetadataEnum;
+
+use chrono::{DateTime, TimeZone, Utc};
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
@@ -134,8 +135,8 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> TimestampMillis {
-        TimestampMillis::new(self.last_updated_ms)
+    pub fn last_updated_ms(&self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.last_updated_ms).unwrap()
     }
 
     /// Returns schemas
@@ -243,7 +244,7 @@ impl TableMetadata {
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) {
-        self.last_updated_ms = snapshot.timestamp().to_date_time().timestamp_millis();
+        self.last_updated_ms = snapshot.timestamp().timestamp_millis();
         self.last_sequence_number = snapshot.sequence_number();
 
         self.refs
@@ -279,7 +280,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::{Snapshot, TimestampMillis};
+    use crate::spec::Snapshot;
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -309,7 +310,7 @@ pub(super) mod _serde {
         pub table_uuid: Uuid,
         pub location: String,
         pub last_sequence_number: i64,
-        pub last_updated_ms: TimestampMillis,
+        pub last_updated_ms: i64,
         pub last_column_id: i32,
         pub schemas: Vec<SchemaV2>,
         pub current_schema_id: i32,
@@ -340,7 +341,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub table_uuid: Option<Uuid>,
         pub location: String,
-        pub last_updated_ms: TimestampMillis,
+        pub last_updated_ms: i64,
         pub last_column_id: i32,
         pub schema: SchemaV1,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -434,7 +435,7 @@ pub(super) mod _serde {
                 table_uuid: value.table_uuid,
                 location: value.location,
                 last_sequence_number: value.last_sequence_number,
-                last_updated_ms: value.last_updated_ms.to_date_time().timestamp_millis(),
+                last_updated_ms: value.last_updated_ms,
                 last_column_id: value.last_column_id,
                 current_schema_id: if schemas.keys().contains(&value.current_schema_id) {
                     Ok(value.current_schema_id)
@@ -542,7 +543,7 @@ pub(super) mod _serde {
                 table_uuid: value.table_uuid.unwrap_or_default(),
                 location: value.location,
                 last_sequence_number: 0,
-                last_updated_ms: value.last_updated_ms.to_date_time().timestamp_millis(),
+                last_updated_ms: value.last_updated_ms,
                 last_column_id: value.last_column_id,
                 current_schema_id: value
                     .current_schema_id
@@ -605,7 +606,7 @@ pub(super) mod _serde {
                 table_uuid: v.table_uuid,
                 location: v.location,
                 last_sequence_number: v.last_sequence_number,
-                last_updated_ms: TimestampMillis::new(v.last_updated_ms),
+                last_updated_ms: v.last_updated_ms,
                 last_column_id: v.last_column_id,
                 schemas: v
                     .schemas
@@ -671,7 +672,7 @@ pub(super) mod _serde {
                 format_version: VersionNumber::<1>,
                 table_uuid: Some(v.table_uuid),
                 location: v.location,
-                last_updated_ms: TimestampMillis::new(v.last_updated_ms),
+                last_updated_ms: v.last_updated_ms,
                 last_column_id: v.last_column_id,
                 schema: v
                     .schemas
@@ -769,7 +770,14 @@ pub struct SnapshotLog {
     /// Id of the snapshot.
     pub snapshot_id: i64,
     /// Last updated timestamp
-    pub timestamp_ms: TimestampMillis,
+    pub timestamp_ms: i64,
+}
+
+impl SnapshotLog {
+    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
+    pub fn timestamp(self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -787,8 +795,6 @@ mod tests {
         PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, SortDirection, SortField, SortOrder, Summary, Transform, Type,
     };
-
-    use crate::spec::timestamp_millis::TimestampMillis;
 
     use super::{FormatVersion, MetadataLog, SnapshotLog};
 
@@ -1066,7 +1072,7 @@ mod tests {
             properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
             snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
-                timestamp_ms: TimestampMillis::new(1662532818843),
+                timestamp_ms: 1662532818843,
             }],
             metadata_log: vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}],
             refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
@@ -1215,11 +1221,11 @@ mod tests {
             snapshot_log: vec![
                 SnapshotLog {
                     snapshot_id: 3051729675574597004,
-                    timestamp_ms: TimestampMillis::new(1515100955770),
+                    timestamp_ms: 1515100955770,
                 },
                 SnapshotLog {
                     snapshot_id: 3055729675574597004,
-                    timestamp_ms: TimestampMillis::new(1555100955770),
+                    timestamp_ms: 1555100955770,
                 },
             ],
             metadata_log: Vec::new(),

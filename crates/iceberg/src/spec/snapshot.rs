@@ -18,7 +18,7 @@
 /*!
  * Snapshots
 */
-use crate::spec::timestamp_millis::TimestampMillis;
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -117,8 +117,8 @@ impl Snapshot {
     }
     /// Get the timestamp of when the snapshot was created
     #[inline]
-    pub fn timestamp(&self) -> TimestampMillis {
-        TimestampMillis::new(self.timestamp_ms)
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
     }
     /// Create snapshot builder
     pub fn builder() -> SnapshotBuilder {
@@ -127,7 +127,7 @@ impl Snapshot {
 
     pub(crate) fn log(&self) -> SnapshotLog {
         SnapshotLog {
-            timestamp_ms: TimestampMillis::new(self.timestamp_ms),
+            timestamp_ms: self.timestamp_ms,
             snapshot_id: self.snapshot_id,
         }
     }
@@ -142,7 +142,6 @@ pub(super) mod _serde {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::spec::TimestampMillis;
     use crate::{Error, ErrorKind};
 
     use super::{ManifestListLocation, Operation, Snapshot, Summary};
@@ -155,7 +154,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
         pub sequence_number: i64,
-        pub timestamp_ms: TimestampMillis,
+        pub timestamp_ms: i64,
         pub manifest_list: String,
         pub summary: Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,7 +168,7 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
-        pub timestamp_ms: TimestampMillis,
+        pub timestamp_ms: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub manifest_list: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -186,7 +185,7 @@ pub(super) mod _serde {
                 snapshot_id: v2.snapshot_id,
                 parent_snapshot_id: v2.parent_snapshot_id,
                 sequence_number: v2.sequence_number,
-                timestamp_ms: v2.timestamp_ms.to_date_time().timestamp_millis(),
+                timestamp_ms: v2.timestamp_ms,
                 manifest_list: ManifestListLocation::ManifestListFile(v2.manifest_list),
                 summary: v2.summary,
                 schema_id: v2.schema_id,
@@ -200,7 +199,7 @@ pub(super) mod _serde {
             snapshot_id: v2.snapshot_id,
             parent_snapshot_id: v2.parent_snapshot_id,
             sequence_number: v2.sequence_number,
-            timestamp_ms: TimestampMillis::new(v2.timestamp_ms),
+            timestamp_ms: v2.timestamp_ms,
             manifest_list: match v2.manifest_list {
                 ManifestListLocation::ManifestListFile(file) => file,
                 ManifestListLocation::ManifestFiles(_) => panic!("Wrong table format version. Can't convert a list of manifest files into a location of a manifest file.")
@@ -219,7 +218,7 @@ pub(super) mod _serde {
                 snapshot_id: v1.snapshot_id,
                 parent_snapshot_id: v1.parent_snapshot_id,
                 sequence_number: 0,
-                timestamp_ms: v1.timestamp_ms.to_date_time().timestamp_millis(),
+                timestamp_ms: v1.timestamp_ms,
                 manifest_list: match (v1.manifest_list, v1.manifests) {
                     (Some(file), _) => ManifestListLocation::ManifestListFile(file),
                     (None, Some(files)) => ManifestListLocation::ManifestFiles(files),
@@ -248,7 +247,7 @@ pub(super) mod _serde {
             SnapshotV1 {
                 snapshot_id: v2.snapshot_id,
                 parent_snapshot_id: v2.parent_snapshot_id,
-                timestamp_ms: TimestampMillis::new(v2.timestamp_ms),
+                timestamp_ms: v2.timestamp_ms,
                 manifest_list,
                 manifests,
                 summary: Some(v2.summary),
@@ -311,12 +310,12 @@ pub enum SnapshotRetention {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
 
     use crate::spec::snapshot::{
         ManifestListLocation, Operation, Snapshot, Summary, _serde::SnapshotV1,
     };
-    use crate::spec::timestamp_millis::TimestampMillis;
 
     #[test]
     fn schema() {
@@ -337,7 +336,10 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(3051729675574597004, result.snapshot_id());
-        assert_eq!(TimestampMillis::new(1515100955770), result.timestamp());
+        assert_eq!(
+            Utc.timestamp_millis_opt(1515100955770).unwrap(),
+            result.timestamp()
+        );
         assert_eq!(
             Summary {
                 operation: Operation::Append,
