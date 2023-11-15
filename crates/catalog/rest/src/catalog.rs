@@ -26,7 +26,7 @@ use serde::de::DeserializeOwned;
 use typed_builder::TypedBuilder;
 use urlencoding::encode;
 
-use crate::catalog::_serde::LoadTableResponse;
+use crate::catalog::_serde::{CommitTableRequest, CommitTableResponse, LoadTableResponse};
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::table::Table;
 use iceberg::Result;
@@ -75,7 +75,7 @@ impl RestCatalogConfig {
             &ns.encode_in_url(),
             "tables",
         ]
-        .join("/")
+            .join("/")
     }
 
     fn rename_table_endpoint(&self) -> String {
@@ -91,7 +91,7 @@ impl RestCatalogConfig {
             "tables",
             encode(&table.name).as_ref(),
         ]
-        .join("/")
+            .join("/")
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
@@ -138,8 +138,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?)
         } else {
             let text = resp.bytes().await?;
@@ -148,8 +148,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?;
             Err(e.into())
         }
@@ -170,8 +170,8 @@ impl HttpClient {
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?;
             Err(e.into())
         }
@@ -330,20 +330,7 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
-        let mut props = self.config.props.clone();
-        if let Some(config) = resp.config {
-            props.extend(config);
-        }
-
-        let file_io = match self
-            .config
-            .warehouse
-            .as_ref()
-            .or_else(|| resp.metadata_location.as_ref())
-        {
-            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
-            None => FileIOBuilder::new("s3").with_props(props).build()?,
-        };
+        let file_io = self.load_file_io(resp.metadata_location.as_deref(), resp.config)?;
 
         let table_builder = Table::builder()
             .identifier(table.clone())
@@ -401,14 +388,26 @@ impl Catalog for RestCatalog {
             .await
     }
 
-    /// Update a table to the catalog.
-    async fn update_table(&self, _table: &TableIdent, _commit: TableCommit) -> Result<Table> {
-        todo!()
-    }
+    /// Update table.
+    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+        let request = self.client
+            .0
+            .post(self.config.table_endpoint(&commit.identifier()))
+            .json(&CommitTableRequest {
+                identifier: commit.identifier().clone(),
+                requirements: commit.take_requirements(),
+                updates: commit.take_updates(),
+            }).build()?;
 
-    /// Update multiple tables to the catalog as an atomic operation.
-    async fn update_tables(&self, _tables: &[(TableIdent, TableCommit)]) -> Result<()> {
-        todo!()
+        let resp = self.client.query::<CommitTableResponse, ErrorResponse, OK>(request).await?;
+
+        let file_io = self.load_file_io(Some(&resp.metadata_location()), None)?;
+        Ok(Table::builder()
+            .identifier(commit.identifier().clone())
+            .file_io(file_io)
+            .metadata(resp.metadata)
+            .metadata_location(resp.metadata_location)
+            .build())
     }
 }
 
@@ -446,6 +445,25 @@ impl RestCatalog {
 
         Ok(())
     }
+
+    fn load_file_io(&self, metadata_location: Option<&str>, extra_config: Option<HashMap<String, String>>) -> Result<FileIO> {
+        let mut props = self.config.props.clone();
+        if let Some(config) = extra_config {
+            props.extend(config);
+        }
+
+        let file_io = match self
+            .config
+            .warehouse
+            .as_deref()
+            .or_else(|| metadata_location)
+        {
+            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
+            None => FileIOBuilder::new("s3").with_props(props).build()?,
+        };
+
+        Ok(file_io)
+    }
 }
 
 /// Requests and responses for rest api.
@@ -455,7 +473,7 @@ mod _serde {
     use serde_derive::{Deserialize, Serialize};
 
     use iceberg::spec::TableMetadata;
-    use iceberg::{Error, ErrorKind, Namespace, TableIdent};
+    use iceberg::{Error, ErrorKind, Namespace, TableIdent, TableRequirement, TableUpdate};
 
     pub(super) const OK: u16 = 200u16;
     pub(super) const NO_CONTENT: u16 = 204u16;
@@ -585,6 +603,19 @@ mod _serde {
         pub(super) metadata_location: Option<String>,
         pub(super) metadata: TableMetadata,
         pub(super) config: Option<HashMap<String, String>>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct CommitTableRequest {
+        pub(super) identifier: TableIdent,
+        pub(super) requirements: Vec<TableRequirement>,
+        pub(super) updates: Vec<TableUpdate>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct CommitTableResponse {
+        pub(super) metadata_location: String,
+        pub(super) metadata: TableMetadata,
     }
 }
 
@@ -1017,31 +1048,31 @@ mod tests {
             .with_summary(Summary {
                 operation: Operation::Append,
                 other: HashMap::from_iter([
-                                          ("spark.app.id", "local-1646787004168"),
-                                          ("added-data-files", "1"),
-                                          ("added-records", "1"),
-                                          ("added-files-size", "697"),
-                                          ("changed-partition-count", "1"),
-                                          ("total-records", "1"),
-                                          ("total-files-size", "697"),
-                                          ("total-data-files", "1"),
-                                          ("total-delete-files", "0"),
-                                          ("total-position-deletes", "0"),
-                                          ("total-equality-deletes", "0")
-                ].iter().map(|p|(p.0.to_string(), p.1.to_string())))
+                    ("spark.app.id", "local-1646787004168"),
+                    ("added-data-files", "1"),
+                    ("added-records", "1"),
+                    ("added-files-size", "697"),
+                    ("changed-partition-count", "1"),
+                    ("total-records", "1"),
+                    ("total-files-size", "697"),
+                    ("total-data-files", "1"),
+                    ("total-delete-files", "0"),
+                    ("total-position-deletes", "0"),
+                    ("total-equality-deletes", "0")
+                ].iter().map(|p| (p.0.to_string(), p.1.to_string()))),
             }).build().unwrap()
         )], table.metadata().snapshots().collect::<Vec<_>>());
         assert_eq!(
             &[SnapshotLog {
                 timestamp_ms: 1646787054459,
-                snapshot_id: 3497810964824022504
+                snapshot_id: 3497810964824022504,
             }],
             table.metadata().history()
         );
         assert_eq!(
             vec![&Arc::new(SortOrder {
                 order_id: 0,
-                fields: vec![]
+                fields: vec![],
             })],
             table.metadata().sort_orders_iter().collect::<Vec<_>>()
         );

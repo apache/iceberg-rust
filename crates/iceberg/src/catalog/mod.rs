@@ -20,19 +20,21 @@
 use serde_derive::{Deserialize, Serialize};
 use urlencoding::encode;
 
-use crate::spec::{PartitionSpec, Schema, SortOrder};
+use crate::spec::{FormatVersion, PartitionSpec, Schema, Snapshot, SnapshotReference, SortOrder};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::mem::{replace, take};
 use std::ops::Deref;
+use typed_builder::TypedBuilder;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog: std::fmt::Debug {
     /// List namespaces from table.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
-        -> Result<Vec<NamespaceIdent>>;
+                             -> Result<Vec<NamespaceIdent>>;
 
     /// Create a new namespace inside the catalog.
     async fn create_namespace(
@@ -84,10 +86,7 @@ pub trait Catalog: std::fmt::Debug {
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
 
     /// Update a table to the catalog.
-    async fn update_table(&self, table: &TableIdent, commit: TableCommit) -> Result<Table>;
-
-    /// Update multiple tables to the catalog as an atomic operation.
-    async fn update_tables(&self, tables: &[(TableIdent, TableCommit)]) -> Result<()>;
+    async fn update_table(&self, commit: TableCommit) -> Result<Table>;
 }
 
 /// NamespaceIdent represents the identifier of a namespace in the catalog.
@@ -116,7 +115,7 @@ impl NamespaceIdent {
     }
 
     /// Try to create namespace identifier from an iterator of string.
-    pub fn from_strs(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
+    pub fn from_strs(iter: impl IntoIterator<Item=impl ToString>) -> Result<Self> {
         Self::from_vec(iter.into_iter().map(|s| s.to_string()).collect())
     }
 
@@ -200,7 +199,7 @@ impl TableIdent {
     }
 
     /// Try to create table identifier from an iterator of string.
-    pub fn from_strs(iter: impl IntoIterator<Item = impl ToString>) -> Result<Self> {
+    pub fn from_strs(iter: impl IntoIterator<Item=impl ToString>) -> Result<Self> {
         let mut vec: Vec<String> = iter.into_iter().map(|s| s.to_string()).collect();
         let table_name = vec.pop().ok_or_else(|| {
             Error::new(ErrorKind::DataInvalid, "Table identifier can't be empty!")
@@ -232,16 +231,34 @@ pub struct TableCreation {
 }
 
 /// TableCommit represents the commit of a table in the catalog.
-#[derive(Debug)]
+#[derive(Debug, TypedBuilder)]
+#[builder(build_method(vis="pub(crate)"))]
 pub struct TableCommit {
     /// The table ident.
-    pub ident: TableIdent,
+    ident: TableIdent,
     /// The requirements of the table.
     ///
     /// Commit will fail if the requirements are not met.
-    pub requirements: Vec<TableRequirement>,
+    requirements: Vec<TableRequirement>,
     /// The updates of the table.
-    pub updates: Vec<TableUpdate>,
+    updates: Vec<TableUpdate>,
+}
+
+impl TableCommit {
+    /// Return the table identifier.
+    pub fn identifier(&self) -> &TableIdent {
+        &self.ident
+    }
+
+    /// Take all requirements.
+    pub fn take_requirements(&mut self) -> Vec<TableRequirement> {
+        take(&mut self.requirements)
+    }
+
+    /// Take all updates.
+    pub fn take_updates(&mut self) -> Vec<TableUpdate> {
+        take(&mut self.updates)
+    }
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
@@ -274,10 +291,67 @@ pub enum TableRequirement {
 }
 
 /// TableUpdate represents an update to a table in the catalog.
-///
-/// TODO: we should fill with UpgradeFormatVersionUpdate, AddSchemaUpdate and so on.
 #[derive(Debug)]
-pub enum TableUpdate {}
+pub enum TableUpdate {
+    /// Upgrade table's format version
+    UpgradeFormatVersion {
+        format_version: FormatVersion,
+    },
+    /// Add a new schema to the table
+    AddSchema {
+        schema: Schema,
+        last_column_id: i32,
+    },
+    /// Set table's current schema
+    SetCurrentSchema {
+        schema_id: i32
+    },
+    /// Add a new partition spec to the table
+    AddPartitionSpec {
+        spec: PartitionSpec,
+    },
+    /// Set table's default spec
+    SetDefaultSpec {
+        spec_id: i32,
+    },
+    /// Add sort order to table.
+    AddSortOrder {
+        sort_order: SortOrder,
+    },
+    /// Set table's default sort order
+    SetDefaultSortOrder {
+        sort_order_id: i32
+    },
+    /// Add snapshot to table.
+    AddSnapshot {
+        snapshot: Snapshot,
+    },
+    /// Set table's snapshot ref.
+    SetSnapshotRef {
+        ref_name: String,
+        reference: SnapshotReference,
+    },
+    /// Remove table's snapshots
+    RemoveSnapshots {
+        snapshot_ids: Vec<i64>,
+    },
+    /// Remove snapshot reference
+    RemoveSnapshotRef {
+        ref_name: String,
+    },
+    /// Update table's location
+    SetLocation {
+        location: String,
+    },
+    /// Update table's properties
+    SetProperties {
+        updates: HashMap<String, String>,
+    },
+    /// Remove table's properties
+    RemoveProperties {
+        removals: Vec<String>,
+    },
+}
 
 #[cfg(test)]
 mod tests {
