@@ -17,12 +17,12 @@
 
 //! This module contains transaction api.
 
-use std::collections::HashMap;
-use crate::table::Table;
-use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
-use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder, Transform};
 use crate::error::Result;
+use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder, Transform};
+use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+use std::collections::HashMap;
 
 /// Table transaction.
 pub struct Transaction<'a> {
@@ -55,22 +55,22 @@ impl<'a> Transaction<'a> {
     pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
         let current_version = self.table.metadata().format_version();
         if current_version > format_version {
-            return Err(Error::new(ErrorKind::DataInvalid, format!("Cannot downgrade table version from {} to {}",
-                                                                  current_version,
-                                                                  format_version)));
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot downgrade table version from {} to {}",
+                    current_version, format_version
+                ),
+            ));
         } else if current_version < format_version {
-            self.append_updates(vec![UpgradeFormatVersion {
-                format_version
-            }])?;
+            self.append_updates(vec![UpgradeFormatVersion { format_version }])?;
         }
         Ok(self)
     }
 
     /// Update table's property.
     pub fn set_properties(mut self, props: HashMap<String, String>) -> Result<Self> {
-        self.append_updates(vec![TableUpdate::SetProperties {
-            updates: props
-        }])?;
+        self.append_updates(vec![TableUpdate::SetProperties { updates: props }])?;
         Ok(self)
     }
 
@@ -84,9 +84,7 @@ impl<'a> Transaction<'a> {
 
     /// Remove properties in table.
     pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
-        self.append_updates(vec![TableUpdate::RemoveProperties {
-            removals: keys
-        }])?;
+        self.append_updates(vec![TableUpdate::RemoveProperties { removals: keys }])?;
         Ok(self)
     }
 
@@ -121,18 +119,28 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
     /// Finished building the action and apply it to the transaction.
     pub fn apply(mut self) -> Result<Transaction<'a>> {
-        let updates = vec![TableUpdate::AddSortOrder {
-            sort_order: SortOrder {
-                fields: self.sort_fields,
-                ..SortOrder::default()
-            }
-        }, TableUpdate::SetDefaultSortOrder {
-            sort_order_id: -1
-        }];
+        let updates = vec![
+            TableUpdate::AddSortOrder {
+                sort_order: SortOrder {
+                    fields: self.sort_fields,
+                    ..SortOrder::default()
+                },
+            },
+            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
+        ];
 
         let requirements = vec![
-            TableRequirement::CurrentSchemaIdMatch(self.tx.table.metadata().current_schema().schema_id() as i64),
-            TableRequirement::DefaultSortOrderIdMatch(self.tx.table.metadata().default_sort_order().unwrap().order_id),
+            TableRequirement::CurrentSchemaIdMatch(
+                self.tx.table.metadata().current_schema().schema_id() as i64,
+            ),
+            TableRequirement::DefaultSortOrderIdMatch(
+                self.tx
+                    .table
+                    .metadata()
+                    .default_sort_order()
+                    .unwrap()
+                    .order_id,
+            ),
         ];
 
         self.tx.append_requirements(requirements)?;
@@ -140,9 +148,24 @@ impl<'a> ReplaceSortOrderAction<'a> {
         Ok(self.tx)
     }
 
-    fn add_sort_field(mut self, name: &str, sort_direction: SortDirection, null_order: NullOrder) -> Result<Self> {
-        let field_id = self.tx.table.metadata().current_schema().field_id_by_name(name)
-            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, format!("Cannot find field {} in table schema", name)))?;
+    fn add_sort_field(
+        mut self,
+        name: &str,
+        sort_direction: SortDirection,
+        null_order: NullOrder,
+    ) -> Result<Self> {
+        let field_id = self
+            .tx
+            .table
+            .metadata()
+            .current_schema()
+            .field_id_by_name(name)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Cannot find field {} in table schema", name),
+                )
+            })?;
 
         let sort_field = SortField::builder()
             .source_id(field_id)
