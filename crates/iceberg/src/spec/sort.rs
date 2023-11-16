@@ -69,6 +69,7 @@ pub struct SortField {
 /// The order of the sort fields within the list defines the order in which the sort is applied to the data.
 pub struct SortOrder {
     /// Identifier for SortOrder, order_id `0` is no sort order.
+    #[builder(default)]
     pub order_id: i64,
     /// Details of the sort
     #[builder(setter(each(name = "with_sort_field")), default)]

@@ -761,7 +761,7 @@ impl PartialOrd for FormatVersion {
 
 impl Ord for FormatVersion {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.to_u8().cmp(&other.to_u8())
+        (*self as u8).cmp(&(*other as u8))
     }
 }
 

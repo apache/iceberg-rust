@@ -24,15 +24,16 @@ use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder,
 use crate::error::Result;
 use crate::TableUpdate::UpgradeFormatVersion;
 
+/// Table transaction.
 pub struct Transaction<'a> {
     table: &'a Table,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
-impl Transaction<'_> {
+impl<'a> Transaction<'a> {
     /// Creates a new transaction.
-    pub fn new(table: &'_ Table) -> Self {
+    pub fn new(table: &'a Table) -> Self {
         Self {
             table,
             updates: vec![],
@@ -74,7 +75,7 @@ impl Transaction<'_> {
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(mut self) -> ReplaceSortOrderAction {
+    pub fn replace_sort_order(mut self) -> ReplaceSortOrderAction<'a> {
         ReplaceSortOrderAction {
             tx: self,
             sort_fields: vec![],
@@ -102,12 +103,12 @@ impl Transaction<'_> {
 }
 
 /// Transaction action for replacing sort order.
-pub struct ReplaceSortOrderAction {
-    tx: Transaction<'_>,
+pub struct ReplaceSortOrderAction<'a> {
+    tx: Transaction<'a>,
     sort_fields: Vec<SortField>,
 }
 
-impl ReplaceSortOrderAction {
+impl<'a> ReplaceSortOrderAction<'a> {
     /// Adds a field for sorting in ascending order.
     pub fn asc(mut self, name: &str, null_order: NullOrder) -> Result<Self> {
         self.add_sort_field(name, SortDirection::Ascending, null_order)
@@ -119,7 +120,7 @@ impl ReplaceSortOrderAction {
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub fn apply(mut self) -> Result<Transaction<'_>> {
+    pub fn apply(mut self) -> Result<Transaction<'a>> {
         let updates = vec![TableUpdate::AddSortOrder {
             sort_order: SortOrder {
                 fields: self.sort_fields,

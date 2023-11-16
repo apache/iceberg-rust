@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::table_metadata::SnapshotLog;
+use _serde::SnapshotV2;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
@@ -57,7 +58,8 @@ impl Default for Operation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Builder)]
+#[derive(Debug, PartialEq, Eq, Clone, Builder, Serialize, Deserialize)]
+#[serde(from = "SnapshotV2", into = "SnapshotV2")]
 #[builder(setter(prefix = "with"))]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {

@@ -25,7 +25,7 @@ use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::mem::{replace, take};
+use std::mem::take;
 use std::ops::Deref;
 use typed_builder::TypedBuilder;
 
@@ -214,19 +214,23 @@ impl TableIdent {
 }
 
 /// TableCreation represents the creation of a table in the catalog.
-#[derive(Debug)]
+#[derive(Debug, TypedBuilder)]
 pub struct TableCreation {
     /// The name of the table.
     pub name: String,
     /// The location of the table.
-    pub location: String,
+    #[builder(default, setter(strip_option))]
+    pub location: Option<String>,
     /// The schema of the table.
     pub schema: Schema,
     /// The partition spec of the table, could be None.
+    #[builder(default, setter(strip_option))]
     pub partition_spec: Option<PartitionSpec>,
     /// The sort order of the table.
-    pub sort_order: SortOrder,
+    #[builder(default, setter(strip_option))]
+    pub sort_order: Option<SortOrder>,
     /// The properties of the table.
+    #[builder(default)]
     pub properties: HashMap<String, String>,
 }
 
@@ -262,7 +266,7 @@ impl TableCommit {
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum TableRequirement {
     /// The table must not already exist; used for create transactions
     NotExist,
@@ -291,10 +295,11 @@ pub enum TableRequirement {
 }
 
 /// TableUpdate represents an update to a table in the catalog.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum TableUpdate {
     /// Upgrade table's format version
     UpgradeFormatVersion {
+        /// Target format upgrade to.
         format_version: FormatVersion,
     },
     /// Add a new schema to the table

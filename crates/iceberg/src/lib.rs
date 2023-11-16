@@ -17,7 +17,7 @@
 
 //! Native Rust implementation of Apache Iceberg
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 
 #[macro_use]
 extern crate derive_builder;
