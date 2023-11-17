@@ -1498,4 +1498,66 @@ mod tests {
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
     }
+
+    #[tokio::test]
+    async fn test_update_table_404() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let update_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .with_status(404)
+            .with_body(
+                r#"
+{
+    "error": {
+        "message": "The given table does not exist",
+        "type": "NoSuchTableException",
+        "code": 404
+    }
+}      
+            "#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table1 = {
+            let file = File::open(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .unwrap();
+            let reader = BufReader::new(file);
+            let resp = serde_json::from_reader::<_, LoadTableResponse>(reader).unwrap();
+
+            Table::builder()
+                .metadata(resp.metadata)
+                .metadata_location(resp.metadata_location.unwrap())
+                .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+                .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+                .build()
+        };
+
+        let table_result = Transaction::new(&table1)
+            .upgrade_table_version(FormatVersion::V2)
+            .unwrap()
+            .commit(&catalog)
+            .await;
+
+        assert!(table_result.is_err());
+        assert!(table_result
+            .err()
+            .unwrap()
+            .message()
+            .contains("The given table does not exist"));
+
+        config_mock.assert_async().await;
+        update_table_mock.assert_async().await;
+    }
 }

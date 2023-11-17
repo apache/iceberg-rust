@@ -130,17 +130,18 @@ impl<'a> ReplaceSortOrderAction<'a> {
         ];
 
         let requirements = vec![
-            TableRequirement::CurrentSchemaIdMatch(
-                self.tx.table.metadata().current_schema().schema_id() as i64,
-            ),
-            TableRequirement::DefaultSortOrderIdMatch(
-                self.tx
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: self.tx.table.metadata().current_schema().schema_id() as i64,
+            },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: self
+                    .tx
                     .table
                     .metadata()
                     .default_sort_order()
                     .unwrap()
                     .order_id,
-            ),
+            },
         ];
 
         self.tx.append_requirements(requirements)?;

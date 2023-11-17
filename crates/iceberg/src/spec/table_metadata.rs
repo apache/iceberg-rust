@@ -22,9 +22,9 @@ The main struct here is [TableMetadataV2] which defines the data for a table.
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use std::{collections::HashMap, sync::Arc};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
 use super::{
@@ -141,7 +141,7 @@ impl TableMetadata {
 
     /// Returns schemas
     #[inline]
-    pub fn schemas_iter(&self) -> impl Iterator<Item=&SchemaRef> {
+    pub fn schemas_iter(&self) -> impl Iterator<Item = &SchemaRef> {
         self.schemas.values()
     }
 
@@ -160,7 +160,7 @@ impl TableMetadata {
 
     /// Returns all partition specs.
     #[inline]
-    pub fn partition_specs_iter(&self) -> impl Iterator<Item=&PartitionSpecRef> {
+    pub fn partition_specs_iter(&self) -> impl Iterator<Item = &PartitionSpecRef> {
         self.partition_specs.values()
     }
 
@@ -185,7 +185,7 @@ impl TableMetadata {
 
     /// Returns all snapshots
     #[inline]
-    pub fn snapshots(&self) -> impl Iterator<Item=&SnapshotRef> {
+    pub fn snapshots(&self) -> impl Iterator<Item = &SnapshotRef> {
         self.snapshots.values()
     }
 
@@ -212,7 +212,7 @@ impl TableMetadata {
 
     /// Return all sort orders.
     #[inline]
-    pub fn sort_orders_iter(&self) -> impl Iterator<Item=&SortOrderRef> {
+    pub fn sort_orders_iter(&self) -> impl Iterator<Item = &SortOrderRef> {
         self.sort_orders.values()
     }
 
@@ -375,8 +375,8 @@ pub(super) mod _serde {
 
     impl<const V: u8> Serialize for VersionNumber<V> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
+        where
+            S: serde::Serializer,
         {
             serializer.serialize_u8(V)
         }
@@ -384,8 +384,8 @@ pub(super) mod _serde {
 
     impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
+        where
+            D: serde::Deserializer<'de>,
         {
             let value = u8::deserialize(deserializer)?;
             if value == V {
@@ -748,9 +748,9 @@ pub(super) mod _serde {
 /// Iceberg format version
 pub enum FormatVersion {
     /// Iceberg spec version 1
-    V1 = b'1',
+    V1 = 1u8,
     /// Iceberg spec version 2
-    V2 = b'2',
+    V2 = 2u8,
 }
 
 impl PartialOrd for FormatVersion {
@@ -1457,7 +1457,7 @@ mod tests {
         let metadata = fs::read_to_string(
             "testdata/table_metadata/TableMetadataV2MissingLastPartitionId.json",
         )
-            .unwrap();
+        .unwrap();
 
         let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
 
