@@ -344,18 +344,27 @@ pub enum TableUpdate {
     },
     /// Set table's current schema
     #[serde(rename_all = "kebab-case")]
-    SetCurrentSchema { schema_id: i32 },
+    SetCurrentSchema {
+        /// Schema ID to set as current, or -1 to set last added schema
+        schema_id: i32,
+    },
     /// Add a new partition spec to the table
     AddSpec { spec: PartitionSpec },
     /// Set table's default spec
     #[serde(rename_all = "kebab-case")]
-    SetDefaultSpec { spec_id: i32 },
+    SetDefaultSpec {
+        /// Partition spec ID to set as the default, or -1 to set last added spec
+        spec_id: i32,
+    },
     /// Add sort order to table.
     #[serde(rename_all = "kebab-case")]
     AddSortOrder { sort_order: SortOrder },
     /// Set table's default sort order
     #[serde(rename_all = "kebab-case")]
-    SetDefaultSortOrder { sort_order_id: i32 },
+    SetDefaultSortOrder {
+        /// Sort order ID to set as the default, or -1 to set last added sort order
+        sort_order_id: i32,
+    },
     /// Add snapshot to table.
     #[serde(rename_all = "kebab-case")]
     AddSnapshot { snapshot: Snapshot },
