@@ -554,13 +554,14 @@ impl From<&Literal> for JsonValue {
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
             Literal::Struct(s) => {
-                JsonValue::Object(JsonMap::from_iter(s.iter().map(|(id, value, _)| {
-                    let json: JsonValue = match value {
-                        Some(val) => val.into(),
-                        None => JsonValue::Null,
-                    };
-                    (id.to_string(), json)
-                })))
+                JsonValue::Array(
+                    s.iter()
+                        .map(|value| match value {
+                            Some(val) => val.into(),
+                            None => JsonValue::Null,
+                        })
+                        .collect()
+                )
             }
             Literal::List(list) => JsonValue::Array(
                 list.iter()
@@ -600,24 +601,18 @@ impl From<&Literal> for JsonValue {
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
-    /// Vector to store the field ids
-    field_ids: Vec<i32>,
-    /// Vector to store the field names
-    field_names: Vec<String>,
     /// Null bitmap
     null_bitmap: BitVec,
 }
 
 impl Struct {
     /// Create a iterator to read the field in order of (field_id, field_value, field_name).
-    pub fn iter(&self) -> impl Iterator<Item = (&i32, Option<&Literal>, &str)> {
+    pub fn iter(&self) -> impl Iterator<Item = Option<&Literal>> {
         self.null_bitmap
             .iter()
             .zip(self.fields.iter())
-            .zip(self.field_ids.iter())
-            .zip(self.field_names.iter())
-            .map(|(((null, value), id), name)| {
-                (id, if *null { None } else { Some(value) }, name.as_str())
+            .map(|(null, value)| {
+                if *null { None } else { Some(value) }
             })
     }
 }
@@ -652,16 +647,12 @@ impl IntoIterator for Struct {
     }
 }
 
-impl FromIterator<(i32, Option<Literal>, String)> for Struct {
-    fn from_iter<I: IntoIterator<Item = (i32, Option<Literal>, String)>>(iter: I) -> Self {
+impl FromIterator<Option<Literal>> for Struct {
+    fn from_iter<I: IntoIterator<Item = Option<Literal>>>(iter: I) -> Self {
         let mut fields = Vec::new();
-        let mut field_ids = Vec::new();
-        let mut field_names = Vec::new();
         let mut null_bitmap = BitVec::new();
 
-        for (id, value, name) in iter.into_iter() {
-            field_ids.push(id);
-            field_names.push(name);
+        for value in iter.into_iter() {
             match value {
                 Some(value) => {
                     fields.push(value);
@@ -675,8 +666,6 @@ impl FromIterator<(i32, Option<Literal>, String)> for Struct {
         }
         Struct {
             fields,
-            field_ids,
-            field_names,
             null_bitmap,
         }
     }
@@ -828,20 +817,16 @@ impl Literal {
                 if let JsonValue::Object(mut object) = value {
                     Ok(Some(Literal::Struct(Struct::from_iter(
                         schema.fields().iter().map(|field| {
-                            (
-                                field.id,
-                                object.remove(&field.id.to_string()).and_then(|value| {
-                                    Literal::try_from_json(value, &field.field_type)
-                                        .and_then(|value| {
-                                            value.ok_or(Error::new(
-                                                ErrorKind::DataInvalid,
-                                                "Key of map cannot be null",
-                                            ))
-                                        })
-                                        .ok()
-                                }),
-                                field.name.clone(),
-                            )
+                            object.remove(&field.id.to_string()).and_then(|value| {
+                                Literal::try_from_json(value, &field.field_type)
+                                    .and_then(|value| {
+                                        value.ok_or(Error::new(
+                                            ErrorKind::DataInvalid,
+                                            "Key of map cannot be null",
+                                        ))
+                                    })
+                                    .ok()
+                            })                            
                         }),
                     ))))
                 } else {
@@ -1558,7 +1543,7 @@ mod _serde {
                     optional: _,
                 }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<(i32, Option<Literal>, String)> = required
+                        let iters: Vec<Option<Literal>> = required
                             .into_iter()
                             .map(|(field_name, value)| {
                                 let field = struct_ty
@@ -1570,7 +1555,7 @@ mod _serde {
                                         )
                                     })?;
                                 let value = value.try_into(&field.field_type)?;
-                                Ok((field.id, value, field.name.clone()))
+                                Ok(value)
                             })
                             .collect::<Result<_, Error>>()?;
                         Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
@@ -1660,9 +1645,7 @@ mod tests {
         let avro_schema = schema_to_avro_schema("test", &schema).unwrap();
         let struct_type = Type::Struct(StructType::new(fields));
         let struct_literal = Literal::Struct(Struct::from_iter(vec![(
-            1,
-            Some(expected_literal.clone()),
-            "col".to_string(),
+            Some(expected_literal.clone())
         )]));
 
         let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
@@ -1689,9 +1672,7 @@ mod tests {
         let avro_schema = schema_to_avro_schema("test", &schema).unwrap();
         let struct_type = Type::Struct(StructType::new(fields));
         let struct_literal = Literal::Struct(Struct::from_iter(vec![(
-            1,
-            Some(literal.clone()),
-            "col".to_string(),
+            Some(literal.clone())
         )]));
         let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
         let raw_literal = RawLiteral::try_from(struct_literal.clone(), &struct_type).unwrap();
@@ -1839,18 +1820,14 @@ mod tests {
             record,
             Literal::Struct(Struct::from_iter(vec![
                 (
-                    1,
-                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
-                    "id".to_string(),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1)))
                 ),
                 (
-                    2,
                     Some(Literal::Primitive(PrimitiveLiteral::String(
                         "bar".to_string(),
-                    ))),
-                    "name".to_string(),
+                    )))
                 ),
-                (3, None, "address".to_string()),
+                (None),
             ])),
             &Type::Struct(StructType::new(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
@@ -2206,18 +2183,14 @@ mod tests {
         check_convert_with_avro(
             Literal::Struct(Struct::from_iter(vec![
                 (
-                    1,
-                    Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
-                    "id".to_string(),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(1)))
                 ),
                 (
-                    2,
                     Some(Literal::Primitive(PrimitiveLiteral::String(
-                        "bar".to_string(),
-                    ))),
-                    "name".to_string(),
+                        "bar".to_string()
+                    )))
                 ),
-                (3, None, "address".to_string()),
+                (None)
             ])),
             &Type::Struct(StructType::new(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
