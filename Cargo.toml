@@ -55,4 +55,5 @@ tokio = { version = "1", features = ["macros"] }
 typed-builder = "^0.18"
 url = "2"
 urlencoding = "2"
-uuid = "1.5.0"
+# We pin uuid's version to 1.5.0 because this bug: https://github.com/uuid-rs/uuid/issues/720
+uuid = "~1.5.0"
