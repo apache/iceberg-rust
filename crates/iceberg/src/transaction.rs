@@ -22,6 +22,7 @@ use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder,
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem::discriminant;
 
@@ -68,16 +69,22 @@ impl<'a> Transaction<'a> {
     /// Sets table to a new version.
     pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
         let current_version = self.table.metadata().format_version();
-        if current_version > format_version {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot downgrade table version from {} to {}",
-                    current_version, format_version
-                ),
-            ));
-        } else if current_version < format_version {
-            self.append_updates(vec![UpgradeFormatVersion { format_version }])?;
+        match current_version.cmp(&format_version) {
+            Ordering::Greater => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot downgrade table version from {} to {}",
+                        current_version, format_version
+                    ),
+                ));
+            }
+            Ordering::Less => {
+                self.append_updates(vec![UpgradeFormatVersion { format_version }])?;
+            }
+            Ordering::Equal => {
+                // Do nothing.
+            }
         }
         Ok(self)
     }
@@ -89,7 +96,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Creates replace sort order action.
-    pub fn replace_sort_order(mut self) -> ReplaceSortOrderAction<'a> {
+    pub fn replace_sort_order(self) -> ReplaceSortOrderAction<'a> {
         ReplaceSortOrderAction {
             tx: self,
             sort_fields: vec![],
@@ -122,12 +129,12 @@ pub struct ReplaceSortOrderAction<'a> {
 
 impl<'a> ReplaceSortOrderAction<'a> {
     /// Adds a field for sorting in ascending order.
-    pub fn asc(mut self, name: &str, null_order: NullOrder) -> Result<Self> {
+    pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
         self.add_sort_field(name, SortDirection::Ascending, null_order)
     }
 
     /// Adds a field for sorting in descending order.
-    pub fn desc(mut self, name: &str, null_order: NullOrder) -> Result<Self> {
+    pub fn desc(self, name: &str, null_order: NullOrder) -> Result<Self> {
         self.add_sort_field(name, SortDirection::Descending, null_order)
     }
 
@@ -202,7 +209,7 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableRequirement, TableUpdate};
     use std::collections::HashMap;
-    use std::fs::{metadata, File};
+    use std::fs::File;
     use std::io::BufReader;
 
     fn make_v1_table() -> Table {

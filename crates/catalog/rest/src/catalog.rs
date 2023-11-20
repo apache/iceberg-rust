@@ -433,7 +433,7 @@ impl Catalog for RestCatalog {
         let request = self
             .client
             .0
-            .post(self.config.table_endpoint(&commit.identifier()))
+            .post(self.config.table_endpoint(commit.identifier()))
             .json(&CommitTableRequest {
                 identifier: commit.identifier().clone(),
                 requirements: commit.take_requirements(),
@@ -501,12 +501,7 @@ impl RestCatalog {
             props.extend(config);
         }
 
-        let file_io = match self
-            .config
-            .warehouse
-            .as_deref()
-            .or_else(|| metadata_location)
-        {
+        let file_io = match self.config.warehouse.as_deref().or(metadata_location) {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
             None => FileIOBuilder::new("s3").with_props(props).build()?,
         };

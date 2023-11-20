@@ -275,7 +275,10 @@ pub enum TableRequirement {
     NotExist,
     /// The table UUID must match the requirement.
     #[serde(rename = "assert-table-uuid")]
-    UuidMatch { uuid: Uuid },
+    UuidMatch {
+        /// Uuid of original table.
+        uuid: Uuid,
+    },
     /// The table branch or tag identified by the requirement's `reference` must
     /// reference the requirement's `snapshot-id`.
     #[serde(rename = "assert-ref-snapshot-id")]
@@ -290,12 +293,14 @@ pub enum TableRequirement {
     /// The table's last assigned column id must match the requirement.
     #[serde(rename = "assert-last-assigned-field-id")]
     LastAssignedFieldIdMatch {
+        /// The last assigned field id of the table to assert.
         #[serde(rename = "last-assigned-field-id")]
         last_assigned_field_id: i64,
     },
     /// The table's current schema id must match the requirement.
     #[serde(rename = "assert-current-schema-id")]
     CurrentSchemaIdMatch {
+        /// Current schema id of the table to assert.
         #[serde(rename = "current-schema-id")]
         current_schema_id: i64,
     },
@@ -303,18 +308,21 @@ pub enum TableRequirement {
     /// requirement.
     #[serde(rename = "assert-last-assigned-partition-id")]
     LastAssignedPartitionIdMatch {
+        /// Last assigned partition id of the table to assert.
         #[serde(rename = "last-assigned-partition-id")]
         last_assigned_partition_id: i64,
     },
     /// The table's default spec id must match the requirement.
     #[serde(rename = "assert-default-spec-id")]
     DefaultSpecIdMatch {
+        /// Default spec id of the table to assert.
         #[serde(rename = "default-spec-id")]
         default_spec_id: i64,
     },
     /// The table's default sort order id must match the requirement.
     #[serde(rename = "assert-default-sort-order-id")]
     DefaultSortOrderIdMatch {
+        /// Default sort order id of the table to assert.
         #[serde(rename = "default-sort-order-id")]
         default_sort_order_id: i64,
     },
@@ -339,7 +347,9 @@ pub enum TableUpdate {
     /// Add a new schema to the table
     #[serde(rename_all = "kebab-case")]
     AddSchema {
+        /// The schema to add.
         schema: Schema,
+        /// The last column id of the table.
         last_column_id: Option<i32>,
     },
     /// Set table's current schema
@@ -349,7 +359,10 @@ pub enum TableUpdate {
         schema_id: i32,
     },
     /// Add a new partition spec to the table
-    AddSpec { spec: PartitionSpec },
+    AddSpec {
+        /// The partition spec to add.
+        spec: PartitionSpec,
+    },
     /// Set table's default spec
     #[serde(rename_all = "kebab-case")]
     SetDefaultSpec {
@@ -358,7 +371,10 @@ pub enum TableUpdate {
     },
     /// Add sort order to table.
     #[serde(rename_all = "kebab-case")]
-    AddSortOrder { sort_order: SortOrder },
+    AddSortOrder {
+        /// Sort order to add.
+        sort_order: SortOrder,
+    },
     /// Set table's default sort order
     #[serde(rename_all = "kebab-case")]
     SetDefaultSortOrder {
@@ -367,26 +383,46 @@ pub enum TableUpdate {
     },
     /// Add snapshot to table.
     #[serde(rename_all = "kebab-case")]
-    AddSnapshot { snapshot: Snapshot },
+    AddSnapshot {
+        /// Snapshot to add.
+        snapshot: Snapshot,
+    },
     /// Set table's snapshot ref.
     #[serde(rename_all = "kebab-case")]
     SetSnapshotRef {
+        /// Name of snapshot reference to set.
         ref_name: String,
+        /// Snapshot reference to set.
         #[serde(flatten)]
         reference: SnapshotReference,
     },
     /// Remove table's snapshots
     #[serde(rename_all = "kebab-case")]
-    RemoveSnapshots { snapshot_ids: Vec<i64> },
+    RemoveSnapshots {
+        /// Snapshot ids to remove.
+        snapshot_ids: Vec<i64>,
+    },
     /// Remove snapshot reference
     #[serde(rename_all = "kebab-case")]
-    RemoveSnapshotRef { ref_name: String },
+    RemoveSnapshotRef {
+        /// Name of snapshot reference to remove.
+        ref_name: String,
+    },
     /// Update table's location
-    SetLocation { location: String },
+    SetLocation {
+        /// New location for table.
+        location: String,
+    },
     /// Update table's properties
-    SetProperties { updates: HashMap<String, String> },
+    SetProperties {
+        /// Properties to update for table.
+        updates: HashMap<String, String>,
+    },
     /// Remove table's properties
-    RemoveProperties { removals: Vec<String> },
+    RemoveProperties {
+        /// Properties to remove
+        removals: Vec<String>,
+    },
 }
 
 #[cfg(test)]
@@ -401,7 +437,7 @@ mod tests {
     use serde::de::DeserializeOwned;
     use serde::Serialize;
     use std::collections::HashMap;
-    use std::fmt::{Debug, Display};
+    use std::fmt::Debug;
     use uuid::uuid;
 
     #[test]

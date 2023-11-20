@@ -28,7 +28,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use _serde::SchemaEnum;
 
@@ -50,7 +50,6 @@ pub struct Schema {
 
     name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
-    lower_case_name_to_id: OnceLock<HashMap<String, i32>>,
 }
 
 impl PartialEq for Schema {
@@ -127,7 +126,6 @@ impl SchemaBuilder {
 
             name_to_id,
             id_to_name,
-            lower_case_name_to_id: OnceLock::default(),
         })
     }
 
