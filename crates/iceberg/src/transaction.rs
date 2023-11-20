@@ -23,6 +23,7 @@ use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 use std::collections::HashMap;
+use std::mem::discriminant;
 
 /// Table transaction.
 pub struct Transaction<'a> {
@@ -42,6 +43,19 @@ impl<'a> Transaction<'a> {
     }
 
     fn append_updates(&mut self, updates: Vec<TableUpdate>) -> Result<()> {
+        for update in &updates {
+            for up in &self.updates {
+                if discriminant(up) == discriminant(update) {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot apply update with same type at same time: {:?}",
+                            update
+                        ),
+                    ));
+                }
+            }
+        }
         self.updates.extend(updates);
         Ok(())
     }
@@ -177,5 +191,169 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
         self.sort_fields.push(sort_field);
         Ok(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::io::FileIO;
+    use crate::spec::{FormatVersion, TableMetadata};
+    use crate::table::Table;
+    use crate::transaction::Transaction;
+    use crate::{TableIdent, TableRequirement, TableUpdate};
+    use std::collections::HashMap;
+    use std::fs::{metadata, File};
+    use std::io::BufReader;
+
+    fn make_v1_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV1Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .build()
+    }
+
+    fn make_v2_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .build()
+    }
+
+    #[test]
+    fn test_upgrade_table_version_v1_to_v2() {
+        let table = make_v1_table();
+        let tx = Transaction::new(&table);
+        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
+
+        assert_eq!(
+            vec![TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V2
+            }],
+            tx.updates
+        );
+    }
+
+    #[test]
+    fn test_upgrade_table_version_v2_to_v2() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
+
+        assert!(
+            tx.updates.is_empty(),
+            "Upgrade table to same version should not generate any updates"
+        );
+        assert!(
+            tx.requirements.is_empty(),
+            "Upgrade table to same version should not generate any requirements"
+        );
+    }
+
+    #[test]
+    fn test_downgrade_table_version() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx.upgrade_table_version(FormatVersion::V1);
+
+        assert!(tx.is_err(), "Downgrade table version should fail!");
+    }
+
+    #[test]
+    fn test_set_table_property() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .set_properties(HashMap::from([("a".to_string(), "b".to_string())]))
+            .unwrap();
+
+        assert_eq!(
+            vec![TableUpdate::SetProperties {
+                updates: HashMap::from([("a".to_string(), "b".to_string())])
+            }],
+            tx.updates
+        );
+    }
+
+    #[test]
+    fn test_remove_property() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .remove_properties(vec!["a".to_string(), "b".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![TableUpdate::RemoveProperties {
+                removals: vec!["a".to_string(), "b".to_string()]
+            }],
+            tx.updates
+        );
+    }
+
+    #[test]
+    fn test_replace_sort_order() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx.replace_sort_order().apply().unwrap();
+
+        assert_eq!(
+            vec![
+                TableUpdate::AddSortOrder {
+                    sort_order: Default::default()
+                },
+                TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }
+            ],
+            tx.updates
+        );
+
+        assert_eq!(
+            vec![
+                TableRequirement::CurrentSchemaIdMatch {
+                    current_schema_id: 1
+                },
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id: 3
+                }
+            ],
+            tx.requirements
+        );
+    }
+
+    #[test]
+    fn test_do_same_update_in_same_transaction() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .remove_properties(vec!["a".to_string(), "b".to_string()])
+            .unwrap();
+
+        let tx = tx.remove_properties(vec!["c".to_string(), "d".to_string()]);
+
+        assert!(
+            tx.is_err(),
+            "Should not allow to do same kinds update in same transaction"
+        );
     }
 }
