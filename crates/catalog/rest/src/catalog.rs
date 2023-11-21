@@ -29,7 +29,7 @@ use urlencoding::encode;
 use crate::catalog::_serde::{
     CommitTableRequest, CommitTableResponse, CreateTableRequest, LoadTableResponse,
 };
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::FileIO;
 use iceberg::table::Table;
 use iceberg::Result;
 use iceberg::{
@@ -326,7 +326,7 @@ impl Catalog for RestCatalog {
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
                 // We don't support stage create yet.
-                stage_create: false,
+                stage_create: None,
                 properties: if creation.properties.is_empty() {
                     None
                 } else {
@@ -503,7 +503,12 @@ impl RestCatalog {
 
         let file_io = match self.config.warehouse.as_deref().or(metadata_location) {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
-            None => FileIOBuilder::new("s3").with_props(props).build()?,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Unable to load file io, neither warehouse nor metadata location is set!",
+                ))?
+            }
         };
 
         Ok(file_io)
@@ -657,7 +662,7 @@ mod _serde {
         pub(super) schema: Schema,
         pub(super) partition_spec: Option<PartitionSpec>,
         pub(super) write_order: Option<SortOrder>,
-        pub(super) stage_create: bool,
+        pub(super) stage_create: Option<bool>,
         pub(super) properties: Option<HashMap<String, String>>,
     }
 

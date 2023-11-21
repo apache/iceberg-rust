@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/*!
-Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
-The main struct here is [TableMetadataV2] which defines the data for a table.
- */
+//! Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
+//! The main struct here is [TableMetadataV2] which defines the data for a table.
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
