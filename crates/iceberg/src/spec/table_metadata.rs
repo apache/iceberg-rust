@@ -32,6 +32,8 @@ use super::{
 
 use _serde::TableMetadataEnum;
 
+use chrono::{DateTime, TimeZone, Utc};
+
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
@@ -133,8 +135,8 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> i64 {
-        self.last_updated_ms
+    pub fn last_updated_ms(&self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.last_updated_ms).unwrap()
     }
 
     /// Returns schemas
@@ -242,7 +244,7 @@ impl TableMetadata {
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) {
-        self.last_updated_ms = snapshot.timestamp();
+        self.last_updated_ms = snapshot.timestamp().timestamp_millis();
         self.last_sequence_number = snapshot.sequence_number();
 
         self.refs
@@ -769,6 +771,13 @@ pub struct SnapshotLog {
     pub snapshot_id: i64,
     /// Last updated timestamp
     pub timestamp_ms: i64,
+}
+
+impl SnapshotLog {
+    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
+    pub fn timestamp(self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    }
 }
 
 #[cfg(test)]

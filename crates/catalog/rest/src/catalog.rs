@@ -590,6 +590,7 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
         FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog,
@@ -984,7 +985,10 @@ mod tests {
             uuid!("b55d9dda-6561-423a-8bfc-787980ce421f"),
             table.metadata().uuid()
         );
-        assert_eq!(1646787054459, table.metadata().last_updated_ms());
+        assert_eq!(
+            Utc.timestamp_millis_opt(1646787054459).unwrap(),
+            table.metadata().last_updated_ms()
+        );
         assert_eq!(
             vec![&Arc::new(
                 Schema::builder()

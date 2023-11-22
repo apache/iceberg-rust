@@ -18,6 +18,7 @@
 /*!
  * Snapshots
 */
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -116,8 +117,8 @@ impl Snapshot {
     }
     /// Get the timestamp of when the snapshot was created
     #[inline]
-    pub fn timestamp(&self) -> i64 {
-        self.timestamp_ms
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
     }
     /// Create snapshot builder
     pub fn builder() -> SnapshotBuilder {
@@ -309,6 +310,7 @@ pub enum SnapshotRetention {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
 
     use crate::spec::snapshot::{
@@ -334,7 +336,10 @@ mod tests {
             .try_into()
             .unwrap();
         assert_eq!(3051729675574597004, result.snapshot_id());
-        assert_eq!(1515100955770, result.timestamp());
+        assert_eq!(
+            Utc.timestamp_millis_opt(1515100955770).unwrap(),
+            result.timestamp()
+        );
         assert_eq!(
             Summary {
                 operation: Operation::Append,
