@@ -553,20 +553,7 @@ impl From<&Literal> for JsonValue {
                 }
                 PrimitiveLiteral::Decimal(_) => todo!(),
             },
-            Literal::Struct(s) => {
-                JsonValue::Object(
-                    s.iter()
-                        .enumerate()
-                        .map(|(id, value)| {
-                            let json: JsonValue = match value {
-                                Some(val) => val.into(),
-                                None => JsonValue::Null,
-                            };
-                            ((id + 1).to_string(), json)
-                        })
-                        .collect(),
-                )
-            }
+            Literal::Struct(_) => todo!(),
             Literal::List(list) => JsonValue::Array(
                 list.iter()
                     .map(|opt| match opt {
