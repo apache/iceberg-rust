@@ -28,7 +28,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use _serde::SchemaEnum;
 
@@ -37,7 +37,7 @@ pub type SchemaRef = Arc<Schema>;
 const DEFAULT_SCHEMA_ID: i32 = 0;
 
 /// Defines schema in iceberg.
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(try_from = "SchemaEnum", into = "SchemaEnum")]
 pub struct Schema {
     r#struct: StructType,
@@ -50,8 +50,17 @@ pub struct Schema {
 
     name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
-    lower_case_name_to_id: OnceLock<HashMap<String, i32>>,
 }
+
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        self.r#struct == other.r#struct
+            && self.schema_id == other.schema_id
+            && self.identifier_field_ids == other.identifier_field_ids
+    }
+}
+
+impl Eq for Schema {}
 
 /// Schema builder.
 #[derive(Debug)]
@@ -117,7 +126,6 @@ impl SchemaBuilder {
 
             name_to_id,
             id_to_name,
-            lower_case_name_to_id: OnceLock::default(),
         })
     }
 

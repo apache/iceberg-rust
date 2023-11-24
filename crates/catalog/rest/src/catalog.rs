@@ -26,8 +26,10 @@ use serde::de::DeserializeOwned;
 use typed_builder::TypedBuilder;
 use urlencoding::encode;
 
-use crate::catalog::_serde::LoadTableResponse;
-use iceberg::io::{FileIO, FileIOBuilder};
+use crate::catalog::_serde::{
+    CommitTableRequest, CommitTableResponse, CreateTableRequest, LoadTableResponse,
+};
+use iceberg::io::FileIO;
 use iceberg::table::Table;
 use iceberg::Result;
 use iceberg::{
@@ -308,13 +310,51 @@ impl Catalog for RestCatalog {
     /// Create a new table inside the namespace.
     async fn create_table(
         &self,
-        _namespace: &NamespaceIdent,
-        _creation: TableCreation,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
     ) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Creating table not supported yet!",
-        ))
+        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+
+        let request = self
+            .client
+            .0
+            .post(self.config.tables_endpoint(namespace))
+            .json(&CreateTableRequest {
+                name: creation.name,
+                location: creation.location,
+                schema: creation.schema,
+                partition_spec: creation.partition_spec,
+                write_order: creation.sort_order,
+                // We don't support stage create yet.
+                stage_create: None,
+                properties: if creation.properties.is_empty() {
+                    None
+                } else {
+                    Some(creation.properties)
+                },
+            })
+            .build()?;
+
+        let resp = self
+            .client
+            .query::<LoadTableResponse, ErrorResponse, OK>(request)
+            .await?;
+
+        let file_io = self.load_file_io(resp.metadata_location.as_deref(), resp.config)?;
+
+        let table = Table::builder()
+            .identifier(table_ident)
+            .file_io(file_io)
+            .metadata(resp.metadata)
+            .metadata_location(resp.metadata_location.ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Metadata location missing in create table response!",
+                )
+            })?)
+            .build();
+
+        Ok(table)
     }
 
     /// Load table from the catalog.
@@ -330,20 +370,7 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
-        let mut props = self.config.props.clone();
-        if let Some(config) = resp.config {
-            props.extend(config);
-        }
-
-        let file_io = match self
-            .config
-            .warehouse
-            .as_ref()
-            .or_else(|| resp.metadata_location.as_ref())
-        {
-            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
-            None => FileIOBuilder::new("s3").with_props(props).build()?,
-        };
+        let file_io = self.load_file_io(resp.metadata_location.as_deref(), resp.config)?;
 
         let table_builder = Table::builder()
             .identifier(table.clone())
@@ -401,14 +428,31 @@ impl Catalog for RestCatalog {
             .await
     }
 
-    /// Update a table to the catalog.
-    async fn update_table(&self, _table: &TableIdent, _commit: TableCommit) -> Result<Table> {
-        todo!()
-    }
+    /// Update table.
+    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+        let request = self
+            .client
+            .0
+            .post(self.config.table_endpoint(commit.identifier()))
+            .json(&CommitTableRequest {
+                identifier: commit.identifier().clone(),
+                requirements: commit.take_requirements(),
+                updates: commit.take_updates(),
+            })
+            .build()?;
 
-    /// Update multiple tables to the catalog as an atomic operation.
-    async fn update_tables(&self, _tables: &[(TableIdent, TableCommit)]) -> Result<()> {
-        todo!()
+        let resp = self
+            .client
+            .query::<CommitTableResponse, ErrorResponse, OK>(request)
+            .await?;
+
+        let file_io = self.load_file_io(Some(&resp.metadata_location), None)?;
+        Ok(Table::builder()
+            .identifier(commit.identifier().clone())
+            .file_io(file_io)
+            .metadata(resp.metadata)
+            .metadata_location(resp.metadata_location)
+            .build())
     }
 }
 
@@ -446,6 +490,29 @@ impl RestCatalog {
 
         Ok(())
     }
+
+    fn load_file_io(
+        &self,
+        metadata_location: Option<&str>,
+        extra_config: Option<HashMap<String, String>>,
+    ) -> Result<FileIO> {
+        let mut props = self.config.props.clone();
+        if let Some(config) = extra_config {
+            props.extend(config);
+        }
+
+        let file_io = match self.config.warehouse.as_deref().or(metadata_location) {
+            Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Unable to load file io, neither warehouse nor metadata location is set!",
+                ))?
+            }
+        };
+
+        Ok(file_io)
+    }
 }
 
 /// Requests and responses for rest api.
@@ -454,8 +521,8 @@ mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
-    use iceberg::spec::TableMetadata;
-    use iceberg::{Error, ErrorKind, Namespace, TableIdent};
+    use iceberg::spec::{PartitionSpec, Schema, SortOrder, TableMetadata};
+    use iceberg::{Error, ErrorKind, Namespace, TableIdent, TableRequirement, TableUpdate};
 
     pub(super) const OK: u16 = 200u16;
     pub(super) const NO_CONTENT: u16 = 204u16;
@@ -586,6 +653,32 @@ mod _serde {
         pub(super) metadata: TableMetadata,
         pub(super) config: Option<HashMap<String, String>>,
     }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) struct CreateTableRequest {
+        pub(super) name: String,
+        pub(super) location: Option<String>,
+        pub(super) schema: Schema,
+        pub(super) partition_spec: Option<PartitionSpec>,
+        pub(super) write_order: Option<SortOrder>,
+        pub(super) stage_create: Option<bool>,
+        pub(super) properties: Option<HashMap<String, String>>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct CommitTableRequest {
+        pub(super) identifier: TableIdent,
+        pub(super) requirements: Vec<TableRequirement>,
+        pub(super) updates: Vec<TableUpdate>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) struct CommitTableResponse {
+        pub(super) metadata_location: String,
+        pub(super) metadata: TableMetadata,
+    }
 }
 
 #[cfg(test)]
@@ -593,10 +686,14 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
-        FormatVersion, NestedField, Operation, PrimitiveType, Schema, Snapshot, SnapshotLog,
-        SortOrder, Summary, Type,
+        FormatVersion, NestedField, NullOrder, Operation, PartitionField, PartitionSpec,
+        PrimitiveType, Schema, Snapshot, SnapshotLog, SortDirection, SortField, SortOrder, Summary,
+        Transform, Type,
     };
+    use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
+    use std::fs::File;
+    use std::io::BufReader;
     use std::sync::Arc;
     use uuid::uuid;
 
@@ -1021,31 +1118,31 @@ mod tests {
             .with_summary(Summary {
                 operation: Operation::Append,
                 other: HashMap::from_iter([
-                                          ("spark.app.id", "local-1646787004168"),
-                                          ("added-data-files", "1"),
-                                          ("added-records", "1"),
-                                          ("added-files-size", "697"),
-                                          ("changed-partition-count", "1"),
-                                          ("total-records", "1"),
-                                          ("total-files-size", "697"),
-                                          ("total-data-files", "1"),
-                                          ("total-delete-files", "0"),
-                                          ("total-position-deletes", "0"),
-                                          ("total-equality-deletes", "0")
-                ].iter().map(|p|(p.0.to_string(), p.1.to_string())))
+                    ("spark.app.id", "local-1646787004168"),
+                    ("added-data-files", "1"),
+                    ("added-records", "1"),
+                    ("added-files-size", "697"),
+                    ("changed-partition-count", "1"),
+                    ("total-records", "1"),
+                    ("total-files-size", "697"),
+                    ("total-data-files", "1"),
+                    ("total-delete-files", "0"),
+                    ("total-position-deletes", "0"),
+                    ("total-equality-deletes", "0")
+                ].iter().map(|p| (p.0.to_string(), p.1.to_string()))),
             }).build().unwrap()
         )], table.metadata().snapshots().collect::<Vec<_>>());
         assert_eq!(
             &[SnapshotLog {
                 timestamp_ms: 1646787054459,
-                snapshot_id: 3497810964824022504
+                snapshot_id: 3497810964824022504,
             }],
             table.metadata().history()
         );
         assert_eq!(
             vec![&Arc::new(SortOrder {
                 order_id: 0,
-                fields: vec![]
+                fields: vec![],
             })],
             table.metadata().sort_orders_iter().collect::<Vec<_>>()
         );
@@ -1095,5 +1192,376 @@ mod tests {
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_table() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let create_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table_creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .into(),
+                    ])
+                    .with_schema_id(1)
+                    .with_identifier_field_ids(vec![2])
+                    .build()
+                    .unwrap(),
+            )
+            .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
+            .partition_spec(
+                PartitionSpec::builder()
+                    .with_fields(vec![PartitionField::builder()
+                        .source_id(1)
+                        .field_id(1000)
+                        .transform(Transform::Truncate(3))
+                        .name("id".to_string())
+                        .build()])
+                    .with_spec_id(1)
+                    .build()
+                    .unwrap(),
+            )
+            .sort_order(
+                SortOrder::builder()
+                    .with_sort_field(
+                        SortField::builder()
+                            .source_id(2)
+                            .transform(Transform::Identity)
+                            .direction(SortDirection::Ascending)
+                            .null_order(NullOrder::First)
+                            .build(),
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        let table = catalog
+            .create_table(&NamespaceIdent::from_strs(["ns1"]).unwrap(), table_creation)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
+            table.identifier()
+        );
+        assert_eq!(
+            "s3://warehouse/database/table/metadata.json",
+            table.metadata_location().unwrap()
+        );
+        assert_eq!(FormatVersion::V1, table.metadata().format_version());
+        assert_eq!("s3://warehouse/database/table", table.metadata().location());
+        assert_eq!(
+            uuid!("bf289591-dcc0-4234-ad4f-5c3eed811a29"),
+            table.metadata().uuid()
+        );
+        assert_eq!(1657810967051, table.metadata().last_updated_ms());
+        assert_eq!(
+            vec![&Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .into(),
+                    ])
+                    .with_schema_id(0)
+                    .with_identifier_field_ids(vec![2])
+                    .build()
+                    .unwrap()
+            )],
+            table.metadata().schemas_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &HashMap::from([
+                (
+                    "write.delete.parquet.compression-codec".to_string(),
+                    "zstd".to_string()
+                ),
+                (
+                    "write.metadata.compression-codec".to_string(),
+                    "gzip".to_string()
+                ),
+                (
+                    "write.summary.partition-limit".to_string(),
+                    "100".to_string()
+                ),
+                (
+                    "write.parquet.compression-codec".to_string(),
+                    "zstd".to_string()
+                ),
+            ]),
+            table.metadata().properties()
+        );
+        assert!(table.metadata().current_snapshot().is_none());
+        assert!(table.metadata().history().is_empty());
+        assert_eq!(
+            vec![&Arc::new(SortOrder {
+                order_id: 0,
+                fields: vec![],
+            })],
+            table.metadata().sort_orders_iter().collect::<Vec<_>>()
+        );
+
+        config_mock.assert_async().await;
+        create_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_table_409() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let create_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .with_status(409)
+            .with_body(r#"
+{
+    "error": {
+        "message": "Table already exists: ns1.test1 in warehouse 8bcb0838-50fc-472d-9ddb-8feb89ef5f1e",
+        "type": "AlreadyExistsException",
+        "code": 409
+    }
+}
+            "#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table_creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .into(),
+                    ])
+                    .with_schema_id(1)
+                    .with_identifier_field_ids(vec![2])
+                    .build()
+                    .unwrap(),
+            )
+            .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
+            .build();
+
+        let table_result = catalog
+            .create_table(&NamespaceIdent::from_strs(["ns1"]).unwrap(), table_creation)
+            .await;
+
+        assert!(table_result.is_err());
+        assert!(table_result
+            .err()
+            .unwrap()
+            .message()
+            .contains("Table already exists"));
+
+        config_mock.assert_async().await;
+        create_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let update_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "update_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table1 = {
+            let file = File::open(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .unwrap();
+            let reader = BufReader::new(file);
+            let resp = serde_json::from_reader::<_, LoadTableResponse>(reader).unwrap();
+
+            Table::builder()
+                .metadata(resp.metadata)
+                .metadata_location(resp.metadata_location.unwrap())
+                .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+                .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+                .build()
+        };
+
+        let table = Transaction::new(&table1)
+            .upgrade_table_version(FormatVersion::V2)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            &TableIdent::from_strs(vec!["ns1", "test1"]).unwrap(),
+            table.identifier()
+        );
+        assert_eq!(
+            "s3://warehouse/database/table/metadata.json",
+            table.metadata_location().unwrap()
+        );
+        assert_eq!(FormatVersion::V2, table.metadata().format_version());
+        assert_eq!("s3://warehouse/database/table", table.metadata().location());
+        assert_eq!(
+            uuid!("bf289591-dcc0-4234-ad4f-5c3eed811a29"),
+            table.metadata().uuid()
+        );
+        assert_eq!(1657810967051, table.metadata().last_updated_ms());
+        assert_eq!(
+            vec![&Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
+                            .into(),
+                    ])
+                    .with_schema_id(0)
+                    .with_identifier_field_ids(vec![2])
+                    .build()
+                    .unwrap()
+            )],
+            table.metadata().schemas_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &HashMap::from([
+                (
+                    "write.delete.parquet.compression-codec".to_string(),
+                    "zstd".to_string()
+                ),
+                (
+                    "write.metadata.compression-codec".to_string(),
+                    "gzip".to_string()
+                ),
+                (
+                    "write.summary.partition-limit".to_string(),
+                    "100".to_string()
+                ),
+                (
+                    "write.parquet.compression-codec".to_string(),
+                    "zstd".to_string()
+                ),
+            ]),
+            table.metadata().properties()
+        );
+        assert!(table.metadata().current_snapshot().is_none());
+        assert!(table.metadata().history().is_empty());
+        assert_eq!(
+            vec![&Arc::new(SortOrder {
+                order_id: 0,
+                fields: vec![],
+            })],
+            table.metadata().sort_orders_iter().collect::<Vec<_>>()
+        );
+
+        config_mock.assert_async().await;
+        update_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_table_404() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let update_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .with_status(404)
+            .with_body(
+                r#"
+{
+    "error": {
+        "message": "The given table does not exist",
+        "type": "NoSuchTableException",
+        "code": 404
+    }
+}      
+            "#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let table1 = {
+            let file = File::open(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .unwrap();
+            let reader = BufReader::new(file);
+            let resp = serde_json::from_reader::<_, LoadTableResponse>(reader).unwrap();
+
+            Table::builder()
+                .metadata(resp.metadata)
+                .metadata_location(resp.metadata_location.unwrap())
+                .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+                .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+                .build()
+        };
+
+        let table_result = Transaction::new(&table1)
+            .upgrade_table_version(FormatVersion::V2)
+            .unwrap()
+            .commit(&catalog)
+            .await;
+
+        assert!(table_result.is_err());
+        assert!(table_result
+            .err()
+            .unwrap()
+            .message()
+            .contains("The given table does not exist"));
+
+        config_mock.assert_async().await;
+        update_table_mock.assert_async().await;
     }
 }

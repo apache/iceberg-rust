@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/*!
-Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
-The main struct here is [TableMetadataV2] which defines the data for a table.
-*/
+//! Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
+//! The main struct here is [TableMetadataV2] which defines the data for a table.
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
@@ -748,9 +748,30 @@ pub(super) mod _serde {
 /// Iceberg format version
 pub enum FormatVersion {
     /// Iceberg spec version 1
-    V1 = b'1',
+    V1 = 1u8,
     /// Iceberg spec version 2
-    V2 = b'2',
+    V2 = 2u8,
+}
+
+impl PartialOrd for FormatVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FormatVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (*self as u8).cmp(&(*other as u8))
+    }
+}
+
+impl Display for FormatVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FormatVersion::V1 => write!(f, "v1"),
+            FormatVersion::V2 => write!(f, "v2"),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -782,7 +803,6 @@ impl SnapshotLog {
 
 #[cfg(test)]
 mod tests {
-
     use std::{collections::HashMap, fs, sync::Arc};
 
     use anyhow::Result;
@@ -1050,7 +1070,7 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list(ManifestListLocation::ManifestListFile("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string()))
-            .with_summary(Summary{operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(),"local-1662532784305".to_string()),("added-data-files".to_string(),"4".to_string()),("added-records".to_string(),"4".to_string()),("added-files-size".to_string(),"6001".to_string())])})
+            .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
             .build().unwrap();
 
         let expected = TableMetadata {
@@ -1069,13 +1089,13 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))]),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
-            properties: HashMap::from_iter(vec![("owner".to_string(),"root".to_string())]),
+            properties: HashMap::from_iter(vec![("owner".to_string(), "root".to_string())]),
             snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
                 timestamp_ms: 1662532818843,
             }],
-            metadata_log: vec![MetadataLog{metadata_file:"/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245}],
-            refs: HashMap::from_iter(vec![("main".to_string(),SnapshotReference{snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None }})])
+            metadata_log: vec![MetadataLog { metadata_file: "/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245 }],
+            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference { snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None } })]),
         };
 
         check_table_metadata_serde(data, expected);
@@ -1092,6 +1112,7 @@ mod tests {
         assert!(serde_json::from_str::<TableMetadata>(data).is_err());
         Ok(())
     }
+
     #[test]
     fn test_deserialize_table_data_v2_invalid_format_version() -> Result<()> {
         let data = r#"
@@ -1479,5 +1500,12 @@ mod tests {
             desered.unwrap_err().to_string(),
             "data did not match any variant of untagged enum TableMetadataEnum"
         )
+    }
+
+    #[test]
+    fn order_of_format_version() {
+        assert!(FormatVersion::V1 < FormatVersion::V2);
+        assert_eq!(FormatVersion::V1, FormatVersion::V1);
+        assert_eq!(FormatVersion::V2, FormatVersion::V2);
     }
 }
