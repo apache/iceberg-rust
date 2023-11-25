@@ -1278,7 +1278,10 @@ mod tests {
             uuid!("bf289591-dcc0-4234-ad4f-5c3eed811a29"),
             table.metadata().uuid()
         );
-        assert_eq!(1657810967051, table.metadata().last_updated_ms());
+        assert_eq!(
+            1657810967051,
+            table.metadata().last_updated_ms().timestamp_millis()
+        );
         assert_eq!(
             vec![&Arc::new(
                 Schema::builder()
@@ -1450,7 +1453,10 @@ mod tests {
             uuid!("bf289591-dcc0-4234-ad4f-5c3eed811a29"),
             table.metadata().uuid()
         );
-        assert_eq!(1657810967051, table.metadata().last_updated_ms());
+        assert_eq!(
+            1657810967051,
+            table.metadata().last_updated_ms().timestamp_millis()
+        );
         assert_eq!(
             vec![&Arc::new(
                 Schema::builder()
