@@ -506,84 +506,84 @@ impl From<Literal> for Vec<u8> {
     }
 }
 
-impl From<&Literal> for JsonValue {
-    fn from(value: &Literal) -> Self {
-        match value {
-            Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => JsonValue::Bool(*val),
-                PrimitiveLiteral::Int(val) => JsonValue::Number((*val).into()),
-                PrimitiveLiteral::Long(val) => JsonValue::Number((*val).into()),
-                PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
-                    Some(number) => JsonValue::Number(number),
-                    None => JsonValue::Null,
-                },
-                PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
-                    Some(number) => JsonValue::Number(number),
-                    None => JsonValue::Null,
-                },
-                PrimitiveLiteral::Date(val) => {
-                    JsonValue::String(date::days_to_date(*val).to_string())
-                }
-                PrimitiveLiteral::Time(val) => {
-                    JsonValue::String(time::microseconds_to_time(*val).to_string())
-                }
-                PrimitiveLiteral::Timestamp(val) => JsonValue::String(
-                    timestamp::microseconds_to_datetime(*val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f")
-                        .to_string(),
-                ),
-                PrimitiveLiteral::TimestampTZ(val) => JsonValue::String(
-                    timestamptz::microseconds_to_datetimetz(*val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
-                        .to_string(),
-                ),
-                PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
-                PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
-                PrimitiveLiteral::Fixed(val) => {
-                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
-                        acc
-                    }))
-                }
-                PrimitiveLiteral::Binary(val) => {
-                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
-                        acc
-                    }))
-                }
-                PrimitiveLiteral::Decimal(_) => todo!(),
-            },
-            Literal::Struct(_) => todo!(),
-            Literal::List(list) => JsonValue::Array(
-                list.iter()
-                    .map(|opt| match opt {
-                        Some(literal) => literal.into(),
-                        None => JsonValue::Null,
-                    })
-                    .collect(),
-            ),
-            Literal::Map(map) => {
-                let mut object = JsonMap::with_capacity(2);
-                object.insert(
-                    "keys".to_string(),
-                    JsonValue::Array(map.keys().map(|literal| literal.into()).collect()),
-                );
-                object.insert(
-                    "values".to_string(),
-                    JsonValue::Array(
-                        map.values()
-                            .map(|literal| match literal {
-                                Some(literal) => literal.into(),
-                                None => JsonValue::Null,
-                            })
-                            .collect(),
-                    ),
-                );
-                JsonValue::Object(object)
-            }
-        }
-    }
-}
+// impl From<&Literal> for JsonValue {
+//     fn from(value: &Literal) -> Self {
+//         match value {
+//             Literal::Primitive(prim) => match prim {
+//                 PrimitiveLiteral::Boolean(val) => JsonValue::Bool(*val),
+//                 PrimitiveLiteral::Int(val) => JsonValue::Number((*val).into()),
+//                 PrimitiveLiteral::Long(val) => JsonValue::Number((*val).into()),
+//                 PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
+//                     Some(number) => JsonValue::Number(number),
+//                     None => JsonValue::Null,
+//                 },
+//                 PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
+//                     Some(number) => JsonValue::Number(number),
+//                     None => JsonValue::Null,
+//                 },
+//                 PrimitiveLiteral::Date(val) => {
+//                     JsonValue::String(date::days_to_date(*val).to_string())
+//                 }
+//                 PrimitiveLiteral::Time(val) => {
+//                     JsonValue::String(time::microseconds_to_time(*val).to_string())
+//                 }
+//                 PrimitiveLiteral::Timestamp(val) => JsonValue::String(
+//                     timestamp::microseconds_to_datetime(*val)
+//                         .format("%Y-%m-%dT%H:%M:%S%.f")
+//                         .to_string(),
+//                 ),
+//                 PrimitiveLiteral::TimestampTZ(val) => JsonValue::String(
+//                     timestamptz::microseconds_to_datetimetz(*val)
+//                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+//                         .to_string(),
+//                 ),
+//                 PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
+//                 PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
+//                 PrimitiveLiteral::Fixed(val) => {
+//                     JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
+//                         acc.push_str(&format!("{:x}", x));
+//                         acc
+//                     }))
+//                 }
+//                 PrimitiveLiteral::Binary(val) => {
+//                     JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
+//                         acc.push_str(&format!("{:x}", x));
+//                         acc
+//                     }))
+//                 }
+//                 PrimitiveLiteral::Decimal(_) => todo!(),
+//             },
+//             Literal::Struct(_) => todo!(),
+//             Literal::List(list) => JsonValue::Array(
+//                 list.iter()
+//                     .map(|opt| match opt {
+//                         Some(literal) => literal.into(),
+//                         None => JsonValue::Null,
+//                     })
+//                     .collect(),
+//             ),
+//             Literal::Map(map) => {
+//                 let mut object = JsonMap::with_capacity(2);
+//                 object.insert(
+//                     "keys".to_string(),
+//                     JsonValue::Array(map.keys().map(|literal| literal.into()).collect()),
+//                 );
+//                 object.insert(
+//                     "values".to_string(),
+//                     JsonValue::Array(
+//                         map.values()
+//                             .map(|literal| match literal {
+//                                 Some(literal) => literal.into(),
+//                                 None => JsonValue::Null,
+//                             })
+//                             .collect(),
+//                     ),
+//                 );
+//                 JsonValue::Object(object)
+//             }
+//         }
+//     }
+// }
 
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
