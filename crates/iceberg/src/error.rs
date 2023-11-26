@@ -33,6 +33,8 @@ pub enum ErrorKind {
     /// service error.
     Unexpected,
 
+    /// Iceberg finds some conflict when checking.
+    Conflict,
     /// Iceberg data is invalid.
     ///
     /// This error is returned when we try to read a table from iceberg but
@@ -57,6 +59,7 @@ impl From<ErrorKind> for &'static str {
     fn from(v: ErrorKind) -> &'static str {
         match v {
             ErrorKind::Unexpected => "Unexpected",
+            ErrorKind::Conflict => "conflict",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
         }

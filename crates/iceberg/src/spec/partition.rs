@@ -18,11 +18,13 @@
 /*!
  * Partitioning
 */
+use crate::error::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
-use super::transform::Transform;
+use super::DEFAULT_SPEC_ID;
+use super::{schema::SchemaRef, transform::Transform};
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
@@ -57,6 +59,99 @@ impl PartitionSpec {
     /// Create partition spec builer
     pub fn builder() -> PartitionSpecBuilder {
         PartitionSpecBuilder::default()
+    }
+}
+
+static PARTITION_DATA_ID_START: i32 = 1000;
+
+/// Reference to [`UnboundPartitionSpec`].
+pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "kebab-case")]
+/// Unbound partition field can be built without a schema and later bound to a schema.
+pub struct UnboundPartitionField {
+    /// A source column id from the table’s schema
+    pub source_id: i32,
+    /// A partition field id that is used to identify a partition field and is unique within a partition spec.
+    /// In v2 table metadata, it is unique across all partition specs.
+    pub partition_id: Option<i32>,
+    /// A partition name.
+    pub name: String,
+    /// A transform that is applied to the source column to produce a partition value.
+    pub transform: Transform,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
+#[serde(rename_all = "kebab-case")]
+#[builder(setter(prefix = "with"))]
+/// Unbound partition spec can be built without a schema and later bound to a schema.
+pub struct UnboundPartitionSpec {
+    /// Identifier for PartitionSpec
+    pub spec_id: Option<i32>,
+    /// Details of the partition spec
+    #[builder(setter(each(name = "with_unbound_partition_field")))]
+    pub fields: Vec<UnboundPartitionField>,
+}
+
+impl UnboundPartitionSpec {
+    /// last assigned id for partitioned field
+    pub fn unpartitioned_last_assigned_id() -> i32 {
+        PARTITION_DATA_ID_START - 1
+    }
+
+    /// Create unbound partition spec builer
+    pub fn builder() -> UnboundPartitionSpecBuilder {
+        UnboundPartitionSpecBuilder::default()
+    }
+
+    /// Bind unbound partition spec to a schema
+    pub fn bind(&self, schema: SchemaRef) -> Result<PartitionSpec> {
+        let mut fields = Vec::with_capacity(self.fields.len());
+        let mut last_assigned_field_id: i32 =
+            UnboundPartitionSpec::unpartitioned_last_assigned_id();
+        for field in &self.fields {
+            let field_id = match field.partition_id {
+                Some(id) => id,
+                None => {
+                    last_assigned_field_id += 1;
+                    last_assigned_field_id
+                }
+            };
+            match schema.field_by_id(field.source_id) {
+                Some(f) => {
+                    if f.name != field.name {
+                        return Err(Error::new(
+                            ErrorKind::Conflict,
+                            format!(
+                                "Field name {} in partition spec does not match schema",
+                                field.name
+                            ),
+                        ));
+                    }
+                }
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::Conflict,
+                        format!(
+                            "Field id {} in partition spec is not in schema",
+                            field.source_id
+                        ),
+                    ));
+                }
+            }
+            last_assigned_field_id = last_assigned_field_id.max(field_id);
+            fields.push(PartitionField {
+                source_id: field.source_id,
+                field_id,
+                name: field.name.clone(),
+                transform: field.transform,
+            });
+        }
+        let spec_id = match self.spec_id {
+            Some(id) => id,
+            None => DEFAULT_SPEC_ID,
+        };
+        Ok(PartitionSpec { spec_id, fields })
     }
 }
 

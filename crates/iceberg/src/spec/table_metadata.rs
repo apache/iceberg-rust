@@ -35,7 +35,7 @@ use _serde::TableMetadataEnum;
 use chrono::{DateTime, TimeZone, Utc};
 
 static MAIN_BRANCH: &str = "main";
-static DEFAULT_SPEC_ID: i32 = 0;
+pub(crate) static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
