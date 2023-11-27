@@ -15,9 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+.EXPORT_ALL_VARIABLES:
+
+RUST_LOG = debug
+
 build:
 	cargo build
-	
+
 check-fmt:
 	cargo fmt --all -- --check
 

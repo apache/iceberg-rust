@@ -17,7 +17,7 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/catalog/*", "crates/iceberg"]
+members = ["crates/catalog/*", "crates/iceberg", "crates/test_utils"]
 
 [workspace.dependencies]
 anyhow = "1.0.72"
@@ -31,6 +31,7 @@ bitvec = "1.0.1"
 chrono = "0.4"
 derive_builder = "0.12.0"
 either = "1"
+env_logger = "0.10.0"
 futures = "0.3"
 iceberg = { path = "./crates/iceberg" }
 iceberg-catalog-rest = { path = "./crates/catalog/rest" }
@@ -43,6 +44,7 @@ once_cell = "1"
 opendal = "0.42"
 ordered-float = "4.0.0"
 pretty_assertions = "1.4.0"
+port_scanner = "0.1.5"
 reqwest = { version = "^0.11", features = ["json"] }
 rust_decimal = "1.31.0"
 serde = { version = "^1.0", features = ["rc"] }

@@ -97,7 +97,7 @@ pub trait Catalog: std::fmt::Debug {
 /// The namespace identifier is a list of strings, where each string is a
 /// component of the namespace. It's catalog implementer's responsibility to
 /// handle the namespace identifier correctly.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespaceIdent(Vec<String>);
 
 impl NamespaceIdent {

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, Request};
+use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use typed_builder::TypedBuilder;
 use urlencoding::encode;
@@ -163,15 +163,45 @@ impl HttpClient {
     ) -> Result<()> {
         let resp = self.0.execute(request).await?;
 
+        println!("Status code: {}", resp.status());
+
         if resp.status().as_u16() == SUCCESS_CODE {
             Ok(())
         } else {
+            let code = resp.status();
             let text = resp.bytes().await?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
+                .with_context("json", String::from_utf8_lossy(&text))
+                .with_context("code", code.to_string())
+                .with_source(e)
+            })?;
+            Err(e.into())
+        }
+    }
+
+    /// More generic logic handling for special cases like head.
+    async fn do_execute<R, E: DeserializeOwned + Into<Error>>(
+        &self,
+        request: Request,
+        handler: impl FnOnce(&Response) -> Option<R>,
+    ) -> Result<R> {
+        let resp = self.0.execute(request).await?;
+
+        if let Some(ret) = handler(&resp) {
+            Ok(ret)
+        } else {
+            let code = resp.status();
+            let text = resp.bytes().await?;
+            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to parse response from rest catalog server!",
+                )
+                .with_context("code", code.to_string())
                 .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
@@ -273,9 +303,12 @@ impl Catalog for RestCatalog {
             .build()?;
 
         self.client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
+                StatusCode::NO_CONTENT => Some(true),
+                StatusCode::NOT_FOUND => Some(false),
+                _ => None,
+            })
             .await
-            .map(|_| true)
     }
 
     /// Drop a namespace from the catalog.
@@ -326,7 +359,7 @@ impl Catalog for RestCatalog {
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
                 // We don't support stage create yet.
-                stage_create: None,
+                stage_create: Some(false),
                 properties: if creation.properties.is_empty() {
                     None
                 } else {
@@ -406,9 +439,12 @@ impl Catalog for RestCatalog {
             .build()?;
 
         self.client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
+                StatusCode::NO_CONTENT => Some(true),
+                StatusCode::NOT_FOUND => Some(false),
+                _ => None,
+            })
             .await
-            .map(|_| true)
     }
 
     /// Rename a table in the catalog.
