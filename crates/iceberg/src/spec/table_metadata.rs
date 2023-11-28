@@ -857,12 +857,12 @@ mod tests {
                     {
                         "spec-id": 1,
                         "fields": [
-                            {  
-                                "source-id": 4,  
-                                "field-id": 1000,  
-                                "name": "ts_day",  
+                            {
+                                "source-id": 4,
+                                "field-id": 1000,
+                                "name": "ts_day",
                                 "transform": "day"
-                            } 
+                            }
                         ]
                     }
                 ],
@@ -872,8 +872,8 @@ mod tests {
                     "commit.retry.num-retries": "1"
                 },
                 "metadata-log": [
-                    {  
-                        "metadata-file": "s3://bucket/.../v1.json",  
+                    {
+                        "metadata-file": "s3://bucket/.../v1.json",
                         "timestamp-ms": 1515100
                     }
                 ],
@@ -1071,7 +1071,7 @@ mod tests {
             .with_schema_id(0)
             .with_manifest_list(ManifestListLocation::ManifestListFile("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string()))
             .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
-            .build().unwrap();
+            .build();
 
         let expected = TableMetadata {
             format_version: FormatVersion::V1,
@@ -1200,8 +1200,7 @@ mod tests {
                 operation: Operation::Append,
                 other: HashMap::new(),
             })
-            .build()
-            .unwrap();
+            .build();
 
         let snapshot2 = Snapshot::builder()
             .with_snapshot_id(3055729675574597004)
@@ -1216,8 +1215,7 @@ mod tests {
                 operation: Operation::Append,
                 other: HashMap::new(),
             })
-            .build()
-            .unwrap();
+            .build();
 
         let expected = TableMetadata {
             format_version: FormatVersion::V2,

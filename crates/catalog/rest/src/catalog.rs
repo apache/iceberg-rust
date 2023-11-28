@@ -1130,7 +1130,7 @@ mod tests {
                     ("total-position-deletes", "0"),
                     ("total-equality-deletes", "0")
                 ].iter().map(|p| (p.0.to_string(), p.1.to_string()))),
-            }).build().unwrap()
+            }).build()
         )], table.metadata().snapshots().collect::<Vec<_>>());
         assert_eq!(
             &[SnapshotLog {
@@ -1526,7 +1526,7 @@ mod tests {
         "type": "NoSuchTableException",
         "code": 404
     }
-}      
+}
             "#,
             )
             .create_async()
