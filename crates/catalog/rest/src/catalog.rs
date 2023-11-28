@@ -1526,7 +1526,7 @@ mod tests {
         "type": "NoSuchTableException",
         "code": 404
     }
-}
+}      
             "#,
             )
             .create_async()
