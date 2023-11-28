@@ -521,7 +521,7 @@ mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
-    use iceberg::spec::{PartitionSpec, Schema, SortOrder, TableMetadata};
+    use iceberg::spec::{PartitionSpec, Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
     use iceberg::{Error, ErrorKind, Namespace, TableIdent, TableRequirement, TableUpdate};
 
     pub(super) const OK: u16 = 200u16;
@@ -660,7 +660,7 @@ mod _serde {
         pub(super) name: String,
         pub(super) location: Option<String>,
         pub(super) schema: Schema,
-        pub(super) partition_spec: Option<PartitionSpec>,
+        pub(super) partition_spec: Option<UnboundPartitionSpec>,
         pub(super) write_order: Option<SortOrder>,
         pub(super) stage_create: Option<bool>,
         pub(super) properties: Option<HashMap<String, String>>,

@@ -20,7 +20,7 @@
 use serde_derive::{Deserialize, Serialize};
 use urlencoding::encode;
 
-use crate::spec::{FormatVersion, PartitionSpec, Schema, Snapshot, SnapshotReference, SortOrder};
+use crate::spec::{FormatVersion, PartitionSpec, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
@@ -226,7 +226,7 @@ pub struct TableCreation {
     pub schema: Schema,
     /// The partition spec of the table, could be None.
     #[builder(default, setter(strip_option))]
-    pub partition_spec: Option<PartitionSpec>,
+    pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
     pub sort_order: Option<SortOrder>,
@@ -361,7 +361,7 @@ pub enum TableUpdate {
     /// Add a new partition spec to the table
     AddSpec {
         /// The partition spec to add.
-        spec: PartitionSpec,
+        spec: UnboundPartitionSpec,
     },
     /// Set table's default spec
     #[serde(rename_all = "kebab-case")]

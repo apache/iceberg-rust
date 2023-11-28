@@ -104,55 +104,6 @@ impl UnboundPartitionSpec {
         UnboundPartitionSpecBuilder::default()
     }
 
-    /// Bind unbound partition spec to a schema
-    pub fn bind(&self, schema: SchemaRef) -> Result<PartitionSpec> {
-        let mut fields = Vec::with_capacity(self.fields.len());
-        let mut last_assigned_field_id: i32 =
-            UnboundPartitionSpec::unpartitioned_last_assigned_id();
-        for field in &self.fields {
-            let field_id = match field.partition_id {
-                Some(id) => id,
-                None => {
-                    last_assigned_field_id += 1;
-                    last_assigned_field_id
-                }
-            };
-            match schema.field_by_id(field.source_id) {
-                Some(f) => {
-                    if f.name != field.name {
-                        return Err(Error::new(
-                            ErrorKind::Conflict,
-                            format!(
-                                "Field name {} in partition spec does not match schema",
-                                field.name
-                            ),
-                        ));
-                    }
-                }
-                None => {
-                    return Err(Error::new(
-                        ErrorKind::Conflict,
-                        format!(
-                            "Field id {} in partition spec is not in schema",
-                            field.source_id
-                        ),
-                    ));
-                }
-            }
-            last_assigned_field_id = last_assigned_field_id.max(field_id);
-            fields.push(PartitionField {
-                source_id: field.source_id,
-                field_id,
-                name: field.name.clone(),
-                transform: field.transform,
-            });
-        }
-        let spec_id = match self.spec_id {
-            Some(id) => id,
-            None => DEFAULT_SPEC_ID,
-        };
-        Ok(PartitionSpec { spec_id, fields })
-    }
 }
 
 #[cfg(test)]
