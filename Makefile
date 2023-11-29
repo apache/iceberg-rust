@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+build:
+	cargo build
+	
 check-fmt:
 	cargo fmt --all -- --check
 

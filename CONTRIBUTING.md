@@ -108,6 +108,26 @@ $ cargo version
 cargo 1.69.0 (6e9a83356 2023-04-12)
 ```
 
+## Build
+
+### Compile
+
+```shell
+make build
+```
+
+### Lint
+
+```shell
+make check
+```
+
+### Test
+
+```shell
+make test
+```
+
 ## Code of Conduct
 
 We expect all community members to follow our [Code of Conduct](https://www.apache.org/foundation/policies/conduct.html).
