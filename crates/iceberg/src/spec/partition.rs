@@ -18,13 +18,11 @@
 /*!
  * Partitioning
 */
-use crate::error::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
-use super::DEFAULT_SPEC_ID;
-use super::{schema::SchemaRef, transform::Transform};
+use super::transform::Transform;
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
@@ -62,11 +60,9 @@ impl PartitionSpec {
     }
 }
 
-static PARTITION_DATA_ID_START: i32 = 1000;
-
 /// Reference to [`UnboundPartitionSpec`].
 pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
 #[serde(rename_all = "kebab-case")]
 /// Unbound partition field can be built without a schema and later bound to a schema.
 pub struct UnboundPartitionField {
@@ -74,6 +70,7 @@ pub struct UnboundPartitionField {
     pub source_id: i32,
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
+    #[builder(default, setter(strip_option))]
     pub partition_id: Option<i32>,
     /// A partition name.
     pub name: String,
@@ -87,6 +84,7 @@ pub struct UnboundPartitionField {
 /// Unbound partition spec can be built without a schema and later bound to a schema.
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
+    #[builder(default, setter(strip_option))]
     pub spec_id: Option<i32>,
     /// Details of the partition spec
     #[builder(setter(each(name = "with_unbound_partition_field")))]
@@ -94,16 +92,10 @@ pub struct UnboundPartitionSpec {
 }
 
 impl UnboundPartitionSpec {
-    /// last assigned id for partitioned field
-    pub fn unpartitioned_last_assigned_id() -> i32 {
-        PARTITION_DATA_ID_START - 1
-    }
-
     /// Create unbound partition spec builer
     pub fn builder() -> UnboundPartitionSpecBuilder {
         UnboundPartitionSpecBuilder::default()
     }
-
 }
 
 #[cfg(test)]
