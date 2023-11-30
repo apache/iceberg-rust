@@ -103,8 +103,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn partition_spec() {
-        let sort_order = r#"
+    fn test_partition_spec() {
+        let spec = r#"
         {
         "spec-id": 1,
         "fields": [ {
@@ -126,7 +126,7 @@ mod tests {
         }
         "#;
 
-        let partition_spec: PartitionSpec = serde_json::from_str(sort_order).unwrap();
+        let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
         assert_eq!(4, partition_spec.fields[0].source_id);
         assert_eq!(1000, partition_spec.fields[0].field_id);
         assert_eq!("ts_day", partition_spec.fields[0].name);
@@ -141,5 +141,65 @@ mod tests {
         assert_eq!(1002, partition_spec.fields[2].field_id);
         assert_eq!("id_truncate", partition_spec.fields[2].name);
         assert_eq!(Transform::Truncate(4), partition_spec.fields[2].transform);
+    }
+
+    #[test]
+    fn test_unbound_partition_spec() {
+        let spec = r#"
+		{
+		"spec-id": 1,
+		"fields": [ {
+			"source-id": 4,
+			"partition-id": 1000,
+			"name": "ts_day",
+			"transform": "day"
+			}, {
+			"source-id": 1,
+			"partition-id": 1001,
+			"name": "id_bucket",
+			"transform": "bucket[16]"
+			}, {
+			"source-id": 2,
+			"partition-id": 1002,
+			"name": "id_truncate",
+			"transform": "truncate[4]"
+			} ]
+		}
+		"#;
+
+        let partition_spec: UnboundPartitionSpec = serde_json::from_str(spec).unwrap();
+        assert_eq!(Some(1), partition_spec.spec_id);
+
+        assert_eq!(4, partition_spec.fields[0].source_id);
+        assert_eq!(Some(1000), partition_spec.fields[0].partition_id);
+        assert_eq!("ts_day", partition_spec.fields[0].name);
+        assert_eq!(Transform::Day, partition_spec.fields[0].transform);
+
+        assert_eq!(1, partition_spec.fields[1].source_id);
+        assert_eq!(Some(1001), partition_spec.fields[1].partition_id);
+        assert_eq!("id_bucket", partition_spec.fields[1].name);
+        assert_eq!(Transform::Bucket(16), partition_spec.fields[1].transform);
+
+        assert_eq!(2, partition_spec.fields[2].source_id);
+        assert_eq!(Some(1002), partition_spec.fields[2].partition_id);
+        assert_eq!("id_truncate", partition_spec.fields[2].name);
+        assert_eq!(Transform::Truncate(4), partition_spec.fields[2].transform);
+
+        let spec = r#"
+		{
+		"fields": [ {
+			"source-id": 4,
+			"name": "ts_day",
+			"transform": "day"
+			} ]
+		}
+		"#;
+        let partition_spec: UnboundPartitionSpec = serde_json::from_str(spec).unwrap();
+        assert_eq!(None, partition_spec.spec_id);
+
+        assert_eq!(4, partition_spec.fields[0].source_id);
+        assert_eq!(None, partition_spec.fields[0].partition_id);
+        assert_eq!("ts_day", partition_spec.fields[0].name);
+        assert_eq!(Transform::Day, partition_spec.fields[0].transform);
     }
 }
