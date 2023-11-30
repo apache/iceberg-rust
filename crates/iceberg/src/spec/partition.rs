@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
-use super::transform::Transform;
+use crate::{Error, ErrorKind};
+
+use super::{transform::Transform, NestedField, Schema, StructType};
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
@@ -68,6 +70,30 @@ impl PartitionSpec {
                 .fields
                 .iter()
                 .all(|f| matches!(f.transform, Transform::Void))
+    }
+
+    /// Returns the partition type of this partition spec.
+    pub fn partition_type(&self, schema: &Schema) -> Result<StructType, Error> {
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for partition_field in &self.fields {
+            let field = schema
+                .field_by_id(partition_field.source_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "No column with source column id {} in schema {:?}",
+                            partition_field.source_id, schema
+                        ),
+                    )
+                })?;
+            let res_type = partition_field.transform.result_type(&field.field_type)?;
+            let field =
+                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
+                    .into();
+            fields.push(field);
+        }
+        Ok(StructType::new(fields))
     }
 }
 

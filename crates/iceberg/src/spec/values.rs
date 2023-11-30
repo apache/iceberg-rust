@@ -34,7 +34,6 @@ use uuid::Uuid;
 use crate::{Error, ErrorKind};
 
 use super::datatypes::{PrimitiveType, Type};
-use super::MAX_DECIMAL_PRECISION;
 
 pub use _serde::RawLiteral;
 
@@ -609,6 +608,16 @@ pub struct Struct {
 }
 
 impl Struct {
+    /// Create a empty struct.
+    pub fn empty() -> Self {
+        Self {
+            fields: Vec::new(),
+            field_ids: Vec::new(),
+            field_names: Vec::new(),
+            null_bitmap: BitVec::new(),
+        }
+    }
+
     /// Create a iterator to read the field in order of (field_id, field_value, field_name).
     pub fn iter(&self) -> impl Iterator<Item = (&i32, Option<&Literal>, &str)> {
         self.null_bitmap
@@ -903,34 +912,6 @@ impl Literal {
                     ))
                 }
             }
-        }
-    }
-
-    /// Get datatype of value
-    pub fn datatype(&self) -> Type {
-        match self {
-            Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(_) => Type::Primitive(PrimitiveType::Boolean),
-                PrimitiveLiteral::Int(_) => Type::Primitive(PrimitiveType::Int),
-                PrimitiveLiteral::Long(_) => Type::Primitive(PrimitiveType::Long),
-                PrimitiveLiteral::Float(_) => Type::Primitive(PrimitiveType::Float),
-                PrimitiveLiteral::Double(_) => Type::Primitive(PrimitiveType::Double),
-                PrimitiveLiteral::Date(_) => Type::Primitive(PrimitiveType::Date),
-                PrimitiveLiteral::Time(_) => Type::Primitive(PrimitiveType::Time),
-                PrimitiveLiteral::Timestamp(_) => Type::Primitive(PrimitiveType::Timestamp),
-                PrimitiveLiteral::TimestampTZ(_) => Type::Primitive(PrimitiveType::Timestamptz),
-                PrimitiveLiteral::Fixed(vec) => {
-                    Type::Primitive(PrimitiveType::Fixed(vec.len() as u64))
-                }
-                PrimitiveLiteral::Binary(_) => Type::Primitive(PrimitiveType::Binary),
-                PrimitiveLiteral::String(_) => Type::Primitive(PrimitiveType::String),
-                PrimitiveLiteral::UUID(_) => Type::Primitive(PrimitiveType::Uuid),
-                PrimitiveLiteral::Decimal(_) => Type::Primitive(PrimitiveType::Decimal {
-                    precision: MAX_DECIMAL_PRECISION,
-                    scale: 0,
-                }),
-            },
-            _ => unimplemented!(),
         }
     }
 

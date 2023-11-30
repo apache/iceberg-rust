@@ -17,9 +17,9 @@
 
 //! ManifestList for Iceberg.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
-use crate::{io::OutputFile, spec::Literal, Error};
+use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
 use futures::AsyncWriteExt;
 
@@ -29,6 +29,9 @@ use self::{
 };
 
 use super::{FormatVersion, StructType};
+
+/// The seq number when no added files are present.
+pub const UNASSIGNED_SEQ_NUMBER: i64 = -1;
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -466,85 +469,109 @@ pub struct ManifestListEntry {
     /// field: 500
     ///
     /// Location of the manifest file
-    manifest_path: String,
+    pub manifest_path: String,
     /// field: 501
     ///
     /// Length of the manifest file in bytes
-    manifest_length: i64,
+    pub manifest_length: i64,
     /// field: 502
     ///
     /// ID of a partition spec used to write the manifest; must be listed
     /// in table metadata partition-specs
-    partition_spec_id: i32,
+    pub partition_spec_id: i32,
     /// field: 517
     ///
     /// The type of files tracked by the manifest, either data or delete
     /// files; 0 for all v1 manifests
-    content: ManifestContentType,
+    pub content: ManifestContentType,
     /// field: 515
     ///
     /// The sequence number when the manifest was added to the table; use 0
     /// when reading v1 manifest lists
-    sequence_number: i64,
+    pub sequence_number: i64,
     /// field: 516
     ///
     /// The minimum data sequence number of all live data or delete files in
     /// the manifest; use 0 when reading v1 manifest lists
-    min_sequence_number: i64,
+    pub min_sequence_number: i64,
     /// field: 503
     ///
     /// ID of the snapshot where the manifest file was added
-    added_snapshot_id: i64,
+    pub added_snapshot_id: i64,
     /// field: 504
     ///
     /// Number of entries in the manifest that have status ADDED, when null
     /// this is assumed to be non-zero
-    added_data_files_count: Option<i32>,
+    pub added_data_files_count: Option<i32>,
     /// field: 505
     ///
     /// Number of entries in the manifest that have status EXISTING (0),
     /// when null this is assumed to be non-zero
-    existing_data_files_count: Option<i32>,
+    pub existing_data_files_count: Option<i32>,
     /// field: 506
     ///
     /// Number of entries in the manifest that have status DELETED (2),
     /// when null this is assumed to be non-zero
-    deleted_data_files_count: Option<i32>,
+    pub deleted_data_files_count: Option<i32>,
     /// field: 512
     ///
     /// Number of rows in all of files in the manifest that have status
     /// ADDED, when null this is assumed to be non-zero
-    added_rows_count: Option<i64>,
+    pub added_rows_count: Option<i64>,
     /// field: 513
     ///
     /// Number of rows in all of files in the manifest that have status
     /// EXISTING, when null this is assumed to be non-zero
-    existing_rows_count: Option<i64>,
+    pub existing_rows_count: Option<i64>,
     /// field: 514
     ///
     /// Number of rows in all of files in the manifest that have status
     /// DELETED, when null this is assumed to be non-zero
-    deleted_rows_count: Option<i64>,
+    pub deleted_rows_count: Option<i64>,
     /// field: 507
     /// element_field: 508
     ///
     /// A list of field summaries for each partition field in the spec. Each
     /// field in the list corresponds to a field in the manifest file’s
     /// partition spec.
-    partitions: Vec<FieldSummary>,
+    pub partitions: Vec<FieldSummary>,
     /// field: 519
     ///
     /// Implementation-specific key metadata for encryption
-    key_metadata: Vec<u8>,
+    pub key_metadata: Vec<u8>,
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum ManifestContentType {
     /// The manifest content is data.
     Data = 0,
     /// The manifest content is deletes.
     Deletes = 1,
+}
+
+impl FromStr for ManifestContentType {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "data" => Ok(ManifestContentType::Data),
+            "deletes" => Ok(ManifestContentType::Deletes),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid manifest content type: {s}"),
+            )),
+        }
+    }
+}
+
+impl ToString for ManifestContentType {
+    fn to_string(&self) -> String {
+        match self {
+            ManifestContentType::Data => "data".to_string(),
+            ManifestContentType::Deletes => "deletes".to_string(),
+        }
+    }
 }
 
 impl TryFrom<i32> for ManifestContentType {
@@ -568,25 +595,25 @@ impl TryFrom<i32> for ManifestContentType {
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct FieldSummary {
     /// field: 509
     ///
     /// Whether the manifest contains at least one partition with a null
     /// value for the field
-    contains_null: bool,
+    pub contains_null: bool,
     /// field: 518
     /// Whether the manifest contains at least one partition with a NaN
     /// value for the field
-    contains_nan: Option<bool>,
+    pub contains_nan: Option<bool>,
     /// field: 510
     /// The minimum value for the field in the manifests
     /// partitions.
-    lower_bound: Option<Literal>,
+    pub lower_bound: Option<Literal>,
     /// field: 511
     /// The maximum value for the field in the manifests
     /// partitions.
-    upper_bound: Option<Literal>,
+    pub upper_bound: Option<Literal>,
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
