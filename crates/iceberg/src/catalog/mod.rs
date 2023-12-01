@@ -21,7 +21,7 @@ use serde_derive::{Deserialize, Serialize};
 use urlencoding::encode;
 
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec,
+    FormatVersion, Schema, Snapshot, SnapshotReference, UnboundPartitionSpec, UnboundSortOrder,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -231,7 +231,7 @@ pub struct TableCreation {
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
-    pub sort_order: Option<SortOrder>,
+    pub sort_order: Option<UnboundSortOrder>,
     /// The properties of the table.
     #[builder(default)]
     pub properties: HashMap<String, String>,
@@ -375,7 +375,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     AddSortOrder {
         /// Sort order to add.
-        sort_order: SortOrder,
+        sort_order: UnboundSortOrder,
     },
     /// Set table's default sort order
     #[serde(rename_all = "kebab-case")]
@@ -432,8 +432,8 @@ mod tests {
     use crate::spec::ManifestListLocation::ManifestListFile;
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        SnapshotReference, SnapshotRetention, SortDirection, Summary, Transform, Type,
+        UnboundPartitionField, UnboundPartitionSpec, UnboundSortField, UnboundSortOrder,
     };
     use crate::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
     use serde::de::DeserializeOwned;
@@ -848,10 +848,10 @@ mod tests {
         "#;
 
         let update = TableUpdate::AddSortOrder {
-            sort_order: SortOrder::builder()
+            sort_order: UnboundSortOrder::builder()
                 .with_order_id(1)
                 .with_sort_field(
-                    SortField::builder()
+                    UnboundSortField::builder()
                         .source_id(2)
                         .direction(SortDirection::Ascending)
                         .null_order(NullOrder::First)
@@ -859,7 +859,7 @@ mod tests {
                         .build(),
                 )
                 .with_sort_field(
-                    SortField::builder()
+                    UnboundSortField::builder()
                         .source_id(3)
                         .direction(SortDirection::Descending)
                         .null_order(NullOrder::Last)

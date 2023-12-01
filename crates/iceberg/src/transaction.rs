@@ -18,7 +18,9 @@
 //! This module contains transaction api.
 
 use crate::error::Result;
-use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder, Transform};
+use crate::spec::{
+    FormatVersion, NullOrder, SortDirection, Transform, UnboundSortField, UnboundSortOrder,
+};
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -124,7 +126,7 @@ impl<'a> Transaction<'a> {
 /// Transaction action for replacing sort order.
 pub struct ReplaceSortOrderAction<'a> {
     tx: Transaction<'a>,
-    sort_fields: Vec<SortField>,
+    sort_fields: Vec<UnboundSortField>,
 }
 
 impl<'a> ReplaceSortOrderAction<'a> {
@@ -140,12 +142,13 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
     /// Finished building the action and apply it to the transaction.
     pub fn apply(mut self) -> Result<Transaction<'a>> {
+        let unbound_sort_order = UnboundSortOrder::builder()
+            .with_fields(self.sort_fields)
+            .build()?;
+
         let updates = vec![
             TableUpdate::AddSortOrder {
-                sort_order: SortOrder {
-                    fields: self.sort_fields,
-                    ..SortOrder::default()
-                },
+                sort_order: unbound_sort_order,
             },
             TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
         ];
@@ -189,7 +192,7 @@ impl<'a> ReplaceSortOrderAction<'a> {
                 )
             })?;
 
-        let sort_field = SortField::builder()
+        let sort_field = UnboundSortField::builder()
             .source_id(field_id)
             .transform(Transform::Identity)
             .direction(sort_direction)
