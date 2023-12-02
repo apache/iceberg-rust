@@ -44,4 +44,5 @@ mod avro;
 pub mod io;
 pub mod spec;
 
+pub mod transaction;
 pub mod transform;

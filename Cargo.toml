@@ -34,13 +34,13 @@ either = "1"
 futures = "0.3"
 iceberg = { path = "./crates/iceberg" }
 iceberg-catalog-rest = { path = "./crates/catalog/rest" }
-itertools = "0.11"
+itertools = "0.12"
 lazy_static = "1"
 log = "^0.4"
 mockito = "^1"
 murmur3 = "0.5.2"
 once_cell = "1"
-opendal = "0.41"
+opendal = "0.42"
 ordered-float = "4.0.0"
 pretty_assertions = "1.4.0"
 reqwest = { version = "^0.11", features = ["json"] }
@@ -55,4 +55,5 @@ tokio = { version = "1", features = ["macros"] }
 typed-builder = "^0.18"
 url = "2"
 urlencoding = "2"
-uuid = "1.5.0"
+# We pin uuid's version to 1.5.0 because this bug: https://github.com/uuid-rs/uuid/issues/720
+uuid = "~1.5.0"
