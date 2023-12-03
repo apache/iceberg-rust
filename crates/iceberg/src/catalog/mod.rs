@@ -923,8 +923,7 @@ mod tests {
                     operation: Operation::Append,
                     other: HashMap::default(),
                 })
-                .build()
-                .unwrap(),
+                .build(),
         };
 
         test_serde_json(json, update);

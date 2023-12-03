@@ -22,6 +22,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
 use _serde::SnapshotV2;
@@ -59,16 +60,16 @@ impl Default for Operation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Builder, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypedBuilder)]
 #[serde(from = "SnapshotV2", into = "SnapshotV2")]
-#[builder(setter(prefix = "with"))]
+#[builder(field_defaults(setter(prefix = "with_")))]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
     /// A unique long ID
     snapshot_id: i64,
     /// The snapshot ID of the snapshot’s parent.
     /// Omitted for any snapshot with no parent
-    #[builder(default = "None")]
+    #[builder(default = None)]
     parent_snapshot_id: Option<i64>,
     /// A monotonically increasing long that tracks the order of
     /// changes to a table.
@@ -82,7 +83,7 @@ pub struct Snapshot {
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
-    #[builder(setter(strip_option), default = "None")]
+    #[builder(setter(strip_option), default = None)]
     schema_id: Option<i64>,
 }
 
@@ -121,10 +122,6 @@ impl Snapshot {
     #[inline]
     pub fn timestamp(&self) -> DateTime<Utc> {
         Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
-    }
-    /// Create snapshot builder
-    pub fn builder() -> SnapshotBuilder {
-        SnapshotBuilder::default()
     }
 
     pub(crate) fn log(&self) -> SnapshotLog {
