@@ -110,23 +110,9 @@ cargo 1.69.0 (6e9a83356 2023-04-12)
 
 ## Build
 
-### Compile
-
-```shell
-make build
-```
-
-### Lint
-
-```shell
-make check
-```
-
-### Test
-
-```shell
-make test
-```
+* To compile the project: `make build`
+* To check code styles: `make check`
+* To run tests: `make test`
 
 ## Code of Conduct
 
