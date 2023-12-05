@@ -26,9 +26,9 @@ use super::transform::Transform;
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
+/// Partition fields capture the transform from table data to partition values.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
 #[serde(rename_all = "kebab-case")]
-/// Partition fields capture the transform from table data to partition values.
 pub struct PartitionField {
     /// A source column id from the table’s schema
     pub source_id: i32,
@@ -41,10 +41,10 @@ pub struct PartitionField {
     pub transform: Transform,
 }
 
+///  Partition spec that defines how to produce a tuple of partition values from a record.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
 #[serde(rename_all = "kebab-case")]
 #[builder(setter(prefix = "with"))]
-///  Partition spec that defines how to produce a tuple of partition values from a record.
 pub struct PartitionSpec {
     /// Identifier for PartitionSpec
     pub spec_id: i32,
@@ -62,9 +62,9 @@ impl PartitionSpec {
 
 /// Reference to [`UnboundPartitionSpec`].
 pub type UnboundPartitionSpecRef = Arc<UnboundPartitionSpec>;
+/// Unbound partition field can be built without a schema and later bound to a schema.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
 #[serde(rename_all = "kebab-case")]
-/// Unbound partition field can be built without a schema and later bound to a schema.
 pub struct UnboundPartitionField {
     /// A source column id from the table’s schema
     pub source_id: i32,
@@ -78,10 +78,10 @@ pub struct UnboundPartitionField {
     pub transform: Transform,
 }
 
+/// Unbound partition spec can be built without a schema and later bound to a schema.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
 #[serde(rename_all = "kebab-case")]
 #[builder(setter(prefix = "with"))]
-/// Unbound partition spec can be built without a schema and later bound to a schema.
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
     #[builder(default, setter(strip_option))]
