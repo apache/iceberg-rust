@@ -20,7 +20,9 @@
 use serde_derive::{Deserialize, Serialize};
 use urlencoding::encode;
 
-use crate::spec::{FormatVersion, PartitionSpec, Schema, Snapshot, SnapshotReference, SortOrder};
+use crate::spec::{
+    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec,
+};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
@@ -226,7 +228,7 @@ pub struct TableCreation {
     pub schema: Schema,
     /// The partition spec of the table, could be None.
     #[builder(default, setter(strip_option))]
-    pub partition_spec: Option<PartitionSpec>,
+    pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
     pub sort_order: Option<SortOrder>,
@@ -361,7 +363,7 @@ pub enum TableUpdate {
     /// Add a new partition spec to the table
     AddSpec {
         /// The partition spec to add.
-        spec: PartitionSpec,
+        spec: UnboundPartitionSpec,
     },
     /// Set table's default spec
     #[serde(rename_all = "kebab-case")]
@@ -429,9 +431,9 @@ pub enum TableUpdate {
 mod tests {
     use crate::spec::ManifestListLocation::ManifestListFile;
     use crate::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PartitionField, PartitionSpec,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, Summary, Transform, Type,
+        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
+        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
     use serde::de::DeserializeOwned;
@@ -758,23 +760,19 @@ mod tests {
 {
     "action": "add-spec",
     "spec": {
-        "spec-id": 1,
         "fields": [
             {
                 "source-id": 4,
-                "field-id": 1000,
                 "name": "ts_day",
                 "transform": "day"
             },
             {
                 "source-id": 1,
-                "field-id": 1001,
                 "name": "id_bucket",
                 "transform": "bucket[16]"
             },
             {
                 "source-id": 2,
-                "field-id": 1002,
                 "name": "id_truncate",
                 "transform": "truncate[4]"
             }
@@ -783,28 +781,24 @@ mod tests {
 }
         "#,
             TableUpdate::AddSpec {
-                spec: PartitionSpec::builder()
-                    .with_spec_id(1)
-                    .with_partition_field(
-                        PartitionField::builder()
+                spec: UnboundPartitionSpec::builder()
+                    .with_unbound_partition_field(
+                        UnboundPartitionField::builder()
                             .source_id(4)
-                            .field_id(1000)
                             .name("ts_day".to_string())
                             .transform(Transform::Day)
                             .build(),
                     )
-                    .with_partition_field(
-                        PartitionField::builder()
+                    .with_unbound_partition_field(
+                        UnboundPartitionField::builder()
                             .source_id(1)
-                            .field_id(1001)
                             .name("id_bucket".to_string())
                             .transform(Transform::Bucket(16))
                             .build(),
                     )
-                    .with_partition_field(
-                        PartitionField::builder()
+                    .with_unbound_partition_field(
+                        UnboundPartitionField::builder()
                             .source_id(2)
-                            .field_id(1002)
                             .name("id_truncate".to_string())
                             .transform(Transform::Truncate(4))
                             .build(),

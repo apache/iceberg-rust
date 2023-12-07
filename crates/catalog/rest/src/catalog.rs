@@ -521,7 +521,7 @@ mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
-    use iceberg::spec::{PartitionSpec, Schema, SortOrder, TableMetadata};
+    use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
     use iceberg::{Error, ErrorKind, Namespace, TableIdent, TableRequirement, TableUpdate};
 
     pub(super) const OK: u16 = 200u16;
@@ -660,7 +660,7 @@ mod _serde {
         pub(super) name: String,
         pub(super) location: Option<String>,
         pub(super) schema: Schema,
-        pub(super) partition_spec: Option<PartitionSpec>,
+        pub(super) partition_spec: Option<UnboundPartitionSpec>,
         pub(super) write_order: Option<SortOrder>,
         pub(super) stage_create: Option<bool>,
         pub(super) properties: Option<HashMap<String, String>>,
@@ -686,9 +686,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PartitionField, PartitionSpec,
-        PrimitiveType, Schema, Snapshot, SnapshotLog, SortDirection, SortField, SortOrder, Summary,
-        Transform, Type,
+        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
+        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
@@ -1233,14 +1233,12 @@ mod tests {
             )
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
-                PartitionSpec::builder()
-                    .with_fields(vec![PartitionField::builder()
+                UnboundPartitionSpec::builder()
+                    .with_fields(vec![UnboundPartitionField::builder()
                         .source_id(1)
-                        .field_id(1000)
                         .transform(Transform::Truncate(3))
                         .name("id".to_string())
                         .build()])
-                    .with_spec_id(1)
                     .build()
                     .unwrap(),
             )
