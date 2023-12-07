@@ -108,6 +108,12 @@ $ cargo version
 cargo 1.69.0 (6e9a83356 2023-04-12)
 ```
 
+## Build
+
+* To compile the project: `make build`
+* To check code styles: `make check`
+* To run tests: `make test`
+
 ## Code of Conduct
 
 We expect all community members to follow our [Code of Conduct](https://www.apache.org/foundation/policies/conduct.html).
