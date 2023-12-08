@@ -81,6 +81,13 @@ impl SortOrder {
     pub fn builder() -> SortOrderBuilder {
         SortOrderBuilder::default()
     }
+
+    /// Returns true if the sort order is unsorted.
+    ///
+    /// A [`SortOrder`] is unsorted if it has no sort fields.
+    pub fn is_unsorted(&self) -> bool {
+        self.fields.is_empty()
+    }
 }
 
 #[cfg(test)]

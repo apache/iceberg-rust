@@ -58,6 +58,17 @@ impl PartitionSpec {
     pub fn builder() -> PartitionSpecBuilder {
         PartitionSpecBuilder::default()
     }
+
+    /// Returns if the partition spec is unpartitioned.
+    ///
+    /// A [`PartitionSpec`] is unpartitioned if it has no fields or all fields are [`Transform::Void`] transform.
+    pub fn is_unpartitioned(&self) -> bool {
+        self.fields.is_empty()
+            || self
+                .fields
+                .iter()
+                .all(|f| matches!(f.transform, Transform::Void))
+    }
 }
 
 /// Reference to [`UnboundPartitionSpec`].
@@ -141,6 +152,69 @@ mod tests {
         assert_eq!(1002, partition_spec.fields[2].field_id);
         assert_eq!("id_truncate", partition_spec.fields[2].name);
         assert_eq!(Transform::Truncate(4), partition_spec.fields[2].transform);
+    }
+
+    #[test]
+    fn test_is_unpartitioned() {
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(1)
+            .with_fields(vec![])
+            .build()
+            .unwrap();
+        assert!(
+            partition_spec.is_unpartitioned(),
+            "Empty partition spec should be unpartitioned"
+        );
+
+        let partition_spec = PartitionSpec::builder()
+            .with_partition_field(
+                PartitionField::builder()
+                    .source_id(1)
+                    .field_id(1)
+                    .name("id".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
+            .with_partition_field(
+                PartitionField::builder()
+                    .source_id(2)
+                    .field_id(2)
+                    .name("name".to_string())
+                    .transform(Transform::Void)
+                    .build(),
+            )
+            .with_spec_id(1)
+            .build()
+            .unwrap();
+        assert!(
+            !partition_spec.is_unpartitioned(),
+            "Partition spec with one non void transform should not be unpartitioned"
+        );
+
+        let partition_spec = PartitionSpec::builder()
+            .with_spec_id(1)
+            .with_partition_field(
+                PartitionField::builder()
+                    .source_id(1)
+                    .field_id(1)
+                    .name("id".to_string())
+                    .transform(Transform::Void)
+                    .build(),
+            )
+            .with_partition_field(
+                PartitionField::builder()
+                    .source_id(2)
+                    .field_id(2)
+                    .name("name".to_string())
+                    .transform(Transform::Void)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        assert!(
+            partition_spec.is_unpartitioned(),
+            "Partition spec with all void field should be unpartitioned"
+        );
     }
 
     #[test]

@@ -16,32 +16,13 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-rest"
+name = "iceberg_test_utils"
 version = "0.1.0"
 edition = "2021"
 
-categories = ["database"]
-description = "Apache Iceberg Rust REST API"
-repository = "https://github.com/apache/iceberg-rust"
-license = "Apache-2.0"
-keywords = ["iceberg", "rest", "catalog"]
-
 [dependencies]
-# async-trait = { workspace = true }
-async-trait = { workspace = true }
-chrono = { workspace = true }
-iceberg = { workspace = true }
+env_logger = { workspace = true }
 log = "0.4.20"
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_derive = { workspace = true }
-serde_json = { workspace = true }
-typed-builder = { workspace = true }
-urlencoding = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 
-[dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-mockito = { workspace = true }
-port_scanner = { workspace = true }
-tokio = { workspace = true }
+[features]
+tests = []
