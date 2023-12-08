@@ -163,8 +163,6 @@ impl HttpClient {
     ) -> Result<()> {
         let resp = self.0.execute(request).await?;
 
-        println!("Status code: {}", resp.status());
-
         if resp.status().as_u16() == SUCCESS_CODE {
             Ok(())
         } else {
