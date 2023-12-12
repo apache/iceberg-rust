@@ -21,7 +21,7 @@ use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 use super::Literal;
 use super::{
     FieldSummary, FormatVersion, ManifestContentType, ManifestListEntry, PartitionSpec, Schema,
-    Struct, UNASSIGNED_SEQ_NUMBER,
+    Struct,
 };
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
@@ -87,12 +87,12 @@ pub struct ManifestWriter {
 
     snapshot_id: i64,
 
-    added_files: i32,
-    added_rows: i64,
-    existing_files: i32,
-    existing_rows: i64,
-    deleted_files: i32,
-    deleted_rows: i64,
+    added_files: u32,
+    added_rows: u64,
+    existing_files: u32,
+    existing_rows: u64,
+    deleted_files: u32,
+    deleted_rows: u64,
 
     seq_num: i64,
     min_seq_num: Option<i64>,
@@ -139,7 +139,6 @@ impl ManifestWriter {
         if let Some(nan) = &entry.data_file.nan_value_counts {
             for (&k, &v) in nan {
                 let field_summary = self.field_summary.entry(k).or_default();
-                assert!(v >= 0);
                 if v > 0 {
                     field_summary.contains_nan = Some(true);
                 }
@@ -187,7 +186,7 @@ impl ManifestWriter {
     }
 
     /// Write a manifest entry.
-    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestListEntry, Error> {
+    pub async fn write(mut self, manifest: Manifest) -> Result<Option<ManifestListEntry>, Error> {
         // Create the avro writer
         let partition_type = manifest
             .metadata
@@ -289,23 +288,28 @@ impl ManifestWriter {
         let partition_summary =
             self.get_field_summary_vec(&manifest.metadata.partition_spec.fields);
 
-        Ok(ManifestListEntry {
-            manifest_path: self.output.location().to_string(),
-            manifest_length: length as i64,
-            partition_spec_id: manifest.metadata.partition_spec.spec_id,
-            content: manifest.metadata.content,
-            sequence_number: self.seq_num,
-            min_sequence_number: self.min_seq_num.unwrap_or(UNASSIGNED_SEQ_NUMBER),
-            added_snapshot_id: self.snapshot_id,
-            added_data_files_count: Some(self.added_files),
-            existing_data_files_count: Some(self.existing_files),
-            deleted_data_files_count: Some(self.deleted_files),
-            added_rows_count: Some(self.added_rows),
-            existing_rows_count: Some(self.existing_rows),
-            deleted_rows_count: Some(self.deleted_rows),
-            partitions: partition_summary,
-            key_metadata: self.key_metadata.unwrap_or_default(),
-        })
+        if let Some(min_sequence_number) = self.min_seq_num {
+            Ok(Some(ManifestListEntry {
+                manifest_path: self.output.location().to_string(),
+                manifest_length: length as i64,
+                partition_spec_id: manifest.metadata.partition_spec.spec_id,
+                content: manifest.metadata.content,
+                sequence_number: self.seq_num,
+                min_sequence_number,
+                added_snapshot_id: self.snapshot_id,
+                added_data_files_count: Some(self.added_files),
+                existing_data_files_count: Some(self.existing_files),
+                deleted_data_files_count: Some(self.deleted_files),
+                added_rows_count: Some(self.added_rows),
+                existing_rows_count: Some(self.existing_rows),
+                deleted_rows_count: Some(self.deleted_rows),
+                partitions: partition_summary,
+                key_metadata: self.key_metadata.unwrap_or_default(),
+            }))
+        } else {
+            // All entries are deleted
+            Ok(None)
+        }
     }
 }
 
@@ -324,7 +328,7 @@ mod _const_schema {
         Error,
     };
 
-    pub static STATUS: Lazy<NestedFieldRef> = {
+    static STATUS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 0,
@@ -334,7 +338,7 @@ mod _const_schema {
         })
     };
 
-    pub static SNAPSHOT_ID_V1: Lazy<NestedFieldRef> = {
+    static SNAPSHOT_ID_V1: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 1,
@@ -344,7 +348,7 @@ mod _const_schema {
         })
     };
 
-    pub static SNAPSHOT_ID_V2: Lazy<NestedFieldRef> = {
+    static SNAPSHOT_ID_V2: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 1,
@@ -354,7 +358,7 @@ mod _const_schema {
         })
     };
 
-    pub static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 3,
@@ -364,7 +368,7 @@ mod _const_schema {
         })
     };
 
-    pub static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
+    static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 4,
@@ -374,7 +378,7 @@ mod _const_schema {
         })
     };
 
-    pub static CONTENT: Lazy<NestedFieldRef> = {
+    static CONTENT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 134,
@@ -384,7 +388,7 @@ mod _const_schema {
         })
     };
 
-    pub static FILE_PATH: Lazy<NestedFieldRef> = {
+    static FILE_PATH: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 100,
@@ -394,7 +398,7 @@ mod _const_schema {
         })
     };
 
-    pub static FILE_FORMAT: Lazy<NestedFieldRef> = {
+    static FILE_FORMAT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 101,
@@ -404,7 +408,7 @@ mod _const_schema {
         })
     };
 
-    pub static RECORD_COUNT: Lazy<NestedFieldRef> = {
+    static RECORD_COUNT: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 103,
@@ -414,7 +418,7 @@ mod _const_schema {
         })
     };
 
-    pub static FILE_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
+    static FILE_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 104,
@@ -425,7 +429,7 @@ mod _const_schema {
     };
 
     // Deprecated. Always write a default in v1. Do not write in v2.
-    pub static BLOCK_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
+    static BLOCK_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 105,
@@ -435,7 +439,7 @@ mod _const_schema {
         })
     };
 
-    pub static COLUMN_SIZES: Lazy<NestedFieldRef> = {
+    static COLUMN_SIZES: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 108,
@@ -456,7 +460,7 @@ mod _const_schema {
         })
     };
 
-    pub static VALUE_COUNTS: Lazy<NestedFieldRef> = {
+    static VALUE_COUNTS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 109,
@@ -477,7 +481,7 @@ mod _const_schema {
         })
     };
 
-    pub static NULL_VALUE_COUNTS: Lazy<NestedFieldRef> = {
+    static NULL_VALUE_COUNTS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 110,
@@ -498,7 +502,7 @@ mod _const_schema {
         })
     };
 
-    pub static NAN_VALUE_COUNTS: Lazy<NestedFieldRef> = {
+    static NAN_VALUE_COUNTS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 137,
@@ -519,7 +523,7 @@ mod _const_schema {
         })
     };
 
-    pub static DISTINCT_COUNTS: Lazy<NestedFieldRef> = {
+    static DISTINCT_COUNTS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 111,
@@ -540,7 +544,7 @@ mod _const_schema {
         })
     };
 
-    pub static LOWER_BOUNDS: Lazy<NestedFieldRef> = {
+    static LOWER_BOUNDS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 125,
@@ -561,7 +565,7 @@ mod _const_schema {
         })
     };
 
-    pub static UPPER_BOUNDS: Lazy<NestedFieldRef> = {
+    static UPPER_BOUNDS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 128,
@@ -582,7 +586,7 @@ mod _const_schema {
         })
     };
 
-    pub static KEY_METADATA: Lazy<NestedFieldRef> = {
+    static KEY_METADATA: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 131,
@@ -592,7 +596,7 @@ mod _const_schema {
         })
     };
 
-    pub static SPLIT_OFFSETS: Lazy<NestedFieldRef> = {
+    static SPLIT_OFFSETS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 132,
@@ -608,7 +612,7 @@ mod _const_schema {
         })
     };
 
-    pub static EQUALITY_IDS: Lazy<NestedFieldRef> = {
+    static EQUALITY_IDS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 135,
@@ -624,7 +628,7 @@ mod _const_schema {
         })
     };
 
-    pub static SORT_ORDER_ID: Lazy<NestedFieldRef> = {
+    static SORT_ORDER_ID: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
                 140,
@@ -906,11 +910,11 @@ pub struct DataFile {
     /// field id: 103
     ///
     /// Number of records in this file
-    record_count: i64,
+    record_count: u64,
     /// field id: 104
     ///
     /// Total file size in bytes
-    file_size_in_bytes: i64,
+    file_size_in_bytes: u64,
     /// field id: 108
     /// key field id: 117
     /// value field id: 118
@@ -918,26 +922,26 @@ pub struct DataFile {
     /// Map from column id to the total size on disk of all regions that
     /// store the column. Does not include bytes necessary to read other
     /// columns, like footers. Leave null for row-oriented formats (Avro)
-    column_sizes: Option<HashMap<i32, i64>>,
+    column_sizes: Option<HashMap<i32, u64>>,
     /// field id: 109
     /// key field id: 119
     /// value field id: 120
     ///
     /// Map from column id to number of values in the column (including null
     /// and NaN values)
-    value_counts: Option<HashMap<i32, i64>>,
+    value_counts: Option<HashMap<i32, u64>>,
     /// field id: 110
     /// key field id: 121
     /// value field id: 122
     ///
     /// Map from column id to number of null values in the column
-    null_value_counts: Option<HashMap<i32, i64>>,
+    null_value_counts: Option<HashMap<i32, u64>>,
     /// field id: 137
     /// key field id: 138
     /// value field id: 139
     ///
     /// Map from column id to number of NaN values in the column
-    nan_value_counts: Option<HashMap<i32, i64>>,
+    nan_value_counts: Option<HashMap<i32, u64>>,
     /// field id: 111
     /// key field id: 123
     /// value field id: 124
@@ -946,7 +950,7 @@ pub struct DataFile {
     /// distinct counts must be derived using values in the file by counting
     /// or using sketches, but not using methods like merging existing
     /// distinct counts
-    distinct_counts: Option<HashMap<i32, i64>>,
+    distinct_counts: Option<HashMap<i32, u64>>,
     /// field id: 125
     /// key field id: 126
     /// value field id: 127
@@ -1193,14 +1197,14 @@ mod _serde {
                     Literal::Struct(value.partition),
                     &Type::Struct(partition_type.clone()),
                 )?,
-                record_count: value.record_count,
-                file_size_in_bytes: value.file_size_in_bytes,
+                record_count: value.record_count.try_into()?,
+                file_size_in_bytes: value.file_size_in_bytes.try_into()?,
                 block_size_in_bytes,
-                column_sizes: value.column_sizes.map(to_i64_entry),
-                value_counts: value.value_counts.map(to_i64_entry),
-                null_value_counts: value.null_value_counts.map(to_i64_entry),
-                nan_value_counts: value.nan_value_counts.map(to_i64_entry),
-                distinct_counts: value.distinct_counts.map(to_i64_entry),
+                column_sizes: value.column_sizes.map(to_i64_entry).transpose()?,
+                value_counts: value.value_counts.map(to_i64_entry).transpose()?,
+                null_value_counts: value.null_value_counts.map(to_i64_entry).transpose()?,
+                nan_value_counts: value.nan_value_counts.map(to_i64_entry).transpose()?,
+                distinct_counts: value.distinct_counts.map(to_i64_entry).transpose()?,
                 lower_bounds: value.lower_bounds.map(to_bytes_entry),
                 upper_bounds: value.upper_bounds.map(to_bytes_entry),
                 key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
@@ -1234,13 +1238,13 @@ mod _serde {
                 file_path: self.file_path,
                 file_format: self.file_format.parse()?,
                 partition,
-                record_count: self.record_count,
-                file_size_in_bytes: self.file_size_in_bytes,
-                column_sizes: self.column_sizes.map(parse_i64_entry),
-                value_counts: self.value_counts.map(parse_i64_entry),
-                null_value_counts: self.null_value_counts.map(parse_i64_entry),
-                nan_value_counts: self.nan_value_counts.map(parse_i64_entry),
-                distinct_counts: self.distinct_counts.map(parse_i64_entry),
+                record_count: self.record_count.try_into()?,
+                file_size_in_bytes: self.file_size_in_bytes.try_into()?,
+                column_sizes: self.column_sizes.map(parse_i64_entry).transpose()?,
+                value_counts: self.value_counts.map(parse_i64_entry).transpose()?,
+                null_value_counts: self.null_value_counts.map(parse_i64_entry).transpose()?,
+                nan_value_counts: self.nan_value_counts.map(parse_i64_entry).transpose()?,
+                distinct_counts: self.distinct_counts.map(parse_i64_entry).transpose()?,
                 lower_bounds: self
                     .lower_bounds
                     .map(|v| parse_bytes_entry(v, schema))
@@ -1301,20 +1305,22 @@ mod _serde {
         value: i64,
     }
 
-    fn parse_i64_entry(v: Vec<I64Entry>) -> HashMap<i32, i64> {
+    fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
         let mut m = HashMap::with_capacity(v.len());
         for entry in v {
-            m.insert(entry.key, entry.value);
+            m.insert(entry.key, entry.value.try_into()?);
         }
-        m
+        Ok(m)
     }
 
-    fn to_i64_entry(entries: HashMap<i32, i64>) -> Vec<I64Entry> {
+    fn to_i64_entry(entries: HashMap<i32, u64>) -> Result<Vec<I64Entry>, Error> {
         entries
             .iter()
-            .map(|e| I64Entry {
-                key: *e.0,
-                value: *e.1,
+            .map(|e| {
+                Ok(I64Entry {
+                    key: *e.0,
+                    value: (*e.1).try_into()?,
+                })
             })
             .collect()
     }
@@ -1806,7 +1812,7 @@ mod tests {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let writer = ManifestWriter::new(output_file, 1, 1, None);
-        let entry = writer.write(manifest.clone()).await.unwrap();
+        let entry = writer.write(manifest.clone()).await.unwrap().unwrap();
 
         // Check partition summary
         assert_eq!(entry.partitions.len(), 1);
