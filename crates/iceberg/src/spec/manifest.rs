@@ -96,14 +96,14 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    key_metadata: Option<Vec<u8>>,
+    key_metadata: Vec<u8>,
 
     field_summary: HashMap<i32, FieldSummary>,
 }
 
 impl ManifestWriter {
     /// Create a new manifest writer.
-    pub fn new(output: OutputFile, snapshot_id: i64, key_metadata: Option<Vec<u8>>) -> Self {
+    pub fn new(output: OutputFile, snapshot_id: i64, key_metadata: Vec<u8>) -> Self {
         Self {
             output,
             snapshot_id,
@@ -121,47 +121,42 @@ impl ManifestWriter {
 
     fn update_field_summary(&mut self, entry: &ManifestEntry) {
         // Update field summary
-        if let Some(null) = &entry.data_file.null_value_counts {
-            for (&k, &v) in null {
-                let field_summary = self.field_summary.entry(k).or_default();
-                if v > 0 {
-                    field_summary.contains_null = true;
-                }
+        for (&k, &v) in &entry.data_file.null_value_counts {
+            let field_summary = self.field_summary.entry(k).or_default();
+            if v > 0 {
+                field_summary.contains_null = true;
             }
         }
-        if let Some(nan) = &entry.data_file.nan_value_counts {
-            for (&k, &v) in nan {
-                let field_summary = self.field_summary.entry(k).or_default();
-                if v > 0 {
-                    field_summary.contains_nan = Some(true);
-                }
-                if v == 0 {
-                    field_summary.contains_nan = Some(false);
-                }
+
+        for (&k, &v) in &entry.data_file.nan_value_counts {
+            let field_summary = self.field_summary.entry(k).or_default();
+            if v > 0 {
+                field_summary.contains_nan = Some(true);
+            }
+            if v == 0 {
+                field_summary.contains_nan = Some(false);
             }
         }
-        if let Some(lower_bound) = &entry.data_file.lower_bounds {
-            for (&k, v) in lower_bound {
-                let field_summary = self.field_summary.entry(k).or_default();
-                if let Some(cur) = &field_summary.lower_bound {
-                    if v < cur {
-                        field_summary.lower_bound = Some(v.clone());
-                    }
-                } else {
+
+        for (&k, v) in &entry.data_file.lower_bounds {
+            let field_summary = self.field_summary.entry(k).or_default();
+            if let Some(cur) = &field_summary.lower_bound {
+                if v < cur {
                     field_summary.lower_bound = Some(v.clone());
                 }
+            } else {
+                field_summary.lower_bound = Some(v.clone());
             }
         }
-        if let Some(upper_bound) = &entry.data_file.upper_bounds {
-            for (&k, v) in upper_bound {
-                let field_summary = self.field_summary.entry(k).or_default();
-                if let Some(cur) = &field_summary.upper_bound {
-                    if v > cur {
-                        field_summary.upper_bound = Some(v.clone());
-                    }
-                } else {
+
+        for (&k, v) in &entry.data_file.upper_bounds {
+            let field_summary = self.field_summary.entry(k).or_default();
+            if let Some(cur) = &field_summary.upper_bound {
+                if v > cur {
                     field_summary.upper_bound = Some(v.clone());
                 }
+            } else {
+                field_summary.upper_bound = Some(v.clone());
             }
         }
     }
@@ -300,7 +295,7 @@ impl ManifestWriter {
             existing_rows_count: Some(self.existing_rows),
             deleted_rows_count: Some(self.deleted_rows),
             partitions: partition_summary,
-            key_metadata: self.key_metadata.unwrap_or_default(),
+            key_metadata: self.key_metadata,
         })
     }
 }
@@ -630,7 +625,7 @@ mod _const_schema {
         })
     };
 
-    pub fn manifest_schema_v2(partition_type: StructType) -> Result<AvroSchema, Error> {
+    pub(super) fn manifest_schema_v2(partition_type: StructType) -> Result<AvroSchema, Error> {
         let fields = vec![
             STATUS.clone(),
             SNAPSHOT_ID_V2.clone(),
@@ -668,7 +663,7 @@ mod _const_schema {
         schema_to_avro_schema("manifest", &schema)
     }
 
-    pub fn manifest_schema_v1(partition_type: StructType) -> Result<AvroSchema, Error> {
+    pub(super) fn manifest_schema_v1(partition_type: StructType) -> Result<AvroSchema, Error> {
         let fields = vec![
             STATUS.clone(),
             SNAPSHOT_ID_V1.clone(),
@@ -914,26 +909,26 @@ pub struct DataFile {
     /// Map from column id to the total size on disk of all regions that
     /// store the column. Does not include bytes necessary to read other
     /// columns, like footers. Leave null for row-oriented formats (Avro)
-    column_sizes: Option<HashMap<i32, u64>>,
+    column_sizes: HashMap<i32, u64>,
     /// field id: 109
     /// key field id: 119
     /// value field id: 120
     ///
     /// Map from column id to number of values in the column (including null
     /// and NaN values)
-    value_counts: Option<HashMap<i32, u64>>,
+    value_counts: HashMap<i32, u64>,
     /// field id: 110
     /// key field id: 121
     /// value field id: 122
     ///
     /// Map from column id to number of null values in the column
-    null_value_counts: Option<HashMap<i32, u64>>,
+    null_value_counts: HashMap<i32, u64>,
     /// field id: 137
     /// key field id: 138
     /// value field id: 139
     ///
     /// Map from column id to number of NaN values in the column
-    nan_value_counts: Option<HashMap<i32, u64>>,
+    nan_value_counts: HashMap<i32, u64>,
     /// field id: 111
     /// key field id: 123
     /// value field id: 124
@@ -942,7 +937,7 @@ pub struct DataFile {
     /// distinct counts must be derived using values in the file by counting
     /// or using sketches, but not using methods like merging existing
     /// distinct counts
-    distinct_counts: Option<HashMap<i32, u64>>,
+    distinct_counts: HashMap<i32, u64>,
     /// field id: 125
     /// key field id: 126
     /// value field id: 127
@@ -954,7 +949,7 @@ pub struct DataFile {
     /// Reference:
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
-    lower_bounds: Option<HashMap<i32, Literal>>,
+    lower_bounds: HashMap<i32, Literal>,
     /// field id: 128
     /// key field id: 129
     /// value field id: 130
@@ -966,17 +961,17 @@ pub struct DataFile {
     /// Reference:
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
-    upper_bounds: Option<HashMap<i32, Literal>>,
+    upper_bounds: HashMap<i32, Literal>,
     /// field id: 131
     ///
     /// Implementation-specific key metadata for encryption
-    key_metadata: Option<Vec<u8>>,
+    key_metadata: Vec<u8>,
     /// field id: 132
     /// element field id: 133
     ///
     /// Split offsets for the data file. For example, all row group offsets
     /// in a Parquet file. Must be sorted ascending
-    split_offsets: Option<Vec<i64>>,
+    split_offsets: Vec<i64>,
     /// field id: 135
     /// element field id: 136
     ///
@@ -984,7 +979,7 @@ pub struct DataFile {
     /// Required when content is EqualityDeletes and should be null
     /// otherwise. Fields with ids listed in this column must be present
     /// in the delete file
-    equality_ids: Option<Vec<i32>>,
+    equality_ids: Vec<i32>,
     /// field id: 140
     ///
     /// ID representing sort order for this file.
@@ -1192,16 +1187,16 @@ mod _serde {
                 record_count: value.record_count.try_into()?,
                 file_size_in_bytes: value.file_size_in_bytes.try_into()?,
                 block_size_in_bytes,
-                column_sizes: value.column_sizes.map(to_i64_entry).transpose()?,
-                value_counts: value.value_counts.map(to_i64_entry).transpose()?,
-                null_value_counts: value.null_value_counts.map(to_i64_entry).transpose()?,
-                nan_value_counts: value.nan_value_counts.map(to_i64_entry).transpose()?,
-                distinct_counts: value.distinct_counts.map(to_i64_entry).transpose()?,
-                lower_bounds: value.lower_bounds.map(to_bytes_entry),
-                upper_bounds: value.upper_bounds.map(to_bytes_entry),
-                key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
-                split_offsets: value.split_offsets,
-                equality_ids: value.equality_ids,
+                column_sizes: Some(to_i64_entry(value.column_sizes)?),
+                value_counts: Some(to_i64_entry(value.value_counts)?),
+                null_value_counts: Some(to_i64_entry(value.null_value_counts)?),
+                nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
+                distinct_counts: Some(to_i64_entry(value.distinct_counts)?),
+                lower_bounds: Some(to_bytes_entry(value.lower_bounds)),
+                upper_bounds: Some(to_bytes_entry(value.upper_bounds)),
+                key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
+                split_offsets: Some(value.split_offsets),
+                equality_ids: Some(value.equality_ids),
                 sort_order_id: value.sort_order_id,
             })
         }
@@ -1232,22 +1227,44 @@ mod _serde {
                 partition,
                 record_count: self.record_count.try_into()?,
                 file_size_in_bytes: self.file_size_in_bytes.try_into()?,
-                column_sizes: self.column_sizes.map(parse_i64_entry).transpose()?,
-                value_counts: self.value_counts.map(parse_i64_entry).transpose()?,
-                null_value_counts: self.null_value_counts.map(parse_i64_entry).transpose()?,
-                nan_value_counts: self.nan_value_counts.map(parse_i64_entry).transpose()?,
-                distinct_counts: self.distinct_counts.map(parse_i64_entry).transpose()?,
+                column_sizes: self
+                    .column_sizes
+                    .map(parse_i64_entry)
+                    .transpose()?
+                    .unwrap_or_default(),
+                value_counts: self
+                    .value_counts
+                    .map(parse_i64_entry)
+                    .transpose()?
+                    .unwrap_or_default(),
+                null_value_counts: self
+                    .null_value_counts
+                    .map(parse_i64_entry)
+                    .transpose()?
+                    .unwrap_or_default(),
+                nan_value_counts: self
+                    .nan_value_counts
+                    .map(parse_i64_entry)
+                    .transpose()?
+                    .unwrap_or_default(),
+                distinct_counts: self
+                    .distinct_counts
+                    .map(parse_i64_entry)
+                    .transpose()?
+                    .unwrap_or_default(),
                 lower_bounds: self
                     .lower_bounds
                     .map(|v| parse_bytes_entry(v, schema))
-                    .transpose()?,
+                    .transpose()?
+                    .unwrap_or_default(),
                 upper_bounds: self
                     .upper_bounds
                     .map(|v| parse_bytes_entry(v, schema))
-                    .transpose()?,
-                key_metadata: self.key_metadata.map(|v| v.to_vec()),
-                split_offsets: self.split_offsets,
-                equality_ids: self.equality_ids,
+                    .transpose()?
+                    .unwrap_or_default(),
+                key_metadata: self.key_metadata.map(|v| v.to_vec()).unwrap_or_default(),
+                split_offsets: self.split_offsets.unwrap_or_default(),
+                equality_ids: self.equality_ids.unwrap_or_default(),
                 sort_order_id: self.sort_order_id,
             })
         }
@@ -1426,16 +1443,16 @@ mod tests {
                 partition: Struct::empty(),
                 record_count: 1,
                 file_size_in_bytes: 5442,
-                column_sizes: Some(HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)])),
-                value_counts: Some(HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)])),
-                null_value_counts: Some(HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)])),
-                nan_value_counts: None,
-                distinct_counts: None,
-                lower_bounds: None,
-                upper_bounds: None,
-                key_metadata: None,
-                split_offsets: Some(vec![4]),
-                equality_ids: None,
+                column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                nan_value_counts: HashMap::new(),
+                distinct_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: Vec::new(),
+                split_offsets: vec![4],
+                equality_ids: Vec::new(),
                 sort_order_id: None,
             }
         );
@@ -1558,7 +1575,7 @@ mod tests {
         assert_eq!(entry.data_file.file_size_in_bytes, 5442);
         assert_eq!(
             entry.data_file.column_sizes,
-            Some(HashMap::from([
+            HashMap::from([
                 (0, 73),
                 (6, 34),
                 (2, 73),
@@ -1570,11 +1587,11 @@ mod tests {
                 (1, 61),
                 (4, 73),
                 (8, 73)
-            ]))
+            ])
         );
         assert_eq!(
             entry.data_file.value_counts,
-            Some(HashMap::from([
+            HashMap::from([
                 (4, 1),
                 (5, 1),
                 (2, 1),
@@ -1586,11 +1603,11 @@ mod tests {
                 (10, 1),
                 (7, 1),
                 (9, 1)
-            ]))
+            ])
         );
         assert_eq!(
             entry.data_file.null_value_counts,
-            Some(HashMap::from([
+            HashMap::from([
                 (1, 0),
                 (6, 0),
                 (2, 0),
@@ -1602,15 +1619,15 @@ mod tests {
                 (7, 0),
                 (4, 0),
                 (10, 0)
-            ]))
+            ])
         );
-        assert_eq!(entry.data_file.nan_value_counts, None);
-        assert_eq!(entry.data_file.distinct_counts, None);
-        assert_eq!(entry.data_file.lower_bounds, None);
-        assert_eq!(entry.data_file.upper_bounds, None);
-        assert_eq!(entry.data_file.key_metadata, None);
-        assert_eq!(entry.data_file.split_offsets, Some(vec![4]));
-        assert_eq!(entry.data_file.equality_ids, None);
+        assert!(entry.data_file.nan_value_counts.is_empty());
+        assert!(entry.data_file.distinct_counts.is_empty());
+        assert!(entry.data_file.lower_bounds.is_empty());
+        assert!(entry.data_file.upper_bounds.is_empty());
+        assert!(entry.data_file.key_metadata.is_empty());
+        assert_eq!(entry.data_file.split_offsets, vec![4]);
+        assert!(entry.data_file.equality_ids.is_empty());
         assert_eq!(entry.data_file.sort_order_id, None);
     }
 
@@ -1666,16 +1683,16 @@ mod tests {
                 partition: Struct::empty(),
                 record_count: 1,
                 file_size_in_bytes: 875,
-                column_sizes: Some(HashMap::from([(1,47),(2,48),(3,52)])),
-                value_counts: Some(HashMap::from([(1,1),(2,1),(3,1)])),
-                null_value_counts: Some(HashMap::from([(1,0),(2,0),(3,0)])),
-                nan_value_counts: Some(HashMap::new()),
-                distinct_counts: None,
-                lower_bounds: Some(HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))])),
-                upper_bounds: Some(HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))])),
-                key_metadata: None,
-                split_offsets: Some(vec![4]),
-                equality_ids: None,
+                column_sizes: HashMap::from([(1,47),(2,48),(3,52)]),
+                value_counts: HashMap::from([(1,1),(2,1),(3,1)]),
+                null_value_counts: HashMap::from([(1,0),(2,0),(3,0)]),
+                nan_value_counts: HashMap::new(),
+                distinct_counts: HashMap::new(),
+                lower_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
+                upper_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
+                key_metadata: vec![],
+                split_offsets: vec![4],
+                equality_ids: vec![],
                 sort_order_id: Some(0),
             }
         );
@@ -1754,37 +1771,37 @@ mod tests {
         assert_eq!(entry.data_file.file_size_in_bytes, 874);
         assert_eq!(
             entry.data_file.column_sizes,
-            Some(HashMap::from([(1, 46), (2, 48), (3, 48)]))
+            HashMap::from([(1, 46), (2, 48), (3, 48)])
         );
         assert_eq!(
             entry.data_file.value_counts,
-            Some(HashMap::from([(1, 1), (2, 1), (3, 1)]))
+            HashMap::from([(1, 1), (2, 1), (3, 1)])
         );
         assert_eq!(
             entry.data_file.null_value_counts,
-            Some(HashMap::from([(1, 0), (2, 0), (3, 0)]))
+            HashMap::from([(1, 0), (2, 0), (3, 0)])
         );
-        assert_eq!(entry.data_file.nan_value_counts, Some(HashMap::new()));
-        assert_eq!(entry.data_file.distinct_counts, None);
+        assert_eq!(entry.data_file.nan_value_counts, HashMap::new());
+        assert_eq!(entry.data_file.distinct_counts, HashMap::new());
         assert_eq!(
             entry.data_file.lower_bounds,
-            Some(HashMap::from([
+            HashMap::from([
                 (1, Literal::long(1)),
                 (2, Literal::string("a")),
                 (3, Literal::string("x"))
-            ]))
+            ])
         );
         assert_eq!(
             entry.data_file.upper_bounds,
-            Some(HashMap::from([
+            HashMap::from([
                 (1, Literal::long(1)),
                 (2, Literal::string("a")),
                 (3, Literal::string("x"))
-            ]))
+            ])
         );
-        assert_eq!(entry.data_file.key_metadata, None);
-        assert_eq!(entry.data_file.split_offsets, Some(vec![4]));
-        assert_eq!(entry.data_file.equality_ids, None);
+        assert!(entry.data_file.key_metadata.is_empty());
+        assert_eq!(entry.data_file.split_offsets, vec![4]);
+        assert!(entry.data_file.equality_ids.is_empty());
         assert_eq!(entry.data_file.sort_order_id, Some(0));
     }
 
@@ -1803,7 +1820,7 @@ mod tests {
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
-        let writer = ManifestWriter::new(output_file, 1, None);
+        let writer = ManifestWriter::new(output_file, 1, vec![]);
         let entry = writer.write(manifest.clone()).await.unwrap();
 
         // Check partition summary
@@ -1833,7 +1850,7 @@ mod tests {
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
-        let writer = ManifestWriter::new(output_file, 1, None);
+        let writer = ManifestWriter::new(output_file, 1, vec![]);
         let res = writer.write(manifest.clone()).await.unwrap();
         assert_eq!(res.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
         assert_eq!(res.min_sequence_number, 1);

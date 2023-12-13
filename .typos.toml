@@ -1,2 +1,2 @@
 [files]
-extend-exclude = ["crates/iceberg/testdata"]
+extend-exclude = ["**/testdata"]
