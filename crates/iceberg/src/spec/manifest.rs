@@ -510,27 +510,6 @@ mod _const_schema {
         })
     };
 
-    static DISTINCT_COUNTS: Lazy<NestedFieldRef> = {
-        Lazy::new(|| {
-            Arc::new(NestedField::optional(
-                111,
-                "distinct_counts",
-                Type::Map(MapType {
-                    key_field: Arc::new(NestedField::required(
-                        123,
-                        "key",
-                        Type::Primitive(PrimitiveType::Int),
-                    )),
-                    value_field: Arc::new(NestedField::required(
-                        124,
-                        "value",
-                        Type::Primitive(PrimitiveType::Long),
-                    )),
-                }),
-            ))
-        })
-    };
-
     static LOWER_BOUNDS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
             Arc::new(NestedField::optional(
@@ -649,7 +628,6 @@ mod _const_schema {
                     VALUE_COUNTS.clone(),
                     NULL_VALUE_COUNTS.clone(),
                     NAN_VALUE_COUNTS.clone(),
-                    DISTINCT_COUNTS.clone(),
                     LOWER_BOUNDS.clone(),
                     UPPER_BOUNDS.clone(),
                     KEY_METADATA.clone(),
@@ -685,7 +663,6 @@ mod _const_schema {
                     VALUE_COUNTS.clone(),
                     NULL_VALUE_COUNTS.clone(),
                     NAN_VALUE_COUNTS.clone(),
-                    DISTINCT_COUNTS.clone(),
                     LOWER_BOUNDS.clone(),
                     UPPER_BOUNDS.clone(),
                     KEY_METADATA.clone(),
@@ -929,15 +906,6 @@ pub struct DataFile {
     ///
     /// Map from column id to number of NaN values in the column
     nan_value_counts: HashMap<i32, u64>,
-    /// field id: 111
-    /// key field id: 123
-    /// value field id: 124
-    ///
-    /// Map from column id to number of distinct values in the column;
-    /// distinct counts must be derived using values in the file by counting
-    /// or using sketches, but not using methods like merging existing
-    /// distinct counts
-    distinct_counts: HashMap<i32, u64>,
     /// field id: 125
     /// key field id: 126
     /// value field id: 127
@@ -1159,7 +1127,6 @@ mod _serde {
         value_counts: Option<Vec<I64Entry>>,
         null_value_counts: Option<Vec<I64Entry>>,
         nan_value_counts: Option<Vec<I64Entry>>,
-        distinct_counts: Option<Vec<I64Entry>>,
         lower_bounds: Option<Vec<BytesEntry>>,
         upper_bounds: Option<Vec<BytesEntry>>,
         key_metadata: Option<serde_bytes::ByteBuf>,
@@ -1191,7 +1158,6 @@ mod _serde {
                 value_counts: Some(to_i64_entry(value.value_counts)?),
                 null_value_counts: Some(to_i64_entry(value.null_value_counts)?),
                 nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
-                distinct_counts: Some(to_i64_entry(value.distinct_counts)?),
                 lower_bounds: Some(to_bytes_entry(value.lower_bounds)),
                 upper_bounds: Some(to_bytes_entry(value.upper_bounds)),
                 key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
@@ -1244,11 +1210,6 @@ mod _serde {
                     .unwrap_or_default(),
                 nan_value_counts: self
                     .nan_value_counts
-                    .map(parse_i64_entry)
-                    .transpose()?
-                    .unwrap_or_default(),
-                distinct_counts: self
-                    .distinct_counts
                     .map(parse_i64_entry)
                     .transpose()?
                     .unwrap_or_default(),
@@ -1447,7 +1408,6 @@ mod tests {
                 value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
                 null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
                 nan_value_counts: HashMap::new(),
-                distinct_counts: HashMap::new(),
                 lower_bounds: HashMap::new(),
                 upper_bounds: HashMap::new(),
                 key_metadata: Vec::new(),
@@ -1622,7 +1582,6 @@ mod tests {
             ])
         );
         assert!(entry.data_file.nan_value_counts.is_empty());
-        assert!(entry.data_file.distinct_counts.is_empty());
         assert!(entry.data_file.lower_bounds.is_empty());
         assert!(entry.data_file.upper_bounds.is_empty());
         assert!(entry.data_file.key_metadata.is_empty());
@@ -1687,7 +1646,6 @@ mod tests {
                 value_counts: HashMap::from([(1,1),(2,1),(3,1)]),
                 null_value_counts: HashMap::from([(1,0),(2,0),(3,0)]),
                 nan_value_counts: HashMap::new(),
-                distinct_counts: HashMap::new(),
                 lower_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
                 upper_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
                 key_metadata: vec![],
@@ -1782,7 +1740,6 @@ mod tests {
             HashMap::from([(1, 0), (2, 0), (3, 0)])
         );
         assert_eq!(entry.data_file.nan_value_counts, HashMap::new());
-        assert_eq!(entry.data_file.distinct_counts, HashMap::new());
         assert_eq!(
             entry.data_file.lower_bounds,
             HashMap::from([
