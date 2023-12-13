@@ -30,6 +30,9 @@ use self::{
 
 use super::{FormatVersion, StructType};
 
+/// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
+pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
+
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
 ///
@@ -81,6 +84,8 @@ pub struct ManifestListWriter {
     format_version: FormatVersion,
     output_file: OutputFile,
     avro_writer: Writer<'static, Vec<u8>>,
+    sequence_number: i64,
+    snapshot_id: i64,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -104,7 +109,7 @@ impl ManifestListWriter {
             ),
             ("format-version".to_string(), "1".to_string()),
         ]);
-        Self::new(FormatVersion::V1, output_file, metadata)
+        Self::new(FormatVersion::V1, output_file, metadata, 0, snapshot_id)
     }
 
     /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
@@ -123,13 +128,21 @@ impl ManifestListWriter {
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
-        Self::new(FormatVersion::V2, output_file, metadata)
+        Self::new(
+            FormatVersion::V2,
+            output_file,
+            metadata,
+            sequence_number,
+            snapshot_id,
+        )
     }
 
     fn new(
         format_version: FormatVersion,
         output_file: OutputFile,
         metadata: HashMap<String, String>,
+        sequence_number: i64,
+        snapshot_id: i64,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -145,6 +158,8 @@ impl ManifestListWriter {
             format_version,
             output_file,
             avro_writer,
+            sequence_number,
+            snapshot_id,
         }
     }
 
@@ -161,7 +176,31 @@ impl ManifestListWriter {
                 }
             }
             FormatVersion::V2 => {
-                for manifest_entry in manifest_entries {
+                for mut manifest_entry in manifest_entries {
+                    if manifest_entry.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                                    manifest_entry.added_snapshot_id
+                                ),
+                            ));
+                        }
+                        manifest_entry.sequence_number = self.sequence_number;
+                    }
+                    if manifest_entry.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                                    manifest_entry.added_snapshot_id
+                                ),
+                            ));
+                        }
+                        manifest_entry.min_sequence_number = self.sequence_number;
+                    }
                     let manifest_entry: ManifestListEntryV2 = manifest_entry.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
@@ -1000,9 +1039,9 @@ mod test {
     use crate::{
         io::FileIOBuilder,
         spec::{
-            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
-            ManifestList, ManifestListEntry, ManifestListWriter, NestedField, PrimitiveType,
-            StructType, Type,
+            manifest_list::{_serde::ManifestListV1, UNASSIGNED_SEQUENCE_NUMBER},
+            FieldSummary, Literal, ManifestContentType, ManifestList, ManifestListEntry,
+            ManifestListWriter, NestedField, PrimitiveType, StructType, Type,
         },
     };
 
@@ -1197,15 +1236,17 @@ mod test {
 
     #[tokio::test]
     async fn test_manifest_list_writer_v2() {
-        let expected_manifest_list = ManifestList {
+        let snapshot_id = 377075049360453639;
+        let seq_num = 1;
+        let mut expected_manifest_list = ManifestList {
             entries: vec![ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
                 partition_spec_id: 1,
                 content: ManifestContentType::Data,
-                sequence_number: 1,
-                min_sequence_number: 1,
-                added_snapshot_id: 377075049360453639,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
                 added_data_files_count: Some(1),
                 existing_data_files_count: Some(0),
                 deleted_data_files_count: Some(0),
@@ -1222,7 +1263,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 377075049360453639, 0, 1);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, 0, seq_num);
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1239,6 +1280,8 @@ mod test {
             ))]),
         )
         .unwrap();
+        expected_manifest_list.entries[0].sequence_number = seq_num;
+        expected_manifest_list.entries[0].min_sequence_number = seq_num;
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();

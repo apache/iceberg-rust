@@ -18,11 +18,11 @@
 //! Manifest for Iceberg.
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 
-use super::Literal;
 use super::{
     FieldSummary, FormatVersion, ManifestContentType, ManifestListEntry, PartitionSpec, Schema,
     Struct,
 };
+use super::{Literal, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
@@ -94,7 +94,6 @@ pub struct ManifestWriter {
     deleted_files: u32,
     deleted_rows: u64,
 
-    seq_num: i64,
     min_seq_num: Option<i64>,
 
     key_metadata: Option<Vec<u8>>,
@@ -104,12 +103,7 @@ pub struct ManifestWriter {
 
 impl ManifestWriter {
     /// Create a new manifest writer.
-    pub fn new(
-        output: OutputFile,
-        snapshot_id: i64,
-        seq_num: i64,
-        key_metadata: Option<Vec<u8>>,
-    ) -> Self {
+    pub fn new(output: OutputFile, snapshot_id: i64, key_metadata: Option<Vec<u8>>) -> Self {
         Self {
             output,
             snapshot_id,
@@ -119,7 +113,6 @@ impl ManifestWriter {
             existing_rows: 0,
             deleted_files: 0,
             deleted_rows: 0,
-            seq_num,
             min_seq_num: None,
             key_metadata,
             field_summary: HashMap::new(),
@@ -186,7 +179,7 @@ impl ManifestWriter {
     }
 
     /// Write a manifest entry.
-    pub async fn write(mut self, manifest: Manifest) -> Result<Option<ManifestListEntry>, Error> {
+    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestListEntry, Error> {
         // Create the avro writer
         let partition_type = manifest
             .metadata
@@ -222,7 +215,7 @@ impl ManifestWriter {
         )?;
         avro_writer.add_user_metadata(
             "format-version".to_string(),
-            manifest.metadata.format_version.to_string(),
+            (manifest.metadata.format_version as u8).to_string(),
         )?;
         if manifest.metadata.format_version == FormatVersion::V2 {
             avro_writer
@@ -231,6 +224,15 @@ impl ManifestWriter {
 
         // Write manifest entries
         for entry in manifest.entries {
+            if (entry.status == ManifestStatus::Deleted || entry.status == ManifestStatus::Existing)
+                && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none())
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Manifest entry with status Existing or Deleted should have sequence number",
+                ));
+            }
+
             match entry.status {
                 ManifestStatus::Added => {
                     self.added_files += 1;
@@ -247,15 +249,8 @@ impl ManifestWriter {
             }
 
             if entry.is_alive() {
-                if let Some(cur_min_seq_num) = self.min_seq_num {
-                    self.min_seq_num = Some(
-                        entry
-                            .sequence_number
-                            .map(|v| min(v, cur_min_seq_num))
-                            .unwrap_or(cur_min_seq_num),
-                    );
-                } else {
-                    self.min_seq_num = entry.sequence_number;
+                if let Some(seq_num) = entry.sequence_number {
+                    self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
                 }
             }
 
@@ -288,28 +283,25 @@ impl ManifestWriter {
         let partition_summary =
             self.get_field_summary_vec(&manifest.metadata.partition_spec.fields);
 
-        if let Some(min_sequence_number) = self.min_seq_num {
-            Ok(Some(ManifestListEntry {
-                manifest_path: self.output.location().to_string(),
-                manifest_length: length as i64,
-                partition_spec_id: manifest.metadata.partition_spec.spec_id,
-                content: manifest.metadata.content,
-                sequence_number: self.seq_num,
-                min_sequence_number,
-                added_snapshot_id: self.snapshot_id,
-                added_data_files_count: Some(self.added_files),
-                existing_data_files_count: Some(self.existing_files),
-                deleted_data_files_count: Some(self.deleted_files),
-                added_rows_count: Some(self.added_rows),
-                existing_rows_count: Some(self.existing_rows),
-                deleted_rows_count: Some(self.deleted_rows),
-                partitions: partition_summary,
-                key_metadata: self.key_metadata.unwrap_or_default(),
-            }))
-        } else {
-            // All entries are deleted
-            Ok(None)
-        }
+        Ok(ManifestListEntry {
+            manifest_path: self.output.location().to_string(),
+            manifest_length: length as i64,
+            partition_spec_id: manifest.metadata.partition_spec.spec_id,
+            content: manifest.metadata.content,
+            // sequence_number and min_sequence_number with UNASSIGNED_SEQUENCE_NUMBER will be replace with
+            // real sequence number in `ManifestListWriter`.
+            sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+            min_sequence_number: self.min_seq_num.unwrap_or(UNASSIGNED_SEQUENCE_NUMBER),
+            added_snapshot_id: self.snapshot_id,
+            added_data_files_count: Some(self.added_files),
+            existing_data_files_count: Some(self.existing_files),
+            deleted_data_files_count: Some(self.deleted_files),
+            added_rows_count: Some(self.added_rows),
+            existing_rows_count: Some(self.existing_rows),
+            deleted_rows_count: Some(self.deleted_rows),
+            partitions: partition_summary,
+            key_metadata: self.key_metadata.unwrap_or_default(),
+        })
     }
 }
 
@@ -1811,8 +1803,8 @@ mod tests {
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
-        let writer = ManifestWriter::new(output_file, 1, 1, None);
-        let entry = writer.write(manifest.clone()).await.unwrap().unwrap();
+        let writer = ManifestWriter::new(output_file, 1, None);
+        let entry = writer.write(manifest.clone()).await.unwrap();
 
         // Check partition summary
         assert_eq!(entry.partitions.len(), 1);
@@ -1841,8 +1833,10 @@ mod tests {
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
-        let writer = ManifestWriter::new(output_file, 1, 1, None);
-        let _ = writer.write(manifest.clone()).await.unwrap();
+        let writer = ManifestWriter::new(output_file, 1, None);
+        let res = writer.write(manifest.clone()).await.unwrap();
+        assert_eq!(res.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
+        assert_eq!(res.min_sequence_number, 1);
 
         // Verify manifest
         let bs = fs::read(path).expect("read_file must succeed");
