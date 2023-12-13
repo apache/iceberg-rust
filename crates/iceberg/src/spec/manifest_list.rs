@@ -17,9 +17,9 @@
 
 //! ManifestList for Iceberg.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
-use crate::{io::OutputFile, spec::Literal, Error};
+use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
 use futures::AsyncWriteExt;
 
@@ -29,6 +29,9 @@ use self::{
 };
 
 use super::{FormatVersion, StructType};
+
+/// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
+pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -81,6 +84,8 @@ pub struct ManifestListWriter {
     format_version: FormatVersion,
     output_file: OutputFile,
     avro_writer: Writer<'static, Vec<u8>>,
+    sequence_number: i64,
+    snapshot_id: i64,
 }
 
 impl std::fmt::Debug for ManifestListWriter {
@@ -104,7 +109,7 @@ impl ManifestListWriter {
             ),
             ("format-version".to_string(), "1".to_string()),
         ]);
-        Self::new(FormatVersion::V1, output_file, metadata)
+        Self::new(FormatVersion::V1, output_file, metadata, 0, snapshot_id)
     }
 
     /// Construct a v2 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
@@ -123,13 +128,21 @@ impl ManifestListWriter {
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
-        Self::new(FormatVersion::V2, output_file, metadata)
+        Self::new(
+            FormatVersion::V2,
+            output_file,
+            metadata,
+            sequence_number,
+            snapshot_id,
+        )
     }
 
     fn new(
         format_version: FormatVersion,
         output_file: OutputFile,
         metadata: HashMap<String, String>,
+        sequence_number: i64,
+        snapshot_id: i64,
     ) -> Self {
         let avro_schema = match format_version {
             FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
@@ -145,6 +158,8 @@ impl ManifestListWriter {
             format_version,
             output_file,
             avro_writer,
+            sequence_number,
+            snapshot_id,
         }
     }
 
@@ -156,12 +171,36 @@ impl ManifestListWriter {
         match self.format_version {
             FormatVersion::V1 => {
                 for manifest_entry in manifest_entries {
-                    let manifest_entry: ManifestListEntryV1 = manifest_entry.into();
+                    let manifest_entry: ManifestListEntryV1 = manifest_entry.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
             FormatVersion::V2 => {
-                for manifest_entry in manifest_entries {
+                for mut manifest_entry in manifest_entries {
+                    if manifest_entry.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                                    manifest_entry.added_snapshot_id
+                                ),
+                            ));
+                        }
+                        manifest_entry.sequence_number = self.sequence_number;
+                    }
+                    if manifest_entry.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                                    manifest_entry.added_snapshot_id
+                                ),
+                            ));
+                        }
+                        manifest_entry.min_sequence_number = self.sequence_number;
+                    }
                     let manifest_entry: ManifestListEntryV2 = manifest_entry.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
@@ -466,85 +505,109 @@ pub struct ManifestListEntry {
     /// field: 500
     ///
     /// Location of the manifest file
-    manifest_path: String,
+    pub manifest_path: String,
     /// field: 501
     ///
     /// Length of the manifest file in bytes
-    manifest_length: i64,
+    pub manifest_length: i64,
     /// field: 502
     ///
     /// ID of a partition spec used to write the manifest; must be listed
     /// in table metadata partition-specs
-    partition_spec_id: i32,
+    pub partition_spec_id: i32,
     /// field: 517
     ///
     /// The type of files tracked by the manifest, either data or delete
     /// files; 0 for all v1 manifests
-    content: ManifestContentType,
+    pub content: ManifestContentType,
     /// field: 515
     ///
     /// The sequence number when the manifest was added to the table; use 0
     /// when reading v1 manifest lists
-    sequence_number: i64,
+    pub sequence_number: i64,
     /// field: 516
     ///
     /// The minimum data sequence number of all live data or delete files in
     /// the manifest; use 0 when reading v1 manifest lists
-    min_sequence_number: i64,
+    pub min_sequence_number: i64,
     /// field: 503
     ///
     /// ID of the snapshot where the manifest file was added
-    added_snapshot_id: i64,
+    pub added_snapshot_id: i64,
     /// field: 504
     ///
     /// Number of entries in the manifest that have status ADDED, when null
     /// this is assumed to be non-zero
-    added_data_files_count: Option<i32>,
+    pub added_data_files_count: Option<u32>,
     /// field: 505
     ///
     /// Number of entries in the manifest that have status EXISTING (0),
     /// when null this is assumed to be non-zero
-    existing_data_files_count: Option<i32>,
+    pub existing_data_files_count: Option<u32>,
     /// field: 506
     ///
     /// Number of entries in the manifest that have status DELETED (2),
     /// when null this is assumed to be non-zero
-    deleted_data_files_count: Option<i32>,
+    pub deleted_data_files_count: Option<u32>,
     /// field: 512
     ///
     /// Number of rows in all of files in the manifest that have status
     /// ADDED, when null this is assumed to be non-zero
-    added_rows_count: Option<i64>,
+    pub added_rows_count: Option<u64>,
     /// field: 513
     ///
     /// Number of rows in all of files in the manifest that have status
     /// EXISTING, when null this is assumed to be non-zero
-    existing_rows_count: Option<i64>,
+    pub existing_rows_count: Option<u64>,
     /// field: 514
     ///
     /// Number of rows in all of files in the manifest that have status
     /// DELETED, when null this is assumed to be non-zero
-    deleted_rows_count: Option<i64>,
+    pub deleted_rows_count: Option<u64>,
     /// field: 507
     /// element_field: 508
     ///
     /// A list of field summaries for each partition field in the spec. Each
     /// field in the list corresponds to a field in the manifest file’s
     /// partition spec.
-    partitions: Vec<FieldSummary>,
+    pub partitions: Vec<FieldSummary>,
     /// field: 519
     ///
     /// Implementation-specific key metadata for encryption
-    key_metadata: Vec<u8>,
+    pub key_metadata: Vec<u8>,
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum ManifestContentType {
     /// The manifest content is data.
     Data = 0,
     /// The manifest content is deletes.
     Deletes = 1,
+}
+
+impl FromStr for ManifestContentType {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "data" => Ok(ManifestContentType::Data),
+            "deletes" => Ok(ManifestContentType::Deletes),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid manifest content type: {s}"),
+            )),
+        }
+    }
+}
+
+impl ToString for ManifestContentType {
+    fn to_string(&self) -> String {
+        match self {
+            ManifestContentType::Data => "data".to_string(),
+            ManifestContentType::Deletes => "deletes".to_string(),
+        }
+    }
 }
 
 impl TryFrom<i32> for ManifestContentType {
@@ -568,25 +631,25 @@ impl TryFrom<i32> for ManifestContentType {
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct FieldSummary {
     /// field: 509
     ///
     /// Whether the manifest contains at least one partition with a null
     /// value for the field
-    contains_null: bool,
+    pub contains_null: bool,
     /// field: 518
     /// Whether the manifest contains at least one partition with a NaN
     /// value for the field
-    contains_nan: Option<bool>,
+    pub contains_nan: Option<bool>,
     /// field: 510
     /// The minimum value for the field in the manifests
     /// partitions.
-    lower_bound: Option<Literal>,
+    pub lower_bound: Option<Literal>,
     /// field: 511
     /// The maximum value for the field in the manifests
     /// partitions.
-    upper_bound: Option<Literal>,
+    pub upper_bound: Option<Literal>,
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
@@ -658,11 +721,17 @@ pub(super) mod _serde {
         }
     }
 
-    impl From<super::ManifestList> for ManifestListV1 {
-        fn from(value: super::ManifestList) -> Self {
-            Self {
-                entries: value.entries.into_iter().map(Into::into).collect(),
-            }
+    impl TryFrom<super::ManifestList> for ManifestListV1 {
+        type Error = Error;
+
+        fn try_from(value: super::ManifestList) -> Result<Self, Self::Error> {
+            Ok(Self {
+                entries: value
+                    .entries
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
         }
     }
 
@@ -769,12 +838,12 @@ pub(super) mod _serde {
                 sequence_number: self.sequence_number,
                 min_sequence_number: self.min_sequence_number,
                 added_snapshot_id: self.added_snapshot_id,
-                added_data_files_count: Some(self.added_data_files_count),
-                existing_data_files_count: Some(self.existing_data_files_count),
-                deleted_data_files_count: Some(self.deleted_data_files_count),
-                added_rows_count: Some(self.added_rows_count),
-                existing_rows_count: Some(self.existing_rows_count),
-                deleted_rows_count: Some(self.deleted_rows_count),
+                added_data_files_count: Some(self.added_data_files_count.try_into()?),
+                existing_data_files_count: Some(self.existing_data_files_count.try_into()?),
+                deleted_data_files_count: Some(self.deleted_data_files_count.try_into()?),
+                added_rows_count: Some(self.added_rows_count.try_into()?),
+                existing_rows_count: Some(self.existing_rows_count.try_into()?),
+                deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
                 partitions,
                 key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
             })
@@ -791,12 +860,24 @@ pub(super) mod _serde {
                 manifest_length: self.manifest_length,
                 partition_spec_id: self.partition_spec_id,
                 added_snapshot_id: self.added_snapshot_id,
-                added_data_files_count: self.added_data_files_count,
-                existing_data_files_count: self.existing_data_files_count,
-                deleted_data_files_count: self.deleted_data_files_count,
-                added_rows_count: self.added_rows_count,
-                existing_rows_count: self.existing_rows_count,
-                deleted_rows_count: self.deleted_rows_count,
+                added_data_files_count: self
+                    .added_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                existing_data_files_count: self
+                    .existing_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                deleted_data_files_count: self
+                    .deleted_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                added_rows_count: self.added_rows_count.map(TryInto::try_into).transpose()?,
+                existing_rows_count: self
+                    .existing_rows_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                deleted_rows_count: self.deleted_rows_count.map(TryInto::try_into).transpose()?,
                 partitions,
                 key_metadata: self.key_metadata.map(|b| b.into_vec()).unwrap_or_default(),
                 // as ref: https://iceberg.apache.org/spec/#partitioning
@@ -850,66 +931,101 @@ pub(super) mod _serde {
                 sequence_number: value.sequence_number,
                 min_sequence_number: value.min_sequence_number,
                 added_snapshot_id: value.added_snapshot_id,
-                added_data_files_count: value.added_data_files_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_data_files_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
-                existing_data_files_count: value.existing_data_files_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_data_files_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
-                deleted_data_files_count: value.deleted_data_files_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_data_files_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
-                added_rows_count: value.added_rows_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "added_rows_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
-                existing_rows_count: value.existing_rows_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "existing_rows_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
-                deleted_rows_count: value.deleted_rows_count.ok_or_else(|| {
-                    Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        "deleted_rows_count in ManifestListEntryV2 should be require",
-                    )
-                })?,
+                added_data_files_count: value
+                    .added_data_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "added_data_files_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
+                existing_data_files_count: value
+                    .existing_data_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "existing_data_files_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
+                deleted_data_files_count: value
+                    .deleted_data_files_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "deleted_data_files_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
+                added_rows_count: value
+                    .added_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "added_rows_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
+                existing_rows_count: value
+                    .existing_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "existing_rows_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
+                deleted_rows_count: value
+                    .deleted_rows_count
+                    .ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            "deleted_rows_count in ManifestListEntryV2 should be require",
+                        )
+                    })?
+                    .try_into()?,
                 partitions,
                 key_metadata,
             })
         }
     }
 
-    impl From<ManifestListEntry> for ManifestListEntryV1 {
-        fn from(value: ManifestListEntry) -> Self {
+    impl TryFrom<ManifestListEntry> for ManifestListEntryV1 {
+        type Error = Error;
+
+        fn try_from(value: ManifestListEntry) -> Result<Self, Self::Error> {
             let partitions = convert_to_serde_field_summary(value.partitions);
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
-            Self {
+            Ok(Self {
                 manifest_path: value.manifest_path,
                 manifest_length: value.manifest_length,
                 partition_spec_id: value.partition_spec_id,
                 added_snapshot_id: value.added_snapshot_id,
-                added_data_files_count: value.added_data_files_count,
-                existing_data_files_count: value.existing_data_files_count,
-                deleted_data_files_count: value.deleted_data_files_count,
-                added_rows_count: value.added_rows_count,
-                existing_rows_count: value.existing_rows_count,
-                deleted_rows_count: value.deleted_rows_count,
+                added_data_files_count: value
+                    .added_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                existing_data_files_count: value
+                    .existing_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                deleted_data_files_count: value
+                    .deleted_data_files_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                added_rows_count: value.added_rows_count.map(TryInto::try_into).transpose()?,
+                existing_rows_count: value
+                    .existing_rows_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                deleted_rows_count: value
+                    .deleted_rows_count
+                    .map(TryInto::try_into)
+                    .transpose()?,
                 partitions,
                 key_metadata,
-            }
+            })
         }
     }
 }
@@ -923,9 +1039,9 @@ mod test {
     use crate::{
         io::FileIOBuilder,
         spec::{
-            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
-            ManifestList, ManifestListEntry, ManifestListWriter, NestedField, PrimitiveType,
-            StructType, Type,
+            manifest_list::{_serde::ManifestListV1, UNASSIGNED_SEQUENCE_NUMBER},
+            FieldSummary, Literal, ManifestContentType, ManifestList, ManifestListEntry,
+            ManifestListWriter, NestedField, PrimitiveType, StructType, Type,
         },
     };
 
@@ -1033,7 +1149,7 @@ mod test {
                 partitions: vec![],
                 key_metadata: vec![],
             }]
-        }.into();
+        }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
         assert_eq!(
             result,
@@ -1120,15 +1236,17 @@ mod test {
 
     #[tokio::test]
     async fn test_manifest_list_writer_v2() {
-        let expected_manifest_list = ManifestList {
+        let snapshot_id = 377075049360453639;
+        let seq_num = 1;
+        let mut expected_manifest_list = ManifestList {
             entries: vec![ManifestListEntry {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
                 partition_spec_id: 1,
                 content: ManifestContentType::Data,
-                sequence_number: 1,
-                min_sequence_number: 1,
-                added_snapshot_id: 377075049360453639,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
                 added_data_files_count: Some(1),
                 existing_data_files_count: Some(0),
                 deleted_data_files_count: Some(0),
@@ -1145,7 +1263,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 377075049360453639, 0, 1);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, 0, seq_num);
         writer
             .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1162,6 +1280,8 @@ mod test {
             ))]),
         )
         .unwrap();
+        expected_manifest_list.entries[0].sequence_number = seq_num;
+        expected_manifest_list.entries[0].min_sequence_number = seq_num;
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();

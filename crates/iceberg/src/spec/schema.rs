@@ -686,7 +686,6 @@ pub(super) mod _serde {
     impl TryFrom<SchemaV2> for Schema {
         type Error = Error;
         fn try_from(value: SchemaV2) -> Result<Self> {
-            dbg!(&value);
             Schema::builder()
                 .with_schema_id(value.schema_id)
                 .with_fields(value.fields.fields().iter().cloned())

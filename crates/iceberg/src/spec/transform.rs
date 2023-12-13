@@ -126,17 +126,20 @@ pub enum Transform {
 impl Transform {
     /// Get the return type of transform given the input type.
     /// Returns `None` if it can't be transformed.
-    pub fn result_type(&self, input_type: &Type) -> Option<Type> {
+    pub fn result_type(&self, input_type: &Type) -> Result<Type> {
         match self {
             Transform::Identity => {
                 if matches!(input_type, Type::Primitive(_)) {
-                    Some(input_type.clone())
+                    Ok(input_type.clone())
                 } else {
-                    None
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of identity transform",),
+                    ))
                 }
             }
-            Transform::Void => Some(input_type.clone()),
-            Transform::Unknown => Some(Type::Primitive(PrimitiveType::String)),
+            Transform::Void => Ok(input_type.clone()),
+            Transform::Unknown => Ok(Type::Primitive(PrimitiveType::String)),
             Transform::Bucket(_) => {
                 if let Type::Primitive(p) = input_type {
                     match p {
@@ -150,11 +153,17 @@ impl Transform {
                         | PrimitiveType::String
                         | PrimitiveType::Uuid
                         | PrimitiveType::Fixed(_)
-                        | PrimitiveType::Binary => Some(Type::Primitive(PrimitiveType::Int)),
-                        _ => None,
+                        | PrimitiveType::Binary => Ok(Type::Primitive(PrimitiveType::Int)),
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of bucket transform",),
+                        )),
                     }
                 } else {
-                    None
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of bucket transform",),
+                    ))
                 }
             }
             Transform::Truncate(_) => {
@@ -164,11 +173,17 @@ impl Transform {
                         | PrimitiveType::Long
                         | PrimitiveType::String
                         | PrimitiveType::Binary
-                        | PrimitiveType::Decimal { .. } => Some(input_type.clone()),
-                        _ => None,
+                        | PrimitiveType::Decimal { .. } => Ok(input_type.clone()),
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of truncate transform",),
+                        )),
                     }
                 } else {
-                    None
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of truncate transform",),
+                    ))
                 }
             }
             Transform::Year | Transform::Month | Transform::Day => {
@@ -176,23 +191,35 @@ impl Transform {
                     match p {
                         PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
-                        | PrimitiveType::Date => Some(Type::Primitive(PrimitiveType::Int)),
-                        _ => None,
+                        | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Int)),
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of {self} transform",),
+                        )),
                     }
                 } else {
-                    None
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of {self} transform",),
+                    ))
                 }
             }
             Transform::Hour => {
                 if let Type::Primitive(p) = input_type {
                     match p {
                         PrimitiveType::Timestamp | PrimitiveType::Timestamptz => {
-                            Some(Type::Primitive(PrimitiveType::Int))
+                            Ok(Type::Primitive(PrimitiveType::Int))
                         }
-                        _ => None,
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of {self} transform",),
+                        )),
                     }
                 } else {
-                    None
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of {self} transform",),
+                    ))
                 }
             }
         }
@@ -367,7 +394,7 @@ mod tests {
         }
 
         for (input_type, result_type) in param.trans_types {
-            assert_eq!(result_type, trans.result_type(&input_type));
+            assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
     }
 

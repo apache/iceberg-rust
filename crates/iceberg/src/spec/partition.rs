@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
-use super::transform::Transform;
+use crate::{Error, ErrorKind};
+
+use super::{transform::Transform, NestedField, Schema, StructType};
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
@@ -69,6 +71,30 @@ impl PartitionSpec {
                 .iter()
                 .all(|f| matches!(f.transform, Transform::Void))
     }
+
+    /// Returns the partition type of this partition spec.
+    pub fn partition_type(&self, schema: &Schema) -> Result<StructType, Error> {
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for partition_field in &self.fields {
+            let field = schema
+                .field_by_id(partition_field.source_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "No column with source column id {} in schema {:?}",
+                            partition_field.source_id, schema
+                        ),
+                    )
+                })?;
+            let res_type = partition_field.transform.result_type(&field.field_type)?;
+            let field =
+                NestedField::optional(partition_field.field_id, &partition_field.name, res_type)
+                    .into();
+            fields.push(field);
+        }
+        Ok(StructType::new(fields))
+    }
 }
 
 /// Reference to [`UnboundPartitionSpec`].
@@ -111,6 +137,8 @@ impl UnboundPartitionSpec {
 
 #[cfg(test)]
 mod tests {
+    use crate::spec::Type;
+
     use super::*;
 
     #[test]
@@ -275,5 +303,190 @@ mod tests {
         assert_eq!(None, partition_spec.fields[0].partition_id);
         assert_eq!("ts_day", partition_spec.fields[0].name);
         assert_eq!(Transform::Day, partition_spec.fields[0].transform);
+    }
+
+    #[test]
+    fn test_partition_type() {
+        let spec = r#"
+            {
+            "spec-id": 1,
+            "fields": [ {
+                "source-id": 4,
+                "field-id": 1000,
+                "name": "ts_day",
+                "transform": "day"
+                }, {
+                "source-id": 1,
+                "field-id": 1001,
+                "name": "id_bucket",
+                "transform": "bucket[16]"
+                }, {
+                "source-id": 2,
+                "field-id": 1002,
+                "name": "id_truncate",
+                "transform": "truncate[4]"
+                } ]
+            }
+            "#;
+
+        let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "name",
+                    Type::Primitive(crate::spec::PrimitiveType::String),
+                )
+                .into(),
+                NestedField::required(
+                    3,
+                    "ts",
+                    Type::Primitive(crate::spec::PrimitiveType::Timestamp),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "ts_day",
+                    Type::Primitive(crate::spec::PrimitiveType::Timestamp),
+                )
+                .into(),
+                NestedField::required(
+                    5,
+                    "id_bucket",
+                    Type::Primitive(crate::spec::PrimitiveType::Int),
+                )
+                .into(),
+                NestedField::required(
+                    6,
+                    "id_truncate",
+                    Type::Primitive(crate::spec::PrimitiveType::Int),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        assert_eq!(3, partition_type.fields().len());
+        assert_eq!(
+            *partition_type.fields()[0],
+            NestedField::optional(
+                partition_spec.fields[0].field_id,
+                &partition_spec.fields[0].name,
+                Type::Primitive(crate::spec::PrimitiveType::Int)
+            )
+        );
+        assert_eq!(
+            *partition_type.fields()[1],
+            NestedField::optional(
+                partition_spec.fields[1].field_id,
+                &partition_spec.fields[1].name,
+                Type::Primitive(crate::spec::PrimitiveType::Int)
+            )
+        );
+        assert_eq!(
+            *partition_type.fields()[2],
+            NestedField::optional(
+                partition_spec.fields[2].field_id,
+                &partition_spec.fields[2].name,
+                Type::Primitive(crate::spec::PrimitiveType::String)
+            )
+        );
+    }
+
+    #[test]
+    fn test_partition_empty() {
+        let spec = r#"
+            {
+            "spec-id": 1,
+            "fields": []
+            }
+            "#;
+
+        let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "name",
+                    Type::Primitive(crate::spec::PrimitiveType::String),
+                )
+                .into(),
+                NestedField::required(
+                    3,
+                    "ts",
+                    Type::Primitive(crate::spec::PrimitiveType::Timestamp),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "ts_day",
+                    Type::Primitive(crate::spec::PrimitiveType::Timestamp),
+                )
+                .into(),
+                NestedField::required(
+                    5,
+                    "id_bucket",
+                    Type::Primitive(crate::spec::PrimitiveType::Int),
+                )
+                .into(),
+                NestedField::required(
+                    6,
+                    "id_truncate",
+                    Type::Primitive(crate::spec::PrimitiveType::Int),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_type = partition_spec.partition_type(&schema).unwrap();
+        assert_eq!(0, partition_type.fields().len());
+    }
+
+    #[test]
+    fn test_partition_error() {
+        let spec = r#"
+        {
+        "spec-id": 1,
+        "fields": [ {
+            "source-id": 4,
+            "field-id": 1000,
+            "name": "ts_day",
+            "transform": "day"
+            }, {
+            "source-id": 1,
+            "field-id": 1001,
+            "name": "id_bucket",
+            "transform": "bucket[16]"
+            }, {
+            "source-id": 2,
+            "field-id": 1002,
+            "name": "id_truncate",
+            "transform": "truncate[4]"
+            } ]
+        }
+        "#;
+
+        let partition_spec: PartitionSpec = serde_json::from_str(spec).unwrap();
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "name",
+                    Type::Primitive(crate::spec::PrimitiveType::String),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(partition_spec.partition_type(&schema).is_err());
     }
 }
