@@ -34,6 +34,9 @@ cargo-sort:
 
 check: check-fmt check-clippy cargo-sort
 
+unit-test:
+	cargo test --no-fail-fast --lib --all-features --workspace
+
 test:
 	cargo test --no-fail-fast --all-targets --all-features --workspace
 	cargo test --no-fail-fast --doc --all-features --workspace

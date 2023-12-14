@@ -1047,55 +1047,104 @@ mod test {
 
     use super::_serde::ManifestListV2;
 
-    #[test]
-    fn test_parse_manifest_list_v1() {
-        let path = format!(
-            "{}/testdata/simple_manifest_list_v1.avro",
-            env!("CARGO_MANIFEST_DIR")
+    #[tokio::test]
+    async fn test_parse_manifest_list_v1() {
+        let manifest_list = ManifestList {
+            entries: vec![
+                ManifestListEntry {
+                    manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                    manifest_length: 5806,
+                    partition_spec_id: 0,
+                    content: ManifestContentType::Data,
+                    sequence_number: 0,
+                    min_sequence_number: 0,
+                    added_snapshot_id: 1646658105718557341,
+                    added_data_files_count: Some(3),
+                    existing_data_files_count: Some(0),
+                    deleted_data_files_count: Some(0),
+                    added_rows_count: Some(3),
+                    existing_rows_count: Some(0),
+                    deleted_rows_count: Some(0),
+                    partitions: vec![],
+                    key_metadata: vec![],
+                }
+            ]
+        };
+
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = "simple_manifest_list_v1.avro";
+        let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
+
+        let mut writer = ManifestListWriter::v1(
+            file_io.new_output(full_path.clone()).unwrap(),
+            1646658105718557341,
+            1646658105718557341,
         );
 
-        let bs = fs::read(path).expect("read_file must succeed");
+        writer
+            .add_manifest_entries(manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
 
-        let manifest_list = ManifestList::parse_with_version(
+        let bs = fs::read(full_path).expect("read_file must succeed");
+
+        let parsed_manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V1,
             &StructType::new(vec![]),
         )
         .unwrap();
 
-        assert_eq!(1, manifest_list.entries.len());
-        assert_eq!(
-            manifest_list.entries[0],
-            ManifestListEntry {
-                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
-                manifest_length: 5806,
-                partition_spec_id: 0,
-                content: ManifestContentType::Data,
-                sequence_number: 0,
-                min_sequence_number: 0,
-                added_snapshot_id: 1646658105718557341,
-                added_data_files_count: Some(3),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
-                added_rows_count: Some(3),
-                existing_rows_count: Some(0),
-                deleted_rows_count: Some(0),
-                partitions: vec![],
-                key_metadata: vec![],
-            }
-        );
+        assert_eq!(manifest_list, parsed_manifest_list);
     }
 
-    #[test]
-    fn test_parse_manifest_list_v2() {
-        let path = format!(
-            "{}/testdata/simple_manifest_list_v2.avro",
-            env!("CARGO_MANIFEST_DIR")
+    #[tokio::test]
+    async fn test_parse_manifest_list_v2() {
+        let manifest_list = ManifestList {
+            entries: vec![
+                ManifestListEntry {
+                    manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
+                    manifest_length: 6926,
+                    partition_spec_id: 1,
+                    content: ManifestContentType::Data,
+                    sequence_number: 1,
+                    min_sequence_number: 1,
+                    added_snapshot_id: 377075049360453639,
+                    added_data_files_count: Some(1),
+                    existing_data_files_count: Some(0),
+                    deleted_data_files_count: Some(0),
+                    added_rows_count: Some(3),
+                    existing_rows_count: Some(0),
+                    deleted_rows_count: Some(0),
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                    key_metadata: vec![],
+                }
+            ]
+        };
+
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_name = "simple_manifest_list_v1.avro";
+        let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
+
+        let mut writer = ManifestListWriter::v2(
+            file_io.new_output(full_path.clone()).unwrap(),
+            1646658105718557341,
+            1646658105718557341,
+            1,
         );
 
-        let bs = fs::read(path).expect("read_file must succeed");
+        writer
+            .add_manifest_entries(manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
 
-        let manifest_list = ManifestList::parse_with_version(
+        let bs = fs::read(full_path).expect("read_file must succeed");
+
+        let parsed_manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V2,
             &StructType::new(vec![Arc::new(NestedField::required(
@@ -1106,27 +1155,7 @@ mod test {
         )
         .unwrap();
 
-        assert_eq!(1, manifest_list.entries.len());
-        assert_eq!(
-            manifest_list.entries[0],
-            ManifestListEntry {
-                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
-                manifest_length: 6926,
-                partition_spec_id: 1,
-                content: ManifestContentType::Data,
-                sequence_number: 1,
-                min_sequence_number: 1,
-                added_snapshot_id: 377075049360453639,
-                added_data_files_count: Some(1),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
-                added_rows_count: Some(3),
-                existing_rows_count: Some(0),
-                deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
-                key_metadata: vec![],
-            }
-        );
+        assert_eq!(manifest_list, parsed_manifest_list);
     }
 
     #[test]
