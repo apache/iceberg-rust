@@ -1390,9 +1390,9 @@ mod tests {
             entries: vec![
                 ManifestEntry {
                     status: ManifestStatus::Added,
-                    snapshot_id: Some(0),
-                    sequence_number: Some(1),
-                    file_sequence_number: Some(1),
+                    snapshot_id: None,
+                    sequence_number: None,
+                    file_sequence_number: None,
                     data_file: DataFile {
                         content: DataContentType::Data,
                         file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
@@ -1510,9 +1510,9 @@ mod tests {
             },
             entries: vec![ManifestEntry {
                 status: ManifestStatus::Added,
-                snapshot_id: Some(0),
-                sequence_number: Some(1),
-                file_sequence_number: Some(1),
+                snapshot_id: None,
+                sequence_number: None,
+                file_sequence_number: None,
                 data_file: DataFile {
                     content: DataContentType::Data,
                     file_format: DataFileFormat::Parquet,
@@ -1581,7 +1581,7 @@ mod tests {
         let res = test_manifest_read_write(manifest, writer).await;
 
         assert_eq!(res.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
-        assert_eq!(res.min_sequence_number, 1);
+        assert_eq!(res.min_sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
     }
 
     #[tokio::test]
@@ -1619,7 +1619,7 @@ mod tests {
             },
             entries: vec![ManifestEntry {
                 status: ManifestStatus::Added,
-                snapshot_id: Some(2966623707104393227),
+                snapshot_id: Some(0),
                 sequence_number: None,
                 file_sequence_number: None,
                 data_file: DataFile {
@@ -1689,7 +1689,7 @@ mod tests {
             entries: vec![
                 ManifestEntry {
                     status: ManifestStatus::Added,
-                    snapshot_id: Some(8205833995881562618),
+                    snapshot_id: Some(0),
                     sequence_number: None,
                     file_sequence_number: None,
                     data_file: DataFile {
