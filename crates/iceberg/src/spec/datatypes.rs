@@ -523,14 +523,16 @@ impl From<SerdeNestedField> for NestedField {
 
 impl From<NestedField> for SerdeNestedField {
     fn from(value: NestedField) -> Self {
+        let initial_default = value.initial_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_initial_default, it can't be converted to json value"));
+        let write_default = value.write_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_write_default, it can't be converted to json value"));
         SerdeNestedField {
             id: value.id,
             name: value.name,
             required: value.required,
             field_type: value.field_type,
             doc: value.doc,
-            initial_default: value.initial_default.map(|x| (&x).into()),
-            write_default: value.write_default.map(|x| (&x).into()),
+            initial_default,
+            write_default,
         }
     }
 }

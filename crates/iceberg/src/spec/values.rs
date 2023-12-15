@@ -505,93 +505,6 @@ impl From<Literal> for Vec<u8> {
     }
 }
 
-impl From<&Literal> for JsonValue {
-    fn from(value: &Literal) -> Self {
-        match value {
-            Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => JsonValue::Bool(*val),
-                PrimitiveLiteral::Int(val) => JsonValue::Number((*val).into()),
-                PrimitiveLiteral::Long(val) => JsonValue::Number((*val).into()),
-                PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
-                    Some(number) => JsonValue::Number(number),
-                    None => JsonValue::Null,
-                },
-                PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
-                    Some(number) => JsonValue::Number(number),
-                    None => JsonValue::Null,
-                },
-                PrimitiveLiteral::Date(val) => {
-                    JsonValue::String(date::days_to_date(*val).to_string())
-                }
-                PrimitiveLiteral::Time(val) => {
-                    JsonValue::String(time::microseconds_to_time(*val).to_string())
-                }
-                PrimitiveLiteral::Timestamp(val) => JsonValue::String(
-                    timestamp::microseconds_to_datetime(*val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f")
-                        .to_string(),
-                ),
-                PrimitiveLiteral::TimestampTZ(val) => JsonValue::String(
-                    timestamptz::microseconds_to_datetimetz(*val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
-                        .to_string(),
-                ),
-                PrimitiveLiteral::String(val) => JsonValue::String(val.clone()),
-                PrimitiveLiteral::UUID(val) => JsonValue::String(val.to_string()),
-                PrimitiveLiteral::Fixed(val) => {
-                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
-                        acc
-                    }))
-                }
-                PrimitiveLiteral::Binary(val) => {
-                    JsonValue::String(val.iter().fold(String::new(), |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
-                        acc
-                    }))
-                }
-                PrimitiveLiteral::Decimal(_) => todo!(),
-            },
-            Literal::Struct(s) => {
-                JsonValue::Object(JsonMap::from_iter(s.iter().map(|(id, value, _)| {
-                    let json: JsonValue = match value {
-                        Some(val) => val.into(),
-                        None => JsonValue::Null,
-                    };
-                    (id.to_string(), json)
-                })))
-            }
-            Literal::List(list) => JsonValue::Array(
-                list.iter()
-                    .map(|opt| match opt {
-                        Some(literal) => literal.into(),
-                        None => JsonValue::Null,
-                    })
-                    .collect(),
-            ),
-            Literal::Map(map) => {
-                let mut object = JsonMap::with_capacity(2);
-                object.insert(
-                    "keys".to_string(),
-                    JsonValue::Array(map.keys().map(|literal| literal.into()).collect()),
-                );
-                object.insert(
-                    "values".to_string(),
-                    JsonValue::Array(
-                        map.values()
-                            .map(|literal| match literal {
-                                Some(literal) => literal.into(),
-                                None => JsonValue::Null,
-                            })
-                            .collect(),
-                    ),
-                );
-                JsonValue::Object(object)
-            }
-        }
-    }
-}
-
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
@@ -599,10 +512,6 @@ impl From<&Literal> for JsonValue {
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
-    /// Vector to store the field ids
-    field_ids: Vec<i32>,
-    /// Vector to store the field names
-    field_names: Vec<String>,
     /// Null bitmap
     null_bitmap: BitVec,
 }
@@ -612,22 +521,21 @@ impl Struct {
     pub fn empty() -> Self {
         Self {
             fields: Vec::new(),
-            field_ids: Vec::new(),
-            field_names: Vec::new(),
             null_bitmap: BitVec::new(),
         }
     }
 
-    /// Create a iterator to read the field in order of (field_id, field_value, field_name).
-    pub fn iter(&self) -> impl Iterator<Item = (&i32, Option<&Literal>, &str)> {
-        self.null_bitmap
-            .iter()
-            .zip(self.fields.iter())
-            .zip(self.field_ids.iter())
-            .zip(self.field_names.iter())
-            .map(|(((null, value), id), name)| {
-                (id, if *null { None } else { Some(value) }, name.as_str())
-            })
+    /// Create a iterator to read the field in order of field_value.
+    pub fn iter(&self) -> impl Iterator<Item = Option<&Literal>> {
+        self.null_bitmap.iter().zip(self.fields.iter()).map(
+            |(null, value)| {
+                if *null {
+                    None
+                } else {
+                    Some(value)
+                }
+            },
+        )
     }
 }
 
@@ -684,8 +592,6 @@ impl FromIterator<(i32, Option<Literal>, String)> for Struct {
         }
         Struct {
             fields,
-            field_ids,
-            field_names,
             null_bitmap,
         }
     }
@@ -820,10 +726,16 @@ impl Literal {
                 (
                     PrimitiveType::Decimal {
                         precision: _,
-                        scale: _,
+                        scale,
                     },
-                    JsonValue::String(_),
-                ) => todo!(),
+                    JsonValue::String(s),
+                ) => {
+                    let mut decimal = Decimal::from_str_exact(&s)?;
+                    decimal.rescale(*scale);
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Decimal(
+                        decimal.mantissa(),
+                    ))))
+                }
                 (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(Error::new(
                     crate::ErrorKind::DataInvalid,
@@ -912,6 +824,113 @@ impl Literal {
                     ))
                 }
             }
+        }
+    }
+
+    /// Converting iceberg value to json value.
+    ///
+    /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
+    pub fn try_into_json(self, r#type: &Type) -> Result<JsonValue> {
+        match (self, r#type) {
+            (Literal::Primitive(prim), _) => match prim {
+                PrimitiveLiteral::Boolean(val) => Ok(JsonValue::Bool(val)),
+                PrimitiveLiteral::Int(val) => Ok(JsonValue::Number((val).into())),
+                PrimitiveLiteral::Long(val) => Ok(JsonValue::Number((val).into())),
+                PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
+                    Some(number) => Ok(JsonValue::Number(number)),
+                    None => Ok(JsonValue::Null),
+                },
+                PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
+                    Some(number) => Ok(JsonValue::Number(number)),
+                    None => Ok(JsonValue::Null),
+                },
+                PrimitiveLiteral::Date(val) => {
+                    Ok(JsonValue::String(date::days_to_date(val).to_string()))
+                }
+                PrimitiveLiteral::Time(val) => Ok(JsonValue::String(
+                    time::microseconds_to_time(val).to_string(),
+                )),
+                PrimitiveLiteral::Timestamp(val) => Ok(JsonValue::String(
+                    timestamp::microseconds_to_datetime(val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string(),
+                )),
+                PrimitiveLiteral::TimestampTZ(val) => Ok(JsonValue::String(
+                    timestamptz::microseconds_to_datetimetz(val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                        .to_string(),
+                )),
+                PrimitiveLiteral::String(val) => Ok(JsonValue::String(val.clone())),
+                PrimitiveLiteral::UUID(val) => Ok(JsonValue::String(val.to_string())),
+                PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.iter().fold(
+                    String::new(),
+                    |mut acc, x| {
+                        acc.push_str(&format!("{:x}", x));
+                        acc
+                    },
+                ))),
+                PrimitiveLiteral::Binary(val) => Ok(JsonValue::String(val.iter().fold(
+                    String::new(),
+                    |mut acc, x| {
+                        acc.push_str(&format!("{:x}", x));
+                        acc
+                    },
+                ))),
+                PrimitiveLiteral::Decimal(val) => match r#type {
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: _precision,
+                        scale,
+                    }) => {
+                        let decimal = Decimal::try_from_i128_with_scale(val, *scale)?;
+                        Ok(JsonValue::String(decimal.to_string()))
+                    }
+                    _ => Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "The iceberg type for decimal literal must be decimal.",
+                    ))?,
+                },
+            },
+            (Literal::Struct(s), Type::Struct(struct_type)) => {
+                let mut id_and_value = Vec::with_capacity(struct_type.fields().len());
+                for (value, field) in s.into_iter().zip(struct_type.fields()) {
+                    let json = match value {
+                        Some(val) => val.try_into_json(&field.field_type)?,
+                        None => JsonValue::Null,
+                    };
+                    id_and_value.push((field.id.to_string(), json));
+                }
+                Ok(JsonValue::Object(JsonMap::from_iter(id_and_value)))
+            }
+            (Literal::List(list), Type::List(list_type)) => Ok(JsonValue::Array(
+                list.into_iter()
+                    .map(|opt| match opt {
+                        Some(literal) => literal.try_into_json(&list_type.element_field.field_type),
+                        None => Ok(JsonValue::Null),
+                    })
+                    .collect::<Result<Vec<JsonValue>>>()?,
+            )),
+            (Literal::Map(map), Type::Map(map_type)) => {
+                let mut object = JsonMap::with_capacity(2);
+                let mut json_keys = Vec::with_capacity(map.len());
+                let mut json_values = Vec::with_capacity(map.len());
+                for (key, value) in map.into_iter() {
+                    json_keys.push(key.try_into_json(&map_type.key_field.field_type)?);
+                    json_values.push(match value {
+                        Some(literal) => literal.try_into_json(&map_type.value_field.field_type)?,
+                        None => JsonValue::Null,
+                    });
+                }
+                object.insert("keys".to_string(), JsonValue::Array(json_keys));
+                object.insert("values".to_string(), JsonValue::Array(json_values));
+                Ok(JsonValue::Object(object))
+            }
+            (value, r#type) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "The iceberg value {:?} doesn't fit to the iceberg type {}.",
+                    value, r#type
+                ),
+            )),
         }
     }
 
@@ -1605,7 +1624,7 @@ mod tests {
             Literal::try_from_json(raw_json_value.clone(), expected_type).unwrap();
         assert_eq!(desered_literal, Some(expected_literal.clone()));
 
-        let expected_json_value: JsonValue = (&expected_literal).into();
+        let expected_json_value: JsonValue = expected_literal.try_into_json(expected_type).unwrap();
         let sered_json = serde_json::to_string(&expected_json_value).unwrap();
         let parsed_json_value = serde_json::from_str::<JsonValue>(&sered_json).unwrap();
 
@@ -1809,6 +1828,17 @@ mod tests {
                 Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
             )),
             &Type::Primitive(PrimitiveType::Uuid),
+        );
+    }
+
+    #[test]
+    fn json_decimal() {
+        let record = r#""14.20""#;
+
+        check_json_serde(
+            record,
+            Literal::Primitive(PrimitiveLiteral::Decimal(1420)),
+            &Type::decimal(28, 2).unwrap(),
         );
     }
 
