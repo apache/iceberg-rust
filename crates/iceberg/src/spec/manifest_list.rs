@@ -57,18 +57,18 @@ impl ManifestList {
     pub fn parse_with_version(
         bs: &[u8],
         version: FormatVersion,
-        partition_type: &StructType,
+        partition_types: &HashMap<i32, StructType>,
     ) -> Result<ManifestList, Error> {
         match version {
             FormatVersion::V1 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
                 let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type)
+                from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_types)
             }
             FormatVersion::V2 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
                 let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type)
+                from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_types)
             }
         }
     }
@@ -657,6 +657,8 @@ pub struct FieldSummary {
 /// and then converted into the [ManifestListEntry] struct. Serialization works the other way around.
 /// [ManifestListEntryV1] and [ManifestListEntryV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
+    use std::collections::HashMap;
+
     pub use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize, Serialize};
 
@@ -682,12 +684,18 @@ pub(super) mod _serde {
     impl ManifestListV2 {
         /// Converts the [ManifestListV2] into a [ManifestList].
         /// The convert of [entries] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: &StructType) -> Result<super::ManifestList, Error> {
+        pub fn try_into(
+            self,
+            partition_types: &HashMap<i32, StructType>,
+        ) -> Result<super::ManifestList, Error> {
             Ok(super::ManifestList {
                 entries: self
                     .entries
                     .into_iter()
-                    .map(|v| v.try_into(partition_type))
+                    .map(|v| {
+                        let partition_spec_id = v.partition_spec_id;
+                        v.try_into(partition_types.get(&partition_spec_id))
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             })
         }
@@ -710,12 +718,18 @@ pub(super) mod _serde {
     impl ManifestListV1 {
         /// Converts the [ManifestListV1] into a [ManifestList].
         /// The convert of [entries] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: &StructType) -> Result<super::ManifestList, Error> {
+        pub fn try_into(
+            self,
+            partition_types: &HashMap<i32, StructType>,
+        ) -> Result<super::ManifestList, Error> {
             Ok(super::ManifestList {
                 entries: self
                     .entries
                     .into_iter()
-                    .map(|v| v.try_into(partition_type))
+                    .map(|v| {
+                        let partition_spec_id = v.partition_spec_id;
+                        v.try_into(partition_types.get(&partition_spec_id))
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             })
         }
@@ -800,10 +814,10 @@ pub(super) mod _serde {
 
     fn try_convert_to_field_summary(
         partitions: Option<Vec<FieldSummary>>,
-        partition_type: &StructType,
+        partition_type: Option<&StructType>,
     ) -> Result<Vec<super::FieldSummary>, Error> {
-        Ok(partitions
-            .map(|partitions| {
+        if let Some(partitions) = partitions {
+            if let Some(partition_type) = partition_type {
                 let partition_types = partition_type.fields();
                 if partitions.len() != partition_types.len() {
                     return Err(Error::new(
@@ -820,15 +834,24 @@ pub(super) mod _serde {
                     .zip(partition_types)
                     .map(|(v, field)| v.try_into(&field.field_type))
                     .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default())
+            } else {
+                Err(Error::new(
+                    crate::ErrorKind::DataInvalid,
+                    "Invalid partition spec. Partition type is required",
+                ))
+            }
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     impl ManifestListEntryV2 {
         /// Converts the [ManifestListEntryV2] into a [ManifestListEntry].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: &StructType) -> Result<ManifestListEntry, Error> {
+        pub fn try_into(
+            self,
+            partition_type: Option<&StructType>,
+        ) -> Result<ManifestListEntry, Error> {
             let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
             Ok(ManifestListEntry {
                 manifest_path: self.manifest_path,
@@ -853,7 +876,10 @@ pub(super) mod _serde {
     impl ManifestListEntryV1 {
         /// Converts the [ManifestListEntryV1] into a [ManifestListEntry].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: &StructType) -> Result<ManifestListEntry, Error> {
+        pub fn try_into(
+            self,
+            partition_type: Option<&StructType>,
+        ) -> Result<ManifestListEntry, Error> {
             let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
             Ok(ManifestListEntry {
                 manifest_path: self.manifest_path,
@@ -1032,7 +1058,7 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, sync::Arc};
+    use std::{collections::HashMap, fs, sync::Arc};
 
     use tempfile::TempDir;
 
@@ -1090,12 +1116,9 @@ mod test {
 
         let bs = fs::read(full_path).expect("read_file must succeed");
 
-        let parsed_manifest_list = ManifestList::parse_with_version(
-            &bs,
-            crate::spec::FormatVersion::V1,
-            &StructType::new(vec![]),
-        )
-        .unwrap();
+        let parsed_manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1, &HashMap::new())
+                .unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -1119,6 +1142,23 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                    key_metadata: vec![],
+                },
+                ManifestListEntry {
+                    manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
+                    manifest_length: 6926,
+                    partition_spec_id: 2,
+                    content: ManifestContentType::Data,
+                    sequence_number: 1,
+                    min_sequence_number: 1,
+                    added_snapshot_id: 377075049360453639,
+                    added_data_files_count: Some(1),
+                    existing_data_files_count: Some(0),
+                    deleted_data_files_count: Some(0),
+                    added_rows_count: Some(3),
+                    existing_rows_count: Some(0),
+                    deleted_rows_count: Some(0),
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::float(1.1)), upper_bound: Some(Literal::float(2.1))}],
                     key_metadata: vec![],
                 }
             ]
@@ -1147,11 +1187,24 @@ mod test {
         let parsed_manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V2,
-            &StructType::new(vec![Arc::new(NestedField::required(
-                1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
+            &HashMap::from([
+                (
+                    1,
+                    StructType::new(vec![Arc::new(NestedField::required(
+                        1,
+                        "test",
+                        Type::Primitive(PrimitiveType::Long),
+                    ))]),
+                ),
+                (
+                    2,
+                    StructType::new(vec![Arc::new(NestedField::required(
+                        1,
+                        "test",
+                        Type::Primitive(PrimitiveType::Float),
+                    ))]),
+                ),
+            ]),
         )
         .unwrap();
 
@@ -1251,11 +1304,14 @@ mod test {
         let manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V1,
-            &StructType::new(vec![Arc::new(NestedField::required(
+            &HashMap::from([(
                 1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
+                StructType::new(vec![Arc::new(NestedField::required(
+                    1,
+                    "test",
+                    Type::Primitive(PrimitiveType::Long),
+                ))]),
+            )]),
         )
         .unwrap();
         assert_eq!(manifest_list, expected_manifest_list);
@@ -1302,11 +1358,14 @@ mod test {
         let manifest_list = ManifestList::parse_with_version(
             &bs,
             crate::spec::FormatVersion::V2,
-            &StructType::new(vec![Arc::new(NestedField::required(
+            &HashMap::from([(
                 1,
-                "test",
-                Type::Primitive(PrimitiveType::Long),
-            ))]),
+                StructType::new(vec![Arc::new(NestedField::required(
+                    1,
+                    "test",
+                    Type::Primitive(PrimitiveType::Long),
+                ))]),
+            )]),
         )
         .unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
