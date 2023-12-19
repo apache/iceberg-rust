@@ -28,7 +28,7 @@ use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
 use crate::io::FileIO;
-use crate::spec::{ManifestList, SchemaId, TableMetadata};
+use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
 use crate::{Error, ErrorKind};
 use _serde::SnapshotV2;
 
@@ -135,6 +135,22 @@ impl Snapshot {
         self.schema_id
     }
 
+    /// Get the schema of this snapshot.
+    pub fn schema(&self, table_metadata: &TableMetadata) -> Result<SchemaRef> {
+        Ok(match self.schema_id() {
+            Some(schema_id) => table_metadata
+                .schema_by_id(schema_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Schema with id {} not found", schema_id),
+                    )
+                })?
+                .clone(),
+            None => table_metadata.current_schema().clone(),
+        })
+    }
+
     /// Load manifest list.
     pub async fn load_manifest_list(
         &self,
@@ -150,7 +166,16 @@ impl Snapshot {
                     .read_to_end(&mut manifest_list_content)
                     .await?;
 
-                Ok(ManifestList::parse_with_version(&manifest_list_content, table_metadata.format_version(), table_metadata.default_partition_spec().unwrap().partition_type(table_metadata.current_schema()).as_ref().unwrap())?)
+                let schema = self.schema(table_metadata)?;
+
+                let partition_type_provider = |partition_spec_id: i32| -> Result<Option<StructType>> {
+                    table_metadata.partition_spec_by_id(partition_spec_id).map(|partition_spec| {
+                        partition_spec.partition_type(&schema)
+                    }).transpose()
+                };
+
+                ManifestList::parse_with_version(&manifest_list_content, table_metadata.format_version(),
+                                                    partition_type_provider, )
             }
             ManifestListLocation::ManifestFiles(_) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,

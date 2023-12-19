@@ -149,20 +149,8 @@ impl<'a> TableScanBuilder<'a> {
                 })?
                 .clone(),
         };
-        let schema = match snapshot.schema_id() {
-            Some(schema_id) => self
-                .table
-                .metadata()
-                .schema_by_id(schema_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Schema with id {} not found", schema_id),
-                    )
-                })?
-                .clone(),
-            None => self.table.metadata.current_schema().clone(),
-        };
+
+        let schema = snapshot.schema(self.table.metadata())?;
 
         Ok(TableScan {
             column_names: self.column_names.clone(),
