@@ -319,6 +319,12 @@ define_from_err!(
     "Failed to parse json string"
 );
 
+define_from_err!(
+    rust_decimal::Error,
+    ErrorKind::DataInvalid,
+    "Failed to convert decimal literal to rust decimal"
+);
+
 /// Helper macro to check arguments.
 ///
 ///
