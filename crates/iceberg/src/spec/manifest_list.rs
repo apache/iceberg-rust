@@ -694,7 +694,15 @@ pub(super) mod _serde {
                     .into_iter()
                     .map(|v| {
                         let partition_spec_id = v.partition_spec_id;
+                        let manifest_path = v.manifest_path.clone();
                         v.try_into(partition_types.get(&partition_spec_id))
+                            .map_err(|err| {
+                                err.with_context("manifest file path", manifest_path)
+                                    .with_context(
+                                        "partition spec id",
+                                        partition_spec_id.to_string(),
+                                    )
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             })
@@ -728,7 +736,15 @@ pub(super) mod _serde {
                     .into_iter()
                     .map(|v| {
                         let partition_spec_id = v.partition_spec_id;
+                        let manifest_path = v.manifest_path.clone();
                         v.try_into(partition_types.get(&partition_spec_id))
+                            .map_err(|err| {
+                                err.with_context("manifest file path", manifest_path)
+                                    .with_context(
+                                        "partition spec id",
+                                        partition_spec_id.to_string(),
+                                    )
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             })
