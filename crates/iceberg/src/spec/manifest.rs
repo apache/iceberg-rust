@@ -1104,8 +1104,8 @@ mod _serde {
             Ok(ManifestEntry {
                 status: self.status.try_into()?,
                 snapshot_id: Some(self.snapshot_id),
-                sequence_number: None,
-                file_sequence_number: None,
+                sequence_number: Some(0),
+                file_sequence_number: Some(0),
                 data_file: self.data_file.try_into(partition_type, schema)?,
             })
         }
@@ -1620,8 +1620,8 @@ mod tests {
             entries: vec![ManifestEntry {
                 status: ManifestStatus::Added,
                 snapshot_id: Some(0),
-                sequence_number: None,
-                file_sequence_number: None,
+                sequence_number: Some(0),
+                file_sequence_number: Some(0),
                 data_file: DataFile {
                     content: DataContentType::Data,
                     file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
@@ -1690,8 +1690,8 @@ mod tests {
                 ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: Some(0),
-                    sequence_number: None,
-                    file_sequence_number: None,
+                    sequence_number: Some(0),
+                    file_sequence_number: Some(0),
                     data_file: DataFile {
                         content: DataContentType::Data,
                         file_path: "s3://testbucket/prod/db/sample/data/category=x/00010-1-d5c93668-1e52-41ac-92a6-bba590cbf249-00001.parquet".to_string(),

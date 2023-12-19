@@ -1374,4 +1374,56 @@ mod test {
 
         temp_dir.close().unwrap();
     }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v1_as_v2() {
+        let expected_manifest_list = ManifestList {
+            entries: vec![ManifestListEntry {
+                manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
+                manifest_length: 5806,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 0,
+                min_sequence_number: 0,
+                added_snapshot_id: 1646658105718557341,
+                added_data_files_count: Some(3),
+                existing_data_files_count: Some(0),
+                deleted_data_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                key_metadata: vec![],
+            }]
+        };
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("manifest_list_v1.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+
+        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, 0, 1);
+        writer
+            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let bs = fs::read(path).unwrap();
+        let manifest_list = ManifestList::parse_with_version(
+            &bs,
+            crate::spec::FormatVersion::V2,
+            &HashMap::from([(
+                1,
+                StructType::new(vec![Arc::new(NestedField::required(
+                    1,
+                    "test",
+                    Type::Primitive(PrimitiveType::Long),
+                ))]),
+            )]),
+        )
+        .unwrap();
+        assert_eq!(manifest_list, expected_manifest_list);
+
+        temp_dir.close().unwrap();
+    }
 }
