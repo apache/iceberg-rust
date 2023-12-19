@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef,
+    PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
 };
 
 use _serde::TableMetadataEnum;
@@ -37,6 +37,11 @@ use chrono::{DateTime, TimeZone, Utc};
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
+
+pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
+
+/// Reference to [`TableMetadata`].
+pub type TableMetadataRef = Arc<TableMetadata>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -147,7 +152,7 @@ impl TableMetadata {
 
     /// Lookup schema by id.
     #[inline]
-    pub fn schema_by_id(&self, schema_id: i32) -> Option<&SchemaRef> {
+    pub fn schema_by_id(&self, schema_id: SchemaId) -> Option<&SchemaRef> {
         self.schemas.get(&schema_id)
     }
 

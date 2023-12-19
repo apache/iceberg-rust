@@ -20,9 +20,10 @@ use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 
 use super::{
     FieldSummary, FormatVersion, ManifestContentType, ManifestListEntry, PartitionSpec, Schema,
-    Struct,
+    Struct, INITIAL_SEQUENCE_NUMBER,
 };
 use super::{Literal, UNASSIGNED_SEQUENCE_NUMBER};
+use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
@@ -32,17 +33,18 @@ use serde_json::to_vec;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Manifest {
     metadata: ManifestMetadata,
-    entries: Vec<ManifestEntry>,
+    entries: Vec<ManifestEntryRef>,
 }
 
 impl Manifest {
-    /// Parse manifest from bytes of avro file.
-    pub fn parse_avro(bs: &[u8]) -> Result<Self, Error> {
+    /// Parse manifest metadata and entries from bytes of avro file.
+    pub(crate) fn try_from_avro_bytes(bs: &[u8]) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
         let reader = AvroReader::new(bs)?;
 
         // Parse manifest metadata
@@ -62,7 +64,7 @@ impl Manifest {
                         from_value::<_serde::ManifestEntryV1>(&value?)?
                             .try_into(&partition_type, &metadata.schema)
                     })
-                    .collect::<Result<Vec<_>, Error>>()?
+                    .collect::<Result<Vec<_>>>()?
             }
             FormatVersion::V2 => {
                 let schema = manifest_schema_v2(partition_type.clone())?;
@@ -73,11 +75,30 @@ impl Manifest {
                         from_value::<_serde::ManifestEntryV2>(&value?)?
                             .try_into(&partition_type, &metadata.schema)
                     })
-                    .collect::<Result<Vec<_>, Error>>()?
+                    .collect::<Result<Vec<_>>>()?
             }
         };
 
-        Ok(Manifest { metadata, entries })
+        Ok((metadata, entries))
+    }
+
+    /// Parse manifest from bytes of avro file.
+    pub fn parse_avro(bs: &[u8]) -> Result<Self> {
+        let (metadata, entries) = Self::try_from_avro_bytes(bs)?;
+        Ok(Self::new(metadata, entries))
+    }
+
+    /// Entries slice.
+    pub fn entries(&self) -> &[ManifestEntryRef] {
+        &self.entries
+    }
+
+    /// Constructor from [`ManifestMetadata`] and [`ManifestEntry`]s.
+    pub fn new(metadata: ManifestMetadata, entries: Vec<ManifestEntry>) -> Self {
+        Self {
+            metadata,
+            entries: entries.into_iter().map(Arc::new).collect(),
+        }
     }
 }
 
@@ -174,7 +195,7 @@ impl ManifestWriter {
     }
 
     /// Write a manifest entry.
-    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestListEntry, Error> {
+    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestListEntry> {
         // Create the avro writer
         let partition_type = manifest
             .metadata
@@ -252,14 +273,16 @@ impl ManifestWriter {
             self.update_field_summary(&entry);
 
             let value = match manifest.metadata.format_version {
-                FormatVersion::V1 => {
-                    to_value(_serde::ManifestEntryV1::try_from(entry, &partition_type)?)?
-                        .resolve(&avro_schema)?
-                }
-                FormatVersion::V2 => {
-                    to_value(_serde::ManifestEntryV2::try_from(entry, &partition_type)?)?
-                        .resolve(&avro_schema)?
-                }
+                FormatVersion::V1 => to_value(_serde::ManifestEntryV1::try_from(
+                    (*entry).clone(),
+                    &partition_type,
+                )?)?
+                .resolve(&avro_schema)?,
+                FormatVersion::V2 => to_value(_serde::ManifestEntryV2::try_from(
+                    (*entry).clone(),
+                    &partition_type,
+                )?)?
+                .resolve(&avro_schema)?,
             };
 
             avro_writer.append(value)?;
@@ -694,7 +717,7 @@ pub struct ManifestMetadata {
 
 impl ManifestMetadata {
     /// Parse from metadata in avro file.
-    pub fn parse(meta: &HashMap<String, Vec<u8>>) -> Result<Self, Error> {
+    pub fn parse(meta: &HashMap<String, Vec<u8>>) -> Result<Self> {
         let schema = {
             let bs = meta.get("schema").ok_or_else(|| {
                 Error::new(
@@ -781,6 +804,9 @@ impl ManifestMetadata {
     }
 }
 
+/// Reference to [`ManifestEntry`].
+pub type ManifestEntryRef = Arc<ManifestEntry>;
+
 /// A manifest is an immutable Avro file that lists data files or delete
 /// files, along with each file’s partition data tuple, metrics, and tracking
 /// information.
@@ -819,6 +845,49 @@ impl ManifestEntry {
             ManifestStatus::Added | ManifestStatus::Existing
         )
     }
+
+    /// Content type of this manifest entry.
+    pub fn content_type(&self) -> DataContentType {
+        self.data_file.content
+    }
+
+    /// Data file path of this manifest entry.
+    pub fn file_path(&self) -> &str {
+        &self.data_file.file_path
+    }
+
+    /// Inherit data from snapshot, such as snapshot id, sequence number.
+    pub(crate) fn inherit_data(&mut self, snapshot_entry: &ManifestListEntry) {
+        if self.snapshot_id.is_none() {
+            self.snapshot_id = Some(snapshot_entry.added_snapshot_id);
+        }
+
+        if self.sequence_number.is_none()
+            && (self.status == ManifestStatus::Added
+                || snapshot_entry.sequence_number == INITIAL_SEQUENCE_NUMBER)
+        {
+            self.sequence_number = Some(snapshot_entry.sequence_number);
+        }
+
+        if self.file_sequence_number.is_none()
+            && (self.status == ManifestStatus::Added
+                || snapshot_entry.sequence_number == INITIAL_SEQUENCE_NUMBER)
+        {
+            self.file_sequence_number = Some(snapshot_entry.sequence_number);
+        }
+    }
+
+    /// Data sequence number.
+    #[inline]
+    pub fn sequence_number(&self) -> Option<i64> {
+        self.sequence_number
+    }
+
+    /// File size in bytes.
+    #[inline]
+    pub fn file_size_in_bytes(&self) -> u64 {
+        self.data_file.file_size_in_bytes
+    }
 }
 
 /// Used to track additions and deletions in ManifestEntry.
@@ -837,7 +906,7 @@ pub enum ManifestStatus {
 impl TryFrom<i32> for ManifestStatus {
     type Error = Error;
 
-    fn try_from(v: i32) -> Result<ManifestStatus, Error> {
+    fn try_from(v: i32) -> Result<ManifestStatus> {
         match v {
             0 => Ok(ManifestStatus::Existing),
             1 => Ok(ManifestStatus::Added),
@@ -976,7 +1045,7 @@ pub enum DataContentType {
 impl TryFrom<i32> for DataContentType {
     type Error = Error;
 
-    fn try_from(v: i32) -> Result<DataContentType, Error> {
+    fn try_from(v: i32) -> Result<DataContentType> {
         match v {
             0 => Ok(DataContentType::Data),
             1 => Ok(DataContentType::PositionDeletes),
@@ -1003,7 +1072,7 @@ pub enum DataFileFormat {
 impl FromStr for DataFileFormat {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "avro" => Ok(Self::Avro),
             "orc" => Ok(Self::Orc),
@@ -1388,7 +1457,7 @@ mod tests {
                 format_version: FormatVersion::V2,
             },
             entries: vec![
-                ManifestEntry {
+                Arc::new(ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: None,
                     sequence_number: None,
@@ -1411,7 +1480,7 @@ mod tests {
                         equality_ids: Vec::new(),
                         sort_order_id: None,
                     }
-                }
+                })
             ]
         };
 
@@ -1508,7 +1577,7 @@ mod tests {
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
-            entries: vec![ManifestEntry {
+            entries: vec![Arc::new(ManifestEntry {
                 status: ManifestStatus::Added,
                 snapshot_id: None,
                 sequence_number: None,
@@ -1573,7 +1642,7 @@ mod tests {
                     equality_ids: vec![],
                     sort_order_id: None,
                 },
-            }],
+            })],
         };
 
         let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
@@ -1617,7 +1686,7 @@ mod tests {
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
-            entries: vec![ManifestEntry {
+            entries: vec![Arc::new(ManifestEntry {
                 status: ManifestStatus::Added,
                 snapshot_id: Some(0),
                 sequence_number: Some(0),
@@ -1640,7 +1709,7 @@ mod tests {
                     equality_ids: vec![],
                     sort_order_id: Some(0),
                 }
-            }],
+            })],
         };
 
         let writer =
@@ -1687,7 +1756,7 @@ mod tests {
                 format_version: FormatVersion::V1,
             },
             entries: vec![
-                ManifestEntry {
+                Arc::new(ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: Some(0),
                     sequence_number: Some(0),
@@ -1728,7 +1797,7 @@ mod tests {
                         equality_ids: vec![],
                         sort_order_id: Some(0),
                     },
-                }
+                })
             ]
         };
 

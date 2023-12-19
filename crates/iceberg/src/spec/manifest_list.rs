@@ -19,16 +19,18 @@
 
 use std::{collections::HashMap, str::FromStr};
 
+use crate::io::FileIO;
 use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
-use futures::AsyncWriteExt;
+use futures::{AsyncReadExt, AsyncWriteExt};
 
 use self::{
     _const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
     _serde::{ManifestListEntryV1, ManifestListEntryV2},
 };
 
-use super::{FormatVersion, StructType};
+use super::{FormatVersion, Manifest, StructType};
+use crate::error::Result;
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
@@ -58,16 +60,16 @@ impl ManifestList {
         bs: &[u8],
         version: FormatVersion,
         partition_types: &HashMap<i32, StructType>,
-    ) -> Result<ManifestList, Error> {
+    ) -> Result<ManifestList> {
         match version {
             FormatVersion::V1 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
-                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
+                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_types)
             }
             FormatVersion::V2 => {
                 let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
-                let values = Value::Array(reader.collect::<Result<Vec<Value>, _>>()?);
+                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_types)
             }
         }
@@ -167,7 +169,7 @@ impl ManifestListWriter {
     pub fn add_manifest_entries(
         &mut self,
         manifest_entries: impl Iterator<Item = ManifestListEntry>,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         match self.format_version {
             FormatVersion::V1 => {
                 for manifest_entry in manifest_entries {
@@ -210,7 +212,7 @@ impl ManifestListWriter {
     }
 
     /// Write the manifest list to the output file.
-    pub async fn close(self) -> Result<(), Error> {
+    pub async fn close(self) -> Result<()> {
         let data = self.avro_writer.into_inner()?;
         let mut writer = self.output_file.writer().await?;
         writer.write_all(&data).await.unwrap();
@@ -589,7 +591,7 @@ pub enum ManifestContentType {
 impl FromStr for ManifestContentType {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "data" => Ok(ManifestContentType::Data),
             "deletes" => Ok(ManifestContentType::Deletes),
@@ -613,7 +615,7 @@ impl ToString for ManifestContentType {
 impl TryFrom<i32> for ManifestContentType {
     type Error = Error;
 
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
@@ -625,6 +627,30 @@ impl TryFrom<i32> for ManifestContentType {
                 ),
             )),
         }
+    }
+}
+
+impl ManifestListEntry {
+    /// Load [`Manifest`].
+    ///
+    /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
+    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
+        let mut avro = Vec::new();
+        file_io
+            .new_input(&self.manifest_path)?
+            .reader()
+            .await?
+            .read_to_end(&mut avro)
+            .await?;
+
+        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
+
+        // Let entries inherit values from the manifest list entry.
+        for entry in &mut entries {
+            entry.inherit_data(self);
+        }
+
+        Ok(Manifest::new(metadata, entries))
     }
 }
 
