@@ -62,3 +62,4 @@ notifications:
 
 publish:
   whoami: gh-pages
+  hostname: rust.iceberg.apache.org
