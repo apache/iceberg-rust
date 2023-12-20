@@ -108,6 +108,13 @@ impl Snapshot {
     pub fn snapshot_id(&self) -> i64 {
         self.snapshot_id
     }
+
+    /// Get parent snapshot id.
+    #[inline]
+    pub fn parent_snapshot_id(&self) -> Option<i64> {
+        self.parent_snapshot_id
+    }
+
     /// Get sequence_number of the snapshot. Is 0 for Iceberg V1 tables.
     #[inline]
     pub fn sequence_number(&self) -> i64 {
@@ -117,6 +124,20 @@ impl Snapshot {
     #[inline]
     pub fn manifest_list(&self) -> &ManifestListLocation {
         &self.manifest_list
+    }
+
+    /// Return the manifest list file path.
+    ///
+    /// It will return an error if the manifest list is not a file but a list of manifest file paths.
+    #[inline]
+    pub fn manifest_list_file_path(&self) -> Result<&str> {
+        match &self.manifest_list {
+            ManifestListLocation::ManifestListFile(s) => Ok(s),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Manifest list is not a file but a list of manifest files.",
+            )),
+        }
     }
     /// Get summary of the snapshot
     #[inline]
@@ -149,6 +170,14 @@ impl Snapshot {
                 .clone(),
             None => table_metadata.current_schema().clone(),
         })
+    }
+
+    /// Get parent snapshot.
+    pub fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
+        match self.parent_snapshot_id {
+            Some(id) => table_metadata.snapshot_by_id(id).cloned(),
+            None => None,
+        }
     }
 
     /// Load manifest list.

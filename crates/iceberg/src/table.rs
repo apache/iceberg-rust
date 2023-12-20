@@ -33,7 +33,7 @@ use typed_builder::TypedBuilder;
 #[derive(TypedBuilder, Debug)]
 pub struct Table {
     file_io: FileIO,
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option, into))]
     metadata_location: Option<String>,
     #[builder(setter(into))]
     metadata: TableMetadataRef,
@@ -111,12 +111,6 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Whether the column names are case sensitive.
-    pub fn case_sensitive(mut self, case_sensitive: bool) -> Self {
-        self.case_sensitive = case_sensitive;
-        self
-    }
-
     /// Set the snapshot to scan. When not set, it uses current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
@@ -124,7 +118,7 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Build the table scan.
-    pub async fn build(self) -> Result<TableScan> {
+    pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -152,10 +146,21 @@ impl<'a> TableScanBuilder<'a> {
 
         let schema = snapshot.schema(self.table.metadata())?;
 
+        // Check that all column names exist in the schema.
+        if !self.column_names.is_empty() {
+            for column_name in &self.column_names {
+                if schema.field_by_name(column_name).is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Column {} not found in table.", column_name),
+                    ));
+                }
+            }
+        }
+
         Ok(TableScan {
             column_names: self.column_names.clone(),
             limit: None,
-            case_sensitive: self.case_sensitive,
             snapshot,
             schema,
             file_io: self.table.file_io.clone(),
@@ -165,10 +170,10 @@ impl<'a> TableScanBuilder<'a> {
 }
 
 /// Table scan.
+#[derive(Debug)]
 pub struct TableScan {
     column_names: Vec<String>,
     limit: Option<usize>,
-    case_sensitive: bool,
     snapshot: SnapshotRef,
     schema: SchemaRef,
     table_metadata: TableMetadataRef,
@@ -276,7 +281,7 @@ impl TableScan {
 
         // Find the first position delete file whose sequence number is greater than or equal to the data file.
         let first_entry = position_deletes.partition_point(|e| {
-            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) >= data_seq_num
+            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) < data_seq_num
         });
 
         // TODO: We should further filter the position delete files by `file_path` column.
@@ -296,15 +301,16 @@ impl TableScan {
 
         // Find the first position delete file whose sequence number is greater than or equal to the data file.
         let first_entry = eq_deletes.partition_point(|e| {
-            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) > data_seq_num
+            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) <= data_seq_num
         });
 
-        // TODO: We should further filter the position delete files statistics
+        // TODO: We should further filter the eq delete files statistics
         eq_deletes.iter().skip(first_entry).cloned().collect()
     }
 }
 
 /// A task to scan part of file.
+#[derive(Debug)]
 pub struct FileScanTask {
     data_file: ManifestEntryRef,
     position_delete_files: Vec<ManifestEntryRef>,
@@ -319,5 +325,349 @@ impl FileScanTask {
     /// Returns a stream of arrow record batches.
     pub async fn execute(&self) -> Result<ArrowRecordBatchStream> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::io::{FileIO, OutputFile};
+    use crate::spec::{
+        DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Manifest,
+        ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
+        ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
+    };
+    use crate::table::Table;
+    use crate::TableIdent;
+    use futures::TryStreamExt;
+    use std::fs;
+    use tempfile::TempDir;
+    use tera::{Context, Tera};
+    use uuid::Uuid;
+
+    struct TableTestFixture {
+        tmp_dir: TempDir,
+        table_location: String,
+        manifest_list1_location: String,
+        manifest_list2_location: String,
+        table_metadata1_location: String,
+        table: Table,
+    }
+
+    impl TableTestFixture {
+        fn new() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
+            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+                .unwrap()
+                .build()
+                .unwrap();
+
+            let table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let mut context = Context::new();
+                context.insert("table_location", &table_location);
+                context.insert("manifest_list_1_location", &manifest_list1_location);
+                context.insert("manifest_list_2_location", &manifest_list2_location);
+                context.insert("table_metadata_1_location", &table_metadata1_location);
+
+                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io)
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .build();
+
+            Self {
+                tmp_dir,
+                manifest_list1_location: manifest_list1_location.to_str().unwrap().to_string(),
+                manifest_list2_location: manifest_list2_location.to_str().unwrap().to_string(),
+                table_metadata1_location: table_metadata1_location.to_str().unwrap().to_string(),
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        fn next_manifest_file(&self) -> OutputFile {
+            self.table
+                .file_io
+                .new_output(format!(
+                    "{}/metadata/manifest_{}.avro",
+                    self.table_location,
+                    Uuid::new_v4()
+                ))
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn test_table_scan_columns() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().select(["x", "y"]).build().unwrap();
+        assert_eq!(vec!["x", "y"], table_scan.column_names);
+
+        let table_scan = table
+            .scan()
+            .select(["x", "y"])
+            .select(["z"])
+            .build()
+            .unwrap();
+        assert_eq!(vec!["z"], table_scan.column_names);
+    }
+
+    #[test]
+    fn test_select_all() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().select_all().build().unwrap();
+        assert!(table_scan.column_names.is_empty());
+    }
+
+    #[test]
+    fn test_select_no_exist_column() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().select(["x", "y", "z", "a"]).build();
+        assert!(table_scan.is_err());
+    }
+
+    #[test]
+    fn test_table_scan_default_snapshot_id() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(
+            table.metadata().current_snapshot().unwrap().snapshot_id(),
+            table_scan.snapshot.snapshot_id()
+        );
+    }
+
+    #[test]
+    fn test_table_scan_non_exist_snapshot_id() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().snapshot_id(1024).build();
+        assert!(table_scan.is_err());
+    }
+
+    #[test]
+    fn test_table_scan_with_snapshot_id() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(3051729675574597004)
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot.snapshot_id(), 3051729675574597004);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files() {
+        let fixture = TableTestFixture::new();
+
+        let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let parent_snapshot = current_snapshot
+            .parent_snapshot(fixture.table.metadata())
+            .unwrap();
+        let current_schema = current_snapshot.schema(fixture.table.metadata()).unwrap();
+        let current_partition_spec = fixture.table.metadata().default_partition_spec().unwrap();
+
+        // Write data files
+        let data_file_manifest = ManifestWriter::new(
+            fixture.next_manifest_file(),
+            current_snapshot.snapshot_id(),
+            vec![],
+        )
+        .write(Manifest::new(
+            ManifestMetadata::builder()
+                .schema((*current_schema).clone())
+                .content(ManifestContentType::Data)
+                .format_version(FormatVersion::V2)
+                .partition_spec((**current_partition_spec).clone())
+                .schema_id(current_schema.schema_id())
+                .build(),
+            vec![
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/1.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build(),
+                    )
+                    .build(),
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Deleted)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/2.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(200))]))
+                            .build(),
+                    )
+                    .build(),
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Existing)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/3.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(300))]))
+                            .build(),
+                    )
+                    .build(),
+            ],
+        ))
+        .await
+        .unwrap();
+
+        // Write delete file manifest
+        let delete_file_manifest = ManifestWriter::new(
+            fixture.next_manifest_file(),
+            current_snapshot.snapshot_id(),
+            vec![],
+        )
+        .write(Manifest::new(
+            ManifestMetadata::builder()
+                .schema((*current_schema).clone())
+                .content(ManifestContentType::Deletes)
+                .format_version(FormatVersion::V2)
+                .partition_spec((**current_partition_spec).clone())
+                .schema_id(current_schema.schema_id())
+                .build(),
+            vec![
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::PositionDeletes)
+                            .file_path(format!("{}/pos_delete_1.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build(),
+                    )
+                    .build(),
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::EqualityDeletes)
+                            .file_path(format!("{}/eq_delete_1.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(200))]))
+                            .build(),
+                    )
+                    .build(),
+            ],
+        ))
+        .await
+        .unwrap();
+
+        // Write to manifest list
+        let mut manifest_list_write = ManifestListWriter::v2(
+            fixture
+                .table
+                .file_io
+                .new_output(current_snapshot.manifest_list_file_path().unwrap())
+                .unwrap(),
+            current_snapshot.snapshot_id(),
+            current_snapshot
+                .parent_snapshot_id()
+                .unwrap_or(EMPTY_SNAPSHOT_ID),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_write
+            .add_manifest_entries(vec![data_file_manifest, delete_file_manifest].into_iter())
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+
+        // Create table scan for current snapshot and plan files
+        let table_scan = fixture.table.scan().build().unwrap();
+        let mut tasks = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_fold(vec![], |mut acc, task| async move {
+                acc.push(task);
+                Ok(acc)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 2);
+
+        tasks.sort_by_key(|t| t.data_file.file_path().to_string());
+
+        // Check first task is added data file
+        assert_eq!(
+            tasks[0].data_file.file_path(),
+            format!("{}/1.parquet", &fixture.table_location)
+        );
+        assert!(
+            tasks[0].eq_delete_files.is_empty(),
+            "Equation delete file should not be applied to data file with same sequence number."
+        );
+        assert_eq!(
+            tasks[0].position_delete_files[0].file_path(),
+            format!("{}/pos_delete_1.parquet", &fixture.table_location),
+            "Position delete file should be applied to data file with smaller or same sequence number."
+        );
+
+        // Check second task is existing data file
+        assert_eq!(
+            tasks[1].data_file.file_path(),
+            format!("{}/3.parquet", &fixture.table_location)
+        );
+        assert_eq!(
+            tasks[1]
+                .eq_delete_files
+                .iter()
+                .map(|f| f.file_path().to_string())
+                .collect::<Vec<String>>(),
+            vec![format!("{}/eq_delete_1.parquet", &fixture.table_location)],
+            "Equation delete file should be applied to data file with smaller sequence number."
+        );
+        assert_eq!(
+            tasks[1]
+                .position_delete_files
+                .iter()
+                .map(|f| f.file_path().to_string())
+                .collect::<Vec<String>>(),
+            vec![format!("{}/pos_delete_1.parquet", &fixture.table_location)],
+            "Position delete file should be applied to data file with smaller or same sequence number."
+        );
     }
 }

@@ -20,7 +20,7 @@ use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 
 use super::{
     FieldSummary, FormatVersion, ManifestContentType, ManifestListEntry, PartitionSpec, Schema,
-    Struct, INITIAL_SEQUENCE_NUMBER,
+    SchemaId, Struct, INITIAL_SEQUENCE_NUMBER,
 };
 use super::{Literal, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::error::Result;
@@ -34,6 +34,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use typed_builder::TypedBuilder;
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -700,13 +701,13 @@ mod _const_schema {
 }
 
 /// Meta data of a manifest that is stored in the key-value metadata of the Avro file
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, PartialEq, Clone, Eq, TypedBuilder)]
 pub struct ManifestMetadata {
     /// The table schema at the time the manifest
     /// was written
     schema: Schema,
     /// ID of the schema used to write the manifest as a string
-    schema_id: i32,
+    schema_id: SchemaId,
     /// The partition spec used  to write the manifest
     partition_spec: PartitionSpec,
     /// Table format version number of the manifest as a string
@@ -810,7 +811,7 @@ pub type ManifestEntryRef = Arc<ManifestEntry>;
 /// A manifest is an immutable Avro file that lists data files or delete
 /// files, along with each file’s partition data tuple, metrics, and tracking
 /// information.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, TypedBuilder)]
 pub struct ManifestEntry {
     /// field: 0
     ///
@@ -820,16 +821,19 @@ pub struct ManifestEntry {
     ///
     /// Snapshot id where the file was added, or deleted if status is 2.
     /// Inherited when null.
+    #[builder(default, setter(strip_option))]
     snapshot_id: Option<i64>,
     /// field id: 3
     ///
     /// Data sequence number of the file.
     /// Inherited when null and status is 1 (added).
+    #[builder(default, setter(strip_option))]
     sequence_number: Option<i64>,
     /// field id: 4
     ///
     /// File sequence number indicating when the file was added.
     /// Inherited when null and status is 1 (added).
+    #[builder(default, setter(strip_option))]
     file_sequence_number: Option<i64>,
     /// field id: 2
     ///
@@ -920,7 +924,7 @@ impl TryFrom<i32> for ManifestStatus {
 }
 
 /// Data file carries data file path, partition tuple, metrics, …
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, PartialEq, Clone, Eq, TypedBuilder)]
 pub struct DataFile {
     /// field id: 134
     ///
@@ -955,6 +959,7 @@ pub struct DataFile {
     /// Map from column id to the total size on disk of all regions that
     /// store the column. Does not include bytes necessary to read other
     /// columns, like footers. Leave null for row-oriented formats (Avro)
+    #[builder(default)]
     column_sizes: HashMap<i32, u64>,
     /// field id: 109
     /// key field id: 119
@@ -962,18 +967,21 @@ pub struct DataFile {
     ///
     /// Map from column id to number of values in the column (including null
     /// and NaN values)
+    #[builder(default)]
     value_counts: HashMap<i32, u64>,
     /// field id: 110
     /// key field id: 121
     /// value field id: 122
     ///
     /// Map from column id to number of null values in the column
+    #[builder(default)]
     null_value_counts: HashMap<i32, u64>,
     /// field id: 137
     /// key field id: 138
     /// value field id: 139
     ///
     /// Map from column id to number of NaN values in the column
+    #[builder(default)]
     nan_value_counts: HashMap<i32, u64>,
     /// field id: 125
     /// key field id: 126
@@ -986,6 +994,7 @@ pub struct DataFile {
     /// Reference:
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
+    #[builder(default)]
     lower_bounds: HashMap<i32, Literal>,
     /// field id: 128
     /// key field id: 129
@@ -998,16 +1007,19 @@ pub struct DataFile {
     /// Reference:
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
+    #[builder(default)]
     upper_bounds: HashMap<i32, Literal>,
     /// field id: 131
     ///
     /// Implementation-specific key metadata for encryption
+    #[builder(default)]
     key_metadata: Vec<u8>,
     /// field id: 132
     /// element field id: 133
     ///
     /// Split offsets for the data file. For example, all row group offsets
     /// in a Parquet file. Must be sorted ascending
+    #[builder(default)]
     split_offsets: Vec<i64>,
     /// field id: 135
     /// element field id: 136
@@ -1016,6 +1028,7 @@ pub struct DataFile {
     /// Required when content is EqualityDeletes and should be null
     /// otherwise. Fields with ids listed in this column must be present
     /// in the delete file
+    #[builder(default)]
     equality_ids: Vec<i32>,
     /// field id: 140
     ///
@@ -1027,6 +1040,7 @@ pub struct DataFile {
     /// sorted by file and position, not a table order, and should set sort
     /// order id to null. Readers must ignore sort order id for position
     /// delete files.
+    #[builder(default, setter(strip_option))]
     sort_order_id: Option<i32>,
 }
 
@@ -1588,8 +1602,8 @@ mod tests {
                     file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-378b56f5-5c52-4102-a2c2-f05f8a7cbe4a-00000.parquet".to_string(),
                     partition: Struct::from_iter(
                         vec![
-                            (1000, Some(Literal::int(1)), "v_int".to_string()),
-                            (1001, Some(Literal::long(1000)), "v_long".to_string())
+                            Some(Literal::int(1)),
+                            Some(Literal::long(1000)),
                         ]
                             .into_iter()
                     ),
@@ -1766,14 +1780,12 @@ mod tests {
                         file_path: "s3://testbucket/prod/db/sample/data/category=x/00010-1-d5c93668-1e52-41ac-92a6-bba590cbf249-00001.parquet".to_string(),
                         file_format: DataFileFormat::Parquet,
                         partition: Struct::from_iter(
-                            vec![(
-                                1000,
+                            vec![
                                 Some(
                                     Literal::try_from_bytes(&[120], &Type::Primitive(PrimitiveType::String))
                                         .unwrap()
                                 ),
-                                "category".to_string()
-                            )]
+                            ]
                                 .into_iter()
                         ),
                         record_count: 1,
