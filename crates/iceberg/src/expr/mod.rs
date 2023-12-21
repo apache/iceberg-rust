@@ -15,35 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! This module contains expressions used in apache iceberg.
 
-#![deny(missing_docs)]
+mod bound;
+pub use bound::*;
+mod unbound;
+pub use unbound::*;
 
-#[macro_use]
-extern crate derive_builder;
-
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-mod catalog;
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-pub mod expr;
-pub mod transaction;
-pub mod transform;
+/// Operators used in expressions.
+#[allow(missing_docs)]
+pub enum Operator {
+    IsNull,
+    NotNull,
+    IsNan,
+    NotNan,
+    LessThan,
+    LessThanOrEq,
+    GreaterThan,
+    GreaterThanOrEq,
+    Eq,
+    NotEq,
+    In,
+    NotIn,
+    Not,
+    And,
+    Or,
+    StartsWith,
+    NotStartsWith,
+    Count,
+    CountStar,
+    Max,
+    Min,
+}

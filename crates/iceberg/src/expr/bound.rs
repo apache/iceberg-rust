@@ -15,35 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! This module defines bound expressions.
 
-#![deny(missing_docs)]
+use crate::expr::Operator;
+use crate::spec::{Literal, NestedFieldRef};
 
-#[macro_use]
-extern crate derive_builder;
-
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-mod catalog;
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-pub mod expr;
-pub mod transaction;
-pub mod transform;
+/// Bound expression.
+pub enum Bound {
+    /// Constants such as 1, 'a', true, false, null.
+    Literal(Literal),
+    /// Reference to some field in schema
+    Reference {
+        /// Original name
+        name: String,
+        /// Nested field found in schema.
+        field: NestedFieldRef,
+    },
+    /// Expressions
+    Expr {
+        /// Operator for this expression, such as `AND` or `OR`.
+        op: Operator,
+        /// Arguments for this expression. For example, `a > b` would have `a` and `b` as [`inputs`]
+        inputs: Vec<Bound>,
+    },
+}

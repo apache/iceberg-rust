@@ -15,35 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! This module defines unbound expressions.
 
-#![deny(missing_docs)]
+use crate::error::Result;
+use crate::expr::bound::Bound;
+use crate::expr::Operator;
+use crate::spec::{Literal, Schema};
 
-#[macro_use]
-extern crate derive_builder;
+/// Unbound expressions.
+pub enum Unbound {
+    /// Constants, such as 1, 'a', true, false, null.
+    Literal(Literal),
+    /// References to fields, such as `col` or `tbl.col`.
+    Reference(String),
+    /// Expressions
+    Expr {
+        /// Operator for this expression, such as `AND` or `OR`.
+        operator: Operator,
+        /// Arguments of this express.
+        inputs: Vec<Unbound>,
+    },
+}
 
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-mod catalog;
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-pub mod expr;
-pub mod transaction;
-pub mod transform;
+impl Unbound {
+    /// Bind expression to schema.
+    pub fn bind(&self, _schema: &Schema, _case_sensitive: bool) -> Result<Bound> {
+        todo!()
+    }
+}
