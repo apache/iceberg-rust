@@ -54,8 +54,7 @@ We will add integrations with other rust based data systems, such as polars, dat
 
 ## Contribute
 
-Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are
-some ways to go.
+Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are some ways to go.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
