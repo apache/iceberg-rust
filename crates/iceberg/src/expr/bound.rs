@@ -26,14 +26,12 @@ pub enum Bound {
     Literal(Literal),
     /// Reference to some field in schema
     Reference {
-        /// Original name
-        name: String,
         /// Nested field found in schema.
         field: NestedFieldRef,
     },
     /// Expressions
     Expr {
-        /// Operator for this expression, such as `AND` or `OR`.
+        /// Operator for this expression, such as `And`, `Or`, `IsNull`, `Eq`, `LessThan`.
         op: Operator,
         /// Arguments for this expression. For example, `a > b` would have `a` and `b` as [`inputs`]
         inputs: Vec<Bound>,
