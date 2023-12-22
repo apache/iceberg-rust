@@ -21,14 +21,48 @@
 
 Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
+## RoadMap
+
+### Catalog
+
+| Catalog Type | Status      |
+|--------------|-------------|
+| Rest         | Done        |
+| Hive         | In Progress |
+| Sql          | Not Started |
+| Glue         | Not Started |
+| DynamoDB     | Not Started |
+
+### FileIO
+
+| FileIO Type | Status      |
+|-------------|-------------|
+| S3          | Done        |
+| Local File  | Done        |
+| GCS         | Not Started |
+| HDFS        | Not Started |
+
+### Table API
+
+* Table reader, including planning, reading into arrow record batch, etc.
+* Table writer, including data writer, equality deletion writer, position deletion writer, etc.
+* Transaction api, including schema evolution, update table, etc.
+
+### Integrations
+
+We will add integrations with other rust based data systems, such as polars, datafusion, etc.
+
 ## Contribute
 
-Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are some ways to go.
+Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are
+some ways to go.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
-- Discuss at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)) / [unsubscribe](mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
-- Talk to community directly at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
+- Discuss
+  at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)) / [unsubscribe](mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
+- Talk to community directly
+  at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
 
 ## License
 
