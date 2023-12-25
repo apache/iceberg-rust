@@ -173,7 +173,7 @@ impl Snapshot {
     }
 
     /// Get parent snapshot.
-    pub fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
+    pub(crate) fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
         match self.parent_snapshot_id {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
             None => None,
