@@ -16,17 +16,10 @@
 // under the License.
 
 //! Table API for Apache Iceberg
-
-use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::{
-    DataContentType, ManifestContentType, ManifestEntry, ManifestEntryRef, SchemaRef, SnapshotRef,
-    TableMetadata, TableMetadataRef, INITIAL_SEQUENCE_NUMBER,
-};
-use crate::{Error, ErrorKind, TableIdent};
-use arrow_array::RecordBatch;
-use futures::stream::{iter, BoxStream};
-use futures::StreamExt;
+use crate::scan::TableScanBuilder;
+use crate::spec::{TableMetadata, TableMetadataRef};
+use crate::TableIdent;
 use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.

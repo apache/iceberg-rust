@@ -33,16 +33,14 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Empty column names means to select all columns
     column_names: Vec<String>,
-    case_sensitive: bool,
     snapshot_id: Option<i64>,
 }
 
 impl<'a> TableScanBuilder<'a> {
-    fn new(table: &'a Table) -> Self {
+    pub fn new(table: &'a Table) -> Self {
         Self {
             table,
             column_names: vec![],
-            case_sensitive: false,
             snapshot_id: None,
         }
     }
@@ -110,23 +108,24 @@ impl<'a> TableScanBuilder<'a> {
         }
 
         Ok(TableScan {
-            column_names: self.column_names.clone(),
             snapshot,
-            schema,
             file_io: self.table.file_io().clone(),
             table_metadata: self.table.metadata_ref(),
+            column_names: self.column_names,
+            schema,
         })
     }
 }
 
 /// Table scan.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct TableScan {
-    column_names: Vec<String>,
     snapshot: SnapshotRef,
-    schema: SchemaRef,
     table_metadata: TableMetadataRef,
     file_io: FileIO,
+    column_names: Vec<String>,
+    schema: SchemaRef,
 }
 
 /// A stream of [`FileScanTask`].
@@ -261,6 +260,7 @@ impl TableScan {
 
 /// A task to scan part of file.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct FileScanTask {
     data_file: ManifestEntryRef,
     position_delete_files: Vec<ManifestEntryRef>,
@@ -296,11 +296,7 @@ mod tests {
     use uuid::Uuid;
 
     struct TableTestFixture {
-        tmp_dir: TempDir,
         table_location: String,
-        manifest_list1_location: String,
-        manifest_list2_location: String,
-        table_metadata1_location: String,
         table: Table,
     }
 
@@ -341,10 +337,6 @@ mod tests {
                 .build();
 
             Self {
-                tmp_dir,
-                manifest_list1_location: manifest_list1_location.to_str().unwrap().to_string(),
-                manifest_list2_location: manifest_list2_location.to_str().unwrap().to_string(),
-                table_metadata1_location: table_metadata1_location.to_str().unwrap().to_string(),
                 table_location: table_location.to_str().unwrap().to_string(),
                 table,
             }
