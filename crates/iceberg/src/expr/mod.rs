@@ -17,14 +17,14 @@
 
 //! This module contains expressions used in apache iceberg.
 
-mod bound;
-pub use bound::*;
-mod unbound;
-pub use unbound::*;
+mod term;
+pub use term::*;
+mod predicate;
+pub use predicate::*;
 
-/// Operators used in expressions.
+/// Predicate operators used in expressions.
 #[allow(missing_docs)]
-pub enum Operator {
+pub enum PredicateOperator {
     IsNull,
     NotNull,
     IsNan,
@@ -37,13 +37,6 @@ pub enum Operator {
     NotEq,
     In,
     NotIn,
-    Not,
-    And,
-    Or,
     StartsWith,
     NotStartsWith,
-    Count,
-    CountStar,
-    Max,
-    Min,
 }

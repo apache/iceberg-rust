@@ -15,31 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module defines unbound expressions.
+//! Term definition.
 
-use crate::error::Result;
-use crate::expr::bound::Bound;
-use crate::expr::Operator;
-use crate::spec::{Literal, Schema};
+use crate::spec::NestedFieldRef;
 
-/// Unbound expressions.
-pub enum Unbound {
-    /// Constants, such as 1, 'a', true, false, null.
-    Literal(Literal),
-    /// References to fields, such as `col` or `tbl.col`.
-    Reference(String),
-    /// Expressions
-    Expr {
-        /// Operator for this expression, such as `AND` or `OR`.
-        operator: Operator,
-        /// Arguments of this express.
-        inputs: Vec<Unbound>,
-    },
+/// Unbound term before binding to a schema.
+pub type UnboundTerm = UnboundReference;
+
+/// A named reference in an unbound expression.
+/// For example, `a` in `a > 10`.
+pub struct UnboundReference {
+    name: String,
 }
 
-impl Unbound {
-    /// Bind expression to schema.
-    pub fn bind(&self, _schema: &Schema, _case_sensitive: bool) -> Result<Bound> {
-        todo!()
-    }
+/// A named reference in a bound expression after binding to a schema.
+pub struct BoundReference {
+    field: NestedFieldRef,
 }
+
+/// Bound term after binding to a schema.
+pub type BoundTerm = BoundReference;

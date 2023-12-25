@@ -28,6 +28,7 @@ pub use error::ErrorKind;
 pub use error::Result;
 
 mod catalog;
+
 pub use catalog::Catalog;
 pub use catalog::Namespace;
 pub use catalog::NamespaceIdent;
@@ -44,6 +45,7 @@ mod avro;
 pub mod io;
 pub mod spec;
 
+#[allow(dead_code)]
 pub mod expr;
 pub mod transaction;
 pub mod transform;
