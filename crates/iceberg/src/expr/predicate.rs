@@ -16,7 +16,7 @@
 // under the License.
 
 //! This module contains predicate expressions.
-//! Predicate expressions are used to filter data, and evalutes to a boolean value. For example,
+//! Predicate expressions are used to filter data, and evaluates to a boolean value. For example,
 //! `a > 10` is a predicate expression, and it evaluates to `true` if `a` is greater than `10`,
 
 use crate::expr::{BoundReference, PredicateOperator, UnboundReference};

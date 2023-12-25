@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains expressions used in apache iceberg.
+//! This module contains expressions.
 
 mod term;
 pub use term::*;
