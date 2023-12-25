@@ -42,11 +42,51 @@ Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 | GCS         | Not Started |
 | HDFS        | Not Started |
 
+Our `FileIO` is powered by [Apache OpenDAL](https://github.com/apache/incubator-opendal), so it would be quite easy to
+expand to other service.
+
 ### Table API
 
-* Table reader, including planning, reading into arrow record batch, etc.
-* Table writer, including data writer, equality deletion writer, position deletion writer, etc.
-* Transaction api, including schema evolution, update table, etc.
+#### Reader
+
+| Feature                                                    | Status      |
+|------------------------------------------------------------|-------------|
+| File based task planning                                   | In progress |
+| Size based task planning                                   | Not started |
+| Filter pushdown(manifest evaluation, partition prunning)   | Not started |
+| Apply deletions, including equality and position deletions | Not started |
+| Read into arrow record batch                               | Not started |
+| Parquet file support                                       | Not started |
+| Orc file support                                           | Not started |
+
+#### Writer
+
+| Feature                  | Status      |
+|--------------------------|-------------|
+| Data writer              | Not started |
+| Equality deletion writer | Not started |
+| Position deletion writer | Not started |
+| Partitioned writer       | Not started |
+| Upsert writer            | Not started |
+| Parquet file support     | Not started |
+| Orc file support         | Not started |
+
+#### Transaction
+
+| Feature               | Status      |
+|-----------------------|-------------|
+| Schema evolution      | Not started |
+| Update partition spec | Not started |
+| Update properties     | Not started |
+| Replace sort order    | Not started |
+| Update location       | Not started |
+| Append files          | Not started |
+| Rewrite files         | Not started |
+| Rewrite manifests     | Not started |
+| Overwrite files       | Not started |
+| Row level updates     | Not started |
+| Replace partitions    | Not started |
+| Snapshot management   | Not started |
 
 ### Integrations
 
@@ -54,12 +94,15 @@ We will add integrations with other rust based data systems, such as polars, dat
 
 ## Contribute
 
-Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are some ways to go.
+Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are
+some ways to go.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
-- Discuss at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)) / [unsubscribe](mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
-- Talk to community directly at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
+- Discuss
+  at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)) / [unsubscribe](mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
+- Talk to community directly
+  at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
 
 ## License
 
