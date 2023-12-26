@@ -26,5 +26,5 @@ title = "Iceberg Rust"
 git-repository-url = "https://github.com/apache/iceberg-rust"
 git-repository-icon = "fa-github"
 edit-url-template = "https://github.com/apache/iceberg-rust/edit/main/website/{path}"
-cname = "rust.iceberg.opendal.org"
+cname = "rust.iceberg.apache.org"
 no-section-label = true
