@@ -15,15 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[book]
+authors = ["Iceberg Community"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Iceberg Rust"
 
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '**/*.json'
-    # Generated content by mdbook
-    - 'website/book'
-  comment: on-failure
+[output.html]
+git-repository-url = "https://github.com/apache/iceberg-rust"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/apache/iceberg-rust/edit/main/website/{path}"
+cname = "rust.iceberg.opendal.org"
+no-section-label = true

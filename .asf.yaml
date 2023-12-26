@@ -42,6 +42,9 @@ github:
         required_approving_review_count: 1
 
       required_linear_history: true
+    gh-pages:
+      whatever: Just a placeholder to make it take effects
+
   features:
     wiki: false
     issues: true
@@ -56,3 +59,7 @@ notifications:
     issues:       issues@iceberg.apache.org
     pullrequests: issues@iceberg.apache.org
     jira_options: link label link label
+
+publish:
+  whoami: gh-pages
+  hostname: rust.iceberg.apache.org

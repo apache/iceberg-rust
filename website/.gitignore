@@ -15,15 +15,4 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
-
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '**/*.json'
-    # Generated content by mdbook
-    - 'website/book'
-  comment: on-failure
+book
