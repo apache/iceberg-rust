@@ -15,37 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! Term definition.
 
-#![deny(missing_docs)]
+use crate::spec::NestedFieldRef;
 
-#[macro_use]
-extern crate derive_builder;
+/// Unbound term before binding to a schema.
+pub type UnboundTerm = UnboundReference;
 
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
+/// A named reference in an unbound expression.
+/// For example, `a` in `a > 10`.
+pub struct UnboundReference {
+    name: String,
+}
 
-mod catalog;
+/// A named reference in a bound expression after binding to a schema.
+pub struct BoundReference {
+    field: NestedFieldRef,
+}
 
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-#[allow(dead_code)]
-pub mod expr;
-pub mod transaction;
-pub mod transform;
+/// Bound term after binding to a schema.
+pub type BoundTerm = BoundReference;
