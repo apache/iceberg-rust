@@ -21,7 +21,7 @@
 
 Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
-## RoadMap
+## Roadmap
 
 ### Catalog
 
@@ -57,7 +57,7 @@ expand to other service.
 | Apply deletions, including equality and position deletions | Not started |
 | Read into arrow record batch                               | Not started |
 | Parquet file support                                       | Not started |
-| Orc file support                                           | Not started |
+| ORC file support                                           | Not started |
 
 #### Writer
 
@@ -69,7 +69,7 @@ expand to other service.
 | Partitioned writer       | Not started |
 | Upsert writer            | Not started |
 | Parquet file support     | Not started |
-| Orc file support         | Not started |
+| ORC file support         | Not started |
 
 #### Transaction
 
