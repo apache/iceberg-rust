@@ -167,7 +167,7 @@ impl ManifestWriter {
             let entry = self
                 .field_summary
                 .remove(&field.source_id)
-                .unwrap_or(FieldSummary::default());
+                .unwrap_or_default();
             partition_summary.push(entry);
         }
         partition_summary
