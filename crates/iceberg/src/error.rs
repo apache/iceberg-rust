@@ -325,6 +325,8 @@ define_from_err!(
     "Failed to convert decimal literal to rust decimal"
 );
 
+define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
+
 /// Helper macro to check arguments.
 ///
 ///

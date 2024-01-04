@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef,
+    PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
 };
 
 use _serde::TableMetadataEnum;
@@ -37,6 +37,12 @@ use chrono::{DateTime, TimeZone, Utc};
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
+
+pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
+pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
+
+/// Reference to [`TableMetadata`].
+pub type TableMetadataRef = Arc<TableMetadata>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
@@ -147,7 +153,7 @@ impl TableMetadata {
 
     /// Lookup schema by id.
     #[inline]
-    pub fn schema_by_id(&self, schema_id: i32) -> Option<&SchemaRef> {
+    pub fn schema_by_id(&self, schema_id: SchemaId) -> Option<&SchemaRef> {
         self.schemas.get(&schema_id)
     }
 
@@ -280,7 +286,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::Snapshot;
+    use crate::spec::{Snapshot, EMPTY_SNAPSHOT_ID};
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -558,8 +564,12 @@ pub(super) mod _serde {
                 schemas,
 
                 properties: value.properties.unwrap_or_default(),
-                current_snapshot_id: if let &Some(-1) = &value.current_snapshot_id {
-                    None
+                current_snapshot_id: if let &Some(id) = &value.current_snapshot_id {
+                    if id == EMPTY_SNAPSHOT_ID {
+                        None
+                    } else {
+                        Some(id)
+                    }
                 } else {
                     value.current_snapshot_id
                 },

@@ -32,16 +32,18 @@ use std::sync::Arc;
 
 use _serde::SchemaEnum;
 
+/// Type alias for schema id.
+pub type SchemaId = i32;
 /// Reference to [`Schema`].
 pub type SchemaRef = Arc<Schema>;
-const DEFAULT_SCHEMA_ID: i32 = 0;
+const DEFAULT_SCHEMA_ID: SchemaId = 0;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(try_from = "SchemaEnum", into = "SchemaEnum")]
 pub struct Schema {
     r#struct: StructType,
-    schema_id: i32,
+    schema_id: SchemaId,
     highest_field_id: i32,
     identifier_field_ids: HashSet<i32>,
 
