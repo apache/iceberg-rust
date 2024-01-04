@@ -860,7 +860,7 @@ impl ManifestEntry {
         &self.data_file.file_path
     }
 
-    /// Inherit data from snapshot, such as snapshot id, sequence number.
+    /// Inherit data from manifest list, such as snapshot id, sequence number.
     pub(crate) fn inherit_data(&mut self, snapshot_entry: &ManifestListEntry) {
         if self.snapshot_id.is_none() {
             self.snapshot_id = Some(snapshot_entry.added_snapshot_id);
