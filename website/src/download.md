@@ -17,18 +17,3 @@
   ~ under the License.
 -->
 
-- [Introduction](./introduction.md)
-
-# User Guide
-
-- [Install](./install.md)
-- [Download](./download.md)
-
-# Developer Guide
-
-- [Contributing](./CONTRIBUTING.md)
-- [Release](./release.md)
-
-# Reference
-
-- [Setup GPG key](./reference/setup_gpg.md)
