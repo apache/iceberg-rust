@@ -15,6 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[toolchain]
-channel = "1.75.0"
-components = ["rustfmt", "clippy"]
+[book]
+authors = ["Iceberg Community"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Iceberg Rust"
+
+[output.html]
+git-repository-url = "https://github.com/apache/iceberg-rust"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/apache/iceberg-rust/edit/main/website/{path}"
+cname = "rust.iceberg.apache.org"
+no-section-label = true

@@ -15,39 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! This module contains expressions.
 
-#![deny(missing_docs)]
+mod term;
+pub use term::*;
+mod predicate;
+pub use predicate::*;
 
-#[macro_use]
-extern crate derive_builder;
-
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
-
-mod catalog;
-
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-mod scan;
-
-#[allow(dead_code)]
-pub mod expr;
-pub mod transaction;
-pub mod transform;
+/// Predicate operators used in expressions.
+#[allow(missing_docs)]
+pub enum PredicateOperator {
+    IsNull,
+    NotNull,
+    IsNan,
+    NotNan,
+    LessThan,
+    LessThanOrEq,
+    GreaterThan,
+    GreaterThanOrEq,
+    Eq,
+    NotEq,
+    In,
+    NotIn,
+    StartsWith,
+    NotStartsWith,
+}

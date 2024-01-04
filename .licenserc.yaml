@@ -24,5 +24,6 @@ header:
     - 'LICENSE'
     - 'NOTICE'
     - '**/*.json'
-
+    # Generated content by mdbook
+    - 'website/book'
   comment: on-failure

@@ -21,6 +21,77 @@
 
 Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
+## Roadmap
+
+### Catalog
+
+| Catalog Type | Status      |
+|--------------|-------------|
+| Rest         | Done        |
+| Hive         | In Progress |
+| Sql          | Not Started |
+| Glue         | Not Started |
+| DynamoDB     | Not Started |
+
+### FileIO
+
+| FileIO Type | Status      |
+|-------------|-------------|
+| S3          | Done        |
+| Local File  | Done        |
+| GCS         | Not Started |
+| HDFS        | Not Started |
+
+Our `FileIO` is powered by [Apache OpenDAL](https://github.com/apache/incubator-opendal), so it would be quite easy to
+expand to other service.
+
+### Table API
+
+#### Reader
+
+| Feature                                                    | Status      |
+|------------------------------------------------------------|-------------|
+| File based task planning                                   | In progress |
+| Size based task planning                                   | Not started |
+| Filter pushdown(manifest evaluation, partition prunning)   | Not started |
+| Apply deletions, including equality and position deletions | Not started |
+| Read into arrow record batch                               | Not started |
+| Parquet file support                                       | Not started |
+| ORC file support                                           | Not started |
+
+#### Writer
+
+| Feature                  | Status      |
+|--------------------------|-------------|
+| Data writer              | Not started |
+| Equality deletion writer | Not started |
+| Position deletion writer | Not started |
+| Partitioned writer       | Not started |
+| Upsert writer            | Not started |
+| Parquet file support     | Not started |
+| ORC file support         | Not started |
+
+#### Transaction
+
+| Feature               | Status      |
+|-----------------------|-------------|
+| Schema evolution      | Not started |
+| Update partition spec | Not started |
+| Update properties     | Not started |
+| Replace sort order    | Not started |
+| Update location       | Not started |
+| Append files          | Not started |
+| Rewrite files         | Not started |
+| Rewrite manifests     | Not started |
+| Overwrite files       | Not started |
+| Row level updates     | Not started |
+| Replace partitions    | Not started |
+| Snapshot management   | Not started |
+
+### Integrations
+
+We will add integrations with other rust based data systems, such as polars, datafusion, etc.
+
 ## Contribute
 
 Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are some ways to go.
