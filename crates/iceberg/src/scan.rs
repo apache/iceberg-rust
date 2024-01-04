@@ -19,8 +19,8 @@
 
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestEntry, ManifestEntryRef, SchemaRef, SnapshotRef,
-    TableMetadataRef, INITIAL_SEQUENCE_NUMBER,
+    DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind};
@@ -52,7 +52,7 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Select some columns of the table.
-    pub fn select(mut self, column_names: impl IntoIterator<Item = impl ToString>) -> Self {
+    pub fn select(mut self, column_names: impl IntoIterator<Item=impl ToString>) -> Self {
         self.column_names = column_names
             .into_iter()
             .map(|item| item.to_string())
@@ -139,122 +139,32 @@ impl TableScan {
             .load_manifest_list(&self.file_io, &self.table_metadata)
             .await?;
 
-        // Get minimum sequence number of data files.
-        let min_data_file_seq_num = manifest_list
-            .entries()
-            .iter()
-            .filter(|e| e.content == ManifestContentType::Data)
-            .map(|e| e.min_sequence_number)
-            .min()
-            .unwrap_or(INITIAL_SEQUENCE_NUMBER);
-
-        // Collect deletion files first.
-        let mut position_delete_files = Vec::with_capacity(manifest_list.entries().len());
-        let mut eq_delete_files = Vec::with_capacity(manifest_list.entries().len());
-
-        // TODO: We should introduce runtime api to enable parallel scan.
-        for manifest_list_entry in manifest_list.entries().iter().filter(|e| {
-            e.content == ManifestContentType::Deletes && e.sequence_number >= min_data_file_seq_num
-        }) {
-            let manifest_file = manifest_list_entry.load_manifest(&self.file_io).await?;
-
-            for manifest_entry in manifest_file.entries().iter().filter(|e| e.is_alive()) {
-                match manifest_entry.content_type() {
-                    DataContentType::PositionDeletes => {
-                        position_delete_files.push(manifest_entry.clone());
-                    }
-                    DataContentType::EqualityDeletes => {
-                        eq_delete_files.push(manifest_entry.clone());
-                    }
-                    DataContentType::Data => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Data file entry({}) found in delete manifest file({})",
-                                manifest_entry.file_path(),
-                                manifest_list_entry.manifest_path
-                            ),
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Sort delete files by sequence number.
-        position_delete_files
-            .sort_by_key(|f| f.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER));
-        eq_delete_files.sort_by_key(|f| f.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER));
-
         // Generate data file stream
         let mut file_scan_tasks = Vec::with_capacity(manifest_list.entries().len());
         for manifest_list_entry in manifest_list
             .entries()
             .iter()
-            .filter(|e| e.content == ManifestContentType::Data)
         {
             // Data file
             let manifest = manifest_list_entry.load_manifest(&self.file_io).await?;
 
-            for manifest_entry in manifest.entries() {
-                if manifest_entry.is_alive() {
-                    file_scan_tasks.push(Ok(FileScanTask {
-                        data_file: manifest_entry.clone(),
-                        position_delete_files: TableScan::filter_position_delete_files(
-                            manifest_entry,
-                            &position_delete_files,
-                        ),
-                        eq_delete_files: TableScan::filter_eq_delete_files(
-                            manifest_entry,
-                            &eq_delete_files,
-                        ),
-                        start: 0,
-                        length: manifest_entry.file_size_in_bytes(),
-                    }));
+            for manifest_entry in manifest.entries().iter().filter(|e| e.is_alive()) {
+                match manifest_entry.content_type() {
+                    DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
+                        return Err(Error::new(ErrorKind::FeatureUnsupported, "Delete files are not supported yet."));
+                    }
+                    DataContentType::Data => {
+                        file_scan_tasks.push(Ok(FileScanTask {
+                            data_file: manifest_entry.clone(),
+                            start: 0,
+                            length: manifest_entry.file_size_in_bytes(),
+                        }));
+                    }
                 }
             }
         }
 
         Ok(iter(file_scan_tasks).boxed())
-    }
-
-    /// Return the position delete files that should be applied to the data file.
-    ///
-    /// Here we assume that the position delete files are sorted by sequence number in ascending order.
-    fn filter_position_delete_files(
-        data_file: &ManifestEntry,
-        position_deletes: &[ManifestEntryRef],
-    ) -> Vec<ManifestEntryRef> {
-        let data_seq_num = data_file
-            .sequence_number()
-            .unwrap_or(INITIAL_SEQUENCE_NUMBER);
-
-        // Find the first position delete file whose sequence number is greater than or equal to the data file.
-        let first_entry = position_deletes.partition_point(|e| {
-            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) < data_seq_num
-        });
-
-        // TODO: We should further filter the position delete files by `file_path` column.
-        position_deletes.iter().skip(first_entry).cloned().collect()
-    }
-
-    /// Return the equality delete files that should be applied to the data file.
-    ///
-    /// Here we assume that the equality delete files are sorted by sequence number in ascending order.
-    fn filter_eq_delete_files(
-        data_file: &ManifestEntry,
-        eq_deletes: &[ManifestEntryRef],
-    ) -> Vec<ManifestEntryRef> {
-        let data_seq_num = data_file
-            .sequence_number()
-            .unwrap_or(INITIAL_SEQUENCE_NUMBER);
-
-        // Find the first position delete file whose sequence number is greater than or equal to the data file.
-        let first_entry = eq_deletes.partition_point(|e| {
-            e.sequence_number().unwrap_or(INITIAL_SEQUENCE_NUMBER) <= data_seq_num
-        });
-
-        // TODO: We should further filter the eq delete files statistics
-        eq_deletes.iter().skip(first_entry).cloned().collect()
     }
 }
 
@@ -263,8 +173,6 @@ impl TableScan {
 #[allow(dead_code)]
 pub struct FileScanTask {
     data_file: ManifestEntryRef,
-    position_delete_files: Vec<ManifestEntryRef>,
-    eq_delete_files: Vec<ManifestEntryRef>,
     start: u64,
     length: u64,
 }
@@ -318,7 +226,7 @@ mod tests {
                     "{}/testdata/example_table_metadata_v2.json",
                     env!("CARGO_MANIFEST_DIR")
                 ))
-                .unwrap();
+                    .unwrap();
                 let mut context = Context::new();
                 context.insert("table_location", &table_location);
                 context.insert("manifest_list_1_location", &manifest_list1_location);
@@ -418,7 +326,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_files() {
+    async fn test_plan_files_no_deletions() {
         let fixture = TableTestFixture::new();
 
         let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
@@ -434,110 +342,65 @@ mod tests {
             current_snapshot.snapshot_id(),
             vec![],
         )
-        .write(Manifest::new(
-            ManifestMetadata::builder()
-                .schema((*current_schema).clone())
-                .content(ManifestContentType::Data)
-                .format_version(FormatVersion::V2)
-                .partition_spec((**current_partition_spec).clone())
-                .schema_id(current_schema.schema_id())
-                .build(),
-            vec![
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFile::builder()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/1.parquet", &fixture.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(100))]))
-                            .build(),
-                    )
+            .write(Manifest::new(
+                ManifestMetadata::builder()
+                    .schema((*current_schema).clone())
+                    .content(ManifestContentType::Data)
+                    .format_version(FormatVersion::V2)
+                    .partition_spec((**current_partition_spec).clone())
+                    .schema_id(current_schema.schema_id())
                     .build(),
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Deleted)
-                    .snapshot_id(parent_snapshot.snapshot_id())
-                    .sequence_number(parent_snapshot.sequence_number())
-                    .file_sequence_number(parent_snapshot.sequence_number())
-                    .data_file(
-                        DataFile::builder()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/2.parquet", &fixture.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(200))]))
-                            .build(),
-                    )
-                    .build(),
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Existing)
-                    .snapshot_id(parent_snapshot.snapshot_id())
-                    .sequence_number(parent_snapshot.sequence_number())
-                    .file_sequence_number(parent_snapshot.sequence_number())
-                    .data_file(
-                        DataFile::builder()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/3.parquet", &fixture.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(300))]))
-                            .build(),
-                    )
-                    .build(),
-            ],
-        ))
-        .await
-        .unwrap();
+                vec![
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFile::builder()
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &fixture.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build(),
+                        )
+                        .build(),
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Deleted)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFile::builder()
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/2.parquet", &fixture.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(200))]))
+                                .build(),
+                        )
+                        .build(),
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Existing)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFile::builder()
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/3.parquet", &fixture.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                                .build(),
+                        )
+                        .build(),
+                ],
+            ))
+            .await
+            .unwrap();
 
-        // Write delete file manifest
-        let delete_file_manifest = ManifestWriter::new(
-            fixture.next_manifest_file(),
-            current_snapshot.snapshot_id(),
-            vec![],
-        )
-        .write(Manifest::new(
-            ManifestMetadata::builder()
-                .schema((*current_schema).clone())
-                .content(ManifestContentType::Deletes)
-                .format_version(FormatVersion::V2)
-                .partition_spec((**current_partition_spec).clone())
-                .schema_id(current_schema.schema_id())
-                .build(),
-            vec![
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFile::builder()
-                            .content(DataContentType::PositionDeletes)
-                            .file_path(format!("{}/pos_delete_1.parquet", &fixture.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(100))]))
-                            .build(),
-                    )
-                    .build(),
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFile::builder()
-                            .content(DataContentType::EqualityDeletes)
-                            .file_path(format!("{}/eq_delete_1.parquet", &fixture.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(200))]))
-                            .build(),
-                    )
-                    .build(),
-            ],
-        ))
-        .await
-        .unwrap();
 
         // Write to manifest list
         let mut manifest_list_write = ManifestListWriter::v2(
@@ -553,7 +416,7 @@ mod tests {
             current_snapshot.sequence_number(),
         );
         manifest_list_write
-            .add_manifest_entries(vec![data_file_manifest, delete_file_manifest].into_iter())
+            .add_manifest_entries(vec![data_file_manifest].into_iter())
             .unwrap();
         manifest_list_write.close().await.unwrap();
 
@@ -579,38 +442,11 @@ mod tests {
             tasks[0].data_file.file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
-        assert!(
-            tasks[0].eq_delete_files.is_empty(),
-            "Equation delete file should not be applied to data file with same sequence number."
-        );
-        assert_eq!(
-            tasks[0].position_delete_files[0].file_path(),
-            format!("{}/pos_delete_1.parquet", &fixture.table_location),
-            "Position delete file should be applied to data file with smaller or same sequence number."
-        );
 
         // Check second task is existing data file
         assert_eq!(
             tasks[1].data_file.file_path(),
             format!("{}/3.parquet", &fixture.table_location)
-        );
-        assert_eq!(
-            tasks[1]
-                .eq_delete_files
-                .iter()
-                .map(|f| f.file_path().to_string())
-                .collect::<Vec<String>>(),
-            vec![format!("{}/eq_delete_1.parquet", &fixture.table_location)],
-            "Equation delete file should be applied to data file with smaller sequence number."
-        );
-        assert_eq!(
-            tasks[1]
-                .position_delete_files
-                .iter()
-                .map(|f| f.file_path().to_string())
-                .collect::<Vec<String>>(),
-            vec![format!("{}/pos_delete_1.parquet", &fixture.table_location)],
-            "Position delete file should be applied to data file with smaller or same sequence number."
         );
     }
 }
