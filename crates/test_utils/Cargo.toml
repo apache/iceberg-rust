@@ -19,6 +19,7 @@
 name = "iceberg_test_utils"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [dependencies]
 env_logger = { workspace = true }

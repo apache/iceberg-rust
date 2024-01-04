@@ -23,7 +23,10 @@ header:
   paths-ignore:
     - 'LICENSE'
     - 'NOTICE'
+    - '.gitattributes'
     - '**/*.json'
     # Generated content by mdbook
     - 'website/book'
+    # Generated content by scripts
+    - '**/DEPENDENCIES.*.tsv'
   comment: on-failure
