@@ -37,7 +37,7 @@
 //!
 //! # Simple Case 1: Create a data file writer using parquet file format.
 //! # TODO(Implement this example)
-//! ```
+//! ```ignore
 //! // 1. Create a parquet file writer builder.
 //! let parquet_writer_builder = ParquetFileWriterBuilder::new(parquet_file_writer_config);
 //! // 2. Create a data file writer builder.
@@ -52,7 +52,7 @@
 //!
 //! # Complex Case 2: Create a fanout partition data file writer using parquet file format.
 //! # TODO (Implement this example)
-//! ```
+//! ```ignore
 //! // 1. Create a parquet file writer builder.
 //! let parquet_writer_builder = ParquetFileWriterBuilder::new(parquet_file_writer_config);
 //! // 2. Create a data file writer builder.
