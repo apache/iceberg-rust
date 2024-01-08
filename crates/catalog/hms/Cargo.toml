@@ -22,7 +22,7 @@ edition = "2021"
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
-repository = "https://github.com/apache/iceberg-rust"
+repository = "https://github.com/apache/iceberg-rust" 
 license = "Apache-2.0"
 keywords = ["iceberg", "hive", "catalog"]
 
@@ -37,3 +37,7 @@ iceberg = { workspace = true }
 # crate, built from the thrift upstream with only version bumped.
 thrift = { package = "tent-thrift", version = "0.18.1" }
 typed-builder = { workspace = true }
+
+[package]
+ # ...
+ homepage = "https://iceberg.apache.org"

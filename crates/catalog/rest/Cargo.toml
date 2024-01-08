@@ -45,3 +45,7 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 port_scanner = { workspace = true }
 tokio = { workspace = true }
+
+[package]
+ # ...
+ homepage = "https://iceberg.apache.org"
