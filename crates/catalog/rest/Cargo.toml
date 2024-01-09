@@ -19,6 +19,7 @@
 name = "iceberg-catalog-rest"
 version = "0.1.0"
 edition = "2021"
+homepage = {workspace = true} 
 
 categories = ["database"]
 description = "Apache Iceberg Rust REST API"
@@ -46,6 +47,3 @@ mockito = { workspace = true }
 port_scanner = { workspace = true }
 tokio = { workspace = true }
 
-[package]
- # ...
- homepage = "https://iceberg.apache.org"

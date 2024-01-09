@@ -19,6 +19,9 @@
 resolver = "2"
 members = ["crates/catalog/*", "crates/iceberg", "crates/test_utils"]
 
+[workspace.package]
+homepage = {url = "https://rust.iceberg.apache.org/"}
+
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.16"
@@ -60,6 +63,3 @@ url = "2"
 urlencoding = "2"
 uuid = "1.6.1"
 
-[package]
-# ...
-homepage = "https://iceberg.apache.org"

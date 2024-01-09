@@ -19,6 +19,7 @@
 name = "iceberg-catalog-hms"
 version = "0.1.0"
 edition = "2021"
+homepage = {workspace = true} 
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
@@ -37,7 +38,3 @@ iceberg = { workspace = true }
 # crate, built from the thrift upstream with only version bumped.
 thrift = { package = "tent-thrift", version = "0.18.1" }
 typed-builder = { workspace = true }
-
-[package]
- # ...
- homepage = "https://iceberg.apache.org" 

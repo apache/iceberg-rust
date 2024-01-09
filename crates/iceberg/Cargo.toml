@@ -19,6 +19,7 @@
 name = "iceberg"
 version = "0.1.0"
 edition = "2021"
+homepage = {workspace = true} 
 
 categories = ["database"]
 description = "Apache Iceberg Rust implementation"
@@ -63,7 +64,3 @@ uuid = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-
-[package]
- # ...
- homepage = "https://iceberg.apache.org" 

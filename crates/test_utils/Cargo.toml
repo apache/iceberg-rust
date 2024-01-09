@@ -19,6 +19,7 @@
 name = "iceberg_test_utils"
 version = "0.1.0"
 edition = "2021"
+homepage = {workspace = true} 
 
 [dependencies]
 env_logger = { workspace = true }
@@ -26,7 +27,3 @@ log = "0.4.20"
 
 [features]
 tests = []
-
-[package]
- # ...
- homepage = "https://iceberg.apache.org" 
