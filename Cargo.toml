@@ -22,9 +22,9 @@ members = ["crates/catalog/*", "crates/iceberg", "crates/test_utils"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-homepage = {url = "https://rust.iceberg.apache.org/"}
+homepage = "https://rust.iceberg.apache.org/"
 
-repository = { url = "https://github.com/apache/iceberg-rust" }
+repository = "https://github.com/apache/iceberg-rust" 
 license = "Apache-2.0"
 
 [workspace.dependencies]
