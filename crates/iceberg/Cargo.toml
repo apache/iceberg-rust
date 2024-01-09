@@ -67,4 +67,3 @@ tokio = { workspace = true }
 [package]
  # ...
  homepage = "https://iceberg.apache.org" 
- 
