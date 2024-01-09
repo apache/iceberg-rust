@@ -16,15 +16,15 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-hms"
-version = "0.1.0"
-edition = "2021"
+name = "iceberg-catalog-rest"
+version = {workspace = true} 
+edition = {workspace = true} 
 homepage = {workspace = true} 
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
-repository = "https://github.com/apache/iceberg-rust"
-license = "Apache-2.0"
+repository = {workspace = true} 
+license = {workspace = true} 
 keywords = ["iceberg", "hive", "catalog"]
 
 [dependencies]

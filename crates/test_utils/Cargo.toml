@@ -16,10 +16,13 @@
 # under the License.
 
 [package]
-name = "iceberg_test_utils"
-version = "0.1.0"
-edition = "2021"
+name = "iceberg-catalog-rest"
+version = {workspace = true} 
+edition = {workspace = true} 
 homepage = {workspace = true} 
+
+repository = {workspace = true} 
+license = {workspace = true} 
 
 [dependencies]
 env_logger = { workspace = true }

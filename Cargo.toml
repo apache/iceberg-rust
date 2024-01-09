@@ -20,7 +20,13 @@ resolver = "2"
 members = ["crates/catalog/*", "crates/iceberg", "crates/test_utils"]
 
 [workspace.package]
+name = "iceberg-catalog-rest"
+version = "0.1.0"
+edition = "2021"
 homepage = {url = "https://rust.iceberg.apache.org/"}
+
+repository = { url = "https://github.com/apache/iceberg-rust" }
+license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
