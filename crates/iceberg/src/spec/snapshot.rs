@@ -18,13 +18,18 @@
 /*!
  * Snapshots
 */
+use crate::error::Result;
 use chrono::{DateTime, TimeZone, Utc};
+use futures::AsyncReadExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
+use crate::io::FileIO;
+use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
+use crate::{Error, ErrorKind};
 use _serde::SnapshotV2;
 
 /// Reference to [`Snapshot`].
@@ -84,7 +89,7 @@ pub struct Snapshot {
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
     #[builder(setter(strip_option), default = None)]
-    schema_id: Option<i64>,
+    schema_id: Option<SchemaId>,
 }
 
 /// Type to distinguish between a path to a manifestlist file or a vector of manifestfile locations
@@ -103,6 +108,13 @@ impl Snapshot {
     pub fn snapshot_id(&self) -> i64 {
         self.snapshot_id
     }
+
+    /// Get parent snapshot id.
+    #[inline]
+    pub fn parent_snapshot_id(&self) -> Option<i64> {
+        self.parent_snapshot_id
+    }
+
     /// Get sequence_number of the snapshot. Is 0 for Iceberg V1 tables.
     #[inline]
     pub fn sequence_number(&self) -> i64 {
@@ -113,6 +125,20 @@ impl Snapshot {
     pub fn manifest_list(&self) -> &ManifestListLocation {
         &self.manifest_list
     }
+
+    /// Return the manifest list file path.
+    ///
+    /// It will return an error if the manifest list is not a file but a list of manifest file paths.
+    #[inline]
+    pub fn manifest_list_file_path(&self) -> Result<&str> {
+        match &self.manifest_list {
+            ManifestListLocation::ManifestListFile(s) => Ok(s),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Manifest list is not a file but a list of manifest files.",
+            )),
+        }
+    }
     /// Get summary of the snapshot
     #[inline]
     pub fn summary(&self) -> &Summary {
@@ -122,6 +148,70 @@ impl Snapshot {
     #[inline]
     pub fn timestamp(&self) -> DateTime<Utc> {
         Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    }
+
+    /// Get the schema id of this snapshot.
+    #[inline]
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        self.schema_id
+    }
+
+    /// Get the schema of this snapshot.
+    pub fn schema(&self, table_metadata: &TableMetadata) -> Result<SchemaRef> {
+        Ok(match self.schema_id() {
+            Some(schema_id) => table_metadata
+                .schema_by_id(schema_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Schema with id {} not found", schema_id),
+                    )
+                })?
+                .clone(),
+            None => table_metadata.current_schema().clone(),
+        })
+    }
+
+    /// Get parent snapshot.
+    #[cfg(test)]
+    pub(crate) fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
+        match self.parent_snapshot_id {
+            Some(id) => table_metadata.snapshot_by_id(id).cloned(),
+            None => None,
+        }
+    }
+
+    /// Load manifest list.
+    pub async fn load_manifest_list(
+        &self,
+        file_io: &FileIO,
+        table_metadata: &TableMetadata,
+    ) -> Result<ManifestList> {
+        match &self.manifest_list {
+            ManifestListLocation::ManifestListFile(file) => {
+                let mut manifest_list_content= Vec::new();
+                file_io
+                    .new_input(file)?
+                    .reader().await?
+                    .read_to_end(&mut manifest_list_content)
+                    .await?;
+
+                let schema = self.schema(table_metadata)?;
+
+                let partition_type_provider = |partition_spec_id: i32| -> Result<Option<StructType>> {
+                    table_metadata.partition_spec_by_id(partition_spec_id).map(|partition_spec| {
+                        partition_spec.partition_type(&schema)
+                    }).transpose()
+                };
+
+                ManifestList::parse_with_version(&manifest_list_content, table_metadata.format_version(),
+                                                    partition_type_provider, )
+            }
+            ManifestListLocation::ManifestFiles(_) => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Loading manifests from `manifests` is currently not supported, we only support loading from `manifest-list` file, see https://iceberg.apache.org/spec/#snapshots for more information.",
+            )),
+        }
     }
 
     pub(crate) fn log(&self) -> SnapshotLog {
@@ -141,6 +231,7 @@ pub(super) mod _serde {
 
     use serde::{Deserialize, Serialize};
 
+    use crate::spec::SchemaId;
     use crate::{Error, ErrorKind};
 
     use super::{ManifestListLocation, Operation, Snapshot, Summary};
@@ -157,7 +248,7 @@ pub(super) mod _serde {
         pub manifest_list: String,
         pub summary: Summary,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub schema_id: Option<i64>,
+        pub schema_id: Option<SchemaId>,
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,7 +266,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub summary: Option<Summary>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub schema_id: Option<i64>,
+        pub schema_id: Option<SchemaId>,
     }
 
     impl From<SnapshotV2> for Snapshot {

@@ -16,9 +16,9 @@
 // under the License.
 
 //! Table API for Apache Iceberg
-
 use crate::io::FileIO;
-use crate::spec::TableMetadata;
+use crate::scan::TableScanBuilder;
+use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::TableIdent;
 use typed_builder::TypedBuilder;
 
@@ -26,9 +26,10 @@ use typed_builder::TypedBuilder;
 #[derive(TypedBuilder, Debug)]
 pub struct Table {
     file_io: FileIO,
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option, into))]
     metadata_location: Option<String>,
-    metadata: TableMetadata,
+    #[builder(setter(into))]
+    metadata: TableMetadataRef,
     identifier: TableIdent,
 }
 
@@ -42,8 +43,23 @@ impl Table {
         &self.metadata
     }
 
+    /// Returns current metadata ref.
+    pub fn metadata_ref(&self) -> TableMetadataRef {
+        self.metadata.clone()
+    }
+
     /// Returns current metadata location.
     pub fn metadata_location(&self) -> Option<&str> {
         self.metadata_location.as_deref()
+    }
+
+    /// Returns file io used in this table.
+    pub fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
+    /// Creates a table scan.
+    pub fn scan(&self) -> TableScanBuilder<'_> {
+        TableScanBuilder::new(self)
     }
 }
