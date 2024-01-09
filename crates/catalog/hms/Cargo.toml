@@ -22,7 +22,7 @@ edition = "2021"
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
-repository = "https://github.com/apache/iceberg-rust" 
+repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
 keywords = ["iceberg", "hive", "catalog"]
 
