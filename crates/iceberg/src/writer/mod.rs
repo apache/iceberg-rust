@@ -48,6 +48,8 @@
 //! iceberg_writer.write(input).await?;
 //!
 //! let write_result = iceberg_writer.flush().await?;
+//!
+//! let data_file = write_result.into_iter().map(|builder|builder.build()).collect::<Vec<_>>();
 //! ```
 //!
 //! # Complex Case 2: Create a fanout partition data file writer using parquet file format.
@@ -65,12 +67,11 @@
 //! iceberg_writer.write(input).await?;
 //!
 //! let write_result = iceberg_writer.flush().await?;
+//!
+//! let data_file = write_result.into_iter().map(|builder|builder.build()).collect::<Vec<_>>();
 //! ```
 
-use crate::{
-    spec::{DataContentType, Struct},
-    Result,
-};
+use crate::{spec::DataFileBuilder, Result};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 
@@ -90,22 +91,10 @@ pub trait IcebergWriterBuilder<I = DefaultInput>: Send + Clone + 'static {
 /// The iceberg writer used to write data to iceberg table.
 #[async_trait::async_trait]
 pub trait IcebergWriter<I = DefaultInput>: Send + 'static {
-    /// The associated write result type.
-    type R: IcebergWriteResult;
     /// Write data to iceberg table.
     async fn write(&mut self, input: I) -> Result<()>;
     /// Flush the writer and return the write result.
-    async fn flush(&mut self) -> Result<Vec<Self::R>>;
-}
-
-/// The write result of iceberg writer.
-pub trait IcebergWriteResult: Send + Sync + 'static {
-    /// Set the content type of the write result.
-    fn set_content(&mut self, content: DataContentType) -> &mut Self;
-    /// Set the equality ids of the write result.
-    fn set_equality_ids(&mut self, equality_ids: Vec<i32>) -> &mut Self;
-    /// Set the partition of the write result.
-    fn set_partition(&mut self, partition_value: Struct) -> &mut Self;
+    async fn flush(&mut self) -> Result<Vec<DataFileBuilder>>;
 }
 
 /// The current file status of iceberg writer. It implement for the writer which write a single
