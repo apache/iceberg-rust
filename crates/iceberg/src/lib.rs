@@ -45,6 +45,8 @@ mod avro;
 pub mod io;
 pub mod spec;
 
+mod scan;
+
 #[allow(dead_code)]
 pub mod expr;
 pub mod transaction;
