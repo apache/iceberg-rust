@@ -17,25 +17,25 @@
 
 //! Iceberg File Writer
 
-use super::CurrentFileStatus;
-use crate::{spec::DataFileBuilder, Result};
+use super::{CurrentFileStatus, DefaultOutput};
+use crate::Result;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 
 /// File writer builder trait.
-#[async_trait::async_trait]
-pub trait FileWriterBuilder: Send + Clone + 'static {
+#[allow(async_fn_in_trait)]
+pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
-    type R: FileWriter;
+    type R: FileWriter<O>;
     /// Build file writer.
     async fn build(self, schema: &SchemaRef) -> Result<Self::R>;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
-#[async_trait::async_trait]
-pub trait FileWriter: Send + 'static + CurrentFileStatus {
+#[allow(async_fn_in_trait)]
+pub trait FileWriter<O = DefaultOutput>: Send + 'static + CurrentFileStatus {
     /// Write record batch to file.
     async fn write(&mut self, batch: &RecordBatch) -> Result<()>;
     /// Close file writer.
-    async fn close(self) -> Result<Vec<DataFileBuilder>>;
+    async fn close(self) -> Result<O>;
 }

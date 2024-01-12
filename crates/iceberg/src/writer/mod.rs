@@ -78,23 +78,26 @@ use arrow_schema::SchemaRef;
 pub mod file_writer;
 
 type DefaultInput = RecordBatch;
+type DefaultOutput = Vec<DataFileBuilder>;
 
 /// The builder for iceberg writer.
-#[async_trait::async_trait]
-pub trait IcebergWriterBuilder<I = DefaultInput>: Send + Clone + 'static {
+#[allow(async_fn_in_trait)]
+pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
+    Send + Clone + 'static
+{
     /// The associated writer type.
-    type R: IcebergWriter<I>;
+    type R: IcebergWriter<I, O>;
     /// Build the iceberg writer.
     async fn build(self, schema: &SchemaRef) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.
-#[async_trait::async_trait]
-pub trait IcebergWriter<I = DefaultInput>: Send + 'static {
+#[allow(async_fn_in_trait)]
+pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Write data to iceberg table.
     async fn write(&mut self, input: I) -> Result<()>;
     /// Flush the writer and return the write result.
-    async fn flush(&mut self) -> Result<Vec<DataFileBuilder>>;
+    async fn flush(&mut self) -> Result<O>;
 }
 
 /// The current file status of iceberg writer. It implement for the writer which write a single
