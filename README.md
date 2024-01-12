@@ -51,7 +51,7 @@ expand to other service.
 
 | Feature                                                    | Status      |
 |------------------------------------------------------------|-------------|
-| File based task planning                                   | In progress |
+| File based task planning                                   | Done        |
 | Size based task planning                                   | Not started |
 | Filter pushdown(manifest evaluation, partition prunning)   | Not started |
 | Apply deletions, including equality and position deletions | Not started |
