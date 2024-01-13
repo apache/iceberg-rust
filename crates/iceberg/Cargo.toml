@@ -16,14 +16,15 @@
 # under the License.
 
 [package]
-name = "iceberg"
-version = "0.1.0"
-edition = "2021"
+name = "iceberg" 
+version = { workspace = true } 
+edition = { workspace = true } 
+homepage = { workspace = true } 
 
 categories = ["database"]
 description = "Apache Iceberg Rust implementation"
-repository = "https://github.com/apache/iceberg-rust"
-license = "Apache-2.0"
+repository = { workspace = true } 
+license = { workspace = true } 
 keywords = ["iceberg"]
 
 [dependencies]
