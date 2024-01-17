@@ -19,6 +19,8 @@
 
 RUST_LOG = debug
 
+tomlfiles := $(shell find . -name '*.toml')
+
 build:
 	cargo build
 
@@ -32,7 +34,11 @@ cargo-sort:
 	cargo install cargo-sort
 	cargo sort -c -w
 
-check: check-fmt check-clippy cargo-sort
+fmt-toml:
+	cargo install taplo-cli --locked
+	$(foreach x, $(tomlfiles), $(shell taplo fmt $x))
+
+check: check-fmt check-clippy cargo-sort fmt-toml
 
 unit-test:
 	cargo test --no-fail-fast --lib --all-features --workspace

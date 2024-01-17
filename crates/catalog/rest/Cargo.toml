@@ -16,15 +16,15 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-rest" 
-version = { workspace = true } 
-edition = { workspace = true } 
-homepage = { workspace = true } 
+name = "iceberg-catalog-rest"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust REST API"
-repository = { workspace = true } 
-license = { workspace = true } 
+repository = { workspace = true }
+license = { workspace = true }
 keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
@@ -46,4 +46,3 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 port_scanner = { workspace = true }
 tokio = { workspace = true }
-
