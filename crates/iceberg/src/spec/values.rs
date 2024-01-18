@@ -19,6 +19,7 @@
  * Value in iceberg
  */
 
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::{any::Any, collections::BTreeMap};
 
@@ -31,12 +32,20 @@ use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
-use crate::{Error, ErrorKind};
+use crate::{ensure_data_valid, Error, ErrorKind};
 
 use super::datatypes::{PrimitiveType, Type};
 
+use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
+use crate::spec::values::time::microseconds_to_time;
+use crate::spec::values::timestamp::microseconds_to_datetime;
+use crate::spec::values::timestamptz::microseconds_to_datetimetz;
+use crate::spec::MAX_DECIMAL_PRECISION;
 pub use _serde::RawLiteral;
 
+/// Maximum value for [`PrimitiveType::Time`] type.
+const MAX_TIME_VALUE: i64 =
+    23 * 60 * 60 * 1_000_000i64 + 59 * 60 * 1_000_000i64 + 59 * 1_000_000i64 + 999_999i64;
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum PrimitiveLiteral {
@@ -68,6 +77,571 @@ pub enum PrimitiveLiteral {
     Binary(Vec<u8>),
     /// Stores unscaled value as big int. According to iceberg spec, the precision must less than 38(`MAX_DECIMAL_PRECISION`) , so i128 is suit here.
     Decimal(i128),
+}
+
+/// Literal associated with its type. The value and type pair is checked when construction, so the type and value is
+/// guaranteed to be correct when used.
+///
+/// By default we decouple the type and value of a literal, so we can use avoid the cost of storing extra type info
+/// for each literal. But associate type with literal can be useful in some cases, for example, in unbound expression.
+#[derive(Debug)]
+pub struct Datum {
+    r#type: PrimitiveType,
+    literal: PrimitiveLiteral,
+}
+
+impl Display for Datum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match (&self.r#type, &self.literal) {
+            (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Int(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Float(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Double(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Date(val)) => write!(f, "{}", days_to_date(*val)),
+            (_, PrimitiveLiteral::Time(val)) => write!(f, "{}", microseconds_to_time(*val)),
+            (_, PrimitiveLiteral::Timestamp(val)) => {
+                write!(f, "{}", microseconds_to_datetime(*val))
+            }
+            (_, PrimitiveLiteral::TimestampTZ(val)) => {
+                write!(f, "{}", microseconds_to_datetimetz(*val))
+            }
+            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::UUID(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
+            (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
+            (
+                PrimitiveType::Decimal {
+                    precision: _,
+                    scale,
+                },
+                PrimitiveLiteral::Decimal(val),
+            ) => {
+                write!(f, "{}", Decimal::from_i128_with_scale(*val, *scale))
+            }
+            (_, _) => {
+                unreachable!()
+            }
+        }
+    }
+}
+
+fn display_bytes(bytes: &[u8], f: &mut Formatter<'_>) -> std::fmt::Result {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02X}", b));
+    }
+    f.write_str(&s)
+}
+
+impl From<Datum> for Literal {
+    fn from(value: Datum) -> Self {
+        Literal::Primitive(value.literal)
+    }
+}
+
+impl Datum {
+    /// Creates a boolean value.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::bool(true);
+    ///
+    /// assert_eq!(format!("{}", t), "true".to_string());
+    /// assert_eq!(Literal::from(t), Literal::Primitive(PrimitiveLiteral::Boolean(true)));
+    /// ```
+    pub fn bool<T: Into<bool>>(t: T) -> Self {
+        Self {
+            r#type: PrimitiveType::Boolean,
+            literal: PrimitiveLiteral::Boolean(t.into()),
+        }
+    }
+
+    /// Creates a boolean value from string.
+    /// See [Parse bool from str](https://doc.rust-lang.org/stable/std/primitive.bool.html#impl-FromStr-for-bool) for reference.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::bool_from_str("false").unwrap();
+    ///
+    /// assert_eq!(&format!("{}", t), "false");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(false)), t.into());
+    /// ```
+    pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let v = s.as_ref().parse::<bool>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse string to bool.").with_source(e)
+        })?;
+        Ok(Self::bool(v))
+    }
+
+    /// Creates an 32bit integer.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::int(23i8);
+    ///
+    /// assert_eq!(&format!("{}", t), "23");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Int(23)), t.into());
+    /// ```
+    pub fn int<T: Into<i32>>(t: T) -> Self {
+        Self {
+            r#type: PrimitiveType::Int,
+            literal: PrimitiveLiteral::Int(t.into()),
+        }
+    }
+
+    /// Creates an 64bit integer.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::long(24i8);
+    ///
+    /// assert_eq!(&format!("{t}"), "24");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Long(24)), t.into());
+    /// ```
+    pub fn long<T: Into<i64>>(t: T) -> Self {
+        Self {
+            r#type: PrimitiveType::Long,
+            literal: PrimitiveLiteral::Long(t.into()),
+        }
+    }
+
+    /// Creates an 32bit floating point number.
+    ///
+    /// Example:
+    /// ```rust
+    /// use ordered_float::OrderedFloat;
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::float( 32.1f32 );
+    ///
+    /// assert_eq!(&format!("{t}"), "32.1");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t.into());
+    /// ```
+    pub fn float<T: Into<f32>>(t: T) -> Self {
+        Self {
+            r#type: PrimitiveType::Float,
+            literal: PrimitiveLiteral::Float(OrderedFloat(t.into())),
+        }
+    }
+
+    /// Creates an 32bit floating point number.
+    ///
+    /// Example:
+    /// ```rust
+    /// use ordered_float::OrderedFloat;
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::double( 32.1f64 );
+    ///
+    /// assert_eq!(&format!("{t}"), "32.1");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t.into());
+    /// ```
+    pub fn double<T: Into<f64>>(t: T) -> Self {
+        Self {
+            r#type: PrimitiveType::Double,
+            literal: PrimitiveLiteral::Double(OrderedFloat(t.into())),
+        }
+    }
+
+    /// Creates date literal from number of days from unix epoch directly.
+    ///
+    /// Example:
+    /// ```rust
+    ///
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// // 2 days after 1970-01-01
+    /// let t = Datum::date(2);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-03");
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Date(2)), t.into());
+    /// ```
+    pub fn date(days: i32) -> Self {
+        Self {
+            r#type: PrimitiveType::Date,
+            literal: PrimitiveLiteral::Date(days),
+        }
+    }
+
+    /// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
+    ///
+    /// See [`NaiveDate::from_str`].
+    ///
+    /// Example
+    /// ```rust
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::date_from_str("1970-01-05").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-05");
+    /// assert_eq!(Literal::date(4), t.into());
+    /// ```
+    pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse date from string: {}", s.as_ref()),
+            )
+            .with_source(e)
+        })?;
+
+        Ok(Self::date(date_from_naive_date(t)))
+    }
+
+    /// Create a date from calendar date (year, month and day).
+    ///
+    /// See [`NaiveDate::from_ymd_opt`].
+    ///
+    /// Example:
+    ///
+    ///```rust
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::date_from_ymd(1970, 1, 5).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-05");
+    /// assert_eq!(Literal::date(4), t.into());
+    /// ```
+    pub fn date_from_ymd(year: i32, month: u32, day: u32) -> Result<Self> {
+        let t = NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't create date from year: {year}, month: {month}, day: {day}"),
+            )
+        })?;
+
+        Ok(Self::date(date_from_naive_date(t)))
+    }
+
+    /// Creates time in microseconds directly.
+    ///
+    /// It will returns error when it's negative or too large to fit in 24 hours.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::{Literal, Datum};
+    /// let micro_secs = {
+    ///     1 * 3600 * 1_000_000 + // 1 hour
+    ///     2 * 60 * 1_000_000 +   // 2 minutes
+    ///     1 * 1_000_000 + // 1 second
+    ///     888999  // microseconds
+    ///  };
+    ///
+    /// let t = Datum::time(micro_secs).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "01:02:01.888999");
+    /// assert_eq!(Literal::time(micro_secs), t.into());
+    ///
+    /// let negative_value = -100;
+    /// assert!(Datum::time(negative_value).is_err());
+    ///
+    /// let too_large_value = 36 * 60 * 60 * 1_000_000; // Too large to fit in 24 hours.
+    /// assert!(Datum::time(too_large_value).is_err());
+    /// ```
+    pub fn time(value: i64) -> Result<Self> {
+        ensure_data_valid!(
+            (0..=MAX_TIME_VALUE).contains(&value),
+            "Invalid value for Time type: {}",
+            value
+        );
+
+        Ok(Self {
+            r#type: PrimitiveType::Time,
+            literal: PrimitiveLiteral::Time(value),
+        })
+    }
+
+    /// Creates time literal from [`chrono::NaiveTime`].
+    fn time_from_naive_time(t: NaiveTime) -> Self {
+        let duration = t - unix_epoch().time();
+        // It's safe to unwrap here since less than 24 hours will never overflow.
+        let micro_secs = duration.num_microseconds().unwrap();
+
+        Self {
+            r#type: PrimitiveType::Time,
+            literal: PrimitiveLiteral::Time(micro_secs),
+        }
+    }
+
+    /// Creates time in microseconds in `%H:%M:%S:.f` format.
+    ///
+    /// See [`NaiveTime::from_str`] for details.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::time_from_str("01:02:01.888999777").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "01:02:01.888999");
+    /// ```
+    pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse time from string: {}", s.as_ref()),
+            )
+            .with_source(e)
+        })?;
+
+        Ok(Self::time_from_naive_time(t))
+    }
+
+    /// Creates time literal from hour, minute, second, and microseconds.
+    ///
+    /// See [`NaiveTime::from_hms_micro_opt`].
+    ///
+    /// Example:
+    /// ```rust
+    ///
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::time_from_hms_micro(22, 15, 33, 111).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "22:15:33.000111");
+    /// ```
+    pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
+        let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
+            .ok_or_else(|| Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
+            ))?;
+        Ok(Self::time_from_naive_time(t))
+    }
+
+    /// Creates a timestamp from unix epoch in microseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamp(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001");
+    /// ```
+    pub fn timestamp(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::Timestamp,
+            literal: PrimitiveLiteral::Timestamp(value),
+        }
+    }
+
+    /// Creates a timestamp from [`DateTime`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    ///
+    /// use chrono::{TimeZone, Utc};
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamp_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
+    /// ```
+    pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
+        Self::timestamp(dt.with_timezone(&Utc).timestamp_micros())
+    }
+
+    /// Parse a timestamp in RFC3339 format.
+    ///
+    /// See [`DateTime<Utc>::from_str`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "2012-12-12 16:12:12.889900");
+    /// ```
+    pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
+        })?;
+
+        Ok(Self::timestamp_from_datetime(dt))
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in microseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamptz(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001 UTC");
+    /// ```
+    pub fn timestamptz(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::Timestamptz,
+            literal: PrimitiveLiteral::TimestampTZ(value),
+        }
+    }
+
+    /// Creates a timestamp with timezone from [`DateTime`].
+    /// Example:
+    ///
+    /// ```rust
+    ///
+    /// use chrono::{TimeZone, Utc};
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamp_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
+    /// ```
+    pub fn timestamptz_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
+        Self::timestamptz(dt.with_timezone(&Utc).timestamp_micros())
+    }
+
+    /// Similar to [`Datum::timestamp_from_str`], but return timestamp with timezone literal.
+    pub fn timestamptz_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
+        })?;
+
+        Ok(Self::timestamptz_from_datetime(dt))
+    }
+
+    /// Creates a string literal.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::string("ss");
+    ///
+    /// assert_eq!(&format!("{t}"), "ss");
+    /// ```
+    pub fn string<S: ToString>(s: S) -> Self {
+        Self {
+            r#type: PrimitiveType::String,
+            literal: PrimitiveLiteral::String(s.to_string()),
+        }
+    }
+
+    /// Creates uuid literal.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use uuid::uuid;
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::uuid(uuid!("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8"));
+    ///
+    /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
+    /// ```
+    pub fn uuid(uuid: Uuid) -> Self {
+        Self {
+            r#type: PrimitiveType::Uuid,
+            literal: PrimitiveLiteral::UUID(uuid),
+        }
+    }
+
+    /// Creates uuid from str. See [`Uuid::parse_str`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::{Datum};
+    /// let t = Datum::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
+    /// ```
+    pub fn uuid_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let uuid = Uuid::parse_str(s.as_ref()).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Can't parse uuid from string: {}", s.as_ref()),
+            )
+            .with_source(e)
+        })?;
+        Ok(Self::uuid(uuid))
+    }
+
+    /// Creates a fixed literal from bytes.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// let t = Datum::fixed(vec![1u8, 2u8]);
+    ///
+    /// assert_eq!(&format!("{t}"), "0102");
+    /// ```
+    pub fn fixed<I: IntoIterator<Item = u8>>(input: I) -> Self {
+        let value: Vec<u8> = input.into_iter().collect();
+        Self {
+            r#type: PrimitiveType::Fixed(value.len() as u64),
+            literal: PrimitiveLiteral::Fixed(value),
+        }
+    }
+
+    /// Creates a binary literal from bytes.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::binary(vec![1u8, 100u8]);
+    ///
+    /// assert_eq!(&format!("{t}"), "0164");
+    /// ```
+    pub fn binary<I: IntoIterator<Item = u8>>(input: I) -> Self {
+        Self {
+            r#type: PrimitiveType::Binary,
+            literal: PrimitiveLiteral::Binary(input.into_iter().collect()),
+        }
+    }
+
+    /// Creates decimal literal from string. See [`Decimal::from_str_exact`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use itertools::assert_equal;
+    /// use rust_decimal::Decimal;
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::decimal_from_str("123.45").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "123.45");
+    /// ```
+    pub fn decimal_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
+        let decimal = Decimal::from_str_exact(s.as_ref()).map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse decimal.").with_source(e)
+        })?;
+
+        Self::decimal(decimal)
+    }
+
+    /// Try to create a decimal literal from [`Decimal`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use rust_decimal::Decimal;
+    /// use iceberg::spec::Datum;
+    ///
+    /// let t = Datum::decimal(Decimal::new(123, 2)).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1.23");
+    /// ```
+    pub fn decimal(value: impl Into<Decimal>) -> Result<Self> {
+        let decimal = value.into();
+        let scale = decimal.scale();
+
+        let r#type = Type::decimal(MAX_DECIMAL_PRECISION, scale)?;
+        if let Type::Primitive(p) = r#type {
+            Ok(Self {
+                r#type: p,
+                literal: PrimitiveLiteral::Decimal(decimal.mantissa()),
+            })
+        } else {
+            unreachable!("Decimal type must be primitive.")
+        }
+    }
 }
 
 /// Values present in iceberg type
@@ -174,20 +748,9 @@ impl Literal {
         Self::Primitive(PrimitiveLiteral::Double(OrderedFloat(t.into())))
     }
 
-    /// Returns unix epoch.
-    pub fn unix_epoch() -> DateTime<Utc> {
-        Utc.timestamp_nanos(0)
-    }
-
     /// Creates date literal from number of days from unix epoch directly.
     pub fn date(days: i32) -> Self {
         Self::Primitive(PrimitiveLiteral::Date(days))
-    }
-
-    /// Creates date literal from `NaiveDate`, assuming it's utc timezone.
-    fn date_from_naive_date(date: NaiveDate) -> Self {
-        let days = (date - Self::unix_epoch().date_naive()).num_days();
-        Self::date(days as i32)
     }
 
     /// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
@@ -210,7 +773,7 @@ impl Literal {
             .with_source(e)
         })?;
 
-        Ok(Self::date_from_naive_date(t))
+        Ok(Self::date(date_from_naive_date(t)))
     }
 
     /// Create a date from calendar date (year, month and day).
@@ -233,7 +796,7 @@ impl Literal {
             )
         })?;
 
-        Ok(Self::date_from_naive_date(t))
+        Ok(Self::date(date_from_naive_date(t)))
     }
 
     /// Creates time in microseconds directly
@@ -243,7 +806,7 @@ impl Literal {
 
     /// Creates time literal from [`chrono::NaiveTime`].
     fn time_from_naive_time(t: NaiveTime) -> Self {
-        let duration = t - Self::unix_epoch().time();
+        let duration = t - unix_epoch().time();
         // It's safe to unwrap here since less than 24 hours will never overflow.
         let micro_secs = duration.num_microseconds().unwrap();
 
@@ -951,7 +1514,7 @@ impl Literal {
 }
 
 mod date {
-    use chrono::{NaiveDate, NaiveDateTime};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
         date.signed_duration_since(
@@ -966,6 +1529,16 @@ mod date {
         NaiveDateTime::from_timestamp_opt(days as i64 * 86_400, 0)
             .unwrap()
             .date()
+    }
+
+    /// Returns unix epoch.
+    pub(crate) fn unix_epoch() -> DateTime<Utc> {
+        Utc.timestamp_nanos(0)
+    }
+
+    /// Creates date literal from `NaiveDate`, assuming it's utc timezone.
+    pub(crate) fn date_from_naive_date(date: NaiveDate) -> i32 {
+        (date - unix_epoch().date_naive()).num_days() as i32
     }
 }
 

@@ -18,12 +18,15 @@
 //! This module contains expressions.
 
 mod term;
+
+use std::fmt::{Display, Formatter};
 pub use term::*;
 mod predicate;
 pub use predicate::*;
 
 /// Predicate operators used in expressions.
 #[allow(missing_docs)]
+#[derive(Debug, Clone, Copy)]
 pub enum PredicateOperator {
     IsNull,
     NotNull,
@@ -39,4 +42,25 @@ pub enum PredicateOperator {
     NotIn,
     StartsWith,
     NotStartsWith,
+}
+
+impl Display for PredicateOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PredicateOperator::IsNull => write!(f, "IS NULL"),
+            PredicateOperator::NotNull => write!(f, "IS NOT NULL"),
+            PredicateOperator::IsNan => write!(f, "IS NAN"),
+            PredicateOperator::NotNan => write!(f, "IS NOT NAN"),
+            PredicateOperator::LessThan => write!(f, "<"),
+            PredicateOperator::LessThanOrEq => write!(f, "<="),
+            PredicateOperator::GreaterThan => write!(f, ">"),
+            PredicateOperator::GreaterThanOrEq => write!(f, ">="),
+            PredicateOperator::Eq => write!(f, "="),
+            PredicateOperator::NotEq => write!(f, "!="),
+            PredicateOperator::In => write!(f, "IN"),
+            PredicateOperator::NotIn => write!(f, "NOT IN"),
+            PredicateOperator::StartsWith => write!(f, "STARTS WITH"),
+            PredicateOperator::NotStartsWith => write!(f, "NOT STARTS WITH"),
+        }
+    }
 }
