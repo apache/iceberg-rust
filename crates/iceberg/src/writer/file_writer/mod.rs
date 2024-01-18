@@ -20,19 +20,20 @@
 use super::{CurrentFileStatus, DefaultOutput};
 use crate::Result;
 use arrow_array::RecordBatch;
+use futures::Future;
 
 /// File writer builder trait.
 pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
     /// Build file writer.
-    fn build(self) -> impl std::future::Future<Output = Result<Self::R>> + Send;
+    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
-pub trait FileWriter<O = DefaultOutput>: Send + 'static + CurrentFileStatus {
+pub trait FileWriter<O = DefaultOutput>: Send + CurrentFileStatus + 'static {
     /// Write record batch to file.
-    fn write(&mut self, batch: &RecordBatch) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn write(&mut self, batch: &RecordBatch) -> impl Future<Output = Result<()>> + Send;
     /// Close file writer.
-    fn close(self) -> impl std::future::Future<Output = Result<O>> + Send;
+    fn close(self) -> impl Future<Output = Result<O>> + Send;
 }
