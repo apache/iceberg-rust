@@ -24,7 +24,7 @@ version = "0.1.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org/"
 
-repository = "https://github.com/apache/iceberg-rust" 
+repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
 
 [workspace.dependencies]
@@ -69,4 +69,3 @@ urlencoding = "2"
 uuid = "1.6.1"
 
 tera = "1"
-

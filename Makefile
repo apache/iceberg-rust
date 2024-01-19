@@ -32,7 +32,15 @@ cargo-sort:
 	cargo install cargo-sort
 	cargo sort -c -w
 
-check: check-fmt check-clippy cargo-sort
+fix-toml:
+	cargo install taplo-cli --locked
+	taplo fmt
+
+check-toml:
+	cargo install taplo-cli --locked
+	taplo check
+
+check: check-fmt check-clippy cargo-sort check-toml
 
 unit-test:
 	cargo test --no-fail-fast --lib --all-features --workspace
