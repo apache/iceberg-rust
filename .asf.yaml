@@ -22,7 +22,7 @@
 
 github:
   description: "Apache Iceberg"
-  homepage: https://iceberg.apache.org/
+  homepage: https://rust.iceberg.apache.org/
   labels:
     - iceberg
     - apache

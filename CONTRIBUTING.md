@@ -91,6 +91,8 @@ The fastest way is:
 
 ### Bring your own toolbox
 
+#### Install rust
+
 iceberg-rust is primarily a Rust project. To build iceberg-rust, you will need to set up Rust development first. We highly recommend using [rustup](https://rustup.rs/) for the setup process.
 
 For Linux or MacOS, use the following command:
@@ -108,11 +110,20 @@ $ cargo version
 cargo 1.69.0 (6e9a83356 2023-04-12)
 ```
 
+#### Install docker
+
+Currently, iceberg-rust uses docker to set up environment for integration tests.
+
+You can learn how to install docker from [here](https://docs.docker.com/get-docker/).
+
+For macos users, you can install [OrbStack](https://orbstack.dev/) as a docker alternative.
+
 ## Build
 
 * To compile the project: `make build`
 * To check code styles: `make check`
-* To run tests: `make test`
+* To run unit tests only: `make unit-test`
+* To run all tests: `make test`
 
 ## Code of Conduct
 

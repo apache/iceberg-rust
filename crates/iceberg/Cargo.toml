@@ -17,13 +17,14 @@
 
 [package]
 name = "iceberg"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust implementation"
-repository = "https://github.com/apache/iceberg-rust"
-license = "Apache-2.0"
+repository = { workspace = true }
+license = { workspace = true }
 keywords = ["iceberg"]
 
 [dependencies]
@@ -62,4 +63,5 @@ uuid = { workspace = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tera = { workspace = true }
 tokio = { workspace = true }
