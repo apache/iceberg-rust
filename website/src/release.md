@@ -208,7 +208,7 @@ Iceberg Community Vote should send email to: <dev@iceberg.apache.org>:
 Title:
 
 ```
-[VOTE] Release Apache Iceberg Rust ${release_version} - Round 1
+[VOTE] Release Apache Iceberg Rust ${release_version} RC1
 ```
 
 Content:
@@ -241,7 +241,7 @@ number of votes are reached.
 [ ] +0 no opinion
 [ ] -1 disapprove with the reason
 
-To learn more about apache iceberg, please see https://rust.iceberg.apache.org/
+To learn more about Apache Iceberg, please see https://rust.iceberg.apache.org/
 
 Checklist for reference:
 
@@ -274,7 +274,7 @@ After at least 3 `+1` binding vote (from Iceberg PMC member), claim the vote res
 Title:
 
 ```
-[RESULT][VOTE] Release Apache Iceberg Rust ${release_version} - Round 1
+[RESULT][VOTE] Release Apache Iceberg Rust ${release_version} RC1
 ```
 
 Content:
@@ -354,8 +354,8 @@ Content:
 ```
 Hi all,
 
-The Apache Iceberg rust community is pleased to announce
-that Apache Iceberg rust ${iceberg_version} has been released!
+The Apache Iceberg Rust community is pleased to announce
+that Apache Iceberg Rust ${iceberg_version} has been released!
 
 Iceberg is a data access layer that allows users to easily and efficiently
 retrieve data from various storage services in a unified way.
