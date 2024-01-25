@@ -15,41 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! The iceberg writer module.
 
-#![deny(missing_docs)]
+use crate::spec::DataFileBuilder;
 
-#[macro_use]
-extern crate derive_builder;
+pub mod file_writer;
 
-mod error;
-pub use error::Error;
-pub use error::ErrorKind;
-pub use error::Result;
+type DefaultOutput = Vec<DataFileBuilder>;
 
-mod catalog;
-
-pub use catalog::Catalog;
-pub use catalog::Namespace;
-pub use catalog::NamespaceIdent;
-pub use catalog::TableCommit;
-pub use catalog::TableCreation;
-pub use catalog::TableIdent;
-pub use catalog::TableRequirement;
-pub use catalog::TableUpdate;
-
-#[allow(dead_code)]
-pub mod table;
-
-mod avro;
-pub mod io;
-pub mod spec;
-
-mod scan;
-
-#[allow(dead_code)]
-pub mod expr;
-pub mod transaction;
-pub mod transform;
-
-pub mod writer;
+/// The current file status of iceberg writer. It implement for the writer which write a single
+/// file.
+pub trait CurrentFileStatus {
+    /// Get the current file path.
+    fn current_file_path(&self) -> String;
+    /// Get the current file row number.
+    fn current_row_num(&self) -> usize;
+    /// Get the current file written size.
+    fn current_written_size(&self) -> usize;
+}
