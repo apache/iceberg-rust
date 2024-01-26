@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,18 +16,37 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
 
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '.gitattributes'
-    - '**/*.json'
-    # Generated content by mdbook
-    - 'website/book'
-    # Generated content by scripts
-    - '**/DEPENDENCIES.*.tsv'
-  comment: on-failure
+import subprocess
+import sys
+import os
+
+BASE_DIR = os.getcwd()
+
+
+def check_rust():
+    try:
+        subprocess.run(["cargo", "--version"], check=True)
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        raise Exception("Check rust met unexpected error", e)
+
+def build_core():
+    print("Start building iceberg rust")
+
+    subprocess.run(["cargo", "build", "--release"], check=True)
+
+def main():
+    if not check_rust():
+        print(
+            "Cargo is not found, please check if rust development has been setup correctly"
+        )
+        print("Visit https://www.rust-lang.org/tools/install for more information")
+        sys.exit(1)
+
+    build_core()
+
+if __name__ == "__main__":
+    main()
