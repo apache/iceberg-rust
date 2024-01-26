@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Install - Iceberg Rust</title>
+        <title>Setup GPG key - Iceberg Rust</title>
 
 
         <!-- Custom HTML head -->
@@ -12,21 +12,21 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon.svg">
-        <link rel="shortcut icon" href="favicon.png">
-        <link rel="stylesheet" href="css/variables.css">
-        <link rel="stylesheet" href="css/general.css">
-        <link rel="stylesheet" href="css/chrome.css">
-        <link rel="stylesheet" href="css/print.css" media="print">
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
-        <link rel="stylesheet" href="fonts/fonts.css">
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" href="highlight.css">
-        <link rel="stylesheet" href="tomorrow-night.css">
-        <link rel="stylesheet" href="ayu-highlight.css">
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
 
@@ -35,7 +35,7 @@
     <div id="body-container">
         <!-- Provide site root to javascript -->
         <script>
-            var path_to_root = "";
+            var path_to_root = "../";
             var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
         </script>
 
@@ -88,7 +88,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html" class="active">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="../introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="../install.html">Install</a></li><li class="chapter-item expanded "><a href="../download.html">Download</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="../CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="../release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/setup_gpg.html" class="active">Setup GPG key</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -144,13 +144,13 @@
                     <h1 class="menu-title">Iceberg Rust</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
                         <a href="https://github.com/apache/iceberg-rust" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/apache/iceberg-rust/edit/main/website/src/install.md" title="Suggest an edit" aria-label="Suggest an edit">
+                        <a href="https://github.com/apache/iceberg-rust/edit/main/website/src/reference/setup_gpg.md" title="Suggest an edit" aria-label="Suggest an edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -197,25 +197,127 @@
   ~ specific language governing permissions and limitations
   ~ under the License.
 -->
-<h1 id="install"><a class="header" href="#install">Install</a></h1>
-<p>Add <code>iceberg</code> into <code>Cargo.toml</code> dependencies:</p>
-<pre><code class="language-toml">iceberg = &quot;0.2.0&quot;
+<h1 id="setup-gpg-key"><a class="header" href="#setup-gpg-key">Setup GPG key</a></h1>
+<blockquote>
+<p>This section is a brief from the <a href="https://infra.apache.org/openpgp.html">Cryptography with OpenPGP</a> guideline.</p>
+</blockquote>
+<h2 id="install-gpg"><a class="header" href="#install-gpg">Install GPG</a></h2>
+<p>For more details, please refer to <a href="https://www.gnupg.org/download/index.html">GPG official website</a>. Here shows one approach to install GPG with <code>apt</code>:</p>
+<pre><code class="language-shell">sudo apt install gnupg2
 </code></pre>
-<p>iceberg is under active development, you may want to use the git version instead:</p>
-<pre><code class="language-toml">iceberg = { git = &quot;https://github.com/apache/iceberg-rust&quot;, rev = &quot;commit-hash&quot; }
+<h2 id="generate-gpg-key"><a class="header" href="#generate-gpg-key">Generate GPG Key</a></h2>
+<p>Attentions:</p>
+<ul>
+<li>Name is best to keep consistent with your full name of Apache ID;</li>
+<li>Email should be the Apache email;</li>
+<li>Name is best to only use English to avoid garbled.</li>
+</ul>
+<p>Run <code>gpg --full-gen-key</code> and complete the generation interactively:</p>
+<pre><code class="language-shell">gpg (GnuPG) 2.2.20; Copyright (C) 2020 Free Software Foundation, Inc.
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+Please select what kind of key you want:
+   (1) RSA and RSA (default)
+   (2) DSA and Elgamal
+   (3) DSA (sign only)
+   (4) RSA (sign only)
+  (14) Existing key from card
+Your selection? 1 # input 1
+RSA keys may be between 1024 and 4096 bits long.
+What keysize do you want? (2048) 4096 # input 4096
+Requested keysize is 4096 bits
+Please specify how long the key should be valid.
+         0 = key does not expire
+      &lt;n&gt;  = key expires in n days
+      &lt;n&gt;w = key expires in n weeks
+      &lt;n&gt;m = key expires in n months
+      &lt;n&gt;y = key expires in n years
+Key is valid for? (0) 0 # input 0
+Key does not expire at all
+Is this correct? (y/N) y # input y
+
+GnuPG needs to construct a user ID to identify your key.
+
+Real name: Hulk Lin               # input your name
+Email address: hulk@apache.org    # input your email
+Comment:                          # input some annotations, optional
+You selected this USER-ID:
+    &quot;Hulk &lt;hulk@apache.org&gt;&quot;
+
+Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit? O # input O
+We need to generate a lot of random bytes. It is a good idea to perform
+some other action (type on the keyboard, move the mouse, utilize the
+disks) during the prime generation; this gives the random number
+generator a better chance to gain enough entropy.
+We need to generate a lot of random bytes. It is a good idea to perform
+some other action (type on the keyboard, move the mouse, utilize the
+disks) during the prime generation; this gives the random number
+generator a better chance to gain enough entropy.
+
+# Input the security key
+┌──────────────────────────────────────────────────────┐
+│ Please enter this passphrase                         │
+│                                                      │
+│ Passphrase: _______________________________          │
+│                                                      │
+│       &lt;OK&gt;                              &lt;Cancel&gt;     │
+└──────────────────────────────────────────────────────┘
+# key generation will be done after your inputting the key with the following output
+gpg: key E49B00F626B marked as ultimately trusted
+gpg: revocation certificate stored as '/Users/hulk/.gnupg/openpgp-revocs.d/F77B887A4F25A9468C513E9AA3008E49B00F626B.rev'
+public and secret key created and signed.
+
+pub   rsa4096 2022-07-12 [SC]
+      F77B887A4F25A9468C513E9AA3008E49B00F626B
+uid           [ultimate] hulk &lt;hulk@apache.org&gt;
+sub   rsa4096 2022-07-12 [E]
 </code></pre>
+<h2 id="upload-your-key-to-public-gpg-keyserver"><a class="header" href="#upload-your-key-to-public-gpg-keyserver">Upload your key to public GPG keyserver</a></h2>
+<p>Firstly, list your key:</p>
+<pre><code class="language-shell">gpg --list-keys
+</code></pre>
+<p>The output is like:</p>
+<pre><code class="language-shell">-------------------------------
+pub   rsa4096 2022-07-12 [SC]
+      F77B887A4F25A9468C513E9AA3008E49B00F626B
+uid           [ultimate] hulk &lt;hulk@apache.org&gt;
+sub   rsa4096 2022-07-12 [E]
+</code></pre>
+<p>Then, send your key id to key server:</p>
+<pre><code class="language-shell">gpg --keyserver keys.openpgp.org --send-key &lt;key-id&gt; # e.g., F77B887A4F25A9468C513E9AA3008E49B00F626B
+</code></pre>
+<p>Among them, <code>keys.openpgp.org</code> is a randomly selected keyserver, you can use <code>keyserver.ubuntu.com</code> or any other full-featured keyserver.</p>
+<h2 id="check-whether-the-key-is-created-successfully"><a class="header" href="#check-whether-the-key-is-created-successfully">Check whether the key is created successfully</a></h2>
+<p>Uploading takes about one minute; after that, you can check by your email at the corresponding keyserver.</p>
+<p>Uploading keys to the keyserver is mainly for joining a <a href="https://infra.apache.org/release-signing.html#web-of-trust">Web of Trust</a>.</p>
+<h2 id="add-your-gpg-public-key-to-the-keys-document"><a class="header" href="#add-your-gpg-public-key-to-the-keys-document">Add your GPG public key to the KEYS document</a></h2>
+<p>:::info</p>
+<p><code>SVN</code> is required for this step.</p>
+<p>:::</p>
+<p>The svn repository of the release branch is: https://dist.apache.org/repos/dist/release/iceberg</p>
+<p>Please always add the public key to KEYS in the release branch:</p>
+<pre><code class="language-shell">svn co https://dist.apache.org/repos/dist/release/iceberg iceberg-dist
+# As this step will copy all the versions, it will take some time. If the network is broken, please use svn cleanup to delete the lock before re-execute it.
+cd iceberg-dist
+(gpg --list-sigs YOUR_NAME@apache.org &amp;&amp; gpg --export --armor YOUR_NAME@apache.org) &gt;&gt; KEYS # Append your key to the KEYS file
+svn add .   # It is not needed if the KEYS document exists before.
+svn ci -m &quot;add gpg key for YOUR_NAME&quot; # Later on, if you are asked to enter a username and password, just use your apache username and password.
+</code></pre>
+<h2 id="upload-the-gpg-public-key-to-your-github-account"><a class="header" href="#upload-the-gpg-public-key-to-your-github-account">Upload the GPG public key to your GitHub account</a></h2>
+<ul>
+<li>Enter https://github.com/settings/keys to add your GPG key.</li>
+<li>Please remember to bind the email address used in the GPG key to your GitHub account (https://github.com/settings/emails) if you find &quot;unverified&quot; after adding it.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="introduction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../release.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="download.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -223,13 +325,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="introduction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../release.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="download.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
-                    </a>
             </nav>
 
         </div>
@@ -242,13 +341,13 @@
         </script>
 
 
-        <script src="elasticlunr.min.js"></script>
-        <script src="mark.min.js"></script>
-        <script src="searcher.js"></script>
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
 
-        <script src="clipboard.min.js"></script>
-        <script src="highlight.js"></script>
-        <script src="book.js"></script>
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
 
         <!-- Custom JS scripts -->
 

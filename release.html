@@ -3,8 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Iceberg Rust</title>
-        <meta name="robots" content="noindex">
+        <title>Release - Iceberg Rust</title>
 
 
         <!-- Custom HTML head -->
@@ -89,7 +88,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html" class="active">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -151,6 +150,9 @@
                         <a href="https://github.com/apache/iceberg-rust" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
+                        <a href="https://github.com/apache/iceberg-rust/edit/main/website/src/release.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
 
                     </div>
                 </div>
@@ -178,169 +180,6 @@
                 <div id="content" class="content">
                     <main>
                         <!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<h1 id="iceberg-rust"><a class="header" href="#iceberg-rust">Iceberg Rust</a></h1>
-<p>Iceberg Rust is a rust implementation for accessing iceberg tables.</p>
-<div style="break-before: page; page-break-before: always;"></div><!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<h1 id="install"><a class="header" href="#install">Install</a></h1>
-<p>Add <code>iceberg</code> into <code>Cargo.toml</code> dependencies:</p>
-<pre><code class="language-toml">iceberg = &quot;0.2.0&quot;
-</code></pre>
-<p>iceberg is under active development, you may want to use the git version instead:</p>
-<pre><code class="language-toml">iceberg = { git = &quot;https://github.com/apache/iceberg-rust&quot;, rev = &quot;commit-hash&quot; }
-</code></pre>
-<div style="break-before: page; page-break-before: always;"></div><!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<div style="break-before: page; page-break-before: always;"></div><!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
-<p>First, thank you for contributing to Iceberg Rust! The goal of this document is to provide everything you need to start contributing to iceberg-rust. The following TOC is sorted progressively, starting with the basics and expanding into more specifics.</p>
-<ul>
-<li><a href="CONTRIBUTING.html#your-first-contribution">Your First Contribution</a></li>
-<li><a href="CONTRIBUTING.html#workflow">Workflow</a>
-<ul>
-<li><a href="CONTRIBUTING.html#git-branches">Git Branches</a></li>
-<li><a href="CONTRIBUTING.html#github-pull-requests">GitHub Pull Requests</a>
-<ul>
-<li><a href="CONTRIBUTING.html#title">Title</a></li>
-<li><a href="CONTRIBUTING.html#reviews--approvals">Reviews &amp; Approvals</a></li>
-<li><a href="CONTRIBUTING.html#merge-style">Merge Style</a></li>
-<li><a href="CONTRIBUTING.html#ci">CI</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><a href="CONTRIBUTING.html#setup">Setup</a>
-<ul>
-<li><a href="CONTRIBUTING.html#using-a-dev-container-environment">Using a dev container environment</a></li>
-<li><a href="CONTRIBUTING.html#bring-your-own-toolbox">Bring your own toolbox</a></li>
-</ul>
-</li>
-<li><a href="CONTRIBUTING.html#code-of-conduct">Code of Conduct</a></li>
-</ul>
-<h2 id="your-first-contribution"><a class="header" href="#your-first-contribution">Your First Contribution</a></h2>
-<ol>
-<li><a href="https://github.com/apache/iceberg-rust/fork">Fork the iceberg-rust repository</a> into your own GitHub account.</li>
-<li><a href="https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-and-deleting-branches-within-your-repository">Create a new Git branch</a>.</li>
-<li>Make your changes.</li>
-<li><a href="https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork">Submit the branch as a pull request</a> to the main iceberg-rust repo. An iceberg-rust team member should comment and/or review your pull request within a few days. Although, depending on the circumstances, it may take longer.</li>
-</ol>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<h3 id="git-branches"><a class="header" href="#git-branches">Git Branches</a></h3>
-<p><em>All</em> changes must be made in a branch and submitted as <a href="CONTRIBUTING.html#github-pull-requests">pull requests</a>. iceberg-rust does not adopt any type of branch naming style, but please use something descriptive of your changes.</p>
-<h3 id="github-pull-requests"><a class="header" href="#github-pull-requests">GitHub Pull Requests</a></h3>
-<p>Once your changes are ready you must submit your branch as a <a href="https://github.com/apache/iceberg-rust/pulls">pull request</a>.</p>
-<h4 id="title"><a class="header" href="#title">Title</a></h4>
-<p>The pull request title must follow the format outlined in the <a href="https://www.conventionalcommits.org">conventional commits spec</a>. <a href="https://www.conventionalcommits.org">Conventional commits</a> is a standardized format for commit messages. iceberg-rust only requires this format for commits on the <code>main</code> branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.</p>
-<p>The following are all good examples of pull request titles:</p>
-<pre><code class="language-text">feat(schema): Add last_updated_ms in schema
-docs: add hdfs classpath related troubleshoot
-ci: Mark job as skipped if owner is not apache
-fix(schema): Ignore prefix if it's empty
-refactor: Polish the implementation of read parquet
-</code></pre>
-<h4 id="reviews--approvals"><a class="header" href="#reviews--approvals">Reviews &amp; Approvals</a></h4>
-<p>All pull requests should be reviewed by at least one iceberg-rust committer.</p>
-<h4 id="merge-style"><a class="header" href="#merge-style">Merge Style</a></h4>
-<p>All pull requests are squash merged. We generally discourage large pull requests that are over 300-500 lines of diff. If you would like to propose a change that is larger we suggest coming onto <a href="mailto:dev@iceberg.apache.org">Iceberg's DEV mailing list</a> or <a href="https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A">Slack #rust Channel</a> and discuss it with us. This way we can talk through the solution and discuss if a change that large is even needed! This will produce a quicker response to the change and likely produce code that aligns better with our process.</p>
-<h3 id="ci"><a class="header" href="#ci">CI</a></h3>
-<p>Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in <code>.github/workflows</code>.</p>
-<h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
-<p>For small or first-time contributions, we recommend the dev container method. Prefer to do it yourself? That's fine too!</p>
-<h3 id="using-a-dev-container-environment"><a class="header" href="#using-a-dev-container-environment">Using a dev container environment</a></h3>
-<p>iceberg-rust provides a pre-configured <a href="https://containers.dev/">dev container</a> that could be used in <a href="https://github.com/features/codespaces">Github Codespaces</a>, <a href="https://code.visualstudio.com/">VSCode</a>, <a href="https://www.jetbrains.com/remote-development/gateway/">JetBrains</a>, <a href="https://jupyterlab.readthedocs.io/en/stable/">JuptyerLab</a>. Please pick up your favourite runtime environment.</p>
-<p>The fastest way is:</p>
-<p><a href="https://codespaces.new/apache/iceberg-rust?quickstart=1&amp;machine=standardLinux32gb"><img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces" /></a></p>
-<h3 id="bring-your-own-toolbox"><a class="header" href="#bring-your-own-toolbox">Bring your own toolbox</a></h3>
-<h4 id="install-rust"><a class="header" href="#install-rust">Install rust</a></h4>
-<p>iceberg-rust is primarily a Rust project. To build iceberg-rust, you will need to set up Rust development first. We highly recommend using <a href="https://rustup.rs/">rustup</a> for the setup process.</p>
-<p>For Linux or MacOS, use the following command:</p>
-<pre><code class="language-shell">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-</code></pre>
-<p>For Windows, download <code>rustup-init.exe</code> from <a href="https://win.rustup.rs/x86_64">here</a> instead.</p>
-<p>Rustup will read iceberg-rust's <code>rust-toolchain.toml</code> and set up everything else automatically. To ensure that everything works correctly, run <code>cargo version</code> under iceberg-rust's root directory:</p>
-<pre><code class="language-shell">$ cargo version
-cargo 1.69.0 (6e9a83356 2023-04-12)
-</code></pre>
-<h4 id="install-docker"><a class="header" href="#install-docker">Install docker</a></h4>
-<p>Currently, iceberg-rust uses docker to set up environment for integration tests.</p>
-<p>You can learn how to install docker from <a href="https://docs.docker.com/get-docker/">here</a>.</p>
-<p>For macos users, you can install <a href="https://orbstack.dev/">OrbStack</a> as a docker alternative.</p>
-<h2 id="build"><a class="header" href="#build">Build</a></h2>
-<ul>
-<li>To compile the project: <code>make build</code></li>
-<li>To check code styles: <code>make check</code></li>
-<li>To run unit tests only: <code>make unit-test</code></li>
-<li>To run all tests: <code>make test</code></li>
-</ul>
-<h2 id="code-of-conduct"><a class="header" href="#code-of-conduct">Code of Conduct</a></h2>
-<p>We expect all community members to follow our <a href="https://www.apache.org/foundation/policies/conduct.html">Code of Conduct</a>.</p>
-<div style="break-before: page; page-break-before: always;"></div><!--
   ~ Licensed to the Apache Software Foundation (ASF) under one
   ~ or more contributor license agreements.  See the NOTICE file
   ~ distributed with this work for additional information
@@ -653,142 +492,18 @@ Thanks
 On behalf of Apache Iceberg Community
 </code></pre>
 <p>Example: <a href="https://lists.apache.org/thread/oy77n55brvk72tnlb2bjzfs9nz3cfd0s">https://lists.apache.org/thread/oy77n55brvk72tnlb2bjzfs9nz3cfd0s</a></p>
-<div style="break-before: page; page-break-before: always;"></div><!--
-  ~ Licensed to the Apache Software Foundation (ASF) under one
-  ~ or more contributor license agreements.  See the NOTICE file
-  ~ distributed with this work for additional information
-  ~ regarding copyright ownership.  The ASF licenses this file
-  ~ to you under the Apache License, Version 2.0 (the
-  ~ "License"); you may not use this file except in compliance
-  ~ with the License.  You may obtain a copy of the License at
-  ~
-  ~   http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing,
-  ~ software distributed under the License is distributed on an
-  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  ~ KIND, either express or implied.  See the License for the
-  ~ specific language governing permissions and limitations
-  ~ under the License.
--->
-<h1 id="setup-gpg-key"><a class="header" href="#setup-gpg-key">Setup GPG key</a></h1>
-<blockquote>
-<p>This section is a brief from the <a href="https://infra.apache.org/openpgp.html">Cryptography with OpenPGP</a> guideline.</p>
-</blockquote>
-<h2 id="install-gpg"><a class="header" href="#install-gpg">Install GPG</a></h2>
-<p>For more details, please refer to <a href="https://www.gnupg.org/download/index.html">GPG official website</a>. Here shows one approach to install GPG with <code>apt</code>:</p>
-<pre><code class="language-shell">sudo apt install gnupg2
-</code></pre>
-<h2 id="generate-gpg-key"><a class="header" href="#generate-gpg-key">Generate GPG Key</a></h2>
-<p>Attentions:</p>
-<ul>
-<li>Name is best to keep consistent with your full name of Apache ID;</li>
-<li>Email should be the Apache email;</li>
-<li>Name is best to only use English to avoid garbled.</li>
-</ul>
-<p>Run <code>gpg --full-gen-key</code> and complete the generation interactively:</p>
-<pre><code class="language-shell">gpg (GnuPG) 2.2.20; Copyright (C) 2020 Free Software Foundation, Inc.
-This is free software: you are free to change and redistribute it.
-There is NO WARRANTY, to the extent permitted by law.
-
-Please select what kind of key you want:
-   (1) RSA and RSA (default)
-   (2) DSA and Elgamal
-   (3) DSA (sign only)
-   (4) RSA (sign only)
-  (14) Existing key from card
-Your selection? 1 # input 1
-RSA keys may be between 1024 and 4096 bits long.
-What keysize do you want? (2048) 4096 # input 4096
-Requested keysize is 4096 bits
-Please specify how long the key should be valid.
-         0 = key does not expire
-      &lt;n&gt;  = key expires in n days
-      &lt;n&gt;w = key expires in n weeks
-      &lt;n&gt;m = key expires in n months
-      &lt;n&gt;y = key expires in n years
-Key is valid for? (0) 0 # input 0
-Key does not expire at all
-Is this correct? (y/N) y # input y
-
-GnuPG needs to construct a user ID to identify your key.
-
-Real name: Hulk Lin               # input your name
-Email address: hulk@apache.org    # input your email
-Comment:                          # input some annotations, optional
-You selected this USER-ID:
-    &quot;Hulk &lt;hulk@apache.org&gt;&quot;
-
-Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit? O # input O
-We need to generate a lot of random bytes. It is a good idea to perform
-some other action (type on the keyboard, move the mouse, utilize the
-disks) during the prime generation; this gives the random number
-generator a better chance to gain enough entropy.
-We need to generate a lot of random bytes. It is a good idea to perform
-some other action (type on the keyboard, move the mouse, utilize the
-disks) during the prime generation; this gives the random number
-generator a better chance to gain enough entropy.
-
-# Input the security key
-┌──────────────────────────────────────────────────────┐
-│ Please enter this passphrase                         │
-│                                                      │
-│ Passphrase: _______________________________          │
-│                                                      │
-│       &lt;OK&gt;                              &lt;Cancel&gt;     │
-└──────────────────────────────────────────────────────┘
-# key generation will be done after your inputting the key with the following output
-gpg: key E49B00F626B marked as ultimately trusted
-gpg: revocation certificate stored as '/Users/hulk/.gnupg/openpgp-revocs.d/F77B887A4F25A9468C513E9AA3008E49B00F626B.rev'
-public and secret key created and signed.
-
-pub   rsa4096 2022-07-12 [SC]
-      F77B887A4F25A9468C513E9AA3008E49B00F626B
-uid           [ultimate] hulk &lt;hulk@apache.org&gt;
-sub   rsa4096 2022-07-12 [E]
-</code></pre>
-<h2 id="upload-your-key-to-public-gpg-keyserver"><a class="header" href="#upload-your-key-to-public-gpg-keyserver">Upload your key to public GPG keyserver</a></h2>
-<p>Firstly, list your key:</p>
-<pre><code class="language-shell">gpg --list-keys
-</code></pre>
-<p>The output is like:</p>
-<pre><code class="language-shell">-------------------------------
-pub   rsa4096 2022-07-12 [SC]
-      F77B887A4F25A9468C513E9AA3008E49B00F626B
-uid           [ultimate] hulk &lt;hulk@apache.org&gt;
-sub   rsa4096 2022-07-12 [E]
-</code></pre>
-<p>Then, send your key id to key server:</p>
-<pre><code class="language-shell">gpg --keyserver keys.openpgp.org --send-key &lt;key-id&gt; # e.g., F77B887A4F25A9468C513E9AA3008E49B00F626B
-</code></pre>
-<p>Among them, <code>keys.openpgp.org</code> is a randomly selected keyserver, you can use <code>keyserver.ubuntu.com</code> or any other full-featured keyserver.</p>
-<h2 id="check-whether-the-key-is-created-successfully"><a class="header" href="#check-whether-the-key-is-created-successfully">Check whether the key is created successfully</a></h2>
-<p>Uploading takes about one minute; after that, you can check by your email at the corresponding keyserver.</p>
-<p>Uploading keys to the keyserver is mainly for joining a <a href="https://infra.apache.org/release-signing.html#web-of-trust">Web of Trust</a>.</p>
-<h2 id="add-your-gpg-public-key-to-the-keys-document"><a class="header" href="#add-your-gpg-public-key-to-the-keys-document">Add your GPG public key to the KEYS document</a></h2>
-<p>:::info</p>
-<p><code>SVN</code> is required for this step.</p>
-<p>:::</p>
-<p>The svn repository of the release branch is: https://dist.apache.org/repos/dist/release/iceberg</p>
-<p>Please always add the public key to KEYS in the release branch:</p>
-<pre><code class="language-shell">svn co https://dist.apache.org/repos/dist/release/iceberg iceberg-dist
-# As this step will copy all the versions, it will take some time. If the network is broken, please use svn cleanup to delete the lock before re-execute it.
-cd iceberg-dist
-(gpg --list-sigs YOUR_NAME@apache.org &amp;&amp; gpg --export --armor YOUR_NAME@apache.org) &gt;&gt; KEYS # Append your key to the KEYS file
-svn add .   # It is not needed if the KEYS document exists before.
-svn ci -m &quot;add gpg key for YOUR_NAME&quot; # Later on, if you are asked to enter a username and password, just use your apache username and password.
-</code></pre>
-<h2 id="upload-the-gpg-public-key-to-your-github-account"><a class="header" href="#upload-the-gpg-public-key-to-your-github-account">Upload the GPG public key to your GitHub account</a></h2>
-<ul>
-<li>Enter https://github.com/settings/keys to add your GPG key.</li>
-<li>Please remember to bind the email address used in the GPG key to your GitHub account (https://github.com/settings/emails) if you find &quot;unverified&quot; after adding it.</li>
-</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="CONTRIBUTING.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
 
+                            <a rel="next prefetch" href="reference/setup_gpg.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -796,7 +511,13 @@ svn ci -m &quot;add gpg key for YOUR_NAME&quot; # Later on, if you are asked to 
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="CONTRIBUTING.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
 
+                    <a rel="next prefetch" href="reference/setup_gpg.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
             </nav>
 
         </div>
@@ -819,11 +540,6 @@ svn ci -m &quot;add gpg key for YOUR_NAME&quot; # Later on, if you are asked to 
 
         <!-- Custom JS scripts -->
 
-        <script>
-        window.addEventListener('load', function() {
-            window.setTimeout(window.print, 100);
-        });
-        </script>
 
     </div>
     </body>
