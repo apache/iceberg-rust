@@ -1356,7 +1356,11 @@ mod _serde {
     fn parse_i64_entry(v: Vec<I64Entry>) -> Result<HashMap<i32, u64>, Error> {
         let mut m = HashMap::with_capacity(v.len());
         for entry in v {
-            m.insert(entry.key, entry.value.try_into()?);
+            // We ignore the entry if it's value is negative since these entries are supposed to be used for
+            // counting, which should never be negative.
+            if let Ok(v) = entry.value.try_into() {
+                m.insert(entry.key, v);
+            }
         }
         Ok(m)
     }
@@ -1371,6 +1375,25 @@ mod _serde {
                 })
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
+        use std::collections::HashMap;
+
+        #[test]
+        fn test_parse_negative_manifest_entry() {
+            let entries = vec![
+                I64Entry { key: 1, value: -1 },
+                I64Entry { key: 2, value: 3 },
+            ];
+
+            let ret = parse_i64_entry(entries).unwrap();
+
+            let expected_ret = HashMap::from([(2, 3)]);
+            assert_eq!(ret, expected_ret, "Negative i64 entry should be ignored!");
+        }
     }
 }
 
