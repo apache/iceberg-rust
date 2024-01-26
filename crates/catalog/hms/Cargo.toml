@@ -29,12 +29,8 @@ keywords = ["iceberg", "hive", "catalog"]
 
 [dependencies]
 async-trait = { workspace = true }
-hive_metastore = "0.0.1"
+hive_metastore = "0.0.2"
 iceberg = { workspace = true }
-# the thrift upstream suffered from no regular rust release.
-#
-# [test-rs](https://github.com/tent-rs) is an organization that helps resolves this
-# issue. And [tent-thrift](https://github.com/tent-rs/thrift) is a fork of the thrift
-# crate, built from the thrift upstream with only version bumped.
-thrift = { package = "tent-thrift", version = "0.18.1" }
 typed-builder = { workspace = true }
+volo-thrift = "0.9.2"
+anyhow = {workspace = true}

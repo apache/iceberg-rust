@@ -17,16 +17,16 @@
 
 use super::utils::*;
 use async_trait::async_trait;
-use hive_metastore::{TThriftHiveMetastoreSyncClient, ThriftHiveMetastoreSyncClient};
+use hive_metastore::ThriftHiveMetastoreClient;
+use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use iceberg::table::Table;
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
+};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
-use thrift::protocol::{TBinaryInputProtocol, TBinaryOutputProtocol};
-use thrift::transport::{
-    ReadHalf, TBufferedReadTransport, TBufferedWriteTransport, TIoChannel, WriteHalf,
-};
+use std::net::ToSocketAddrs;
 use typed_builder::TypedBuilder;
 
 /// Hive metastore Catalog configuration.
@@ -35,24 +35,7 @@ pub struct HmsCatalogConfig {
     address: String,
 }
 
-/// TODO: We only support binary protocol for now.
-type HmsClientType = ThriftHiveMetastoreSyncClient<
-    TBinaryInputProtocol<TBufferedReadTransport<ReadHalf<thrift::transport::TTcpChannel>>>,
-    TBinaryOutputProtocol<TBufferedWriteTransport<WriteHalf<thrift::transport::TTcpChannel>>>,
->;
-
-/// # TODO
-///
-/// we are using the same connection everytime, we should support connection
-/// pool in the future.
-struct HmsClient(Arc<Mutex<HmsClientType>>);
-
-impl HmsClient {
-    fn call<T>(&self, f: impl FnOnce(&mut HmsClientType) -> thrift::Result<T>) -> Result<T> {
-        let mut client = self.0.lock().unwrap();
-        f(&mut client).map_err(from_thrift_error)
-    }
-}
+struct HmsClient(ThriftHiveMetastoreClient);
 
 /// Hive metastore Catalog.
 pub struct HmsCatalog {
@@ -71,19 +54,29 @@ impl Debug for HmsCatalog {
 impl HmsCatalog {
     /// Create a new hms catalog.
     pub fn new(config: HmsCatalogConfig) -> Result<Self> {
-        let mut channel = thrift::transport::TTcpChannel::new();
-        channel
-            .open(config.address.as_str())
-            .map_err(from_thrift_error)?;
-        let (i_chan, o_chan) = channel.split().map_err(from_thrift_error)?;
-        let i_chan = TBufferedReadTransport::new(i_chan);
-        let o_chan = TBufferedWriteTransport::new(o_chan);
-        let i_proto = TBinaryInputProtocol::new(i_chan, true);
-        let o_proto = TBinaryOutputProtocol::new(o_chan, true);
-        let client = ThriftHiveMetastoreSyncClient::new(i_proto, o_proto);
+        let address = config
+            .address
+            .as_str()
+            .to_socket_addrs()
+            .map_err(from_io_error)?
+            .next()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("invalid address: {}", config.address),
+                )
+            })?;
+
+        let client = ThriftHiveMetastoreClientBuilder::new("hms")
+            .address(address)
+            // Framed thrift rpc is not enabled by default in HMS, we use
+            // buffered instead.
+            .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
+            .build();
+
         Ok(Self {
             config,
-            client: HmsClient(Arc::new(Mutex::new(client))),
+            client: HmsClient(client),
         })
     }
 }
@@ -103,10 +96,17 @@ impl Catalog for HmsCatalog {
         let dbs = if parent.is_some() {
             return Ok(vec![]);
         } else {
-            self.client.call(|client| client.get_all_databases())?
+            self.client
+                .0
+                .get_all_databases()
+                .await
+                .map_err(from_thrift_error)?
         };
 
-        Ok(dbs.into_iter().map(NamespaceIdent::new).collect())
+        Ok(dbs
+            .into_iter()
+            .map(|v| NamespaceIdent::new(v.into()))
+            .collect())
     }
 
     async fn create_namespace(
