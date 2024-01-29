@@ -1072,7 +1072,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let sort_order = SortOrder::builder().with_order_id(0).build().unwrap();
+        let sort_order = SortOrder::builder()
+            .with_order_id(0)
+            .build_unbound()
+            .unwrap();
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(638933773299822130)
@@ -1196,7 +1199,7 @@ mod tests {
                 direction: SortDirection::Descending,
                 null_order: NullOrder::Last,
             })
-            .build()
+            .build_unbound()
             .unwrap();
 
         let snapshot1 = Snapshot::builder()
@@ -1325,7 +1328,7 @@ mod tests {
                 direction: SortDirection::Descending,
                 null_order: NullOrder::Last,
             })
-            .build()
+            .build_unbound()
             .unwrap();
 
         let expected = TableMetadata {

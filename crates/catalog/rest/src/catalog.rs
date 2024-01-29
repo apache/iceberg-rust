@@ -555,7 +555,7 @@ mod _serde {
 
     use serde_derive::{Deserialize, Serialize};
 
-    use iceberg::spec::{Schema, TableMetadata, UnboundPartitionSpec, UnboundSortOrder};
+    use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
     use iceberg::{Error, ErrorKind, Namespace, TableIdent, TableRequirement, TableUpdate};
 
     pub(super) const OK: u16 = 200u16;
@@ -695,7 +695,7 @@ mod _serde {
         pub(super) location: Option<String>,
         pub(super) schema: Schema,
         pub(super) partition_spec: Option<UnboundPartitionSpec>,
-        pub(super) write_order: Option<UnboundSortOrder>,
+        pub(super) write_order: Option<SortOrder>,
         pub(super) stage_create: Option<bool>,
         pub(super) properties: Option<HashMap<String, String>>,
     }
@@ -721,8 +721,8 @@ mod tests {
     use iceberg::spec::ManifestListLocation::ManifestListFile;
     use iceberg::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotLog, SortDirection, SortOrder, Summary, Transform, Type, UnboundPartitionField,
-        UnboundPartitionSpec, UnboundSortField, UnboundSortOrder,
+        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
@@ -1277,17 +1277,16 @@ mod tests {
                     .unwrap(),
             )
             .sort_order(
-                UnboundSortOrder::builder()
-                    .with_order_id(1)
+                SortOrder::builder()
                     .with_sort_field(
-                        UnboundSortField::builder()
+                        SortField::builder()
                             .source_id(2)
                             .transform(Transform::Identity)
                             .direction(SortDirection::Ascending)
                             .null_order(NullOrder::First)
                             .build(),
                     )
-                    .build()
+                    .build_unbound()
                     .unwrap(),
             )
             .build();

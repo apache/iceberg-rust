@@ -17,19 +17,18 @@
 
 //! Catalog API for Apache Iceberg
 
-use serde_derive::{Deserialize, Serialize};
-use urlencoding::encode;
-
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, UnboundPartitionSpec, UnboundSortOrder,
+    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
+use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem::take;
 use std::ops::Deref;
 use typed_builder::TypedBuilder;
+use urlencoding::encode;
 use uuid::Uuid;
 
 /// The catalog API for Iceberg Rust.
@@ -231,7 +230,7 @@ pub struct TableCreation {
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
-    pub sort_order: Option<UnboundSortOrder>,
+    pub sort_order: Option<SortOrder>,
     /// The properties of the table.
     #[builder(default)]
     pub properties: HashMap<String, String>,
@@ -375,7 +374,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     AddSortOrder {
         /// Sort order to add.
-        sort_order: UnboundSortOrder,
+        sort_order: SortOrder,
     },
     /// Set table's default sort order
     #[serde(rename_all = "kebab-case")]
@@ -432,8 +431,8 @@ mod tests {
     use crate::spec::ManifestListLocation::ManifestListFile;
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, Summary, Transform, Type,
-        UnboundPartitionField, UnboundPartitionSpec, UnboundSortField, UnboundSortOrder,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
+        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
     use serde::de::DeserializeOwned;
@@ -848,10 +847,10 @@ mod tests {
         "#;
 
         let update = TableUpdate::AddSortOrder {
-            sort_order: UnboundSortOrder::builder()
+            sort_order: SortOrder::builder()
                 .with_order_id(1)
                 .with_sort_field(
-                    UnboundSortField::builder()
+                    SortField::builder()
                         .source_id(2)
                         .direction(SortDirection::Ascending)
                         .null_order(NullOrder::First)
@@ -859,14 +858,14 @@ mod tests {
                         .build(),
                 )
                 .with_sort_field(
-                    UnboundSortField::builder()
+                    SortField::builder()
                         .source_id(3)
                         .direction(SortDirection::Descending)
                         .null_order(NullOrder::Last)
                         .transform(Transform::Bucket(4))
                         .build(),
                 )
-                .build()
+                .build_unbound()
                 .unwrap(),
         };
 
