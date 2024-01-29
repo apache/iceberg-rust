@@ -1,0 +1,22 @@
+[package]
+name = "iceberg-examples"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+iceberg-catalog-rest= {workspace = true}
+iceberg = {workspace = true}
+tokio = { version = "1", features = ["full"] }
+
+[[example]]
+name = "rest-catalog-namespace"
+path = "src/rest_catalog_namespace.rs"
+
+[[example]]
+name = "rest-catalog-table"
+path = "src/rest_catalog_table.rs"
