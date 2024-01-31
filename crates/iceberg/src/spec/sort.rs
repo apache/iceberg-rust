@@ -111,6 +111,8 @@ pub struct SortOrder {
 }
 
 impl SortOrder {
+    const UNSORTED_ORDER_ID: i64 = 0;
+
     /// Create sort order builder
     pub fn builder() -> SortOrderBuilder {
         SortOrderBuilder::default()
@@ -119,7 +121,7 @@ impl SortOrder {
     /// Create an unbound unsorted order
     pub fn unsorted_order() -> SortOrder {
         SortOrder {
-            order_id: 0,
+            order_id: SortOrder::UNSORTED_ORDER_ID,
             fields: Vec::new(),
         }
     }
@@ -137,14 +139,17 @@ impl SortOrderBuilder {
     pub fn build_unbound(&self) -> Result<SortOrder> {
         let fields = self.fields.clone().unwrap_or_default();
         return match (self.order_id, fields.as_slice()) {
-            (Some(0) | None, []) => Ok(SortOrder::unsorted_order()),
+            (Some(SortOrder::UNSORTED_ORDER_ID) | None, []) => Ok(SortOrder::unsorted_order()),
             (_, []) => Err(Error::new(
                 ErrorKind::Unexpected,
-                "Unsorted order ID must be 0",
+                format!("Unsorted order ID must be {}", SortOrder::UNSORTED_ORDER_ID),
             )),
-            (Some(0), [..]) => Err(Error::new(
+            (Some(SortOrder::UNSORTED_ORDER_ID), [..]) => Err(Error::new(
                 ErrorKind::Unexpected,
-                "Sort order ID 0 is reserved for unsorted order",
+                format!(
+                    "Sort order ID {} is reserved for unsorted order",
+                    SortOrder::UNSORTED_ORDER_ID
+                ),
             )),
             (maybe_order_id, [..]) => Ok(SortOrder {
                 order_id: maybe_order_id.unwrap_or(1),
@@ -268,7 +273,7 @@ mod tests {
     ) {
         assert_eq!(
             SortOrder::builder()
-                .with_order_id(0)
+                .with_order_id(SortOrder::UNSORTED_ORDER_ID)
                 .with_sort_field(
                     SortField::builder()
                         .source_id(2)
@@ -288,7 +293,7 @@ mod tests {
     fn test_build_unbound_should_return_unsorted_sort_order() {
         assert_eq!(
             SortOrder::builder()
-                .with_order_id(0)
+                .with_order_id(SortOrder::UNSORTED_ORDER_ID)
                 .build_unbound()
                 .expect("Expected an Ok value"),
             SortOrder::unsorted_order()
