@@ -17,19 +17,5 @@
   ~ under the License.
 -->
 
-- [Introduction](./introduction.md)
-
-# User Guide
-
-- [Install](./install.md)
-- [Download](./download.md)
-- [API](./api.md)
-
-# Developer Guide
-
-- [Contributing](./CONTRIBUTING.md)
-- [Release](./release.md)
-
-# Reference
-
-- [Setup GPG key](./reference/setup_gpg.md)
+Example usage codes for `iceberg-rust`. Currently, these examples can't run directly since it requires setting up of 
+environments for catalogs, for example, rest catalog server.  
