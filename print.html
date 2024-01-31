@@ -89,7 +89,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html">Introduction</a></li><li class="chapter-item expanded affix "><li class="part-title">User Guide</li><li class="chapter-item expanded "><a href="install.html">Install</a></li><li class="chapter-item expanded "><a href="download.html">Download</a></li><li class="chapter-item expanded "><a href="api.html">API</a></li><li class="chapter-item expanded affix "><li class="part-title">Developer Guide</li><li class="chapter-item expanded "><a href="CONTRIBUTING.html">Contributing</a></li><li class="chapter-item expanded "><a href="release.html">Release</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/setup_gpg.html">Setup GPG key</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -240,6 +240,307 @@
   ~ specific language governing permissions and limitations
   ~ under the License.
 -->
+<div style="break-before: page; page-break-before: always;"></div><!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+<h1 id="catalog"><a class="header" href="#catalog">Catalog</a></h1>
+<p><code>Catalog</code> is the entry point for accessing iceberg tables. You can use a catalog to:</p>
+<ul>
+<li>Create and list namespaces.</li>
+<li>Create, load, and drop tables</li>
+</ul>
+<p>Currently only rest catalog has been implemented, and other catalogs are under active development. Here is an 
+example of how to create a <code>RestCatalog</code>:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
+</span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span>    // Create catalog
+    let config = RestCatalogConfig::builder()
+        .uri(&quot;http://localhost:8080&quot;.to_string())
+        .build();
+
+    let catalog = RestCatalog::new(config).await.unwrap();
+<span class="boring">
+</span><span class="boring">    // List all namespaces
+</span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
+</span><span class="boring">
+</span><span class="boring">    let namespace_id =
+</span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+</span><span class="boring">    // Create namespace
+</span><span class="boring">    let ns = catalog
+</span><span class="boring">        .create_namespace(
+</span><span class="boring">            &amp;namespace_id,
+</span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    println!(&quot;Namespace created: {:?}&quot;, ns);
+</span><span class="boring">}</span></code></pre>
+<p>You can run following code to list all root namespaces:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
+</span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create catalog
+</span><span class="boring">    let config = RestCatalogConfig::builder()
+</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">
+</span>    // List all namespaces
+    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
+    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
+<span class="boring">
+</span><span class="boring">    let namespace_id =
+</span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+</span><span class="boring">    // Create namespace
+</span><span class="boring">    let ns = catalog
+</span><span class="boring">        .create_namespace(
+</span><span class="boring">            &amp;namespace_id,
+</span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    println!(&quot;Namespace created: {:?}&quot;, ns);
+</span><span class="boring">}</span></code></pre>
+<p>Then you can run following code to create namespace:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
+</span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create catalog
+</span><span class="boring">    let config = RestCatalogConfig::builder()
+</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">
+</span><span class="boring">    // List all namespaces
+</span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
+</span><span class="boring">
+</span>    let namespace_id =
+        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+    // Create namespace
+    let ns = catalog
+        .create_namespace(
+            &amp;namespace_id,
+            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+        )
+        .await
+        .unwrap();
+
+    println!(&quot;Namespace created: {:?}&quot;, ns);
+<span class="boring">}</span></code></pre>
+<h1 id="table"><a class="header" href="#table">Table</a></h1>
+<p>After creating <code>Catalog</code>, we can manipulate tables through <code>Catalog</code>.</p>
+<p>You can use following code to create a table:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+</span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
+</span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create catalog
+</span><span class="boring">    let config = RestCatalogConfig::builder()
+</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">
+</span>    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
+
+    let table_schema = Schema::builder()
+        .with_fields(vec![
+            NestedField::optional(1, &quot;foo&quot;, Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(2, &quot;bar&quot;, Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(3, &quot;baz&quot;, Type::Primitive(PrimitiveType::Boolean)).into(),
+        ])
+        .with_schema_id(1)
+        .with_identifier_field_ids(vec![2])
+        .build()
+        .unwrap();
+
+    // Create table
+    let table_creation = TableCreation::builder()
+        .name(table_id.name.clone())
+        .schema(table_schema.clone())
+        .properties(HashMap::from([(&quot;owner&quot;.to_string(), &quot;testx&quot;.to_string())]))
+        .build();
+
+    let table = catalog
+        .create_table(&amp;table_id.namespace, table_creation)
+        .await
+        .unwrap();
+
+    println!(&quot;Table created: {:?}&quot;, table.metadata());
+<span class="boring">
+</span><span class="boring">    let table2 = catalog
+</span><span class="boring">        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t2&quot;]).unwrap())
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;{:?}&quot;, table2.metadata());
+</span><span class="boring">}</span></code></pre>
+<p>Also, you can load a table directly:</p>
+<pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
+</span><span class="boring">// or more contributor license agreements.  See the NOTICE file
+</span><span class="boring">// distributed with this work for additional information
+</span><span class="boring">// regarding copyright ownership.  The ASF licenses this file
+</span><span class="boring">// to you under the Apache License, Version 2.0 (the
+</span><span class="boring">// &quot;License&quot;); you may not use this file except in compliance
+</span><span class="boring">// with the License.  You may obtain a copy of the License at
+</span><span class="boring">//
+</span><span class="boring">//   http://www.apache.org/licenses/LICENSE-2.0
+</span><span class="boring">//
+</span><span class="boring">// Unless required by applicable law or agreed to in writing,
+</span><span class="boring">// software distributed under the License is distributed on an
+</span><span class="boring">// &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+</span><span class="boring">// KIND, either express or implied.  See the License for the
+</span><span class="boring">// specific language governing permissions and limitations
+</span><span class="boring">// under the License.
+</span><span class="boring">
+</span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+</span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
+</span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() {
+</span><span class="boring">    // Create catalog
+</span><span class="boring">    let config = RestCatalogConfig::builder()
+</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">
+</span><span class="boring">    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    let table_schema = Schema::builder()
+</span><span class="boring">        .with_fields(vec![
+</span><span class="boring">            NestedField::optional(1, &quot;foo&quot;, Type::Primitive(PrimitiveType::String)).into(),
+</span><span class="boring">            NestedField::required(2, &quot;bar&quot;, Type::Primitive(PrimitiveType::Int)).into(),
+</span><span class="boring">            NestedField::optional(3, &quot;baz&quot;, Type::Primitive(PrimitiveType::Boolean)).into(),
+</span><span class="boring">        ])
+</span><span class="boring">        .with_schema_id(1)
+</span><span class="boring">        .with_identifier_field_ids(vec![2])
+</span><span class="boring">        .build()
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Create table
+</span><span class="boring">    let table_creation = TableCreation::builder()
+</span><span class="boring">        .name(table_id.name.clone())
+</span><span class="boring">        .schema(table_schema.clone())
+</span><span class="boring">        .properties(HashMap::from([(&quot;owner&quot;.to_string(), &quot;testx&quot;.to_string())]))
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    let table = catalog
+</span><span class="boring">        .create_table(&amp;table_id.namespace, table_creation)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    println!(&quot;Table created: {:?}&quot;, table.metadata());
+</span><span class="boring">
+</span>    let table2 = catalog
+        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t2&quot;]).unwrap())
+        .await
+        .unwrap();
+    println!(&quot;{:?}&quot;, table2.metadata());
+<span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div><!--
   ~ Licensed to the Apache Software Foundation (ASF) under one
   ~ or more contributor license agreements.  See the NOTICE file
