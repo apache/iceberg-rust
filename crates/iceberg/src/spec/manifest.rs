@@ -662,7 +662,7 @@ mod _const_schema {
             )),
         ];
         let schema = Schema::builder().with_fields(fields).build().unwrap();
-        schema_to_avro_schema("manifest", &schema)
+        schema_to_avro_schema("manifest_entry", &schema)
     }
 
     pub(super) fn manifest_schema_v1(partition_type: StructType) -> Result<AvroSchema, Error> {
@@ -696,7 +696,7 @@ mod _const_schema {
             )),
         ];
         let schema = Schema::builder().with_fields(fields).build().unwrap();
-        schema_to_avro_schema("manifest", &schema)
+        schema_to_avro_schema("manifest_entry", &schema)
     }
 }
 
