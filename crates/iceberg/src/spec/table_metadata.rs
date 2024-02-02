@@ -687,7 +687,7 @@ pub(super) mod _serde {
                 schema: v
                     .schemas
                     .get(&v.current_schema_id)
-                    .unwrap()
+                    .expect("current_schema_id not found in schemas")
                     .as_ref()
                     .clone()
                     .into(),
@@ -867,12 +867,12 @@ mod tests {
                     {
                         "spec-id": 1,
                         "fields": [
-                            {  
-                                "source-id": 4,  
-                                "field-id": 1000,  
-                                "name": "ts_day",  
+                            {
+                                "source-id": 4,
+                                "field-id": 1000,
+                                "name": "ts_day",
                                 "transform": "day"
-                            } 
+                            }
                         ]
                     }
                 ],
@@ -882,8 +882,8 @@ mod tests {
                     "commit.retry.num-retries": "1"
                 },
                 "metadata-log": [
-                    {  
-                        "metadata-file": "s3://bucket/.../v1.json",  
+                    {
+                        "metadata-file": "s3://bucket/.../v1.json",
                         "timestamp-ms": 1515100
                     }
                 ],
