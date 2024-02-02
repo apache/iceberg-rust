@@ -215,8 +215,8 @@ impl ManifestListWriter {
     pub async fn close(self) -> Result<()> {
         let data = self.avro_writer.into_inner()?;
         let mut writer = self.output_file.writer().await?;
-        writer.write_all(&data).await.unwrap();
-        writer.close().await.unwrap();
+        writer.write_all(&data).await?;
+        writer.close().await?;
         Ok(())
     }
 }

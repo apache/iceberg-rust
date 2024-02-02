@@ -160,7 +160,7 @@ impl<'a> ReplaceSortOrderAction<'a> {
                     .table
                     .metadata()
                     .default_sort_order()
-                    .unwrap()
+                    .expect("default sort order impossible to be None")
                     .order_id,
             },
         ];
