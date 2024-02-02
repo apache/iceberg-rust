@@ -55,6 +55,7 @@ use futures::{AsyncRead, AsyncSeek, AsyncWrite};
 use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
 use tokio::io::{AsyncRead as TokioAsyncRead, AsyncSeek as TokioAsyncSeek};
+use tokio::io::AsyncWrite as TokioAsyncWrite;
 use url::Url;
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -244,9 +245,9 @@ impl InputFile {
 }
 
 /// Trait for writing file.
-pub trait FileWrite: AsyncWrite {}
+pub trait FileWrite: AsyncWrite + TokioAsyncWrite + Send + Unpin {}
 
-impl<T> FileWrite for T where T: AsyncWrite {}
+impl<T> FileWrite for T where T: AsyncWrite + TokioAsyncWrite + Send + Unpin {}
 
 /// Output file is used for writing to files..
 #[derive(Debug)]
@@ -282,8 +283,10 @@ impl OutputFile {
     }
 
     /// Creates output file for writing.
-    pub async fn writer(&self) -> Result<impl FileWrite> {
-        Ok(self.op.writer(&self.path[self.relative_path_pos..]).await?)
+    pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
+        Ok(Box::new(
+            self.op.writer(&self.path[self.relative_path_pos..]).await?,
+        ))
     }
 }
 

@@ -18,16 +18,20 @@
 //! This module contains the writer for data file format supported by iceberg: parquet, orc.
 
 use super::{CurrentFileStatus, DefaultOutput};
-use crate::Result;
+use crate::{io::OutputFile, Result};
 use arrow_array::RecordBatch;
 use futures::Future;
+
+mod parquet_writer;
+pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
+mod track_writer;
 
 /// File writer builder trait.
 pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
     /// Build file writer.
-    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
+    fn build(self, out_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)

@@ -211,7 +211,7 @@ impl FileScanTask {
 mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Manifest,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
     };
