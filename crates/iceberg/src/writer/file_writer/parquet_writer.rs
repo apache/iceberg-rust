@@ -23,7 +23,7 @@ use std::{
     sync::{atomic::AtomicI64, Arc},
 };
 
-use crate::Result;
+use crate::{io::FileIO, Result};
 use crate::{
     io::OutputFile,
     spec::{DataFileBuilder, DataFileFormat},
@@ -34,37 +34,55 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use parquet::{arrow::AsyncArrowWriter, format::FileMetaData};
 use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
 
-use super::{track_writer::TrackWriter, FileWriter, FileWriterBuilder};
+use super::{
+    location_generator::{FileNameGenerator, LocationGenerator},
+    track_writer::TrackWriter,
+    FileWriter, FileWriterBuilder,
+};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone)]
-pub struct ParquetWriterBuilder {
+pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
     /// `buffer_size` determines the initial size of the intermediate buffer.
     /// The intermediate buffer will automatically be resized if necessary
     init_buffer_size: usize,
     props: WriterProperties,
     schema: ArrowSchemaRef,
+
+    file_io: FileIO,
+    location_generator: T,
+    file_name_generator: F,
 }
 
-impl ParquetWriterBuilder {
+impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
     /// To avoid EntiryTooSmall error, we set the minimum buffer size to 8MB if the given buffer size is smaller than it.
     const MIN_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    pub fn new(init_buffer_size: usize, props: WriterProperties, schema: ArrowSchemaRef) -> Self {
+    pub fn new(
+        init_buffer_size: usize,
+        props: WriterProperties,
+        schema: ArrowSchemaRef,
+        file_io: FileIO,
+        location_generator: T,
+        file_name_generator: F,
+    ) -> Self {
         Self {
             init_buffer_size,
             props,
             schema,
+            file_io,
+            location_generator,
+            file_name_generator,
         }
     }
 }
 
-impl FileWriterBuilder for ParquetWriterBuilder {
+impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
     type R = ParquetWriter;
 
-    async fn build(self, out_file: OutputFile) -> crate::Result<Self::R> {
+    async fn build(self) -> crate::Result<Self::R> {
         // Fetch field id from schema
         let field_ids = self
             .schema
@@ -89,6 +107,10 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             .collect::<crate::Result<Vec<_>>>()?;
 
         let written_size = Arc::new(AtomicI64::new(0));
+        let out_file = self.file_io.new_output(
+            self.location_generator
+                .generate_location(&self.file_name_generator.generate_file_name()),
+        )?;
         let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
         let init_buffer_size = max(Self::MIN_BUFFER_SIZE, self.init_buffer_size);
         let writer = AsyncArrowWriter::try_new(
@@ -256,17 +278,19 @@ mod tests {
     use super::*;
     use crate::io::FileIOBuilder;
     use crate::spec::Struct;
+    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
 
     #[derive(Clone)]
     struct TestLocationGen;
 
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
-        // create output file
         let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("test.parquet");
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let out_file = file_io.new_output(path.to_str().unwrap()).unwrap();
+        let loccation_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen = DefaultFileNameGenerator::new(0, 0, "test".to_string(), None);
 
         // prepare data
         let schema = {
@@ -283,10 +307,16 @@ mod tests {
         let to_write_null = RecordBatch::try_new(schema.clone(), vec![null_col]).unwrap();
 
         // write data
-        let mut pw =
-            ParquetWriterBuilder::new(0, WriterProperties::builder().build(), to_write.schema())
-                .build(out_file)
-                .await?;
+        let mut pw = ParquetWriterBuilder::new(
+            0,
+            WriterProperties::builder().build(),
+            to_write.schema(),
+            file_io.clone(),
+            loccation_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
         pw.write(&to_write).await?;
         pw.write(&to_write_null).await?;
         let res = pw.close().await?;
