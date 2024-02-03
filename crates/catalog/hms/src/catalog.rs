@@ -16,7 +16,6 @@
 // under the License.
 
 use super::utils::*;
-use async_trait::async_trait;
 use hive_metastore::{TThriftHiveMetastoreSyncClient, ThriftHiveMetastoreSyncClient};
 use iceberg::table::Table;
 use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
@@ -89,7 +88,6 @@ impl HmsCatalog {
 }
 
 /// Refer to <https://github.com/apache/iceberg/blob/main/hive-metastore/src/main/java/org/apache/iceberg/hive/HiveCatalog.java> for implementation details.
-#[async_trait]
 impl Catalog for HmsCatalog {
     /// HMS doesn't support nested namespaces.
     ///

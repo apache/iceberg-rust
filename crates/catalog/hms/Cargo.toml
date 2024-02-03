@@ -28,7 +28,6 @@ license = { workspace = true }
 keywords = ["iceberg", "hive", "catalog"]
 
 [dependencies]
-async-trait = { workspace = true }
 hive_metastore = "0.0.1"
 iceberg = { workspace = true }
 # the thrift upstream suffered from no regular rust release.

@@ -33,7 +33,6 @@ apache-avro = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
-async-trait = { workspace = true }
 bimap = { workspace = true }
 bitvec = { workspace = true }
 chrono = { workspace = true }
@@ -55,6 +54,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
+trait-variant = "0.1.1"
 typed-builder = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }

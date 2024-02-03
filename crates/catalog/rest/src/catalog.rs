@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -215,7 +214,6 @@ pub struct RestCatalog {
     client: HttpClient,
 }
 
-#[async_trait]
 impl Catalog for RestCatalog {
     /// List namespaces from table.
     async fn list_namespaces(
@@ -1558,7 +1556,7 @@ mod tests {
         "type": "NoSuchTableException",
         "code": 404
     }
-}      
+}
             "#,
             )
             .create_async()

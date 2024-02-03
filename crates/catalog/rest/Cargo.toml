@@ -28,8 +28,6 @@ license = { workspace = true }
 keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
-# async-trait = { workspace = true }
-async-trait = { workspace = true }
 chrono = { workspace = true }
 iceberg = { workspace = true }
 log = "0.4.20"
