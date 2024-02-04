@@ -702,7 +702,10 @@ pub(super) mod _serde {
                 schema: v
                     .schemas
                     .get(&v.current_schema_id)
-                    .expect("current_schema_id not found in schemas")
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "current_schema_id not found in schemas",
+                    ))?
                     .as_ref()
                     .clone()
                     .into(),
