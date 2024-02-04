@@ -17,7 +17,7 @@
   ~ under the License.
 -->
 
-# Apache Iceberg Rust
+# Apache Iceberg Rust CI Test
 
 Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
