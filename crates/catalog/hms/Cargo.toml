@@ -30,7 +30,7 @@ keywords = ["iceberg", "hive", "catalog"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-hive_metastore = "0.0.2"
+hive_metastore = { workspace = true }
 iceberg = { workspace = true }
 typed-builder = { workspace = true }
-volo-thrift = "0.9.2"
+volo-thrift = { workspace = true }
