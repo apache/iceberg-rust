@@ -15,13 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use anyhow::anyhow;
 use iceberg::{Error, ErrorKind};
+use std::fmt::Debug;
+use std::io;
 
 /// Format a thrift error into iceberg error.
-pub fn from_thrift_error(error: thrift::Error) -> Error {
+pub fn from_thrift_error<T>(error: volo_thrift::error::ResponseError<T>) -> Error
+where
+    T: Debug,
+{
     Error::new(
         ErrorKind::Unexpected,
         "operation failed for hitting thrift error".to_string(),
+    )
+    .with_source(anyhow!("thrift error: {:?}", error))
+}
+
+/// Format an io error into iceberg error.
+pub fn from_io_error(error: io::Error) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        "operation failed for hitting io error".to_string(),
     )
     .with_source(error)
 }
