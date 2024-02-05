@@ -290,7 +290,8 @@ mod tests {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let loccation_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
-        let file_name_gen = DefaultFileNameGenerator::new(0, 0, "test".to_string(), None);
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
         // prepare data
         let schema = {

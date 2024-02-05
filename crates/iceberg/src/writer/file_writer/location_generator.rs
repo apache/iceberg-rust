@@ -19,9 +19,11 @@
 
 use std::sync::{atomic::AtomicU64, Arc};
 
+use crate::spec::DataFileFormat;
+
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
-    /// Generate a absolute path for the given file name.
+    /// Generate an absolute path for the given file name.
     /// e.g
     /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
     fn generate_location(&self, file_name: &str) -> String;
@@ -35,39 +37,28 @@ pub trait FileNameGenerator: Clone + Send + 'static {
 
 /// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
 /// passed to `LocationGenerator` to generate the location of the file.
-/// The rule of file name is aligned with the OutputFileFactory in iceberg-java
+/// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
 #[derive(Clone)]
 pub struct DefaultFileNameGenerator {
-    partition_id: u64,
-    task_id: u64,
-    // The purpose of this id is to be able to know from two paths that they were written by the
-    // same operation.
-    // That's useful, for example, if a Spark job dies and leaves files in the file system, you can
-    // identify them all
-    // with a recursive listing and grep.
-    operator_id: String,
+    prefix: String,
     suffix: String,
+    format: String,
     file_count: Arc<AtomicU64>,
 }
 
 impl DefaultFileNameGenerator {
     /// Create a new `FileNameGenerator`.
-    pub fn new(
-        partition_id: u64,
-        task_id: u64,
-        operator_id: String,
-        suffix: Option<String>,
-    ) -> Self {
+    pub fn new(prefix: String, suffix: Option<String>, format: DataFileFormat) -> Self {
         let suffix = if let Some(suffix) = suffix {
-            format!("--{}", suffix)
+            format!("-{}", suffix)
         } else {
             "".to_string()
         };
+
         Self {
-            partition_id,
-            task_id,
-            operator_id,
+            prefix,
             suffix,
+            format: format.to_string(),
             file_count: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -79,8 +70,8 @@ impl FileNameGenerator for DefaultFileNameGenerator {
             .file_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!(
-            "{:05}-{}-{}-{:05}{}",
-            self.partition_id, self.task_id, self.operator_id, file_id, self.suffix
+            "{}-{:05}{}.{}",
+            self.prefix, file_id, self.suffix, self.format
         )
     }
 }
