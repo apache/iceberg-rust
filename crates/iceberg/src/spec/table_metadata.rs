@@ -1523,7 +1523,7 @@ mod tests {
 
     #[test]
     fn test_table_metadata_v2_unsupported_version() {
-        let metadata: String =
+        let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataUnsupportedVersion.json")
                 .unwrap();
 
