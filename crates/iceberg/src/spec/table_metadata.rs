@@ -44,8 +44,8 @@ pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(try_from = "TableMetadataEnum", into = "TableMetadataEnum")]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
+#[serde(try_from = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 ///
 /// We assume that this data structure is always valid, so we will panic when invalid error happens.
@@ -379,6 +379,19 @@ pub(super) mod _serde {
     #[derive(Debug, PartialEq, Eq)]
     pub(super) struct VersionNumber<const V: u8>;
 
+    impl Serialize for TableMetadata {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            // we must do a clone here
+            let table_metadata_enum: TableMetadataEnum =
+                self.clone().try_into().map_err(serde::ser::Error::custom)?;
+
+            table_metadata_enum.serialize(serializer)
+        }
+    }
+
     impl<const V: u8> Serialize for VersionNumber<V> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -412,12 +425,13 @@ pub(super) mod _serde {
         }
     }
 
-    impl From<TableMetadata> for TableMetadataEnum {
-        fn from(value: TableMetadata) -> Self {
-            match value.format_version {
+    impl TryFrom<TableMetadata> for TableMetadataEnum {
+        type Error = Error;
+        fn try_from(value: TableMetadata) -> Result<Self, Error> {
+            Ok(match value.format_version {
                 FormatVersion::V2 => TableMetadataEnum::V2(value.into()),
-                FormatVersion::V1 => TableMetadataEnum::V1(value.into()),
-            }
+                FormatVersion::V1 => TableMetadataEnum::V1(value.try_into()?),
+            })
         }
     }
 
@@ -676,9 +690,10 @@ pub(super) mod _serde {
         }
     }
 
-    impl From<TableMetadata> for TableMetadataV1 {
-        fn from(v: TableMetadata) -> Self {
-            TableMetadataV1 {
+    impl TryFrom<TableMetadata> for TableMetadataV1 {
+        type Error = Error;
+        fn try_from(v: TableMetadata) -> Result<Self, Error> {
+            Ok(TableMetadataV1 {
                 format_version: VersionNumber::<1>,
                 table_uuid: Some(v.table_uuid),
                 location: v.location,
@@ -687,7 +702,10 @@ pub(super) mod _serde {
                 schema: v
                     .schemas
                     .get(&v.current_schema_id)
-                    .expect("current_schema_id not found in schemas")
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "current_schema_id not found in schemas",
+                    ))?
                     .as_ref()
                     .clone()
                     .into(),
@@ -748,7 +766,7 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 default_sort_order_id: Some(v.default_sort_order_id),
-            }
+            })
         }
     }
 }
