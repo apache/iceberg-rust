@@ -183,7 +183,7 @@ impl TableMetadata {
             self.partition_spec_by_id(DEFAULT_SPEC_ID)
         } else {
             Some(
-                self.partition_spec_by_id(DEFAULT_SPEC_ID)
+                self.partition_spec_by_id(self.default_spec_id)
                     .expect("Default partition spec id set, but not found in table metadata"),
             )
         }
@@ -856,6 +856,13 @@ mod tests {
         assert_eq!(parsed_json_value, desered_type);
     }
 
+    fn get_test_table_metadata(file_name: &str) -> TableMetadata {
+        let path = format!("testdata/table_metadata/{}", file_name);
+        let metadata: String = fs::read_to_string(path).unwrap();
+
+        serde_json::from_str(&metadata).unwrap()
+    }
+
     #[test]
     fn test_table_data_v2() {
         let data = r#"
@@ -1516,7 +1523,7 @@ mod tests {
 
     #[test]
     fn test_table_metadata_v2_unsupported_version() {
-        let metadata =
+        let metadata: String =
             fs::read_to_string("testdata/table_metadata/TableMetadataUnsupportedVersion.json")
                 .unwrap();
 
@@ -1529,9 +1536,38 @@ mod tests {
     }
 
     #[test]
-    fn order_of_format_version() {
+    fn test_order_of_format_version() {
         assert!(FormatVersion::V1 < FormatVersion::V2);
         assert_eq!(FormatVersion::V1, FormatVersion::V1);
         assert_eq!(FormatVersion::V2, FormatVersion::V2);
+    }
+
+    #[test]
+    fn test_default_partition_spec() {
+        let default_spec_id = 1234;
+        let mut table_meta_data = get_test_table_metadata("TableMetadataV2Valid.json");
+        table_meta_data.default_spec_id = default_spec_id;
+        table_meta_data
+            .partition_specs
+            .insert(default_spec_id, Arc::new(PartitionSpec::default()));
+
+        assert_eq!(
+            table_meta_data.default_partition_spec(),
+            table_meta_data.partition_spec_by_id(default_spec_id)
+        );
+    }
+    #[test]
+    fn test_default_sort_order() {
+        let default_sort_order_id = 1234;
+        let mut table_meta_data = get_test_table_metadata("TableMetadataV2Valid.json");
+        table_meta_data.default_sort_order_id = default_sort_order_id;
+        table_meta_data
+            .sort_orders
+            .insert(default_sort_order_id, Arc::new(SortOrder::default()));
+
+        assert_eq!(
+            table_meta_data.default_sort_order(),
+            table_meta_data.sort_orders.get(&default_sort_order_id)
+        )
     }
 }
