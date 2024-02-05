@@ -495,10 +495,10 @@ mod _const_schema {
     };
 
     pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
-        Lazy::new(|| schema_to_avro_schema("manifest_list", &V1_SCHEMA).unwrap());
+        Lazy::new(|| schema_to_avro_schema("manifest_file", &V1_SCHEMA).unwrap());
 
     pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
-        Lazy::new(|| schema_to_avro_schema("manifest_list", &V2_SCHEMA).unwrap());
+        Lazy::new(|| schema_to_avro_schema("manifest_file", &V2_SCHEMA).unwrap());
 }
 
 /// Entry in a manifest list.
