@@ -661,7 +661,7 @@ mod _const_schema {
                 ])),
             )),
         ];
-        let schema = Schema::builder().with_fields(fields).build().unwrap();
+        let schema = Schema::builder().with_fields(fields).build()?;
         schema_to_avro_schema("manifest_entry", &schema)
     }
 
