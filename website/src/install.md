@@ -19,6 +19,10 @@
 
 # Install
 
+<div class="warning">
+Cargo 1.75.0 or later is required to build.
+</div>
+
 Add `iceberg` into `Cargo.toml` dependencies:
 
 ```toml
