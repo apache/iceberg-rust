@@ -20,6 +20,7 @@ name = "iceberg-catalog-hms"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+rust-version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
