@@ -29,10 +29,21 @@ use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
 use typed_builder::TypedBuilder;
 
+/// Which variant of the thrift transport to communicate with HMS
+/// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
+#[derive(Debug)]
+pub enum HmsThriftTransport {
+    /// Use the framed transport
+    Framed,
+    /// Use the buffered transport (default)
+    Buffered,
+}
+
 /// Hive metastore Catalog configuration.
 #[derive(Debug, TypedBuilder)]
 pub struct HmsCatalogConfig {
     address: String,
+    thrift_transport: HmsThriftTransport,
 }
 
 struct HmsClient(ThriftHiveMetastoreClient);
@@ -67,12 +78,16 @@ impl HmsCatalog {
                 )
             })?;
 
-        let client = ThriftHiveMetastoreClientBuilder::new("hms")
-            .address(address)
-            // Framed thrift rpc is not enabled by default in HMS, we use
-            // buffered instead.
-            .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
-            .build();
+        let builder = ThriftHiveMetastoreClientBuilder::new("hms").address(address);
+
+        let client = match &config.thrift_transport {
+            HmsThriftTransport::Framed => builder
+                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::framed())
+                .build(),
+            HmsThriftTransport::Buffered => builder
+                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
+                .build(),
+        };
 
         Ok(Self {
             config,
