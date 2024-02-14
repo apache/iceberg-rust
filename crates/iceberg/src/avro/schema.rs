@@ -442,7 +442,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
     fn array(&mut self, array: &AvroSchema, item: Option<Type>) -> Result<Self::T> {
         if let AvroSchema::Array(item_schema) = array {
-            let element_field: std::sync::Arc<NestedField> = NestedField::list_element(
+            let element_field = NestedField::list_element(
                 self.next_field_id(),
                 item.ok_or(Error::new(ErrorKind::Unexpected, "item should not be None"))?,
                 !is_avro_optional(item_schema),
