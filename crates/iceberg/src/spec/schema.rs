@@ -972,13 +972,13 @@ mod tests {
 
     #[test]
     fn test_schema_display() {
-        let expected_str = r#"
+        let expected_str = "
 table {
-  1: foo: optional string
-  2: bar: required int
-  3: baz: optional boolean
+  1: foo: optional string\x20
+  2: bar: required int\x20
+  3: baz: optional boolean\x20
 }
-"#;
+";
 
         assert_eq!(expected_str, format!("\n{}", table_schema_simple().0));
     }
