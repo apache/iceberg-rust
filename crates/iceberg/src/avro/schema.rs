@@ -48,7 +48,10 @@ impl SchemaVisitor for SchemaToAvroSchema {
     type T = AvroSchemaOrField;
 
     fn schema(&mut self, _schema: &Schema, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
-        let mut avro_schema = value.unwrap_left();
+        let mut avro_schema = value.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?;
 
         if let AvroSchema::Record(record) = &mut avro_schema {
             record.name = Name::from(self.schema.as_str());
@@ -67,7 +70,10 @@ impl SchemaVisitor for SchemaToAvroSchema {
         field: &NestedFieldRef,
         avro_schema: AvroSchemaOrField,
     ) -> Result<AvroSchemaOrField> {
-        let mut field_schema = avro_schema.unwrap_left();
+        let mut field_schema = avro_schema.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?;
         if let AvroSchema::Record(record) = &mut field_schema {
             record.name = Name::from(format!("r{}", field.id).as_str());
         }
@@ -103,7 +109,15 @@ impl SchemaVisitor for SchemaToAvroSchema {
         _struct: &StructType,
         results: Vec<AvroSchemaOrField>,
     ) -> Result<AvroSchemaOrField> {
-        let avro_fields = results.into_iter().map(|r| r.unwrap_right()).collect_vec();
+        let avro_fields = results
+            .into_iter()
+            .map(|r| {
+                r.right().ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    "result should be avro record field",
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Either::Left(
             // The name of this record schema should be determined later, by schema name or field
@@ -113,7 +127,10 @@ impl SchemaVisitor for SchemaToAvroSchema {
     }
 
     fn list(&mut self, list: &ListType, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
-        let mut field_schema = value.unwrap_left();
+        let mut field_schema = value.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?;
 
         if let AvroSchema::Record(record) = &mut field_schema {
             record.name = Name::from(format!("r{}", list.element_field.id).as_str());
@@ -133,8 +150,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
         key_value: AvroSchemaOrField,
         value: AvroSchemaOrField,
     ) -> Result<AvroSchemaOrField> {
-        let key_field_schema = key_value.unwrap_left();
-        let mut value_field_schema = value.unwrap_left();
+        let key_field_schema = key_value.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?;
+        let mut value_field_schema = value.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?;
         if !map.value_field.required {
             value_field_schema = avro_optional(value_field_schema)?;
         }
@@ -219,7 +242,13 @@ pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Res
         schema: name.to_string(),
     };
 
-    visit_schema(schema, &mut converter).map(Either::unwrap_left)
+    match visit_schema(schema, &mut converter) {
+        Ok(s) => Ok(s.left().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            "value expected to be schema",
+        ))?),
+        Err(e) => Err(e),
+    }
 }
 
 fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSchema> {
@@ -361,10 +390,12 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
             let optional = is_avro_optional(&avro_field.schema);
 
+            let typ = typ.ok_or(Error::new(ErrorKind::Unexpected, "field type None"))?;
+
             let mut field = if optional {
-                NestedField::optional(field_id as i32, &avro_field.name, typ.unwrap())
+                NestedField::optional(field_id as i32, &avro_field.name, typ)
             } else {
-                NestedField::required(field_id as i32, &avro_field.name, typ.unwrap())
+                NestedField::required(field_id as i32, &avro_field.name, typ)
             };
 
             if let Some(doc) = &avro_field.doc {
@@ -397,17 +428,23 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         }
 
         if options.len() == 1 {
-            Ok(Some(options.remove(0).unwrap()))
+            Ok(Some(options.remove(0).ok_or(Error::new(
+                ErrorKind::Unexpected,
+                "type removed is None",
+            ))?))
         } else {
-            Ok(Some(options.remove(1).unwrap()))
+            Ok(Some(options.remove(1).ok_or(Error::new(
+                ErrorKind::Unexpected,
+                "type removed is None",
+            ))?))
         }
     }
 
     fn array(&mut self, array: &AvroSchema, item: Option<Type>) -> Result<Self::T> {
         if let AvroSchema::Array(item_schema) = array {
-            let element_field = NestedField::list_element(
+            let element_field: std::sync::Arc<NestedField> = NestedField::list_element(
                 self.next_field_id(),
-                item.unwrap(),
+                item.ok_or(Error::new(ErrorKind::Unexpected, "item should not be None"))?,
                 !is_avro_optional(item_schema),
             )
             .into();
@@ -430,7 +467,10 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             );
             let value_field = NestedField::map_value_element(
                 self.next_field_id(),
-                value.unwrap(),
+                value.ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    "valud should not be None",
+                ))?,
                 !is_avro_optional(value_schema),
             );
             Ok(Some(Type::Map(MapType {
@@ -705,7 +745,7 @@ mod tests {
             "field-id": 100
         }
     ]
-}            
+}
 "#,
             )
             .unwrap()
@@ -768,7 +808,7 @@ mod tests {
             "field-id": 100
         }
     ]
-}            
+}
 "#,
             )
             .unwrap()
@@ -915,7 +955,7 @@ mod tests {
             "type": "string"
         }
     ]
-}               
+}
 "#,
             )
             .unwrap()
