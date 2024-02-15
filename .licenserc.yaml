@@ -29,4 +29,6 @@ header:
     - 'website/book'
     # Generated content by scripts
     - '**/DEPENDENCIES.*.tsv'
+    # Release distributions
+    - 'dist/*'
   comment: on-failure
