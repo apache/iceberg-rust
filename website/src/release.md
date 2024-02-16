@@ -169,7 +169,7 @@ First, checkout Iceberg to local directory:
 
 ```shell
 # As this step will copy all the versions, it will take some time. If the network is broken, please use svn cleanup to delete the lock before re-execute it.
-svn co https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust iceberg-dist-dev
+svn co https://dist.apache.org/repos/dist/dev/iceberg/ /tmp/iceberg-dist-dev
 ```
 
 Then, upload the artifacts:
@@ -177,11 +177,12 @@ Then, upload the artifacts:
 > The `${release_version}` here should be like `0.2.0-rc.1`
 
 ```shell
-cd iceberg-dist-dev
 # create a directory named by version
-mkdir ${release_version}
+mkdir /tmp/iceberg-dist-dev/${release_version}
 # copy source code and signature package to the versioned directory
-cp ${repo_dir}/dist/* ${release_version}/
+cp ${repo_dir}/dist/* /tmp/iceberg-dist-dev/iceberg-rust-${release_version}/
+# change dir to the svn folder
+cd /tmp/iceberg-dist-dev/
 # check svn status
 svn status
 # add to svn
@@ -222,7 +223,7 @@ The tag to be voted on is ${iceberg_version}.
 
 The release candidate:
 
-https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust/${release_version}/
+https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust-${release_version}/
 
 Keys to verify the release candidate:
 
