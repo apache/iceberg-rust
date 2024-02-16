@@ -215,9 +215,9 @@ pub struct InputFile {
 }
 
 /// Trait for reading file.
-pub trait FileRead: AsyncRead + AsyncSeek {}
+pub trait FileRead: AsyncRead + AsyncSeek + Send + Unpin {}
 
-impl<T> FileRead for T where T: AsyncRead + AsyncSeek {}
+impl<T> FileRead for T where T: AsyncRead + AsyncSeek + Send + Unpin {}
 
 impl InputFile {
     /// Absolute path to root uri.

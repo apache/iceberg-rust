@@ -36,6 +36,7 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bimap = { workspace = true }
 bitvec = { workspace = true }
+bytes ={ workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
 either = { workspace = true }
@@ -49,6 +50,7 @@ opendal = { workspace = true }
 ordered-float = { workspace = true }
 reqwest = { workspace = true }
 rust_decimal = { workspace = true }
+parquet ={ workspace = true, features = ["async"] }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_derive = { workspace = true }

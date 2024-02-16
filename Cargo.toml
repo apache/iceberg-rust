@@ -36,6 +36,7 @@ arrow-schema = { version = ">=46" }
 async-trait = "0.1"
 bimap = "0.6"
 bitvec = "1.0.1"
+bytes = "1.5.0"
 chrono = "0.4"
 derive_builder = "0.13.0"
 either = "1"
@@ -53,6 +54,7 @@ opendal = "0.44"
 ordered-float = "4.0.0"
 pretty_assertions = "1.4.0"
 port_scanner = "0.1.5"
+parquet = "50.0.0"
 reqwest = { version = "^0.11", features = ["json"] }
 rust_decimal = "1.31.0"
 serde = { version = "^1.0", features = ["rc"] }

@@ -855,6 +855,11 @@ impl ManifestEntry {
         self.data_file.content
     }
 
+    /// Return data file 
+    pub fn data_file(&self) -> &DataFile {
+        &self.data_file
+    }
+
     /// Data file path of this manifest entry.
     pub fn file_path(&self) -> &str {
         &self.data_file.file_path
@@ -934,11 +939,11 @@ pub struct DataFile {
     /// field id: 100
     ///
     /// Full URI for the file with FS scheme
-    file_path: String,
+    pub(crate) file_path: String,
     /// field id: 101
     ///
     /// String file format name, avro, orc or parquet
-    file_format: DataFileFormat,
+    pub(crate) file_format: DataFileFormat,
     /// field id: 102
     ///
     /// Partition data tuple, schema based on the partition spec output using
