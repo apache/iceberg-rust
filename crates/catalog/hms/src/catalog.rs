@@ -31,11 +31,12 @@ use typed_builder::TypedBuilder;
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum HmsThriftTransport {
     /// Use the framed transport
     Framed,
     /// Use the buffered transport (default)
+    #[default]
     Buffered,
 }
 
