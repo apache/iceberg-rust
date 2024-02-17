@@ -118,13 +118,6 @@ impl Snapshot {
         &self.manifest_list
     }
 
-    /// Return the manifest list file path.
-    ///
-    /// It will return an error if the manifest list is not a file but a list of manifest file paths.
-    #[inline]
-    pub fn manifest_list_file_path(&self) -> &str {
-        &self.manifest_list
-    }
     /// Get summary of the snapshot
     #[inline]
     pub fn summary(&self) -> &Summary {
