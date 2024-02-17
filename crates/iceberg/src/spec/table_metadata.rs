@@ -1104,7 +1104,7 @@ mod tests {
             .with_timestamp_ms(1662532818843)
             .with_sequence_number(0)
             .with_schema_id(0)
-            .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro".to_string())
+            .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
             .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
             .build();
 
@@ -1228,7 +1228,7 @@ mod tests {
             .with_snapshot_id(3051729675574597004)
             .with_timestamp_ms(1515100955770)
             .with_sequence_number(0)
-            .with_manifest_list("s3://a/b/1.avro".to_string())
+            .with_manifest_list("s3://a/b/1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
                 other: HashMap::new(),
@@ -1241,7 +1241,7 @@ mod tests {
             .with_timestamp_ms(1555100955770)
             .with_sequence_number(1)
             .with_schema_id(1)
-            .with_manifest_list("s3://a/b/2.avro".to_string())
+            .with_manifest_list("s3://a/b/2.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
                 other: HashMap::new(),

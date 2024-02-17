@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(vec![&Arc::new(Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
             .with_timestamp_ms(1646787054459)
-            .with_manifest_list("s3://warehouse/database/table/metadata/snap-3497810964824022504-1-c4f68204-666b-4e50-a9df-b10c34bf6b82.avro".to_string())
+            .with_manifest_list("s3://warehouse/database/table/metadata/snap-3497810964824022504-1-c4f68204-666b-4e50-a9df-b10c34bf6b82.avro")
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_summary(Summary {

@@ -403,7 +403,7 @@ mod tests {
             fixture
                 .table
                 .file_io()
-                .new_output(current_snapshot.manifest_list_file_path().unwrap())
+                .new_output(current_snapshot.manifest_list_file_path())
                 .unwrap(),
             current_snapshot.snapshot_id(),
             current_snapshot

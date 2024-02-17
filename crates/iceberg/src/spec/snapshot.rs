@@ -84,6 +84,8 @@ pub struct Snapshot {
     timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
+    /// Currently we only support manifest list file, and manifest files are not supported.
+    #[builder(setter(into))]
     manifest_list: String,
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
@@ -112,7 +114,7 @@ impl Snapshot {
     }
     /// Get location of manifest_list file
     #[inline]
-    pub fn manifest_list(&self) -> &String {
+    pub fn manifest_list(&self) -> &str {
         &self.manifest_list
     }
 
@@ -120,8 +122,8 @@ impl Snapshot {
     ///
     /// It will return an error if the manifest list is not a file but a list of manifest file paths.
     #[inline]
-    pub fn manifest_list_file_path(&self) -> Result<&str> {
-        Ok(&self.manifest_list)
+    pub fn manifest_list_file_path(&self) -> &str {
+        &self.manifest_list
     }
     /// Get summary of the snapshot
     #[inline]
@@ -213,7 +215,7 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
 
     use crate::spec::SchemaId;
-    use crate::{Error, ErrorKind};
+    use crate::Error;
 
     use super::{Operation, Snapshot, Summary};
 
@@ -242,6 +244,8 @@ pub(super) mod _serde {
         pub timestamp_ms: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub manifest_list: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub manifests: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub summary: Option<Summary>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -285,15 +289,11 @@ pub(super) mod _serde {
                 parent_snapshot_id: v1.parent_snapshot_id,
                 sequence_number: 0,
                 timestamp_ms: v1.timestamp_ms,
-                manifest_list: match v1.manifest_list {
-                    Some(file) => file,
-                    None => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Neither manifestlist file or manifest files are provided.",
-                        ))
-                    }
-                },
+                manifest_list: match (v1.manifest_list, v1.manifests) {
+                    (Some(file), None) => file,
+                    (Some(_), Some(_)) => "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted".to_string(),
+                    (None, _) => "Unsupported v1 snapshot, only manifest list is supported".to_string()
+                   },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
                     other: HashMap::new(),
@@ -305,14 +305,14 @@ pub(super) mod _serde {
 
     impl From<Snapshot> for SnapshotV1 {
         fn from(v2: Snapshot) -> Self {
-            let manifest_list = Some(v2.manifest_list);
             SnapshotV1 {
                 snapshot_id: v2.snapshot_id,
                 parent_snapshot_id: v2.parent_snapshot_id,
                 timestamp_ms: v2.timestamp_ms,
-                manifest_list,
+                manifest_list: Some(v2.manifest_list),
                 summary: Some(v2.summary),
                 schema_id: v2.schema_id,
+                manifests: None,
             }
         }
     }
