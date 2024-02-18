@@ -48,7 +48,6 @@ impl SchemaVisitor for SchemaToAvroSchema {
     type T = AvroSchemaOrField;
 
     fn schema(&mut self, _schema: &Schema, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
-        // value should never be None
         let mut avro_schema = value.unwrap_left();
 
         if let AvroSchema::Record(record) = &mut avro_schema {
@@ -68,10 +67,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
         field: &NestedFieldRef,
         avro_schema: AvroSchemaOrField,
     ) -> Result<AvroSchemaOrField> {
-        let mut field_schema = avro_schema.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))?;
+        let mut field_schema = avro_schema.unwrap_left();
         if let AvroSchema::Record(record) = &mut field_schema {
             record.name = Name::from(format!("r{}", field.id).as_str());
         }
@@ -107,15 +103,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
         _struct: &StructType,
         results: Vec<AvroSchemaOrField>,
     ) -> Result<AvroSchemaOrField> {
-        let avro_fields = results
-            .into_iter()
-            .map(|r| {
-                r.right().ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "result should be avro record field",
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let avro_fields = results.into_iter().map(|r| r.unwrap_right()).collect_vec();
 
         Ok(Either::Left(
             // The name of this record schema should be determined later, by schema name or field
@@ -125,10 +113,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
     }
 
     fn list(&mut self, list: &ListType, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
-        let mut field_schema = value.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))?;
+        let mut field_schema = value.unwrap_left();
 
         if let AvroSchema::Record(record) = &mut field_schema {
             record.name = Name::from(format!("r{}", list.element_field.id).as_str());
@@ -148,14 +133,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
         key_value: AvroSchemaOrField,
         value: AvroSchemaOrField,
     ) -> Result<AvroSchemaOrField> {
-        let key_field_schema = key_value.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))?;
-        let mut value_field_schema = value.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))?;
+        let key_field_schema = key_value.unwrap_left();
+        let mut value_field_schema = value.unwrap_left();
         if !map.value_field.required {
             value_field_schema = avro_optional(value_field_schema)?;
         }
@@ -240,12 +219,7 @@ pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Res
         schema: name.to_string(),
     };
 
-    visit_schema(schema, &mut converter).and_then(|s| {
-        s.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))
-    })
+    visit_schema(schema, &mut converter).map(Either::unwrap_left)
 }
 
 fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSchema> {
@@ -387,15 +361,10 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let typ = typ.ok_or(Error::new(
-                ErrorKind::Unexpected,
-                "Field type should not be None",
-            ))?;
-
             let mut field = if optional {
-                NestedField::optional(field_id as i32, &avro_field.name, typ)
+                NestedField::optional(field_id as i32, &avro_field.name, typ.unwrap())
             } else {
-                NestedField::required(field_id as i32, &avro_field.name, typ)
+                NestedField::required(field_id as i32, &avro_field.name, typ.unwrap())
             };
 
             if let Some(doc) = &avro_field.doc {
