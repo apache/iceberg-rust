@@ -48,10 +48,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
     type T = AvroSchemaOrField;
 
     fn schema(&mut self, _schema: &Schema, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
-        let mut avro_schema = value.left().ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "value expected to be schema",
-        ))?;
+        // value should never be None
+        let mut avro_schema = value.unwrap_left();
 
         if let AvroSchema::Record(record) = &mut avro_schema {
             record.name = Name::from(self.schema.as_str());
@@ -242,13 +240,12 @@ pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Res
         schema: name.to_string(),
     };
 
-    match visit_schema(schema, &mut converter) {
-        Ok(s) => Ok(s.left().ok_or(Error::new(
+    visit_schema(schema, &mut converter).and_then(|s| {
+        s.left().ok_or(Error::new(
             ErrorKind::Unexpected,
             "value expected to be schema",
-        ))?),
-        Err(e) => Err(e),
-    }
+        ))
+    })
 }
 
 fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSchema> {
@@ -390,7 +387,10 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let typ = typ.ok_or(Error::new(ErrorKind::Unexpected, "field type None"))?;
+            let typ = typ.ok_or(Error::new(
+                ErrorKind::Unexpected,
+                "Field type should not be None",
+            ))?;
 
             let mut field = if optional {
                 NestedField::optional(field_id as i32, &avro_field.name, typ)
@@ -428,15 +428,9 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         }
 
         if options.len() == 1 {
-            Ok(Some(options.remove(0).ok_or(Error::new(
-                ErrorKind::Unexpected,
-                "type removed is None",
-            ))?))
+            Ok(Some(options.remove(0).unwrap()))
         } else {
-            Ok(Some(options.remove(1).ok_or(Error::new(
-                ErrorKind::Unexpected,
-                "type removed is None",
-            ))?))
+            Ok(Some(options.remove(1).unwrap()))
         }
     }
 
@@ -444,7 +438,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         if let AvroSchema::Array(item_schema) = array {
             let element_field = NestedField::list_element(
                 self.next_field_id(),
-                item.ok_or(Error::new(ErrorKind::Unexpected, "item should not be None"))?,
+                item.unwrap(),
                 !is_avro_optional(item_schema),
             )
             .into();
@@ -467,10 +461,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             );
             let value_field = NestedField::map_value_element(
                 self.next_field_id(),
-                value.ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "valud should not be None",
-                ))?,
+                value.unwrap(),
                 !is_avro_optional(value_schema),
             );
             Ok(Some(Type::Map(MapType {
@@ -540,10 +531,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
     if let AvroSchema::Record(_) = avro_schema {
         let mut converter = AvroSchemaToSchema { next_id: 0 };
-        let typ = visit(avro_schema, &mut converter)?.ok_or(Error::new(
-            ErrorKind::Unexpected,
-            "Iceberg schema should not be none.",
-        ))?;
+        let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
         if let Type::Struct(s) = typ {
             Schema::builder()
                 .with_fields(s.fields().iter().cloned())

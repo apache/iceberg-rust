@@ -210,8 +210,10 @@ impl TableMetadata {
     /// Get current snapshot
     #[inline]
     pub fn current_snapshot(&self) -> Option<&SnapshotRef> {
-        self.current_snapshot_id
-            .and_then(|s| self.snapshot_by_id(s))
+        self.current_snapshot_id.map(|s| {
+            self.snapshot_by_id(s)
+                .expect("Current snapshot id has been set, but doesn't exist in metadata")
+        })
     }
 
     /// Return all sort orders.
