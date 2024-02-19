@@ -429,7 +429,6 @@ pub enum TableUpdate {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::ManifestListLocation::ManifestListFile;
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
@@ -911,7 +910,7 @@ mod tests {
                 .with_parent_snapshot_id(Some(3051729675574597000))
                 .with_timestamp_ms(1555100955770)
                 .with_sequence_number(1)
-                .with_manifest_list(ManifestListFile("s3://a/b/2.avro".to_string()))
+                .with_manifest_list("s3://a/b/2.avro")
                 .with_schema_id(1)
                 .with_summary(Summary {
                     operation: Operation::Append,
