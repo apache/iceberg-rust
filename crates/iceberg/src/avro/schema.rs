@@ -705,7 +705,7 @@ mod tests {
             "field-id": 100
         }
     ]
-}            
+}
 "#,
             )
             .unwrap()
@@ -768,7 +768,7 @@ mod tests {
             "field-id": 100
         }
     ]
-}            
+}
 "#,
             )
             .unwrap()
@@ -915,7 +915,7 @@ mod tests {
             "type": "string"
         }
     ]
-}               
+}
 "#,
             )
             .unwrap()

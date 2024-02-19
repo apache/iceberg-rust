@@ -160,7 +160,10 @@ impl<'a> ReplaceSortOrderAction<'a> {
                     .table
                     .metadata()
                     .default_sort_order()
-                    .expect("default sort order impossible to be None")
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "default sort order impossible to be none",
+                    ))?
                     .order_id,
             },
         ];

@@ -136,7 +136,7 @@ impl SchemaBuilder {
         id_to_field: &HashMap<i32, NestedFieldRef>,
         identifier_field_ids: impl Iterator<Item = i32>,
     ) -> Result<()> {
-        let id_to_parent = index_parents(r#struct);
+        let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
                 Error::new(
@@ -406,7 +406,7 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
 }
 
 /// Creates a field id to parent field id map.
-pub fn index_parents(r#struct: &StructType) -> HashMap<i32, i32> {
+pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
     struct IndexByParent {
         parents: Vec<i32>,
         result: HashMap<i32, i32>,
@@ -487,8 +487,8 @@ pub fn index_parents(r#struct: &StructType) -> HashMap<i32, i32> {
         parents: vec![],
         result: HashMap::new(),
     };
-    visit_struct(r#struct, &mut index).unwrap();
-    index.result
+    visit_struct(r#struct, &mut index)?;
+    Ok(index.result)
 }
 
 #[derive(Default)]
@@ -971,13 +971,13 @@ mod tests {
 
     #[test]
     fn test_schema_display() {
-        let expected_str = r#"
+        let expected_str = "
 table {
-  1: foo: optional string 
-  2: bar: required int 
-  3: baz: optional boolean 
+  1: foo: optional string\x20
+  2: bar: required int\x20
+  3: baz: optional boolean\x20
 }
-"#;
+";
 
         assert_eq!(expected_str, format!("\n{}", table_schema_simple().0));
     }
