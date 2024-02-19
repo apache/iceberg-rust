@@ -41,7 +41,7 @@ use self::_serde::{
     RenameTableRequest, NO_CONTENT, OK,
 };
 
-const ICEBERG_REST_SPEC_VERSION: &str = "1.14";
+const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
