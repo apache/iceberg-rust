@@ -54,6 +54,7 @@ use crate::{error::Result, Error, ErrorKind};
 use futures::{AsyncRead, AsyncSeek, AsyncWrite};
 use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
+use tokio::io::{AsyncRead as TokioAsyncRead, AsyncSeek as TokioAsyncSeek};
 use url::Url;
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -215,9 +216,12 @@ pub struct InputFile {
 }
 
 /// Trait for reading file.
-pub trait FileRead: AsyncRead + AsyncSeek {}
+pub trait FileRead: AsyncRead + AsyncSeek + Send + Unpin + TokioAsyncRead + TokioAsyncSeek {}
 
-impl<T> FileRead for T where T: AsyncRead + AsyncSeek {}
+impl<T> FileRead for T where
+    T: AsyncRead + AsyncSeek + Send + Unpin + TokioAsyncRead + TokioAsyncSeek
+{
+}
 
 impl InputFile {
     /// Absolute path to root uri.
