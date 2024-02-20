@@ -17,20 +17,19 @@
 
 //! Catalog API for Apache Iceberg
 
-use serde_derive::{Deserialize, Serialize};
-use urlencoding::encode;
-
 use crate::spec::{
     FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
+use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::mem::take;
 use std::ops::Deref;
 use typed_builder::TypedBuilder;
+use urlencoding::encode;
 use uuid::Uuid;
 
 /// The catalog API for Iceberg Rust.
@@ -866,7 +865,7 @@ mod tests {
                         .transform(Transform::Bucket(4))
                         .build(),
                 )
-                .build()
+                .build_unbound()
                 .unwrap(),
         };
 

@@ -140,12 +140,13 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
     /// Finished building the action and apply it to the transaction.
     pub fn apply(mut self) -> Result<Transaction<'a>> {
+        let unbound_sort_order = SortOrder::builder()
+            .with_fields(self.sort_fields)
+            .build_unbound()?;
+
         let updates = vec![
             TableUpdate::AddSortOrder {
-                sort_order: SortOrder {
-                    fields: self.sort_fields,
-                    ..SortOrder::default()
-                },
+                sort_order: unbound_sort_order,
             },
             TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
         ];

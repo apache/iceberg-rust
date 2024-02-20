@@ -1285,7 +1285,7 @@ mod tests {
                             .null_order(NullOrder::First)
                             .build(),
                     )
-                    .build()
+                    .build_unbound()
                     .unwrap(),
             )
             .build();
