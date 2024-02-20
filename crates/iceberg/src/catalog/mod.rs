@@ -27,6 +27,7 @@ use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::mem::take;
 use std::ops::Deref;
 use typed_builder::TypedBuilder;
@@ -34,7 +35,7 @@ use uuid::Uuid;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
-pub trait Catalog: std::fmt::Debug {
+pub trait Catalog: Debug + Sync + Send {
     /// List namespaces from table.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
         -> Result<Vec<NamespaceIdent>>;
