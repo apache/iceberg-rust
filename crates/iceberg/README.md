@@ -25,7 +25,3 @@
 This crate contains the official Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
 See the [API documentation](https://docs.rs/iceberg/latest) for examples and the full API.
-
-## License
-
-Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.
