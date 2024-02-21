@@ -22,6 +22,6 @@
 [![crates.io](https://img.shields.io/crates/v/iceberg.svg)](https://crates.io/crates/iceberg)
 [![docs.rs](https://img.shields.io/docsrs/iceberg.svg)](https://docs.rs/iceberg/latest/iceberg/)
 
-This crate contains the official Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
+This crate contains the official Native Rust implementation of [Apache Iceberg](https://rust.iceberg.apache.org/).
 
 See the [API documentation](https://docs.rs/iceberg/latest) for examples and the full API.
