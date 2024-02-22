@@ -26,7 +26,7 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 
 use self::{
     _const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
-    _serde::{ManifestListEntryV1, ManifestListEntryV2},
+    _serde::{ManifestFileV1, ManifestFileV2},
 };
 
 use super::{FormatVersion, Manifest, StructType};
@@ -51,7 +51,7 @@ pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManifestList {
     /// Entries in a manifest list.
-    entries: Vec<ManifestListEntry>,
+    entries: Vec<ManifestFile>,
 }
 
 impl ManifestList {
@@ -76,7 +76,7 @@ impl ManifestList {
     }
 
     /// Get the entries in the manifest list.
-    pub fn entries(&self) -> &[ManifestListEntry] {
+    pub fn entries(&self) -> &[ManifestFile] {
         &self.entries
     }
 }
@@ -168,12 +168,12 @@ impl ManifestListWriter {
     /// Append manifest entries to be written.
     pub fn add_manifest_entries(
         &mut self,
-        manifest_entries: impl Iterator<Item = ManifestListEntry>,
+        manifest_entries: impl Iterator<Item = ManifestFile>,
     ) -> Result<()> {
         match self.format_version {
             FormatVersion::V1 => {
                 for manifest_entry in manifest_entries {
-                    let manifest_entry: ManifestListEntryV1 = manifest_entry.try_into()?;
+                    let manifest_entry: ManifestFileV1 = manifest_entry.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
@@ -203,7 +203,7 @@ impl ManifestListWriter {
                         }
                         manifest_entry.min_sequence_number = self.sequence_number;
                     }
-                    let manifest_entry: ManifestListEntryV2 = manifest_entry.try_into()?;
+                    let manifest_entry: ManifestFileV2 = manifest_entry.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
@@ -503,7 +503,7 @@ mod _const_schema {
 
 /// Entry in a manifest list.
 #[derive(Debug, PartialEq, Clone)]
-pub struct ManifestListEntry {
+pub struct ManifestFile {
     /// field: 500
     ///
     /// Location of the manifest file
@@ -630,7 +630,7 @@ impl TryFrom<i32> for ManifestContentType {
     }
 }
 
-impl ManifestListEntry {
+impl ManifestFile {
     /// Load [`Manifest`].
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
@@ -679,9 +679,9 @@ pub struct FieldSummary {
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
-/// For deserialization the input first gets read into either the [ManifestListEntryV1] or [ManifestListEntryV2] struct
-/// and then converted into the [ManifestListEntry] struct. Serialization works the other way around.
-/// [ManifestListEntryV1] and [ManifestListEntryV2] are internal struct that are only used for serialization and deserialization.
+/// For deserialization the input first gets read into either the [ManifestFileV1] or [ManifestFileV2] struct
+/// and then converted into the [ManifestFile] struct. Serialization works the other way around.
+/// [ManifestFileV1] and [ManifestFileV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
     use crate::{
         spec::{Literal, StructType, Type},
@@ -690,19 +690,19 @@ pub(super) mod _serde {
     pub use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize, Serialize};
 
-    use super::ManifestListEntry;
+    use super::ManifestFile;
     use crate::error::Result;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(transparent)]
     pub(crate) struct ManifestListV2 {
-        entries: Vec<ManifestListEntryV2>,
+        entries: Vec<ManifestFileV2>,
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(transparent)]
     pub(crate) struct ManifestListV1 {
-        entries: Vec<ManifestListEntryV1>,
+        entries: Vec<ManifestFileV1>,
     }
 
     impl ManifestListV2 {
@@ -790,7 +790,7 @@ pub(super) mod _serde {
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-    pub(super) struct ManifestListEntryV1 {
+    pub(super) struct ManifestFileV1 {
         pub manifest_path: String,
         pub manifest_length: i64,
         pub partition_spec_id: i32,
@@ -806,7 +806,7 @@ pub(super) mod _serde {
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-    pub(super) struct ManifestListEntryV2 {
+    pub(super) struct ManifestFileV2 {
         pub manifest_path: String,
         pub manifest_length: i64,
         pub partition_spec_id: i32,
@@ -885,12 +885,12 @@ pub(super) mod _serde {
         }
     }
 
-    impl ManifestListEntryV2 {
-        /// Converts the [ManifestListEntryV2] into a [ManifestListEntry].
+    impl ManifestFileV2 {
+        /// Converts the [ManifestFileV2] into a [ManifestFile].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestListEntry> {
+        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestFile> {
             let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
-            Ok(ManifestListEntry {
+            Ok(ManifestFile {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
                 partition_spec_id: self.partition_spec_id,
@@ -910,12 +910,12 @@ pub(super) mod _serde {
         }
     }
 
-    impl ManifestListEntryV1 {
-        /// Converts the [ManifestListEntryV1] into a [ManifestListEntry].
+    impl ManifestFileV1 {
+        /// Converts the [MManifestFileV1] into a [ManifestFile].
         /// The convert of [partitions] need the partition_type info so use this function instead of [std::TryFrom] trait.
-        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestListEntry> {
+        pub fn try_into(self, partition_type: Option<&StructType>) -> Result<ManifestFile> {
             let partitions = try_convert_to_field_summary(self.partitions, partition_type)?;
-            Ok(ManifestListEntry {
+            Ok(ManifestFile {
                 manifest_path: self.manifest_path,
                 manifest_length: self.manifest_length,
                 partition_spec_id: self.partition_spec_id,
@@ -977,10 +977,10 @@ pub(super) mod _serde {
         }
     }
 
-    impl TryFrom<ManifestListEntry> for ManifestListEntryV2 {
+    impl TryFrom<ManifestFile> for ManifestFileV2 {
         type Error = Error;
 
-        fn try_from(value: ManifestListEntry) -> std::result::Result<Self, Self::Error> {
+        fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
             let partitions = convert_to_serde_field_summary(value.partitions);
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
@@ -996,7 +996,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "added_data_files_count in ManifestListEntryV2 should be require",
+                            "added_data_files_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1005,7 +1005,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "existing_data_files_count in ManifestListEntryV2 should be require",
+                            "existing_data_files_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1014,7 +1014,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "deleted_data_files_count in ManifestListEntryV2 should be require",
+                            "deleted_data_files_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1023,7 +1023,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "added_rows_count in ManifestListEntryV2 should be require",
+                            "added_rows_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1032,7 +1032,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "existing_rows_count in ManifestListEntryV2 should be require",
+                            "existing_rows_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1041,7 +1041,7 @@ pub(super) mod _serde {
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
-                            "deleted_rows_count in ManifestListEntryV2 should be require",
+                            "deleted_rows_count in ManifestFileV2 should be require",
                         )
                     })?
                     .try_into()?,
@@ -1051,10 +1051,10 @@ pub(super) mod _serde {
         }
     }
 
-    impl TryFrom<ManifestListEntry> for ManifestListEntryV1 {
+    impl TryFrom<ManifestFile> for ManifestFileV1 {
         type Error = Error;
 
-        fn try_from(value: ManifestListEntry) -> std::result::Result<Self, Self::Error> {
+        fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
             let partitions = convert_to_serde_field_summary(value.partitions);
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
@@ -1100,7 +1100,7 @@ mod test {
         io::FileIOBuilder,
         spec::{
             manifest_list::{_serde::ManifestListV1, UNASSIGNED_SEQUENCE_NUMBER},
-            FieldSummary, Literal, ManifestContentType, ManifestList, ManifestListEntry,
+            FieldSummary, Literal, ManifestContentType, ManifestFile, ManifestList,
             ManifestListWriter, NestedField, PrimitiveType, StructType, Type,
         },
     };
@@ -1111,7 +1111,7 @@ mod test {
     async fn test_parse_manifest_list_v1() {
         let manifest_list = ManifestList {
             entries: vec![
-                ManifestListEntry {
+                ManifestFile {
                     manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                     manifest_length: 5806,
                     partition_spec_id: 0,
@@ -1161,7 +1161,7 @@ mod test {
     async fn test_parse_manifest_list_v2() {
         let manifest_list = ManifestList {
             entries: vec![
-                ManifestListEntry {
+                ManifestFile {
                     manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                     manifest_length: 6926,
                     partition_spec_id: 1,
@@ -1178,7 +1178,7 @@ mod test {
                     partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
                     key_metadata: vec![],
                 },
-                ManifestListEntry {
+                ManifestFile {
                     manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m1.avro".to_string(),
                     manifest_length: 6926,
                     partition_spec_id: 2,
@@ -1249,7 +1249,7 @@ mod test {
     #[test]
     fn test_serialize_manifest_list_v1() {
         let manifest_list:ManifestListV1 = ManifestList {
-            entries: vec![ManifestListEntry {
+            entries: vec![ManifestFile {
                 manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                 manifest_length: 5806,
                 partition_spec_id: 0,
@@ -1277,7 +1277,7 @@ mod test {
     #[test]
     fn test_serialize_manifest_list_v2() {
         let manifest_list:ManifestListV2 = ManifestList {
-            entries: vec![ManifestListEntry {
+            entries: vec![ManifestFile {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
                 partition_spec_id: 1,
@@ -1305,7 +1305,7 @@ mod test {
     #[tokio::test]
     async fn test_manifest_list_writer_v1() {
         let expected_manifest_list = ManifestList {
-            entries: vec![ManifestListEntry {
+            entries: vec![ManifestFile {
                 manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                 manifest_length: 5806,
                 partition_spec_id: 1,
@@ -1361,7 +1361,7 @@ mod test {
         let snapshot_id = 377075049360453639;
         let seq_num = 1;
         let mut expected_manifest_list = ManifestList {
-            entries: vec![ManifestListEntry {
+            entries: vec![ManifestFile {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
                 partition_spec_id: 1,
@@ -1415,7 +1415,7 @@ mod test {
     #[tokio::test]
     async fn test_manifest_list_writer_v1_as_v2() {
         let expected_manifest_list = ManifestList {
-            entries: vec![ManifestListEntry {
+            entries: vec![ManifestFile {
                 manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                 manifest_length: 5806,
                 partition_spec_id: 1,

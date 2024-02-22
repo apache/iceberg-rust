@@ -19,7 +19,7 @@
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 
 use super::{
-    FieldSummary, FormatVersion, ManifestContentType, ManifestListEntry, PartitionSpec, Schema,
+    FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
     SchemaId, Struct, INITIAL_SEQUENCE_NUMBER,
 };
 use super::{Literal, UNASSIGNED_SEQUENCE_NUMBER};
@@ -196,7 +196,7 @@ impl ManifestWriter {
     }
 
     /// Write a manifest entry.
-    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestListEntry> {
+    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestFile> {
         // Create the avro writer
         let partition_type = manifest
             .metadata
@@ -302,7 +302,7 @@ impl ManifestWriter {
         let partition_summary =
             self.get_field_summary_vec(&manifest.metadata.partition_spec.fields);
 
-        Ok(ManifestListEntry {
+        Ok(ManifestFile {
             manifest_path: self.output.location().to_string(),
             manifest_length: length as i64,
             partition_spec_id: manifest.metadata.partition_spec.spec_id,
@@ -861,7 +861,7 @@ impl ManifestEntry {
     }
 
     /// Inherit data from manifest list, such as snapshot id, sequence number.
-    pub(crate) fn inherit_data(&mut self, snapshot_entry: &ManifestListEntry) {
+    pub(crate) fn inherit_data(&mut self, snapshot_entry: &ManifestFile) {
         if self.snapshot_id.is_none() {
             self.snapshot_id = Some(snapshot_entry.added_snapshot_id);
         }
@@ -1981,7 +1981,7 @@ mod tests {
     async fn test_manifest_read_write(
         manifest: Manifest,
         writer_builder: impl FnOnce(OutputFile) -> ManifestWriter,
-    ) -> ManifestListEntry {
+    ) -> ManifestFile {
         let (bs, res) = write_manifest(&manifest, writer_builder).await;
         let actual_manifest = Manifest::parse_avro(bs.as_slice()).unwrap();
 
@@ -1993,7 +1993,7 @@ mod tests {
     async fn write_manifest(
         manifest: &Manifest,
         writer_builder: impl FnOnce(OutputFile) -> ManifestWriter,
-    ) -> (Vec<u8>, ManifestListEntry) {
+    ) -> (Vec<u8>, ManifestFile) {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("test_manifest.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
