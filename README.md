@@ -42,7 +42,7 @@ Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 | GCS         | Not Started |
 | HDFS        | Not Started |
 
-Our `FileIO` is powered by [Apache OpenDAL](https://github.com/apache/incubator-opendal), so it would be quite easy to
+Our `FileIO` is powered by [Apache OpenDAL](https://github.com/apache/opendal), so it would be quite easy to
 expand to other service.
 
 ### Table API
