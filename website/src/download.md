@@ -17,14 +17,14 @@
   ~ under the License.
 -->
 
-# Apache Iceberg-Rust™ Downloads
+# Apache Iceberg™ Rust Downloads
 
 The official Apache Iceberg-Rust releases are provided as source artifacts.
 
 ## Releases
 
-The latest source release is [0.2.0](https://archive.apache.org/dist/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz) ([asc](https://archive.apache.org/dist/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz.asc),
-[sha512](https://archive.apache.org/dist/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz.sha512)).
+The latest source release is [0.2.0](https://www.apache.org/dyn/closer.lua/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz?action=download) ([asc](https://downloads.apache.org/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz.asc),
+[sha512](https://downloads.apache.org/iceberg/iceberg-rust-0.2.0/apache-iceberg-rust-0.2.0-src.tar.gz.sha512)).
 
 For older releases, please check the [archive](https://archive.apache.org/dist/iceberg/).
 
@@ -32,7 +32,7 @@ For older releases, please check the [archive](https://archive.apache.org/dist/i
 
 * When downloading a release, please verify the OpenPGP compatible signature (or failing that, check the SHA-512); these should be fetched from the main Apache site.
 * The KEYS file contains the public keys used for signing release. It is recommended that (when possible) a web of trust is used to confirm the identity of these keys.
-* Please download the [KEYS](https://archive.apache.org/dist/iceberg/KEYS) as well as the .asc signature files.
+* Please download the [KEYS](https://downloads.apache.org/iceberg/KEYS) as well as the .asc signature files.
 
 ### To verify the signature of the release artifact
 
