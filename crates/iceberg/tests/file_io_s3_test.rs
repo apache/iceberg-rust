@@ -22,8 +22,6 @@ use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg_test_utils::docker::DockerCompose;
-use port_scanner::scan_port_addr;
-use tokio::time::sleep;
 
 struct MinIOFixture {
     _docker_compose: DockerCompose,
@@ -39,14 +37,7 @@ impl MinIOFixture {
         docker.run();
         let container_ip = docker.get_container_ip("minio");
         let read_port = format!("{}:{}", container_ip, 9000);
-        loop {
-            if !scan_port_addr(&read_port) {
-                log::info!("Waiting 1s for MinIO to ready...");
-                sleep(std::time::Duration::from_millis(1000)).await;
-            } else {
-                break;
-            }
-        }
+
         MinIOFixture {
             _docker_compose: docker,
             file_io: FileIOBuilder::new("s3")

@@ -18,7 +18,7 @@
 version: '3'
 services:
   minio:
-    image: quay.io/minio/minio:latest
+    image: minio/minio:RELEASE.2024-02-26T09-33-48Z
     ports:
       - 9000
       - 9001

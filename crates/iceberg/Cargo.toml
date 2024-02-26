@@ -63,7 +63,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
-port_scanner = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
