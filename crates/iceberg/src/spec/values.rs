@@ -451,7 +451,7 @@ impl Datum {
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
     /// use iceberg::spec::{Literal, Datum};
-    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899").unwrap();
+    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899+00:00").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "2012-12-12 12:12:12.889900");
     /// ```
