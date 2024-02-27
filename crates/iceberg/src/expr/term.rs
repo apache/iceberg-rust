@@ -17,21 +17,21 @@
 
 //! Term definition.
 
-use crate::expr::{BinaryExpression, PredicateOperator, UnboundPredicate};
+use crate::expr::{BinaryExpression, Predicate, PredicateOperator};
 use crate::spec::{Datum, NestedField, NestedFieldRef};
 use std::fmt::{Display, Formatter};
 
 /// Unbound term before binding to a schema.
-pub type UnboundTerm = UnboundReference;
+pub type Term = Reference;
 
 /// A named reference in an unbound expression.
 /// For example, `a` in `a > 10`.
 #[derive(Debug, Clone)]
-pub struct UnboundReference {
+pub struct Reference {
     name: String,
 }
 
-impl UnboundReference {
+impl Reference {
     /// Create a new unbound reference.
     pub fn new(name: impl ToString) -> Self {
         Self {
@@ -45,21 +45,21 @@ impl UnboundReference {
     }
 }
 
-impl UnboundReference {
+impl Reference {
     /// Creates an less than expression. For example, `a < 10`.
     ///
     /// # Example
     ///
     /// ```rust
     ///
-    /// use iceberg::expr::UnboundReference;
+    /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// let expr = UnboundReference::new("a").less_than(Datum::long(10));
+    /// let expr = Reference::new("a").less_than(Datum::long(10));
     ///
     /// assert_eq!(&format!("{expr}"), "a < 10");
     /// ```
-    pub fn less_than(self, datum: Datum) -> UnboundPredicate {
-        UnboundPredicate::Binary(BinaryExpression::new(
+    pub fn less_than(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
             self,
             datum,
@@ -67,7 +67,7 @@ impl UnboundReference {
     }
 }
 
-impl Display for UnboundReference {
+impl Display for Reference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -78,7 +78,7 @@ impl Display for UnboundReference {
 pub struct BoundReference {
     // This maybe different from [`name`] filed in [`NestedField`] since this contains full path.
     // For example, if the field is `a.b.c`, then `field.name` is `c`, but `original_name` is `a.b.c`.
-    original_name: String,
+    column_name: String,
     field: NestedFieldRef,
 }
 
@@ -86,7 +86,7 @@ impl BoundReference {
     /// Creates a new bound reference.
     pub fn new(name: impl ToString, field: NestedFieldRef) -> Self {
         Self {
-            original_name: name.to_string(),
+            column_name: name.to_string(),
             field,
         }
     }
@@ -99,7 +99,7 @@ impl BoundReference {
 
 impl Display for BoundReference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.original_name)
+        write!(f, "{}", self.column_name)
     }
 }
 

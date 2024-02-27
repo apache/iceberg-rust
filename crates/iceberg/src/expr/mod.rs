@@ -20,6 +20,7 @@
 mod term;
 
 use std::fmt::{Display, Formatter};
+
 pub use term::*;
 mod predicate;
 pub use predicate::*;
@@ -27,21 +28,27 @@ pub use predicate::*;
 /// Predicate operators used in expressions.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy)]
+#[repr(u16)]
 pub enum PredicateOperator {
-    IsNull,
-    NotNull,
-    IsNan,
-    NotNan,
-    LessThan,
-    LessThanOrEq,
-    GreaterThan,
-    GreaterThanOrEq,
-    Eq,
-    NotEq,
-    In,
-    NotIn,
-    StartsWith,
-    NotStartsWith,
+    // Unary operators
+    IsNull = 101,
+    NotNull = 102,
+    IsNan = 103,
+    NotNan = 104,
+
+    // Binary operators
+    LessThan = 201,
+    LessThanOrEq = 202,
+    GreaterThan = 203,
+    GreaterThanOrEq = 204,
+    Eq = 205,
+    NotEq = 206,
+    StartsWith = 207,
+    NotStartsWith = 208,
+
+    // Set operators
+    In = 301,
+    NotIn = 302,
 }
 
 impl Display for PredicateOperator {
@@ -62,5 +69,75 @@ impl Display for PredicateOperator {
             PredicateOperator::StartsWith => write!(f, "STARTS WITH"),
             PredicateOperator::NotStartsWith => write!(f, "NOT STARTS WITH"),
         }
+    }
+}
+
+impl PredicateOperator {
+    /// Check if this operator is unary operator.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::PredicateOperator;
+    /// assert!(PredicateOperator::IsNull.unary());
+    /// ```
+    pub fn unary(self) -> bool {
+        (self as u16) < (PredicateOperator::LessThan as u16)
+    }
+
+    /// Check if this operator is binary operator.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::PredicateOperator;
+    /// assert!(PredicateOperator::LessThan.binary());
+    /// ```
+    pub fn binary(self) -> bool {
+        ((self as u16) > (PredicateOperator::NotNan as u16))
+            && ((self as u16) < (PredicateOperator::In as u16))
+    }
+
+    /// Check if this operator is set operator.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::PredicateOperator;
+    /// assert!(PredicateOperator::In.set());
+    /// ```
+    pub fn set(self) -> bool {
+        (self as u16) > (PredicateOperator::NotStartsWith as u16)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::expr::PredicateOperator;
+
+    #[test]
+    fn test_unary() {
+        assert!(PredicateOperator::IsNull.unary());
+        assert!(PredicateOperator::NotNull.unary());
+        assert!(PredicateOperator::IsNan.unary());
+        assert!(PredicateOperator::NotNan.unary());
+    }
+
+    #[test]
+    fn test_binary() {
+        assert!(PredicateOperator::LessThan.binary());
+        assert!(PredicateOperator::LessThanOrEq.binary());
+        assert!(PredicateOperator::GreaterThan.binary());
+        assert!(PredicateOperator::GreaterThanOrEq.binary());
+        assert!(PredicateOperator::Eq.binary());
+        assert!(PredicateOperator::NotEq.binary());
+        assert!(PredicateOperator::StartsWith.binary());
+        assert!(PredicateOperator::NotStartsWith.binary());
+    }
+
+    #[test]
+    fn test_set() {
+        assert!(PredicateOperator::In.set());
+        assert!(PredicateOperator::NotIn.set());
     }
 }

@@ -328,18 +328,18 @@ impl Datum {
     ///     888999  // microseconds
     ///  };
     ///
-    /// let t = Datum::time(micro_secs).unwrap();
+    /// let t = Datum::time_micros(micro_secs).unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "01:02:01.888999");
     /// assert_eq!(Literal::time(micro_secs), t.into());
     ///
     /// let negative_value = -100;
-    /// assert!(Datum::time(negative_value).is_err());
+    /// assert!(Datum::time_micros(negative_value).is_err());
     ///
     /// let too_large_value = 36 * 60 * 60 * 1_000_000; // Too large to fit in 24 hours.
-    /// assert!(Datum::time(too_large_value).is_err());
+    /// assert!(Datum::time_micros(too_large_value).is_err());
     /// ```
-    pub fn time(value: i64) -> Result<Self> {
+    pub fn time_micros(value: i64) -> Result<Self> {
         ensure_data_valid!(
             (0..=MAX_TIME_VALUE).contains(&value),
             "Invalid value for Time type: {}",
@@ -415,11 +415,11 @@ impl Datum {
     /// ```rust
     ///
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamp(1000);
+    /// let t = Datum::timestamp_micros(1000);
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001");
     /// ```
-    pub fn timestamp(value: i64) -> Self {
+    pub fn timestamp_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamp,
             literal: PrimitiveLiteral::Timestamp(value),
@@ -439,7 +439,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
     /// ```
     pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
-        Self::timestamp(dt.with_timezone(&Utc).timestamp_micros())
+        Self::timestamp_micros(dt.with_timezone(&Utc).timestamp_micros())
     }
 
     /// Parse a timestamp in RFC3339 format.
@@ -451,9 +451,9 @@ impl Datum {
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
     /// use iceberg::spec::{Literal, Datum};
-    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
+    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899").unwrap();
     ///
-    /// assert_eq!(&format!("{t}"), "2012-12-12 16:12:12.889900");
+    /// assert_eq!(&format!("{t}"), "2012-12-12 12:12:12.889900");
     /// ```
     pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
@@ -470,11 +470,11 @@ impl Datum {
     /// ```rust
     ///
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamptz(1000);
+    /// let t = Datum::timestamptz_micros(1000);
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001 UTC");
     /// ```
-    pub fn timestamptz(value: i64) -> Self {
+    pub fn timestamptz_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamptz,
             literal: PrimitiveLiteral::TimestampTZ(value),
@@ -493,7 +493,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
     /// ```
     pub fn timestamptz_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
-        Self::timestamptz(dt.with_timezone(&Utc).timestamp_micros())
+        Self::timestamptz_micros(dt.with_timezone(&Utc).timestamp_micros())
     }
 
     /// Similar to [`Datum::timestamp_from_str`], but return timestamp with timezone literal.
