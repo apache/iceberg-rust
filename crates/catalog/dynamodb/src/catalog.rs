@@ -36,13 +36,17 @@ use crate::utils::{from_sdk_error, SdkResultExt};
 static APP_NAME: &str = "iceberg_dynamodb";
 static PROVIDER_NAME: &str = "iceberg_dynamodb";
 
-// These attributes should be consistent with pyiceberg
+// These attributes should be consistent with Java iceberg and pyiceberg
+// https://github.com/apache/iceberg/blob/bd9c615d5d2fedb1a9fda6eb018017d0cc32f04e/aws/src/main/java/org/apache/iceberg/aws/dynamodb/DynamoDbCatalog.java#L95
+// https://github.com/apache/iceberg-python/blob/a1099d81f202a4ed0bdbf69674844868761d5c89/pyiceberg/catalog/dynamodb.py#L66
 static DEFAULT_DYNAMODB_TABLE_NAME: &str = "iceberg";
-static DYNAMODB_COL_IDENTIFIER: &str = "identifier";
-static DYNAMODB_COL_NAMESPACE: &str = "namespace";
-static _DYNAMODB_COL_VERSION: &str = "v";
-static _DYNAMODB_COL_UPDATED_AT: &str = "updated_at";
-static _DYNAMODB_COL_CREATED_AT: &str = "created_at";
+static COL_IDENTIFIER: &str = "identifier";
+static COL_NAMESPACE: &str = "namespace";
+static _COL_IDENTIFIER_NAMESPACE: &str = "NAMESPACE";
+static _COL_VERSION: &str = "v";
+static _COL_UPDATED_AT: &str = "updated_at";
+static _COL_CREATED_AT: &str = "created_at";
+static _PROPERTY_COL_PREFIX: &str = "p.";
 
 #[derive(Debug)]
 pub struct DynamoDBCatalog {
@@ -96,22 +100,22 @@ impl DynamoDBCatalog {
         }
 
         let col_identifier_ks = KeySchemaElement::builder()
-            .set_attribute_name(Some(DYNAMODB_COL_IDENTIFIER.to_string()))
+            .set_attribute_name(Some(COL_IDENTIFIER.to_string()))
             .set_key_type(Some(KeyType::Hash))
             .build()
             .wrap_err()?;
         let namespace_ks = KeySchemaElement::builder()
-            .set_attribute_name(Some(DYNAMODB_COL_NAMESPACE.to_string()))
+            .set_attribute_name(Some(COL_NAMESPACE.to_string()))
             .set_key_type(Some(KeyType::Range))
             .build()
             .wrap_err()?;
         let col_attribute = AttributeDefinition::builder()
-            .attribute_name(DYNAMODB_COL_IDENTIFIER.to_string())
+            .attribute_name(COL_IDENTIFIER.to_string())
             .attribute_type("S".into())
             .build()
             .wrap_err()?;
         let namespace_attribute = AttributeDefinition::builder()
-            .attribute_name(DYNAMODB_COL_NAMESPACE.to_string())
+            .attribute_name(COL_NAMESPACE.to_string())
             .attribute_type("S".into())
             .build()
             .wrap_err()?;
@@ -157,29 +161,34 @@ impl Catalog for DynamoDBCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        // does not support nested namespace
+        let mut condition = format!("{} = :identifier", COL_IDENTIFIER);
+
         if parent.is_some() {
-            return Ok(vec![]);
+            condition += &format!(" AND begins_with({},:ns)", COL_NAMESPACE);
         }
 
-        let output = self
+        let mut query = self
             .client
             .query()
             .table_name(&self.dynamodb_table_name)
             .consistent_read(true)
-            .key_condition_expression(format!("{} = :identifier", DYNAMODB_COL_IDENTIFIER))
+            .key_condition_expression(condition)
             .expression_attribute_values(
                 ":identifier",
-                AttributeValue::S(DYNAMODB_COL_NAMESPACE.to_string()),
-            )
-            .send()
-            .await
-            .wrap_err()?;
+                AttributeValue::S(COL_NAMESPACE.to_string()),
+            );
+
+        if let Some(namespace_ident) = parent {
+            query = query
+                .expression_attribute_values(":ns", AttributeValue::S(namespace_ident.to_string()));
+        }
+
+        let output = query.send().await.wrap_err()?;
 
         let mut namespace_idents = vec![];
         if let Some(items) = output.items {
             for item in items {
-                let namespace = item.get(DYNAMODB_COL_NAMESPACE).unwrap();
+                let namespace = item.get(COL_NAMESPACE).unwrap();
                 namespace_idents.push(NamespaceIdent::new(namespace.as_s().unwrap().into()));
             }
         }
