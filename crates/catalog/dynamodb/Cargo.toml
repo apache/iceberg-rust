@@ -1,0 +1,19 @@
+[package]
+name = "iceberg-catalog-dynamodb"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+rust-version = { workspace = true }
+
+categories = ["database"]
+description = "Apache Iceberg Dynamodb Metastore Catalog Support"
+repository = { workspace = true }
+license = { workspace = true }
+keywords = ["iceberg", "dynamodb", "catalog"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
+iceberg = { workspace = true }
