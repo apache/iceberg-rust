@@ -78,7 +78,7 @@ impl<T: Display> Display for UnaryExpression<T> {
 
 impl<T> UnaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T) -> Self {
-        debug_assert!(op.unary());
+        debug_assert!(op.is_unary());
         Self { op, term }
     }
 }
@@ -105,7 +105,7 @@ impl<T: Debug> Debug for BinaryExpression<T> {
 
 impl<T> BinaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
-        debug_assert!(op.binary());
+        debug_assert!(op.is_binary());
         Self { op, term, literal }
     }
 }

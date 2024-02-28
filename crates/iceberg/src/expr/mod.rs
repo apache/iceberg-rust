@@ -79,9 +79,9 @@ impl PredicateOperator {
     ///
     /// ```rust
     /// use iceberg::expr::PredicateOperator;
-    /// assert!(PredicateOperator::IsNull.unary());
+    /// assert!(PredicateOperator::IsNull.is_unary());
     /// ```
-    pub fn unary(self) -> bool {
+    pub fn is_unary(self) -> bool {
         (self as u16) < (PredicateOperator::LessThan as u16)
     }
 
@@ -91,9 +91,9 @@ impl PredicateOperator {
     ///
     /// ```rust
     /// use iceberg::expr::PredicateOperator;
-    /// assert!(PredicateOperator::LessThan.binary());
+    /// assert!(PredicateOperator::LessThan.is_binary());
     /// ```
-    pub fn binary(self) -> bool {
+    pub fn is_binary(self) -> bool {
         ((self as u16) > (PredicateOperator::NotNan as u16))
             && ((self as u16) < (PredicateOperator::In as u16))
     }
@@ -104,9 +104,9 @@ impl PredicateOperator {
     ///
     /// ```rust
     /// use iceberg::expr::PredicateOperator;
-    /// assert!(PredicateOperator::In.set());
+    /// assert!(PredicateOperator::In.is_set());
     /// ```
-    pub fn set(self) -> bool {
+    pub fn is_set(self) -> bool {
         (self as u16) > (PredicateOperator::NotStartsWith as u16)
     }
 }
@@ -117,27 +117,27 @@ mod tests {
 
     #[test]
     fn test_unary() {
-        assert!(PredicateOperator::IsNull.unary());
-        assert!(PredicateOperator::NotNull.unary());
-        assert!(PredicateOperator::IsNan.unary());
-        assert!(PredicateOperator::NotNan.unary());
+        assert!(PredicateOperator::IsNull.is_unary());
+        assert!(PredicateOperator::NotNull.is_unary());
+        assert!(PredicateOperator::IsNan.is_unary());
+        assert!(PredicateOperator::NotNan.is_unary());
     }
 
     #[test]
     fn test_binary() {
-        assert!(PredicateOperator::LessThan.binary());
-        assert!(PredicateOperator::LessThanOrEq.binary());
-        assert!(PredicateOperator::GreaterThan.binary());
-        assert!(PredicateOperator::GreaterThanOrEq.binary());
-        assert!(PredicateOperator::Eq.binary());
-        assert!(PredicateOperator::NotEq.binary());
-        assert!(PredicateOperator::StartsWith.binary());
-        assert!(PredicateOperator::NotStartsWith.binary());
+        assert!(PredicateOperator::LessThan.is_binary());
+        assert!(PredicateOperator::LessThanOrEq.is_binary());
+        assert!(PredicateOperator::GreaterThan.is_binary());
+        assert!(PredicateOperator::GreaterThanOrEq.is_binary());
+        assert!(PredicateOperator::Eq.is_binary());
+        assert!(PredicateOperator::NotEq.is_binary());
+        assert!(PredicateOperator::StartsWith.is_binary());
+        assert!(PredicateOperator::NotStartsWith.is_binary());
     }
 
     #[test]
     fn test_set() {
-        assert!(PredicateOperator::In.set());
-        assert!(PredicateOperator::NotIn.set());
+        assert!(PredicateOperator::In.is_set());
+        assert!(PredicateOperator::NotIn.is_set());
     }
 }
