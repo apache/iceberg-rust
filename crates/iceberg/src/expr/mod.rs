@@ -26,6 +26,9 @@ mod predicate;
 pub use predicate::*;
 
 /// Predicate operators used in expressions.
+///
+/// The discriminant of this enum is used for determining the type of the operator, see
+/// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]

@@ -33,10 +33,8 @@ pub struct Reference {
 
 impl Reference {
     /// Create a new unbound reference.
-    pub fn new(name: impl ToString) -> Self {
-        Self {
-            name: name.to_string(),
-        }
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
     }
 
     /// Return the name of this reference.
@@ -84,9 +82,9 @@ pub struct BoundReference {
 
 impl BoundReference {
     /// Creates a new bound reference.
-    pub fn new(name: impl ToString, field: NestedFieldRef) -> Self {
+    pub fn new(name: impl Into<String>, field: NestedFieldRef) -> Self {
         Self {
-            column_name: name.to_string(),
+            column_name: name.into(),
             field,
         }
     }

@@ -43,9 +43,9 @@ use crate::spec::values::timestamptz::microseconds_to_datetimetz;
 use crate::spec::MAX_DECIMAL_PRECISION;
 pub use _serde::RawLiteral;
 
-/// Maximum value for [`PrimitiveType::Time`] type.
-const MAX_TIME_VALUE: i64 =
-    23 * 60 * 60 * 1_000_000i64 + 59 * 60 * 1_000_000i64 + 59 * 1_000_000i64 + 999_999i64;
+/// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
+const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
+
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum PrimitiveLiteral {
@@ -82,7 +82,7 @@ pub enum PrimitiveLiteral {
 /// Literal associated with its type. The value and type pair is checked when construction, so the type and value is
 /// guaranteed to be correct when used.
 ///
-/// By default we decouple the type and value of a literal, so we can use avoid the cost of storing extra type info
+/// By default, we decouple the type and value of a literal, so we can use avoid the cost of storing extra type info
 /// for each literal. But associate type with literal can be useful in some cases, for example, in unbound expression.
 #[derive(Debug)]
 pub struct Datum {
