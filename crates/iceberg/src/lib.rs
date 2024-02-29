@@ -52,4 +52,5 @@ pub mod expr;
 pub mod transaction;
 pub mod transform;
 
+pub mod file_record_batch_reader;
 pub mod writer;

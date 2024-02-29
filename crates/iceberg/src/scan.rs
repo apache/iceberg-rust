@@ -17,19 +17,14 @@
 
 //! Table scan api.
 
+use crate::file_record_batch_reader::FileRecordBatchReader;
 use crate::io::FileIO;
 use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
 use crate::{Error, ErrorKind};
 use arrow_array::RecordBatch;
-use async_stream::try_stream;
 use futures::stream::{iter, BoxStream};
-use futures::{StreamExt, TryStreamExt};
-use parquet::arrow::arrow_reader::RowSelection;
-use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-
-/// Default arrow record batch size
-const DEFAULT_BATCH_SIZE: usize = 1024;
+use futures::StreamExt;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -37,7 +32,6 @@ pub struct TableScanBuilder<'a> {
     // Empty column names means to select all columns
     column_names: Vec<String>,
     snapshot_id: Option<i64>,
-    batch_size: Option<usize>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -46,7 +40,6 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: vec![],
             snapshot_id: None,
-            batch_size: None,
         }
     }
 
@@ -68,11 +61,6 @@ impl<'a> TableScanBuilder<'a> {
     /// Set the snapshot to scan. When not set, it uses current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
-        self
-    }
-
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.batch_size = Some(batch_size);
         self
     }
 
@@ -123,7 +111,6 @@ impl<'a> TableScanBuilder<'a> {
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
             schema,
-            batch_size: self.batch_size,
         })
     }
 }
@@ -137,7 +124,6 @@ pub struct TableScan {
     file_io: FileIO,
     column_names: Vec<String>,
     schema: SchemaRef,
-    batch_size: Option<usize>,
 }
 
 /// A stream of [`FileScanTask`].
@@ -179,61 +165,22 @@ impl TableScan {
         Ok(iter(file_scan_tasks).boxed())
     }
 
-    /// Transforms a stream of FileScanTasks from plan_files into a stream of
-    /// Arrow RecordBatches.
-    pub fn open(&self, mut tasks: FileScanTaskStream) -> crate::Result<ArrowRecordBatchStream> {
-        let file_io = self.file_io.clone();
-        let batch_size = self.batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
-        let projection_mask = self.get_arrow_projection_mask();
-        let row_selection = self.get_arrow_row_selection();
-
-        Ok(
-            try_stream! {
-                while let Some(Ok(task)) = tasks.next().await {
-                    let parquet_reader = file_io
-                        .new_input(task.data_file().file_path())?
-                        .reader()
-                        .await?;
-
-                    let mut batch_stream = ParquetRecordBatchStreamBuilder::new(parquet_reader)
-                        .await
-                        .map_err(|err| {
-                            Error::new(ErrorKind::Unexpected, "failed to load parquet file").with_source(err)
-                        })?
-                        .with_batch_size(batch_size)
-                        .with_offset(task.start() as usize)
-                        .with_limit(task.length() as usize)
-                        .with_projection(projection_mask.clone())
-                        .with_row_selection(row_selection.clone())
-                        .build()
-                        .unwrap()
-                        .map_err(|err| Error::new(ErrorKind::Unexpected, "Fail to read data").with_source(err));
-
-                    while let Some(batch) = batch_stream.next().await {
-                        yield batch?;
-                    }
-                }
-            }.boxed()
-        )
-    }
-
-    fn get_arrow_projection_mask(&self) -> ProjectionMask {
-        // TODO, dummy implementation
-        todo!()
-    }
-
-    fn get_arrow_row_selection(&self) -> RowSelection {
-        // TODO, dummy implementation
-        todo!()
+    pub async fn execute(
+        &self,
+        batch_size: Option<usize>,
+    ) -> crate::Result<ArrowRecordBatchStream> {
+        FileRecordBatchReader::new(self.file_io.clone(), self.schema.clone(), batch_size)
+            .read(self.plan_files().await?)
     }
 }
 
 /// A task to scan part of file.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct FileScanTask {
     data_file: ManifestEntryRef,
+    #[allow(dead_code)]
     start: u64,
+    #[allow(dead_code)]
     length: u64,
 }
 
@@ -241,16 +188,8 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub fn data_file(&self) -> ManifestEntryRef {
+    pub(crate) fn data_file(&self) -> ManifestEntryRef {
         self.data_file.clone()
-    }
-
-    pub fn start(&self) -> u64 {
-        self.start
-    }
-
-    pub fn length(&self) -> u64 {
-        self.length
     }
 }
 
@@ -445,13 +384,16 @@ mod tests {
                 .set_compression(Compression::SNAPPY)
                 .build();
 
-            let file = File::create(format!("{}/1.parquet", &self.table_location)).unwrap();
-            let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+            for n in 1..=3 {
+                let file = File::create(format!("{}/{}.parquet", &self.table_location, n)).unwrap();
+                let mut writer =
+                    ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
 
-            writer.write(&to_write).expect("Writing batch");
+                writer.write(&to_write).expect("Writing batch");
 
-            // writer must be closed to write footer
-            writer.close().unwrap();
+                // writer must be closed to write footer
+                writer.close().unwrap();
+            }
         }
     }
 
@@ -554,16 +496,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "won't work yet as there are still some unimplemented methods"]
     async fn test_open_parquet_no_deletions() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
         let table_scan = fixture.table.scan().build().unwrap();
-        let tasks = table_scan.plan_files().await.unwrap();
 
-        let batch_stream = table_scan.open(tasks).unwrap();
+        let batch_stream = table_scan.execute(None).await.unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
