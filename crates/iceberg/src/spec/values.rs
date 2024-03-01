@@ -432,32 +432,36 @@ impl Datum {
     ///
     /// ```rust
     ///
-    /// use chrono::{TimeZone, Utc};
+    /// use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamp_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
+    /// let t = Datum::timestamp_from_datetime(
+    ///     NaiveDate::from_ymd_opt(1992, 3, 1)
+    ///         .unwrap()
+    ///         .and_hms_micro_opt(1, 2, 3, 88)
+    ///         .unwrap());
     ///
-    /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
+    /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
-    pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
-        Self::timestamp_micros(dt.with_timezone(&Utc).timestamp_micros())
+    pub fn timestamp_from_datetime(dt: NaiveDateTime) -> Self {
+        Self::timestamp_micros(dt.timestamp_micros())
     }
 
-    /// Parse a timestamp in RFC3339 format.
+    /// Parse a timestamp in [`%Y-%m-%dT%H:%M:%S%.f`] format.
     ///
-    /// See [`DateTime<Utc>::from_str`].
+    /// See [`NaiveDateTime::from_str`].
     ///
     /// Example:
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
     /// use iceberg::spec::{Literal, Datum};
-    /// let t = Datum::timestamp_from_str("2012-12-12 12:12:12.8899+00:00").unwrap();
+    /// let t = Datum::timestamp_from_str("1992-03-01T01:02:03.000088").unwrap();
     ///
-    /// assert_eq!(&format!("{t}"), "2012-12-12 12:12:12.889900");
+    /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
     pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
+        let dt = s.as_ref().parse::<NaiveDateTime>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse timestamp.").with_source(e)
         })?;
 
         Ok(Self::timestamp_from_datetime(dt))
@@ -488,15 +492,27 @@ impl Datum {
     ///
     /// use chrono::{TimeZone, Utc};
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamp_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
+    /// let t = Datum::timestamptz_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
     ///
-    /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40");
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:16:40 UTC");
     /// ```
     pub fn timestamptz_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
         Self::timestamptz_micros(dt.with_timezone(&Utc).timestamp_micros())
     }
 
-    /// Similar to [`Datum::timestamp_from_str`], but return timestamp with timezone literal.
+    /// Parse timestamp with timezone in RFC3339 format.
+    ///
+    /// See [`DateTime::from_str`].
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+    /// use iceberg::spec::{Literal, Datum};
+    /// let t = Datum::timestamptz_from_str("1992-03-01T01:02:03.000088+08:00").unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1992-02-29 17:02:03.000088 UTC");
+    /// ```
     pub fn timestamptz_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
@@ -2807,4 +2823,37 @@ mod tests {
     // rust avro can't support to convert any byte-like type to fixed in avro now.
     // - uuid ser/de
     // - fixed ser/de
+
+    #[test]
+    fn test_parse_timestamp() {
+        let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899").unwrap();
+        assert_eq!(&format!("{value}"), "2021-08-01 01:09:00.089900");
+
+        let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899+0800");
+        assert!(value.is_err(), "Parse timestamp with timezone should fail!");
+
+        let value = Datum::timestamp_from_str("dfa");
+        assert!(
+            value.is_err(),
+            "Parse timestamp with invalid input should fail!"
+        );
+    }
+
+    #[test]
+    fn test_parse_timestamptz() {
+        let value = Datum::timestamptz_from_str("2021-08-01T09:09:00.0899+0800").unwrap();
+        assert_eq!(&format!("{value}"), "2021-08-01 01:09:00.089900 UTC");
+
+        let value = Datum::timestamptz_from_str("2021-08-01T01:09:00.0899");
+        assert!(
+            value.is_err(),
+            "Parse timestamptz without timezone should fail!"
+        );
+
+        let value = Datum::timestamptz_from_str("dfa");
+        assert!(
+            value.is_err(),
+            "Parse timestamptz with invalid input should fail!"
+        );
+    }
 }
