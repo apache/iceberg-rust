@@ -17,7 +17,7 @@
 
 //! Table scan api.
 
-use crate::arrow::ArrowReader;
+use crate::arrow::ArrowReaderBuilder;
 use crate::io::FileIO;
 use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
@@ -177,8 +177,14 @@ impl TableScan {
     }
 
     pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
-        ArrowReader::new(self.file_io.clone(), self.schema.clone(), self.batch_size)
-            .read(self.plan_files().await?)
+        let mut arrow_reader_builder =
+            ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
+
+        if let Some(batch_size) = self.batch_size {
+            arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
+        }
+
+        arrow_reader_builder.build().read(self.plan_files().await?)
     }
 }
 

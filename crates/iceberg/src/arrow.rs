@@ -25,8 +25,39 @@ use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::SchemaRef;
 
-/// Default arrow record batch size
-const DEFAULT_BATCH_SIZE: usize = 1024;
+/// Builder to create ArrowReader
+pub struct ArrowReaderBuilder {
+    batch_size: Option<usize>,
+    file_io: FileIO,
+    schema: SchemaRef,
+}
+
+impl ArrowReaderBuilder {
+    /// Create a new ArrowReaderBuilder
+    pub fn new(file_io: FileIO, schema: SchemaRef) -> Self {
+        ArrowReaderBuilder {
+            batch_size: None,
+            file_io,
+            schema,
+        }
+    }
+
+    /// Sets the desired size of batches in the response
+    /// to something other than the default
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = Some(batch_size);
+        self
+    }
+
+    /// Build the ArrowReader.
+    pub fn build(self) -> ArrowReader {
+        ArrowReader {
+            batch_size: self.batch_size,
+            schema: self.schema,
+            file_io: self.file_io,
+        }
+    }
+}
 
 /// Reads data from Parquet files
 pub struct ArrowReader {
@@ -37,20 +68,10 @@ pub struct ArrowReader {
 }
 
 impl ArrowReader {
-    /// Constructs a new ArrowReader
-    pub fn new(file_io: FileIO, schema: SchemaRef, batch_size: Option<usize>) -> Self {
-        ArrowReader {
-            batch_size,
-            file_io,
-            schema,
-        }
-    }
-
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
     pub fn read(self, mut tasks: FileScanTaskStream) -> crate::Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
-        let batch_size = self.batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
 
         Ok(try_stream! {
             while let Some(Ok(task)) = tasks.next().await {
@@ -62,11 +83,15 @@ impl ArrowReader {
                     .reader()
                     .await?;
 
-                let mut batch_stream = ParquetRecordBatchStreamBuilder::new(parquet_reader)
+                let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(parquet_reader)
                     .await?
-                    .with_batch_size(batch_size)
-                    .with_projection(projection_mask)
-                    .build()?;
+                    .with_projection(projection_mask);
+
+                if let Some(batch_size) = self.batch_size {
+                    batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
+                }
+
+                let mut batch_stream = batch_stream_builder.build()?;
 
                 while let Some(batch) = batch_stream.next().await {
                     yield batch?;
