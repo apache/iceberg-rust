@@ -1,8 +1,25 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures::lock::Mutex;
+use futures::{lock::Mutex, AsyncReadExt, AsyncWriteExt};
 use sqlx::{
     any::{install_default_drivers, AnyConnectOptions, AnyRow},
     AnyConnection, ConnectOptions, Connection, Row,
@@ -10,100 +27,107 @@ use sqlx::{
 use std::collections::HashMap;
 
 use iceberg::{
-    spec::TableMetadata, table::Table, Catalog, Error, ErrorKind, Namespace, NamespaceIdent,
-    Result, TableCommit, TableCreation, TableIdent,
+    io::FileIO, spec::TableMetadata, table::Table, Catalog, Error, ErrorKind, Namespace,
+    NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
 };
-use opendal::Operator;
 use uuid::Uuid;
+
+use crate::error::from_sqlx_error;
 
 #[derive(Debug)]
 /// Sql catalog implementation.
 pub struct SqlCatalog {
     name: String,
     connection: Arc<Mutex<AnyConnection>>,
-    operator: Operator,
+    storage: FileIO,
     cache: Arc<DashMap<TableIdent, (String, TableMetadata)>>,
 }
 
-// impl SqlCatalog {
-//     pub async fn new(url: &str, name: &str, operator: Operator) -> Result<Self> {
-//         install_default_drivers();
+impl SqlCatalog {
+    /// Create new sql catalog instance
+    pub async fn new(url: &str, name: &str, storage: FileIO) -> Result<Self> {
+        install_default_drivers();
 
-//         let mut connection =
-//             AnyConnectOptions::connect(&AnyConnectOptions::from_url(&url.try_into()?)?).await?;
+        let mut connection = AnyConnectOptions::connect(
+            &AnyConnectOptions::from_url(&url.try_into()?).map_err(from_sqlx_error)?,
+        )
+        .await
+        .map_err(from_sqlx_error)?;
 
-//         connection
-//             .transaction(|txn| {
-//                 Box::pin(async move {
-//                     sqlx::query(
-//                         "create table if not exists iceberg_tables (
-//                                 catalog_name text not null,
-//                                 table_namespace text not null,
-//                                 table_name text not null,
-//                                 metadata_location text not null,
-//                                 previous_metadata_location text,
-//                                 primary key (catalog_name, table_namespace, table_name)
-//                             );",
-//                     )
-//                     .execute(&mut **txn)
-//                     .await
-//                 })
-//             })
-//             .await?;
+        connection
+            .transaction(|txn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "create table if not exists iceberg_tables (
+                                catalog_name text not null,
+                                table_namespace text not null,
+                                table_name text not null,
+                                metadata_location text not null,
+                                previous_metadata_location text,
+                                primary key (catalog_name, table_namespace, table_name)
+                            );",
+                    )
+                    .execute(&mut **txn)
+                    .await
+                })
+            })
+            .await
+            .map_err(from_sqlx_error)?;
 
-//         connection
-//             .transaction(|txn| {
-//                 Box::pin(async move {
-//                     sqlx::query(
-//                         "create table if not exists iceberg_namespace_properties (
-//                                 catalog_name text not null,
-//                                 namespace text not null,
-//                                 property_key text,
-//                                 property_value text,
-//                                 primary key (catalog_name, namespace, property_key)
-//                             );",
-//                     )
-//                     .execute(&mut **txn)
-//                     .await
-//                 })
-//             })
-//             .await?;
+        connection
+            .transaction(|txn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "create table if not exists iceberg_namespace_properties (
+                                catalog_name text not null,
+                                namespace text not null,
+                                property_key text,
+                                property_value text,
+                                primary key (catalog_name, namespace, property_key)
+                            );",
+                    )
+                    .execute(&mut **txn)
+                    .await
+                })
+            })
+            .await
+            .map_err(from_sqlx_error)?;
 
-//         Ok(SqlCatalog {
-//             name: name.to_owned(),
-//             connection: Arc::new(Mutex::new(connection)),
-//             operator,
-//             cache: Arc::new(DashMap::new()),
-//         })
-//     }
-// }
+        Ok(SqlCatalog {
+            name: name.to_owned(),
+            connection: Arc::new(Mutex::new(connection)),
+            storage,
+            cache: Arc::new(DashMap::new()),
+        })
+    }
+}
 
-// #[derive(Debug)]
-// struct TableRef {
-//     table_namespace: String,
-//     table_name: String,
-//     metadata_location: String,
-//     _previous_metadata_location: Option<String>,
-// }
+#[derive(Debug)]
+struct TableRef {
+    table_namespace: String,
+    table_name: String,
+    metadata_location: String,
+    _previous_metadata_location: Option<String>,
+}
 
-// fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
-//     Ok(TableRef {
-//         table_namespace: row.try_get(0)?,
-//         table_name: row.try_get(1)?,
-//         metadata_location: row.try_get(2)?,
-//         _previous_metadata_location: row.try_get::<String, _>(3).map(Some).or_else(|err| {
-//             if let sqlx::Error::ColumnDecode {
-//                 index: _,
-//                 source: _,
-//             } = err
-//             {
-//                 Ok(None)
-//             } else {
-//                 Err(err)
-//             }
-//         })?,
-//     })
-// }
+fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
+    Ok(TableRef {
+        table_namespace: row.try_get(0)?,
+        table_name: row.try_get(1)?,
+        metadata_location: row.try_get(2)?,
+        _previous_metadata_location: row.try_get::<String, _>(3).map(Some).or_else(|err| {
+            if let sqlx::Error::ColumnDecode {
+                index: _,
+                source: _,
+            } = err
+            {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        })?,
+    })
+}
 
 #[async_trait]
 impl Catalog for SqlCatalog {
@@ -111,25 +135,27 @@ impl Catalog for SqlCatalog {
         &self,
         _parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        // let mut connection = self.connection.lock().await;
-        // let rows = connection.transaction(|txn|{
-        //     let name = self.name.clone();
-        //     Box::pin(async move {
-        //     sqlx::query(&format!("select distinct table_namespace from iceberg_tables where catalog_name = '{}';",&name)).fetch_all(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        // let iter = rows.iter().map(|row| row.try_get::<String, _>(0));
+        let mut connection = self.connection.lock().await;
+        let rows = connection.transaction(|txn|{
+            let name = self.name.clone();
+            Box::pin(async move {
+            sqlx::query(&format!("select distinct table_namespace from iceberg_tables where catalog_name = '{}';",&name)).fetch_all(&mut **txn).await
+        })}).await.map_err(from_sqlx_error)?;
+        let iter = rows.iter().map(|row| row.try_get::<String, _>(0));
 
-        // Ok(iter
-        //     .map(|x| {
-        //         x.and_then(|y| {
-        //             Namespace::try_new(&y.split('.').map(ToString::to_string).collect::<Vec<_>>())
-        //                 .map_err(|err| sqlx::Error::Decode(Box::new(err)))
-        //         })
-        //     })
-        //     .collect::<Result<_, sqlx::Error>>()
-        //     .map_err(Error::from)?)
-        todo!()
+        Ok(iter
+            .map(|x| {
+                x.and_then(|y| {
+                    NamespaceIdent::from_vec(
+                        y.split('.').map(ToString::to_string).collect::<Vec<_>>(),
+                    )
+                    .map_err(|err| sqlx::Error::Decode(Box::new(err)))
+                })
+            })
+            .collect::<std::result::Result<_, sqlx::Error>>()
+            .map_err(from_sqlx_error)?)
     }
+
     async fn create_namespace(
         &self,
         _namespace: &NamespaceIdent,
@@ -159,95 +185,85 @@ impl Catalog for SqlCatalog {
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        // let mut connection = self.connection.lock().await;
-        // let rows = connection.transaction(|txn|{
-        //     let name = self.name.clone();
-        //     let namespace = namespace.to_string();
-        //     Box::pin(async move {
-        //     sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}';",&name, &namespace)).fetch_all(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        // let iter = rows.iter().map(query_map);
-        todo!()
+        let mut connection = self.connection.lock().await;
+        let rows = connection.transaction(|txn|{
+            let name = self.name.clone();
+            let namespace = namespace.encode_in_url();
+            Box::pin(async move {
+            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}';",&name, &namespace)).fetch_all(&mut **txn).await
+        })}).await.map_err(from_sqlx_error)?;
+        let iter = rows.iter().map(query_map);
 
-        // Ok(iter
-        //     .map(|x| {
-        //         x.and_then(|y| {
-        //             TableIdent::parse(&(y.table_namespace.to_string() + "." + &y.table_name))
-        //                 .map_err(|err| sqlx::Error::Decode(Box::new(err)))
-        //         })
-        //     })
-        //     .collect::<Result<_, sqlx::Error>>()
-        //     .map_err(Error::from)?)
+        Ok(iter
+            .map(|x| {
+                x.and_then(|y| {
+                    let namespace = NamespaceIdent::from_vec(
+                        y.table_namespace
+                            .split('.')
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+                    Ok(TableIdent::new(namespace, y.table_name))
+                })
+            })
+            .collect::<std::result::Result<_, sqlx::Error>>()
+            .map_err(from_sqlx_error)?)
     }
 
     async fn stat_table(&self, identifier: &TableIdent) -> Result<bool> {
-        // let mut connection = self.connection.lock().await;
-        // let rows = connection.transaction(|txn|{
-        //     let catalog_name = self.name.clone();
-        //     let namespace = identifier.namespace().to_string();
-        //     let name = identifier.name().to_string();
-        //     Box::pin(async move {
-        //     sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
-        //         &namespace,
-        //         &name)).fetch_all(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        // let mut iter = rows.iter().map(query_map);
+        let mut connection = self.connection.lock().await;
+        let rows = connection.transaction(|txn|{
+            let catalog_name = self.name.clone();
+            let namespace = identifier.namespace().encode_in_url();
+            let name = identifier.name().to_string();
+            Box::pin(async move {
+            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
+                &namespace,
+                &name)).fetch_all(&mut **txn).await
+        })}).await.map_err(from_sqlx_error)?;
+        let mut iter = rows.iter().map(query_map);
 
-        // Ok(iter.next().is_some())
-        todo!()
+        Ok(iter.next().is_some())
     }
 
-    async fn drop_table(&self, identifier: &TableIdent) -> Result<()> {
-        // let mut connection = self.connection.lock().await;
-        // connection.transaction(|txn|{
-        //     let catalog_name = self.name.clone();
-        //     let namespace = identifier.namespace().to_string();
-        //     let name = identifier.name().to_string();
-        //     Box::pin(async move {
-        //     sqlx::query(&format!("delete from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
-        //         &namespace,
-        //         &name)).execute(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        Ok(())
+    async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
+        todo!()
     }
 
     async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
-        // let path = {
-        //     let mut connection = self.connection.lock().await;
-        //     let row = connection.transaction(|txn|{
-        //     let catalog_name = self.name.clone();
-        //     let namespace = identifier.namespace().to_string();
-        //     let name = identifier.name().to_string();
-        //         Box::pin(async move {
-        //     sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
-        //             &namespace,
-        //             &name)).fetch_one(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        //     let row = query_map(&row).map_err(Error::from)?;
+        let metadata_location = {
+            let mut connection = self.connection.lock().await;
+            let row = connection.transaction(|txn|{
+            let catalog_name = self.name.clone();
+            let namespace = identifier.namespace().encode_in_url();
+            let name = identifier.name().to_string();
+                Box::pin(async move {
+            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
+                    &namespace,
+                    &name)).fetch_one(&mut **txn).await
+        })}).await.map_err(from_sqlx_error)?;
+            let row = query_map(&row).map_err(from_sqlx_error)?;
 
-        //     row.metadata_location
-        // };
-        todo!()
-        // let bytes = &self
-        //     .operator
-        //     .get(&strip_prefix(&path).as_str().into())
-        //     .await?
-        //     .bytes()
-        //     .await?;
-        // let metadata: TabularMetadata = serde_json::from_str(std::str::from_utf8(bytes)?)?;
-        // self.cache
-        //     .insert(identifier.clone(), (path.clone(), metadata.clone()));
-        // match metadata {
-        //     TabularMetadata::Table(metadata) => Ok(Tabular::Table(
-        //         Table::new(identifier.clone(), self.clone(), metadata).await?,
-        //     )),
-        //     TabularMetadata::View(metadata) => Ok(Tabular::View(
-        //         View::new(identifier.clone(), self.clone(), metadata).await?,
-        //     )),
-        //     TabularMetadata::MaterializedView(metadata) => Ok(Tabular::MaterializedView(
-        //         MaterializedView::new(identifier.clone(), self.clone(), metadata).await?,
-        //     )),
-        // }
+            row.metadata_location
+        };
+        let file = self.storage.new_input(&metadata_location)?;
+
+        let mut json = String::new();
+        file.reader().await?.read_to_string(&mut json).await?;
+
+        let metadata: TableMetadata = serde_json::from_str(&json)?;
+
+        self.cache
+            .insert(identifier.clone(), (metadata_location, metadata.clone()));
+
+        let table = Table::builder()
+            .file_io(self.storage.clone())
+            .identifier(identifier.clone())
+            .metadata(metadata)
+            .build();
+
+        Ok(table)
     }
 
     async fn create_table(
@@ -255,142 +271,127 @@ impl Catalog for SqlCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        // Create metadata
-        // let location = metadata.location.to_string();
+        let location = creation.location.ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            "Table creation with the Sql catalog requires a location.",
+        ))?;
 
-        // let uuid = Uuid::new_v4();
-        // let version = &metadata.last_sequence_number;
-        // let metadata_json = serde_json::to_string(&metadata)?;
-        // let metadata_location = location
-        //     + "/metadata/"
-        //     + &version.to_string()
-        //     + "-"
-        //     + &uuid.to_string()
-        //     + ".metadata.json";
-        // operator
-        //     .put(
-        //         &strip_prefix(&metadata_location).into(),
-        //         metadata_json.into(),
-        //     )
-        //     .await?;
-        // {
-        //     let mut connection = self.connection.lock().await;
-        //     connection.transaction(|txn|{
-        //         let catalog_name = self.name.clone();
-        //         let namespace = identifier.namespace().to_string();
-        //         let name = identifier.name().to_string();
-        //         let metadata_location = metadata_location.to_string();
-        //         Box::pin(async move {
-        //     sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values ('{}', '{}', '{}', '{}');",catalog_name,namespace,name, metadata_location)).execute(&mut **txn).await
-        // })}).await.map_err(Error::from)?;
-        // }
-        // self.clone()
-        //     .load_tabular(&identifier)
-        //     .await
-        todo!()
+        let uuid = Uuid::new_v4();
+        let metadata_location =
+            location.clone() + "/metadata/" + "0-" + &uuid.to_string() + ".metadata.json";
+
+        let metadata = TableMetadata::builder()
+            .location(location)
+            .current_schema_id(creation.schema.schema_id())
+            .last_column_id(creation.schema.highest_field_id())
+            .schemas(HashMap::from_iter(vec![(
+                creation.schema.schema_id(),
+                creation.schema.into(),
+            )]))
+            .partition_specs(HashMap::new())
+            .last_partition_id(0)
+            .current_snapshot_id(-1)
+            .sort_orders(HashMap::new())
+            .default_sort_order_id(0)
+            .build();
+
+        let file = self.storage.new_output(&metadata_location)?;
+        file.writer()
+            .await?
+            .write_all(&serde_json::to_vec(&metadata)?)
+            .await?;
+        {
+            let mut connection = self.connection.lock().await;
+            connection.transaction(|txn|{
+                let catalog_name = self.name.clone();
+                let namespace = namespace.encode_in_url();
+                let name = creation.name.clone();
+                let metadata_location = metadata_location.to_string();
+                Box::pin(async move {
+            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values ('{}', '{}', '{}', '{}');",catalog_name,namespace,name, metadata_location)).execute(&mut **txn).await
+        })}).await.map_err(from_sqlx_error)?;
+        }
+        Ok(Table::builder()
+            .file_io(self.storage.clone())
+            .metadata_location(metadata_location)
+            .identifier(TableIdent::new(namespace.clone(), creation.name))
+            .metadata(metadata)
+            .build())
     }
 
     async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
         todo!()
     }
 
-    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         todo!()
     }
 }
 
-// #[cfg(test)]
-// pub mod tests {
-//     use iceberg_rust::{
-//         catalog::{identifier::TableIdent, namespace::Namespace, Catalog},
-//         spec::{
-//             schema::Schema,
-//             types::{PrimitiveType, StructField, StructType, Type},
-//         },
-//         table::table_builder::TableBuilder,
-//     };
-//     use operator::{memory::InMemory, ObjectStore};
-//     use std::sync::Arc;
+#[cfg(test)]
+pub mod tests {
 
-//     use crate::SqlCatalog;
+    use iceberg::{
+        io::FileIOBuilder,
+        spec::{NestedField, PrimitiveType, Schema, SortOrder, Type, UnboundPartitionSpec},
+        Catalog, NamespaceIdent, TableCreation, TableIdent,
+    };
+    use tempfile::TempDir;
 
-//     #[tokio::test]
-//     async fn test_create_update_drop_table() {
-//         let operator: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-//         let catalog: Arc<dyn Catalog> = Arc::new(
-//             SqlCatalog::new("sqlite://", "test", operator)
-//                 .await
-//                 .unwrap(),
-//         );
-//         let identifier = TableIdent::parse("load_table.table3").unwrap();
-//         let schema = Schema::builder()
-//             .with_schema_id(1)
-//             .with_identifier_field_ids(vec![1, 2])
-//             .with_fields(
-//                 StructType::builder()
-//                     .with_struct_field(StructField {
-//                         id: 1,
-//                         name: "one".to_string(),
-//                         required: false,
-//                         field_type: Type::Primitive(PrimitiveType::String),
-//                         doc: None,
-//                     })
-//                     .with_struct_field(StructField {
-//                         id: 2,
-//                         name: "two".to_string(),
-//                         required: false,
-//                         field_type: Type::Primitive(PrimitiveType::String),
-//                         doc: None,
-//                     })
-//                     .build()
-//                     .unwrap(),
-//             )
-//             .build()
-//             .unwrap();
+    use crate::SqlCatalog;
 
-//         let mut builder = TableBuilder::new(&identifier, catalog.clone())
-//             .expect("Failed to create table builder.");
-//         builder
-//             .location("/")
-//             .with_schema((1, schema))
-//             .current_schema_id(1);
-//         let mut table = builder.build().await.expect("Failed to create table.");
+    #[tokio::test]
+    async fn test_create_update_drop_table() {
+        let dir = TempDir::new().unwrap();
+        let storage = FileIOBuilder::new_fs_io().build().unwrap();
 
-//         let exists = Arc::clone(&catalog)
-//             .table_exists(&identifier)
-//             .await
-//             .expect("Table doesn't exist");
-//         assert!(exists);
+        let catalog = SqlCatalog::new("sqlite://", "iceberg", storage)
+            .await
+            .unwrap();
 
-//         let tables = catalog
-//             .clone()
-//             .list_tables(
-//                 &Namespace::try_new(&["load_table".to_owned()])
-//                     .expect("Failed to create namespace"),
-//             )
-//             .await
-//             .expect("Failed to list Tables");
-//         assert_eq!(tables[0].to_string(), "load_table.table3".to_owned());
+        let namespace = NamespaceIdent::new("test".to_owned());
 
-//         let namespaces = catalog
-//             .clone()
-//             .list_namespaces(None)
-//             .await
-//             .expect("Failed to list namespaces");
-//         assert_eq!(namespaces[0].to_string(), "load_table");
+        let identifier = TableIdent::new(namespace.clone(), "table1".to_owned());
 
-//         let transaction = table.new_transaction(None);
-//         transaction.commit().await.expect("Transaction failed.");
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(1, "one", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(2, "two", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
 
-//         catalog
-//             .drop_table(&identifier)
-//             .await
-//             .expect("Failed to drop table.");
+        let creation = TableCreation::builder()
+            .name("table1".to_owned())
+            .location(dir.path().to_str().unwrap().to_owned() + "/warehouse/table1")
+            .schema(schema)
+            .partition_spec(UnboundPartitionSpec::default())
+            .sort_order(SortOrder::default())
+            .build();
 
-//         let exists = Arc::clone(&catalog)
-//             .table_exists(&identifier)
-//             .await
-//             .expect("Table exists failed");
-//         assert!(!exists);
-//     }
-// }
+        catalog.create_table(&namespace, creation).await.unwrap();
+
+        let exists = catalog
+            .stat_table(&identifier)
+            .await
+            .expect("Table doesn't exist");
+        assert!(exists);
+
+        let tables = catalog
+            .list_tables(&namespace)
+            .await
+            .expect("Failed to list Tables");
+        assert_eq!(tables[0].name(), "table1".to_owned());
+
+        let namespaces = catalog
+            .list_namespaces(None)
+            .await
+            .expect("Failed to list namespaces");
+        assert_eq!(namespaces[0].encode_in_url(), "test");
+
+        let table = catalog.load_table(&identifier).await.unwrap();
+
+        assert!(table.metadata().location().ends_with("/warehouse/table1"))
+    }
+}

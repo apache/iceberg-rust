@@ -29,7 +29,7 @@ license = { workspace = true }
 keywords = ["iceberg", "sql", "catalog"]
 
 [dependencies]
-# async-trait = { workspace = true }
+anyhow = "1"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 iceberg = { workspace = true }
@@ -48,4 +48,5 @@ opendal.workspace = true
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+tempfile = { workspace = true }
 tokio = { workspace = true }
