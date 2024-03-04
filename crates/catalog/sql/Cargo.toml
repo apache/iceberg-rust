@@ -41,10 +41,10 @@ typed-builder = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 dashmap = "5.5.3"
-futures.workspace = true
+futures = { workspace = true }
 sqlx = { version = "0.7.2", features = ["runtime-tokio-rustls", "any", "sqlite", "postgres", "mysql"], default-features = false }
-url.workspace = true
-opendal.workspace = true
+url = { workspace = true }
+opendal = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
