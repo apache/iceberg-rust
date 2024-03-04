@@ -822,8 +822,6 @@ impl Display for FormatVersion {
     }
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// Encodes changes to the previous metadata files for the table
