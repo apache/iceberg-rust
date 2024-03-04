@@ -389,7 +389,7 @@ mod tests {
     async fn test_parquet_writer_with_complex_schema() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen =
+        let location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
@@ -410,7 +410,11 @@ mod tests {
                             "sub_col",
                             arrow_schema::DataType::Int64,
                             true,
-                        )]
+                        )
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "-1".to_string(),
+                        )]))]
                         .into(),
                     ),
                     true,
@@ -424,11 +428,13 @@ mod tests {
                 ),
                 arrow_schema::Field::new(
                     "col3",
-                    arrow_schema::DataType::List(Arc::new(arrow_schema::Field::new(
-                        "item",
-                        arrow_schema::DataType::Int64,
-                        true,
-                    ))),
+                    arrow_schema::DataType::List(Arc::new(
+                        arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                "-1".to_string(),
+                            )])),
+                    )),
                     true,
                 )
                 .with_metadata(HashMap::from([(
@@ -445,11 +451,19 @@ mod tests {
                                     "sub_sub_col",
                                     arrow_schema::DataType::Int64,
                                     true,
-                                )]
+                                )
+                                .with_metadata(HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    "-1".to_string(),
+                                )]))]
                                 .into(),
                             ),
                             true,
-                        )]
+                        )
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "-1".to_string(),
+                        )]))]
                         .into(),
                     ),
                     true,
@@ -463,11 +477,13 @@ mod tests {
         };
         let col0 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
         let col1 = Arc::new(StructArray::new(
-            vec![arrow_schema::Field::new(
-                "sub_col",
-                arrow_schema::DataType::Int64,
-                true,
-            )]
+            vec![
+                arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "-1".to_string(),
+                    )])),
+            ]
             .into(),
             vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
             None,
@@ -476,14 +492,24 @@ mod tests {
             "test";
             1024
         ])) as ArrayRef;
-        let col3 = Arc::new(
-            arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+        let col3 = Arc::new({
+            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
                 Some(
                     vec![Some(1),]
                 );
                 1024
-            ]),
-        ) as ArrayRef;
+            ])
+            .into_parts();
+            arrow_array::ListArray::new(
+                Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "-1".to_string(),
+                )]))),
+                list_parts.1,
+                list_parts.2,
+                list_parts.3,
+            )
+        }) as ArrayRef;
         let col4 = Arc::new(StructArray::new(
             vec![arrow_schema::Field::new(
                 "sub_col",
@@ -492,18 +518,28 @@ mod tests {
                         "sub_sub_col",
                         arrow_schema::DataType::Int64,
                         true,
-                    )]
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "-1".to_string(),
+                    )]))]
                     .into(),
                 ),
                 true,
-            )]
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "-1".to_string(),
+            )]))]
             .into(),
             vec![Arc::new(StructArray::new(
-                vec![arrow_schema::Field::new(
-                    "sub_sub_col",
-                    arrow_schema::DataType::Int64,
-                    true,
-                )]
+                vec![
+                    arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "-1".to_string(),
+                        )])),
+                ]
                 .into(),
                 vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
                 None,
@@ -519,7 +555,7 @@ mod tests {
             WriterProperties::builder().build(),
             to_write.schema(),
             file_io.clone(),
-            loccation_gen,
+            location_gen,
             file_name_gen,
         )
         .build()
