@@ -885,10 +885,12 @@ pub(super) mod _serde {
 #[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 /// Iceberg format version
+#[derive(Default)]
 pub enum FormatVersion {
     /// Iceberg spec version 1
     V1 = 1u8,
     /// Iceberg spec version 2
+    #[default]
     V2 = 2u8,
 }
 
@@ -913,11 +915,7 @@ impl Display for FormatVersion {
     }
 }
 
-impl Default for FormatVersion {
-    fn default() -> Self {
-        FormatVersion::V2
-    }
-}
+
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
