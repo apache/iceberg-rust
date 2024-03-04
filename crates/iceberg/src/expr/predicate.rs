@@ -21,11 +21,13 @@
 
 use crate::expr::{BoundReference, PredicateOperator, Reference};
 use crate::spec::Datum;
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Not;
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
+#[derive(PartialEq)]
 pub struct LogicalExpression<T, const N: usize> {
     inputs: [Box<T>; N],
 }
@@ -54,6 +56,7 @@ impl<T, const N: usize> LogicalExpression<T, N> {
 }
 
 /// Unary predicate, for example, `a IS NULL`.
+#[derive(PartialEq)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
     op: PredicateOperator,
@@ -84,6 +87,7 @@ impl<T> UnaryExpression<T> {
 }
 
 /// Binary predicate, for example, `a > 10`.
+#[derive(PartialEq)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
     op: PredicateOperator,
@@ -117,6 +121,7 @@ impl<T: Display> Display for BinaryExpression<T> {
 }
 
 /// Set predicates, for example, `a in (1, 2, 3)`.
+#[derive(PartialEq)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
     op: PredicateOperator,
@@ -136,8 +141,22 @@ impl<T: Debug> Debug for SetExpression<T> {
     }
 }
 
+impl<T: Debug> SetExpression<T> {
+    pub(crate) fn new(op: PredicateOperator, term: T, literals: HashSet<Datum>) -> Self {
+        Self { op, term, literals }
+    }
+}
+
+impl<T: Display + Debug> Display for SetExpression<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut literal_strs = self.literals.iter().map(|l| format!("{}", l));
+
+        write!(f, "{} {} ({})", self.term, self.op, literal_strs.join(", "))
+    }
+}
+
 /// Unbound predicate expression before binding to a schema.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Predicate {
     /// And predicate, for example, `a > 10 AND b < 20`.
     And(LogicalExpression<Predicate, 2>),
@@ -166,23 +185,13 @@ impl Display for Predicate {
                 write!(f, "NOT ({})", expr.inputs()[0])
             }
             Predicate::Unary(expr) => {
-                write!(f, "{}", expr.term)
+                write!(f, "{}", expr)
             }
             Predicate::Binary(expr) => {
-                write!(f, "{} {} {}", expr.term, expr.op, expr.literal)
+                write!(f, "{}", expr)
             }
             Predicate::Set(expr) => {
-                write!(
-                    f,
-                    "{} {} ({})",
-                    expr.term,
-                    expr.op,
-                    expr.literals
-                        .iter()
-                        .map(|l| format!("{:?}", l))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
+                write!(f, "{}", expr)
             }
         }
     }
@@ -230,6 +239,54 @@ impl Predicate {
     pub fn or(self, other: Predicate) -> Predicate {
         Predicate::Or(LogicalExpression::new([Box::new(self), Box::new(other)]))
     }
+
+    /// Returns a predicate representing the negation ('NOT') of this one,
+    /// by using inverse predicates rather than wrapping in a `NOT`.
+    /// Used for `NOT` elimination.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::ops::Bound::Unbounded;
+    /// use iceberg::expr::BoundPredicate::Unary;
+    /// use iceberg::expr::{LogicalExpression, Predicate, Reference};
+    /// use iceberg::spec::Datum;
+    /// let expr1 = Reference::new("a").less_than(Datum::long(10));
+    /// let expr2 = Reference::new("b").less_than(Datum::long(5)).and(Reference::new("c").less_than(Datum::long(10)));
+    ///
+    /// let result = expr1.negate();
+    /// assert_eq!(&format!("{result}"), "a >= 10");
+    ///
+    /// let result = expr2.negate();
+    /// assert_eq!(&format!("{result}"), "(b >= 5) OR (c >= 10)");
+    /// ```
+    pub fn negate(self) -> Predicate {
+        match self {
+            Predicate::And(expr) => Predicate::Or(LogicalExpression::new(
+                expr.inputs.map(|expr| Box::new(expr.negate())),
+            )),
+            Predicate::Or(expr) => Predicate::And(LogicalExpression::new(
+                expr.inputs.map(|expr| Box::new(expr.negate())),
+            )),
+            Predicate::Not(expr) => {
+                let LogicalExpression { inputs: [input_0] } = expr;
+                *input_0
+            }
+            Predicate::Unary(expr) => {
+                Predicate::Unary(UnaryExpression::new(expr.op.negate(), expr.term))
+            }
+            Predicate::Binary(expr) => Predicate::Binary(BinaryExpression::new(
+                expr.op.negate(),
+                expr.term,
+                expr.literal,
+            )),
+            Predicate::Set(expr) => Predicate::Set(SetExpression::new(
+                expr.op.negate(),
+                expr.term,
+                expr.literals,
+            )),
+        }
+    }
 }
 
 impl Not for Predicate {
@@ -271,6 +328,91 @@ pub enum BoundPredicate {
     Unary(UnaryExpression<BoundReference>),
     /// Binary expression, for example, `a > 10`.
     Binary(BinaryExpression<BoundReference>),
-    /// Set predicates, for example, `a in (1, 2, 3)`.
+    /// Set predicates, for example, `a IN (1, 2, 3)`.
     Set(SetExpression<BoundReference>),
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::expr::Reference;
+    use crate::spec::Datum;
+    use std::collections::HashSet;
+    use std::ops::Not;
+
+    #[test]
+    fn test_predicate_negate_and() {
+        let expression = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(Reference::new("c").less_than(Datum::long(10)));
+
+        let expected = Reference::new("b")
+            .greater_than_or_equal_to(Datum::long(5))
+            .or(Reference::new("c").greater_than_or_equal_to(Datum::long(10)));
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_negate_or() {
+        let expression = Reference::new("b")
+            .greater_than_or_equal_to(Datum::long(5))
+            .or(Reference::new("c").greater_than_or_equal_to(Datum::long(10)));
+
+        let expected = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(Reference::new("c").less_than(Datum::long(10)));
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_negate_not() {
+        let expression = Reference::new("b")
+            .greater_than_or_equal_to(Datum::long(5))
+            .not();
+
+        let expected = Reference::new("b").greater_than_or_equal_to(Datum::long(5));
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_negate_unary() {
+        let expression = Reference::new("b").is_not_null();
+
+        let expected = Reference::new("b").is_null();
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_negate_binary() {
+        let expression = Reference::new("a").less_than(Datum::long(5));
+
+        let expected = Reference::new("a").greater_than_or_equal_to(Datum::long(5));
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_negate_set() {
+        let expression = Reference::new("a").is_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+
+        let expected =
+            Reference::new("a").is_not_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+
+        let result = expression.negate();
+
+        assert_eq!(result, expected);
+    }
 }
