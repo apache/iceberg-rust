@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg REST API implementation.
+use iceberg::{Error, ErrorKind};
 
-#![deny(missing_docs)]
-
-mod catalog;
-mod error;
-pub use catalog::*;
+/// Format an sqlx error into iceberg error.
+pub fn from_sqlx_error(error: sqlx::Error) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        "operation failed for hitting io error".to_string(),
+    )
+    .with_source(error)
+}
