@@ -17,7 +17,7 @@
 
 //! Table scan api.
 
-use crate::file_record_batch_reader::FileRecordBatchReader;
+use crate::arrow::ArrowReader;
 use crate::io::FileIO;
 use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
@@ -32,6 +32,7 @@ pub struct TableScanBuilder<'a> {
     // Empty column names means to select all columns
     column_names: Vec<String>,
     snapshot_id: Option<i64>,
+    batch_size: Option<usize>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -40,7 +41,15 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: vec![],
             snapshot_id: None,
+            batch_size: None,
         }
+    }
+
+    /// Sets the desired size of batches in the response
+    /// to something other than the default
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
+        self
     }
 
     /// Select all columns.
@@ -111,6 +120,7 @@ impl<'a> TableScanBuilder<'a> {
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
             schema,
+            batch_size: self.batch_size,
         })
     }
 }
@@ -124,6 +134,7 @@ pub struct TableScan {
     file_io: FileIO,
     column_names: Vec<String>,
     schema: SchemaRef,
+    batch_size: Option<usize>,
 }
 
 /// A stream of [`FileScanTask`].
@@ -165,11 +176,8 @@ impl TableScan {
         Ok(iter(file_scan_tasks).boxed())
     }
 
-    pub async fn execute(
-        &self,
-        batch_size: Option<usize>,
-    ) -> crate::Result<ArrowRecordBatchStream> {
-        FileRecordBatchReader::new(self.file_io.clone(), self.schema.clone(), batch_size)
+    pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
+        ArrowReader::new(self.file_io.clone(), self.schema.clone(), self.batch_size)
             .read(self.plan_files().await?)
     }
 }
@@ -503,7 +511,7 @@ mod tests {
         // Create table scan for current snapshot and plan files
         let table_scan = fixture.table.scan().build().unwrap();
 
-        let batch_stream = table_scan.execute(None).await.unwrap();
+        let batch_stream = table_scan.to_arrow().await.unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 

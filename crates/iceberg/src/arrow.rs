@@ -29,17 +29,17 @@ use crate::spec::SchemaRef;
 const DEFAULT_BATCH_SIZE: usize = 1024;
 
 /// Reads data from Parquet files
-pub struct FileRecordBatchReader {
+pub struct ArrowReader {
     batch_size: Option<usize>,
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
 }
 
-impl FileRecordBatchReader {
-    /// Constructs a new FileRecordBatchReader
+impl ArrowReader {
+    /// Constructs a new ArrowReader
     pub fn new(file_io: FileIO, schema: SchemaRef, batch_size: Option<usize>) -> Self {
-        FileRecordBatchReader {
+        ArrowReader {
             batch_size,
             file_io,
             schema,
