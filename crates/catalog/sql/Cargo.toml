@@ -32,19 +32,19 @@ keywords = ["iceberg", "sql", "catalog"]
 anyhow = "1"
 async-trait = { workspace = true }
 chrono = { workspace = true }
+dashmap = "5.5.3"
+futures = { workspace = true }
 iceberg = { workspace = true }
 log = "0.4.20"
+opendal = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 typed-builder = { workspace = true }
+url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-dashmap = "5.5.3"
-futures = { workspace = true }
 sqlx = { version = "0.7.2", features = ["runtime-tokio-rustls", "any", "sqlite", "postgres", "mysql"], default-features = false }
-url = { workspace = true }
-opendal = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
