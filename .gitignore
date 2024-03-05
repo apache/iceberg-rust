@@ -17,7 +17,8 @@
 
 /target
 /Cargo.lock
-.idea
+.idea/*
+!.idea/vcs.xml
 .vscode
 **/.DS_Store
 dist/*
