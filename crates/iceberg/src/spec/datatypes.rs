@@ -171,13 +171,13 @@ pub enum PrimitiveType {
     Int,
     /// 64-bit signed integer
     Long,
-    /// 32-bit IEEE 754 floating bit.
+    /// 32-bit IEEE 754 floating point.
     Float,
-    /// 64-bit IEEE 754 floating bit.
+    /// 64-bit IEEE 754 floating point.
     Double,
     /// Fixed point decimal
     Decimal {
-        /// Precision
+        /// Precision, must be 38 or less
         precision: u32,
         /// Scale
         scale: u32,

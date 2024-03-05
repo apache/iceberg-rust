@@ -228,7 +228,7 @@ impl Datum {
         }
     }
 
-    /// Creates an 32bit floating point number.
+    /// Creates an 64bit floating point number.
     ///
     /// Example:
     /// ```rust
@@ -265,7 +265,7 @@ impl Datum {
         }
     }
 
-    /// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
+    /// Creates date literal in `%Y-%m-%d` format, assume in utc timezone.
     ///
     /// See [`NaiveDate::from_str`].
     ///
@@ -289,7 +289,7 @@ impl Datum {
         Ok(Self::date(date_from_naive_date(t)))
     }
 
-    /// Create a date from calendar date (year, month and day).
+    /// Create date literal from calendar date (year, month and day).
     ///
     /// See [`NaiveDate::from_ymd_opt`].
     ///
@@ -313,9 +313,9 @@ impl Datum {
         Ok(Self::date(date_from_naive_date(t)))
     }
 
-    /// Creates time in microseconds directly.
+    /// Creates time literal in microseconds directly.
     ///
-    /// It will returns error when it's negative or too large to fit in 24 hours.
+    /// It will return error when it's negative or too large to fit in 24 hours.
     ///
     /// Example:
     ///
@@ -364,7 +364,7 @@ impl Datum {
         }
     }
 
-    /// Creates time in microseconds in `%H:%M:%S:.f` format.
+    /// Creates time literal in microseconds in `%H:%M:%S:.f` format.
     ///
     /// See [`NaiveTime::from_str`] for details.
     ///
