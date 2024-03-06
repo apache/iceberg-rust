@@ -135,6 +135,15 @@ impl Type {
         ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
     }
+
+    /// Check if it's float or double type.
+    #[inline(always)]
+    pub fn is_floating_type(&self) -> bool {
+        matches!(
+            self,
+            Type::Primitive(PrimitiveType::Float) | Type::Primitive(PrimitiveType::Double)
+        )
+    }
 }
 
 impl From<PrimitiveType> for Type {

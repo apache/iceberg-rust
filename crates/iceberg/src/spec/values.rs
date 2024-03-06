@@ -658,6 +658,21 @@ impl Datum {
             unreachable!("Decimal type must be primitive.")
         }
     }
+
+    /// Convert the datum to `target_type`.
+    pub fn to(self, target_type: &Type) -> Result<Datum> {
+        // TODO: We should allow more type conversions
+        match target_type {
+            Type::Primitive(typ) if typ == &self.r#type => Ok(self),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Can't convert datum from {} type to {} type.",
+                    self.r#type, target_type
+                ),
+            )),
+        }
+    }
 }
 
 /// Values present in iceberg type
