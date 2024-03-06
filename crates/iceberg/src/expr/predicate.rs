@@ -26,6 +26,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Not;
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
+#[derive(PartialEq)]
 pub struct LogicalExpression<T, const N: usize> {
     inputs: [Box<T>; N],
 }
@@ -54,6 +55,7 @@ impl<T, const N: usize> LogicalExpression<T, N> {
 }
 
 /// Unary predicate, for example, `a IS NULL`.
+#[derive(PartialEq)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
     op: PredicateOperator,
@@ -84,6 +86,7 @@ impl<T> UnaryExpression<T> {
 }
 
 /// Binary predicate, for example, `a > 10`.
+#[derive(PartialEq)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
     op: PredicateOperator,
@@ -117,6 +120,7 @@ impl<T: Display> Display for BinaryExpression<T> {
 }
 
 /// Set predicates, for example, `a in (1, 2, 3)`.
+#[derive(PartialEq)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
     op: PredicateOperator,
@@ -137,8 +141,12 @@ impl<T: Debug> Debug for SetExpression<T> {
 }
 
 /// Unbound predicate expression before binding to a schema.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Predicate {
+    /// An expression always evaluates to true.
+    AlwaysTrue,
+    /// An expression always evaluates to false.
+    AlwaysFalse,
     /// And predicate, for example, `a > 10 AND b < 20`.
     And(LogicalExpression<Predicate, 2>),
     /// Or predicate, for example, `a > 10 OR b < 20`.
@@ -184,6 +192,12 @@ impl Display for Predicate {
                         .join(", ")
                 )
             }
+            Predicate::AlwaysTrue => {
+                write!(f, "ALWAYS TRUE")
+            }
+            Predicate::AlwaysFalse => {
+                write!(f, "ALWAYS FALSE")
+            }
         }
     }
 }
@@ -196,17 +210,29 @@ impl Predicate {
     /// ```rust
     /// use std::ops::Bound::Unbounded;
     /// use iceberg::expr::BoundPredicate::Unary;
+    /// use iceberg::expr::Predicate::{AlwaysTrue, AlwaysFalse};
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
     ///
-    /// let expr = expr1.and(expr2);
+    /// let expr3 = expr1.and(expr2);
     ///
-    /// assert_eq!(&format!("{expr}"), "(a < 10) AND (b < 20)");
+    /// assert_eq!(&format!("{expr3}"), "(a < 10) AND (b < 20)");
+    ///
+    /// let expr4 = AlwaysTrue;
+    ///
+    /// let expr5 = AlwaysFalse;
+    ///
+    /// let expr6 = expr4.and(expr5);
+    ///
+    /// assert_eq!(&format!("{expr6}"), "ALWAYS FALSE");
     /// ```
     pub fn and(self, other: Predicate) -> Predicate {
+        if self == Predicate::AlwaysFalse || other == Predicate::AlwaysFalse {
+            return Predicate::AlwaysFalse;
+        }
         Predicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
     }
 
@@ -217,17 +243,29 @@ impl Predicate {
     /// ```rust
     /// use std::ops::Bound::Unbounded;
     /// use iceberg::expr::BoundPredicate::Unary;
+    /// use iceberg::expr::Predicate::{AlwaysTrue, AlwaysFalse};
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
     ///
-    /// let expr = expr1.or(expr2);
+    /// let expr3 = expr1.or(expr2);
     ///
-    /// assert_eq!(&format!("{expr}"), "(a < 10) OR (b < 20)");
+    /// assert_eq!(&format!("{expr3}"), "(a < 10) OR (b < 20)");
+    ///
+    /// let expr4 = AlwaysTrue;
+    ///
+    /// let expr5 = AlwaysFalse;
+    ///
+    /// let expr6 = expr4.or(expr5);
+    ///
+    /// assert_eq!(&format!("{expr6}"), "ALWAYS TRUE");
     /// ```
     pub fn or(self, other: Predicate) -> Predicate {
+        if self == Predicate::AlwaysTrue || other == Predicate::AlwaysTrue {
+            return Predicate::AlwaysTrue;
+        }
         Predicate::Or(LogicalExpression::new([Box::new(self), Box::new(other)]))
     }
 }
@@ -239,17 +277,29 @@ impl Not for Predicate {
     /// # Example
     ///     
     ///```rust
-    ///use std::ops::Bound::Unbounded;
-    ///use iceberg::expr::BoundPredicate::Unary;
-    ///use iceberg::expr::Reference;
-    ///use iceberg::spec::Datum;
-    ///let expr1 = Reference::new("a").less_than(Datum::long(10));
+    /// use std::ops::Bound::Unbounded;
+    /// use iceberg::expr::BoundPredicate::Unary;
+    /// use iceberg::expr::Predicate::{AlwaysTrue, AlwaysFalse};
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///     
-    ///let expr = !expr1;
+    /// let expr2 = !expr1;
     ///     
-    ///assert_eq!(&format!("{expr}"), "NOT (a < 10)");
+    /// assert_eq!(&format!("{expr2}"), "NOT (a < 10)");
+    ///
+    /// let expr3 = AlwaysTrue;
+    ///
+    /// let expr4 = !expr3;
+    ///
+    /// assert_eq!(&format!("{expr4}"), "ALWAYS FALSE");
     ///```
     fn not(self) -> Self::Output {
+        if self == Predicate::AlwaysFalse {
+            return Predicate::AlwaysTrue;
+        } else if self == Predicate::AlwaysTrue {
+            return Predicate::AlwaysFalse;
+        }
         Predicate::Not(LogicalExpression::new([Box::new(self)]))
     }
 }

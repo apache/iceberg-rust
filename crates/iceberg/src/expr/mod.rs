@@ -30,7 +30,7 @@ pub use predicate::*;
 /// The discriminant of this enum is used for determining the type of the operator, see
 /// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
 pub enum PredicateOperator {
     // Unary operators
@@ -52,10 +52,6 @@ pub enum PredicateOperator {
     // Set operators
     In = 301,
     NotIn = 302,
-
-    // True and False binary operator
-    AlwaysTrue = 401,
-    AlwaysFalse = 402,
 }
 
 impl Display for PredicateOperator {
@@ -75,8 +71,6 @@ impl Display for PredicateOperator {
             PredicateOperator::NotIn => write!(f, "NOT IN"),
             PredicateOperator::StartsWith => write!(f, "STARTS WITH"),
             PredicateOperator::NotStartsWith => write!(f, "NOT STARTS WITH"),
-            PredicateOperator::AlwaysTrue => write!(f, "IS ALWAYS TRUE"),
-            PredicateOperator::AlwaysFalse => write!(f, "IS ALWAYS FALSE"),
         }
     }
 }

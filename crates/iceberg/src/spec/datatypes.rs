@@ -162,7 +162,7 @@ impl From<MapType> for Type {
 }
 
 /// Primitive data types
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 #[serde(rename_all = "lowercase", remote = "Self")]
 pub enum PrimitiveType {
     /// True or False
