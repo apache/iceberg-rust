@@ -15,29 +15,34 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "iceberg-catalog-hms"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-rust-version = { workspace = true }
+version: '3.8'
 
-categories = ["database"]
-description = "Apache Iceberg Hive Metastore Catalog Support"
-repository = { workspace = true }
-license = { workspace = true }
-keywords = ["iceberg", "hive", "catalog"]
+services:
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_DOMAIN=minio
+    command: [ "server", "/data", "--console-address", ":9001" ]
 
-[dependencies]
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-hive_metastore = { workspace = true }
-iceberg = { workspace = true }
-typed-builder = { workspace = true }
-volo-thrift = { workspace = true }
-log = "0.4.20"
+  hive-mysql:
+    image: mysql:5.7
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=admin
+      - MYSQL_DATABASE=metastore
+      - MYSQL_USER=hive
+      - MYSQL_PASSWORD=hive
 
-[dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-port_scanner = { workspace = true }
-tokio = { workspace = true }
+  hive-metastore:
+    image: iceberg-hms
+    build: ./
+    depends_on:
+      - hive-mysql
+    ports:
+      - "9083:9083"
