@@ -18,12 +18,17 @@
 //! Table scan api.
 
 use crate::io::FileIO;
-use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
+use crate::spec::{
+    DataContentType, Manifest, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef,
+};
 use crate::table::Table;
-use crate::{Error, ErrorKind};
+use crate::{runtime, Error, ErrorKind};
 use arrow_array::RecordBatch;
+use futures::future::try_join_all;
 use futures::stream::{iter, BoxStream};
 use futures::StreamExt;
+use itertools::Itertools;
+use std::sync::Arc;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -106,7 +111,7 @@ impl<'a> TableScanBuilder<'a> {
 
         Ok(TableScan {
             snapshot,
-            file_io: self.table.file_io().clone(),
+            file_io: Arc::new(self.table.file_io().clone()),
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
             schema,
@@ -120,7 +125,7 @@ impl<'a> TableScanBuilder<'a> {
 pub struct TableScan {
     snapshot: SnapshotRef,
     table_metadata: TableMetadataRef,
-    file_io: FileIO,
+    file_io: Arc<FileIO>,
     column_names: Vec<String>,
     schema: SchemaRef,
 }
@@ -138,10 +143,21 @@ impl TableScan {
 
         // Generate data file stream
         let mut file_scan_tasks = Vec::with_capacity(manifest_list.entries().len());
-        for manifest_list_entry in manifest_list.entries().iter() {
-            // Data file
-            let manifest = manifest_list_entry.load_manifest(&self.file_io).await?;
 
+        let tasks = manifest_list
+            .entries()
+            .iter()
+            .map(|manifest| {
+                let cloned_manifest = Arc::new(manifest.clone());
+                let file_io = self.file_io.clone();
+                async move { cloned_manifest.load_manifest(file_io).await }
+            })
+            .map(runtime::spawn)
+            .collect_vec();
+
+        let manifests: Vec<Manifest> = try_join_all(tasks).await?;
+
+        for manifest in manifests {
             for manifest_entry in manifest.entries().iter().filter(|e| e.is_alive()) {
                 match manifest_entry.content_type() {
                     DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
@@ -160,7 +176,6 @@ impl TableScan {
                 }
             }
         }
-
         Ok(iter(file_scan_tasks).boxed())
     }
 }
