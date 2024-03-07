@@ -23,7 +23,6 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::{any::Any, collections::BTreeMap};
 
-use crate::error::Result;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
@@ -32,16 +31,17 @@ use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
-use crate::{ensure_data_valid, Error, ErrorKind};
+pub use _serde::RawLiteral;
 
-use super::datatypes::{PrimitiveType, Type};
-
+use crate::error::Result;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
 use crate::spec::values::timestamp::microseconds_to_datetime;
 use crate::spec::values::timestamptz::microseconds_to_datetimetz;
 use crate::spec::MAX_DECIMAL_PRECISION;
-pub use _serde::RawLiteral;
+use crate::{ensure_data_valid, Error, ErrorKind};
+
+use super::datatypes::{PrimitiveType, Type};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -443,7 +443,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
     pub fn timestamp_from_datetime(dt: NaiveDateTime) -> Self {
-        Self::timestamp_micros(dt.timestamp_micros())
+        Self::timestamp_micros(dt.and_utc().timestamp_micros())
     }
 
     /// Parse a timestamp in [`%Y-%m-%dT%H:%M:%S%.f`] format.
@@ -1530,7 +1530,7 @@ impl Literal {
 }
 
 mod date {
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
         date.signed_duration_since(
@@ -1542,9 +1542,12 @@ mod date {
 
     pub(crate) fn days_to_date(days: i32) -> NaiveDate {
         // This shouldn't fail until the year 262000
-        NaiveDateTime::from_timestamp_opt(days as i64 * 86_400, 0)
-            .unwrap()
-            .date()
+        NaiveDate::from_num_days_from_ce_opt(
+            (DateTime::from_timestamp(days as i64 * 86_400, 0).unwrap()
+                - chrono::DateTime::UNIX_EPOCH)
+                .num_days() as i32,
+        )
+        .unwrap()
     }
 
     /// Returns unix epoch.
@@ -1578,22 +1581,23 @@ mod time {
 }
 
 mod timestamp {
-    use chrono::NaiveDateTime;
+    use chrono::{DateTime, NaiveDateTime, Utc};
 
     pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> i64 {
-        time.timestamp_micros()
+        time.and_utc().timestamp_micros()
     }
 
-    pub(crate) fn microseconds_to_datetime(micros: i64) -> NaiveDateTime {
+    pub(crate) fn microseconds_to_datetime(micros: i64) -> DateTime<Utc> {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
         // This shouldn't fail until the year 262000
-        NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap()
+        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
     }
 }
 
 mod timestamptz {
-    use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+    use chrono::DateTime;
+    use chrono::Utc;
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
@@ -1602,22 +1606,13 @@ mod timestamptz {
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
-        Utc.from_utc_datetime(
-            // This shouldn't fail until the year 262000
-            &NaiveDateTime::from_timestamp_opt(secs, rem as u32 * 1_000).unwrap(),
-        )
+        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
     }
 }
 
 mod _serde {
     use std::collections::BTreeMap;
 
-    use crate::{
-        spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME},
-        Error, ErrorKind,
-    };
-
-    use super::{Literal, PrimitiveLiteral};
     use serde::{
         de::Visitor,
         ser::{SerializeMap, SerializeSeq, SerializeStruct},
@@ -1626,6 +1621,13 @@ mod _serde {
     use serde_bytes::ByteBuf;
     use serde_derive::Deserialize as DeserializeDerive;
     use serde_derive::Serialize as SerializeDerive;
+
+    use crate::{
+        spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME},
+        Error, ErrorKind,
+    };
+
+    use super::{Literal, PrimitiveLiteral};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -2186,7 +2188,6 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
-
     use apache_avro::{to_value, types::Value};
 
     use crate::{
