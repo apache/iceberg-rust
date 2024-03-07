@@ -17,14 +17,14 @@
 
 //! Term definition.
 
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression};
-use crate::expr::{Bind, UnaryExpression};
+use std::fmt::{Display, Formatter};
+
+use fnv::FnvHashSet;
+
+use crate::expr::Bind;
+use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
 use crate::{Error, ErrorKind};
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
-use crate::spec::{Datum, NestedField, NestedFieldRef};
-use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
 
 /// Unbound term before binding to a schema.
 pub type Term = Reference;
@@ -66,41 +66,6 @@ impl Reference {
             PredicateOperator::LessThan,
             self,
             datum,
-        ))
-    }
-
-    /// Creates an is null expression. For example, `a IS NULL`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    ///
-    /// use iceberg::expr::Reference;
-    /// let expr = Reference::new("a").is_null();
-    ///
-    /// assert_eq!(&format!("{expr}"), "a IS NULL");
-    /// ```
-    pub fn is_null(self) -> Predicate {
-        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNull, self))
-    }
-
-    /// Creates an in expression. For example, `a IN (1, 2, 3)`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    ///
-    /// use iceberg::expr::Reference;
-    /// use iceberg::spec::Datum;
-    /// let expr = Reference::new("a").r#in(vec![Datum::long(1), Datum::long(2), Datum::long(3)]);
-    ///
-    /// assert_eq!(&format!("{expr}"), "a IN (1, 3, 2)");
-    /// ```
-    pub fn r#in(self, values: impl IntoIterator<Item = Datum>) -> Predicate {
-        Predicate::Set(SetExpression::new(
-            PredicateOperator::In,
-            self,
-            values.into_iter().collect(),
         ))
     }
 
@@ -162,16 +127,20 @@ impl Reference {
     ///
     /// ```rust
     ///
-    /// use std::collections::HashSet;
+    /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// let expr = Reference::new("a").is_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    /// let expr = Reference::new("a").is_in([Datum::long(5), Datum::long(6)]);
     ///
     /// let as_string = format!("{expr}");
     /// assert!(&as_string == "a IN (5, 6)" || &as_string == "a IN (6, 5)");
     /// ```
-    pub fn is_in(self, literals: HashSet<Datum>) -> Predicate {
-        Predicate::Set(SetExpression::new(PredicateOperator::In, self, literals))
+    pub fn is_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            self,
+            FnvHashSet::from_iter(literals),
+        ))
     }
 
     /// Creates an is-not-in expression. For example, `a IS NOT IN (5, 6)`.
@@ -180,16 +149,20 @@ impl Reference {
     ///
     /// ```rust
     ///
-    /// use std::collections::HashSet;
+    /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// let expr = Reference::new("a").is_not_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    /// let expr = Reference::new("a").is_not_in([Datum::long(5), Datum::long(6)]);
     ///
     /// let as_string = format!("{expr}");
     /// assert!(&as_string == "a NOT IN (5, 6)" || &as_string == "a NOT IN (6, 5)");
     /// ```
-    pub fn is_not_in(self, literals: HashSet<Datum>) -> Predicate {
-        Predicate::Set(SetExpression::new(PredicateOperator::NotIn, self, literals))
+    pub fn is_not_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::NotIn,
+            self,
+            FnvHashSet::from_iter(literals),
+        ))
     }
 }
 
@@ -254,9 +227,10 @@ pub type BoundTerm = BoundReference;
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::expr::{Bind, BoundReference, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
-    use std::sync::Arc;
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -289,10 +263,10 @@ mod tests {
     #[test]
     fn test_bind_reference_case_insensitive() {
         let schema = table_schema_simple();
-        let reference = Reference::new("BaR").bind(schema, false).unwrap();
+        let reference = Reference::new("BAR").bind(schema, false).unwrap();
 
         let expected_ref = BoundReference::new(
-            "BaR",
+            "BAR",
             NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
         );
 
@@ -310,7 +284,7 @@ mod tests {
     #[test]
     fn test_bind_reference_case_insensitive_failure() {
         let schema = table_schema_simple();
-        let result = Reference::new("BaR_non").bind(schema, false);
+        let result = Reference::new("bar_non_exist").bind(schema, false);
         assert!(result.is_err());
     }
 }

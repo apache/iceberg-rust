@@ -106,7 +106,7 @@ impl Display for Datum {
             (_, PrimitiveLiteral::TimestampTZ(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
-            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (_, PrimitiveLiteral::UUID(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
