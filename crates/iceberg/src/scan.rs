@@ -18,14 +18,17 @@
 //! Table scan api.
 
 use crate::io::FileIO;
-use crate::spec::{DataContentType, Manifest, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
+use crate::spec::{
+    DataContentType, Manifest, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef,
+};
 use crate::table::Table;
-use crate::{Error, ErrorKind};
+use crate::{runtime, Error, ErrorKind};
 use arrow_array::RecordBatch;
 use futures::future::try_join_all;
 use futures::stream::{iter, BoxStream};
 use futures::StreamExt;
 use itertools::Itertools;
+use std::sync::Arc;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -51,7 +54,7 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Select some columns of the table.
-    pub fn select(mut self, column_names: impl IntoIterator<Item=impl ToString>) -> Self {
+    pub fn select(mut self, column_names: impl IntoIterator<Item = impl ToString>) -> Self {
         self.column_names = column_names
             .into_iter()
             .map(|item| item.to_string())
@@ -108,7 +111,7 @@ impl<'a> TableScanBuilder<'a> {
 
         Ok(TableScan {
             snapshot,
-            file_io: self.table.file_io().clone(),
+            file_io: Arc::new(self.table.file_io().clone()),
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
             schema,
@@ -122,7 +125,7 @@ impl<'a> TableScanBuilder<'a> {
 pub struct TableScan {
     snapshot: SnapshotRef,
     table_metadata: TableMetadataRef,
-    file_io: FileIO,
+    file_io: Arc<FileIO>,
     column_names: Vec<String>,
     schema: SchemaRef,
 }
@@ -141,7 +144,17 @@ impl TableScan {
         // Generate data file stream
         let mut file_scan_tasks = Vec::with_capacity(manifest_list.entries().len());
 
-        let tasks = manifest_list.entries().iter().map(|m| m.load_manifest(&self.file_io)).collect_vec();
+        let tasks = manifest_list
+            .entries()
+            .iter()
+            .map(|manifest| {
+                let cloned_manifest = Arc::new(manifest.clone());
+                let file_io = self.file_io.clone();
+                async move { cloned_manifest.load_manifest(file_io).await }
+            })
+            .map(runtime::spawn)
+            .collect_vec();
+
         let manifests: Vec<Manifest> = try_join_all(tasks).await?;
 
         for manifest in manifests {
@@ -225,7 +238,7 @@ mod tests {
                     "{}/testdata/example_table_metadata_v2.json",
                     env!("CARGO_MANIFEST_DIR")
                 ))
-                    .unwrap();
+                .unwrap();
                 let mut context = Context::new();
                 context.insert("table_location", &table_location);
                 context.insert("manifest_list_1_location", &manifest_list1_location);
@@ -341,64 +354,64 @@ mod tests {
             current_snapshot.snapshot_id(),
             vec![],
         )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((**current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
+        .write(Manifest::new(
+            ManifestMetadata::builder()
+                .schema((*current_schema).clone())
+                .content(ManifestContentType::Data)
+                .format_version(FormatVersion::V2)
+                .partition_spec((**current_partition_spec).clone())
+                .schema_id(current_schema.schema_id())
+                .build(),
+            vec![
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/1.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build(),
+                    )
                     .build(),
-                vec![
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Added)
-                        .data_file(
-                            DataFile::builder()
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/1.parquet", &fixture.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                .build(),
-                        )
-                        .build(),
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Deleted)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFile::builder()
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/2.parquet", &fixture.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(200))]))
-                                .build(),
-                        )
-                        .build(),
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Existing)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFile::builder()
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/3.parquet", &fixture.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(300))]))
-                                .build(),
-                        )
-                        .build(),
-                ],
-            ))
-            .await
-            .unwrap();
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Deleted)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/2.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(200))]))
+                            .build(),
+                    )
+                    .build(),
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Existing)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFile::builder()
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/3.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(300))]))
+                            .build(),
+                    )
+                    .build(),
+            ],
+        ))
+        .await
+        .unwrap();
 
         // Write to manifest list
         let mut manifest_list_write = ManifestListWriter::v2(

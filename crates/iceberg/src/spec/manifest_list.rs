@@ -17,6 +17,7 @@
 
 //! ManifestList for Iceberg.
 
+use std::sync::Arc;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::io::FileIO;
@@ -634,7 +635,7 @@ impl ManifestFile {
     /// Load [`Manifest`].
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
-    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
+    pub async fn load_manifest(&self, file_io: Arc<FileIO>) -> Result<Manifest> {
         let mut avro = Vec::new();
         file_io
             .new_input(&self.manifest_path)?
