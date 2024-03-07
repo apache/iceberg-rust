@@ -125,12 +125,35 @@ impl Catalog for HmsCatalog {
             .collect())
     }
 
+    /// Creates a new namespace with the given identifier and properties.
+    ///
+    /// Attempts to create a namespace defined by the `namespace`
+    /// parameter and configured with the specified `properties`.
+    ///
+    /// This function can return an error in the following situations:
+    ///
+    /// - If `hive.metastore.database.owner-type` is specified without  
+    /// `hive.metastore.database.owner`,
+    /// - Errors from `validate_namespace` if the namespace identifier does not
+    /// meet validation criteria.
+    /// - Errors from `convert_to_database` if the properties cannot be  
+    /// successfully converted into a database configuration.
+    /// - Errors from the underlying database creation process, converted using
+    /// `from_thrift_error`.
     async fn create_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        todo!()
+        let database = convert_to_database(namespace, &properties)?;
+
+        self.client
+            .0
+            .create_database(database)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(Namespace::new(namespace.clone()))
     }
 
     async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {

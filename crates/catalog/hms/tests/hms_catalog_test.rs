@@ -17,7 +17,9 @@
 
 //! Integration tests for hms catalog.
 
-use iceberg::{Catalog, NamespaceIdent};
+use std::collections::HashMap;
+
+use iceberg::{Catalog, Namespace, NamespaceIdent};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -25,6 +27,7 @@ use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
+type Result<T> = std::result::Result<T, iceberg::Error>;
 
 struct TestFixture {
     _docker_compose: DockerCompose,
@@ -67,12 +70,48 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 }
 
 #[tokio::test]
-async fn test_list_namespace() {
+async fn test_list_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_list_namespace").await;
 
-    let expected = vec![NamespaceIdent::from_strs(["default"]).unwrap()];
+    let expected_no_parent = vec![NamespaceIdent::new("default".into())];
+    let result_no_parent = fixture.hms_catalog.list_namespaces(None).await?;
 
-    let result = fixture.hms_catalog.list_namespaces(None).await.unwrap();
+    let result_with_parent = fixture
+        .hms_catalog
+        .list_namespaces(Some(&NamespaceIdent::new("parent".into())))
+        .await?;
 
-    assert_eq!(expected, result)
+    assert_eq!(expected_no_parent, result_no_parent);
+    assert!(result_with_parent.len() == 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_create_namespace").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("my_namespace".to_string()));
+    let properties = HashMap::from([
+        ("comment".to_string(), "my_description".to_string()),
+        ("location".to_string(), "my_location".to_string()),
+        (
+            "hive.metastore.database.owner".to_string(),
+            "apache".to_string(),
+        ),
+        (
+            "hive.metastore.database.owner-type".to_string(),
+            "user".to_string(),
+        ),
+        ("key1".to_string(), "value1".to_string()),
+    ]);
+
+    let result = fixture
+        .hms_catalog
+        .create_namespace(ns.name(), properties)
+        .await?;
+
+    assert_eq!(result, ns);
+
+    Ok(())
 }
