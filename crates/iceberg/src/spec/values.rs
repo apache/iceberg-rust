@@ -529,7 +529,7 @@ impl Datum {
     /// use iceberg::spec::Datum;
     /// let t = Datum::string("ss");
     ///
-    /// assert_eq!(&format!("{t}"), "ss");
+    /// assert_eq!(&format!("{t}"), r#""ss""#);
     /// ```
     pub fn string<S: ToString>(s: S) -> Self {
         Self {
