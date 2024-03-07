@@ -851,11 +851,19 @@ impl ManifestEntry {
     }
 
     /// Content type of this manifest entry.
+    #[inline]
     pub fn content_type(&self) -> DataContentType {
         self.data_file.content
     }
 
+    /// File format of this manifest entry.
+    #[inline]
+    pub fn file_format(&self) -> DataFileFormat {
+        self.data_file.file_format
+    }
+
     /// Data file path of this manifest entry.
+    #[inline]
     pub fn file_path(&self) -> &str {
         &self.data_file.file_path
     }
