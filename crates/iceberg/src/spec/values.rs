@@ -1530,7 +1530,7 @@ impl Literal {
 }
 
 mod date {
-    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
         date.signed_duration_since(
@@ -1542,12 +1542,9 @@ mod date {
 
     pub(crate) fn days_to_date(days: i32) -> NaiveDate {
         // This shouldn't fail until the year 262000
-        NaiveDate::from_num_days_from_ce_opt(
-            (DateTime::from_timestamp(days as i64 * 86_400, 0).unwrap()
-                - chrono::DateTime::UNIX_EPOCH)
-                .num_days() as i32,
-        )
-        .unwrap()
+        (chrono::DateTime::UNIX_EPOCH + TimeDelta::try_days(days as i64).unwrap())
+            .naive_utc()
+            .date()
     }
 
     /// Returns unix epoch.
@@ -1581,17 +1578,15 @@ mod time {
 }
 
 mod timestamp {
-    use chrono::{DateTime, NaiveDateTime, Utc};
+    use chrono::{DateTime, NaiveDateTime};
 
     pub(crate) fn datetime_to_microseconds(time: &NaiveDateTime) -> i64 {
         time.and_utc().timestamp_micros()
     }
 
-    pub(crate) fn microseconds_to_datetime(micros: i64) -> DateTime<Utc> {
-        let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
-
+    pub(crate) fn microseconds_to_datetime(micros: i64) -> NaiveDateTime {
         // This shouldn't fail until the year 262000
-        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+        DateTime::from_timestamp_micros(micros).unwrap().naive_utc()
     }
 }
 
