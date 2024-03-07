@@ -84,7 +84,7 @@ pub enum PrimitiveLiteral {
 ///
 /// By default, we decouple the type and value of a literal, so we can use avoid the cost of storing extra type info
 /// for each literal. But associate type with literal can be useful in some cases, for example, in unbound expression.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash, Eq)]
 pub struct Datum {
     r#type: PrimitiveType,
     literal: PrimitiveLiteral,
