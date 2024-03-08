@@ -335,7 +335,7 @@ impl Catalog for HmsCatalog {
             .map_err(from_thrift_error)?;
 
         let properties = HmsCatalog::properties_from_database(&db);
-        let ns = Namespace::with_properties(NamespaceIdent::new(name.into()), properties);
+        let ns = Namespace::with_properties(NamespaceIdent::new(name), properties);
 
         Ok(ns)
     }
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(db.owner_type, Some(PrincipalType::User));
 
         if let Some(params) = db.parameters {
-            assert_eq!(params.get("key1".into()), Some(&FastStr::from("value1")));
+            assert_eq!(params.get("key1"), Some(&FastStr::from("value1")));
         }
 
         Ok(())
@@ -573,12 +573,9 @@ mod tests {
         let inputs = vec!["iceberg", "is/", "/nice/", "really/nice/", "/"];
         let outputs = vec!["/iceberg", "/is", "/nice", "/really/nice", "/"];
 
-        inputs
-            .into_iter()
-            .zip(outputs.into_iter())
-            .for_each(|(inp, out)| {
-                let location = HmsCatalog::format_location_uri(inp.to_string());
-                assert_eq!(location, out);
-            })
+        inputs.into_iter().zip(outputs).for_each(|(inp, out)| {
+            let location = HmsCatalog::format_location_uri(inp.to_string());
+            assert_eq!(location, out);
+        })
     }
 }

@@ -82,7 +82,7 @@ async fn test_list_namespace() -> Result<()> {
         .await?;
 
     assert_eq!(expected_no_parent, result_no_parent);
-    assert!(result_with_parent.len() == 0);
+    assert!(result_with_parent.is_empty());
 
     Ok(())
 }
