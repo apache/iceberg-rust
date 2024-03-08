@@ -20,9 +20,9 @@ version: '3.8'
 services:
   minio:
     image: minio/minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    expose:
+      - 9000
+      - 9001
     environment:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
@@ -31,8 +31,8 @@ services:
 
   hive-mysql:
     image: mysql:5.7
-    ports:
-      - "3306:3306"
+    expose:
+      - 3306
     environment:
       - MYSQL_ROOT_PASSWORD=admin
       - MYSQL_DATABASE=metastore
@@ -44,5 +44,5 @@ services:
     build: ./
     depends_on:
       - hive-mysql
-    ports:
-      - "9083:9083"
+    expose:
+      - 9083
