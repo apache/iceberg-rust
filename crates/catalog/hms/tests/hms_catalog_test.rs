@@ -211,3 +211,16 @@ async fn test_drop_namespace() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_list_tables() -> Result<()> {
+    let fixture = set_test_fixture("test_list_tables").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
+
+    assert_eq!(result, vec![]);
+
+    Ok(())
+}

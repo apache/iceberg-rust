@@ -427,8 +427,22 @@ impl Catalog for HmsCatalog {
         Ok(())
     }
 
-    async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        todo!()
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        let name = HmsCatalog::validate_namespace(namespace)?;
+
+        let tables = self
+            .client
+            .0
+            .get_all_tables(name.clone().into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        let tables = tables
+            .iter()
+            .map(|table| TableIdent::new(namespace.clone(), table.to_string()))
+            .collect();
+
+        Ok(tables)
     }
 
     async fn create_table(
