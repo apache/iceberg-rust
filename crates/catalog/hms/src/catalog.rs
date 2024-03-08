@@ -19,6 +19,7 @@ use super::utils::*;
 use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;
 use hive_metastore::ThriftHiveMetastoreClientBuilder;
+use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -28,6 +29,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
 use typed_builder::TypedBuilder;
+use volo_thrift::ResponseError;
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
@@ -97,7 +99,6 @@ impl HmsCatalog {
     }
 }
 
-/// Refer to <https://github.com/apache/iceberg/blob/main/hive-metastore/src/main/java/org/apache/iceberg/hive/HiveCatalog.java> for implementation details.
 #[async_trait]
 impl Catalog for HmsCatalog {
     /// HMS doesn't support nested namespaces.
@@ -182,8 +183,36 @@ impl Catalog for HmsCatalog {
         Ok(ns)
     }
 
-    async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
-        todo!()
+    /// Checks if a namespace exists within the Hive Metastore.
+    ///
+    /// Validates the namespace identifier by querying the Hive Metastore
+    /// to determine if the specified namespace (database) exists.
+    ///
+    /// # Returns
+    /// A `Result<bool>` indicating the outcome of the check:
+    /// - `Ok(true)` if the namespace exists.
+    /// - `Ok(false)` if the namespace does not exist, identified by a specific
+    /// `UserException` variant.
+    /// - `Err(...)` if an error occurs during validation or the Hive Metastore
+    /// query, with the error encapsulating the issue.
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+        let name = validate_namespace(namespace)?;
+
+        let resp = self.client.0.get_database(name.clone().into()).await;
+
+        match resp {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if let ResponseError::UserException(ThriftHiveMetastoreGetDatabaseException::O1(
+                    _,
+                )) = &err
+                {
+                    Ok(false)
+                } else {
+                    Err(from_thrift_error(err))
+                }
+            }
+        }
     }
 
     async fn update_namespace(
@@ -194,8 +223,23 @@ impl Catalog for HmsCatalog {
         todo!()
     }
 
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
-        todo!()
+    /// Asynchronously drops a namespace from the Hive Metastore.
+    ///
+    /// # Returns
+    /// A `Result<()>` indicating the outcome:
+    /// - `Ok(())` signifies successful namespace deletion.
+    /// - `Err(...)` signifies failure to drop the namespace due to validation  
+    /// errors, connectivity issues, or Hive Metastore constraints.
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        let name = validate_namespace(namespace)?;
+
+        self.client
+            .0
+            .drop_database(name.into(), false, false)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
     async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {

@@ -145,3 +145,47 @@ async fn test_get_namespace() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_namespace_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_namespace_exists").await;
+
+    let ns_exists = Namespace::new(NamespaceIdent::new("default".into()));
+    let ns_not_exists = Namespace::new(NamespaceIdent::new("not_here".into()));
+
+    let result_exists = fixture
+        .hms_catalog
+        .namespace_exists(ns_exists.name())
+        .await?;
+    let result_not_exists = fixture
+        .hms_catalog
+        .namespace_exists(ns_not_exists.name())
+        .await?;
+
+    assert!(result_exists);
+    assert!(!result_not_exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_namespace").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("delete_me".into()));
+
+    fixture
+        .hms_catalog
+        .create_namespace(ns.name(), HashMap::new())
+        .await?;
+
+    let result = fixture.hms_catalog.namespace_exists(ns.name()).await?;
+    assert!(result);
+
+    fixture.hms_catalog.drop_namespace(ns.name()).await?;
+
+    let result = fixture.hms_catalog.namespace_exists(ns.name()).await?;
+    assert!(!result);
+
+    Ok(())
+}
