@@ -169,6 +169,28 @@ async fn test_namespace_exists() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_update_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_update_namespace").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let properties = HashMap::from([("comment".to_string(), "my_update".to_string())]);
+
+    fixture
+        .hms_catalog
+        .update_namespace(ns.name(), properties)
+        .await?;
+
+    let db = fixture.hms_catalog.get_namespace(ns.name()).await?;
+
+    assert_eq!(
+        db.properties().get("comment"),
+        Some(&"my_update".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_drop_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_drop_namespace").await;
 

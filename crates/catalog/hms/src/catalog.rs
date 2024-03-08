@@ -215,12 +215,40 @@ impl Catalog for HmsCatalog {
         }
     }
 
+    /// Asynchronously updates properties of an existing namespace.
+    ///
+    /// Converts the given namespace identifier and properties into a database
+    /// representation and then attempts to update the corresponding namespace  
+    /// in the Hive Metastore.
+    ///
+    /// # Returns
+    /// Returns `Ok(())` if the namespace update is successful. If the
+    /// namespace cannot be updated due to missing information or an error
+    /// during the update process, an `Err(...)` is returned.
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<()> {
-        todo!()
+        let db = convert_to_database(namespace, &properties)?;
+
+        let name = match &db.name {
+            Some(name) => name,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Database name must be specified",
+                ))
+            }
+        };
+
+        self.client
+            .0
+            .alter_database(name.clone(), db)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
     /// Asynchronously drops a namespace from the Hive Metastore.
