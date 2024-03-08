@@ -47,6 +47,41 @@ pub fn from_io_error(error: io::Error) -> Error {
     .with_source(error)
 }
 
+/// Create and extract properties from `hive_metastore::hms::Database`.
+pub fn properties_from_database(database: &Database) -> HashMap<String, String> {
+    let mut properties = HashMap::new();
+
+    if let Some(description) = &database.description {
+        properties.insert("comment".to_string(), description.to_string());
+    };
+
+    if let Some(location) = &database.location_uri {
+        properties.insert("location".to_string(), location.to_string());
+    };
+
+    if let Some(owner) = &database.owner_name {
+        properties.insert(HMS_DB_OWNER.to_string(), owner.to_string());
+    };
+
+    if let Some(owner_type) = &database.owner_type {
+        let value = match owner_type {
+            PrincipalType::User => "User",
+            PrincipalType::Group => "Group",
+            PrincipalType::Role => "Role",
+        };
+
+        properties.insert(HMS_DB_OWNER_TYPE.to_string(), value.to_string());
+    };
+
+    if let Some(params) = &database.parameters {
+        params.iter().for_each(|(k, v)| {
+            properties.insert(k.clone().into(), v.clone().into());
+        });
+    };
+
+    properties
+}
+
 /// Converts name and properties into `hive_metastore::hms::Database`
 /// after validating the `namespace` and `owner-settings`.
 pub fn convert_to_database(
@@ -102,7 +137,7 @@ pub fn convert_to_database(
 }
 
 /// Checks if provided `NamespaceIdent` is valid.
-fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
+pub fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
 
     if name.len() != 1 {
@@ -117,7 +152,7 @@ fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     if name.is_empty() {
         return Err(Error::new(
             ErrorKind::DataInvalid,
-            "Cannot create namespace with empty name",
+            "Invalid database, provided namespace is empty.",
         ));
     }
 
@@ -162,6 +197,26 @@ mod tests {
     use iceberg::{Namespace, NamespaceIdent};
 
     use super::*;
+
+    #[test]
+    fn test_properties_from_database() -> Result<()> {
+        let ns = NamespaceIdent::new("my_namespace".into());
+        let properties = HashMap::from([
+            ("comment".to_string(), "my_description".to_string()),
+            ("location".to_string(), "/my_location".to_string()),
+            (HMS_DB_OWNER.to_string(), "apache".to_string()),
+            (HMS_DB_OWNER_TYPE.to_string(), "User".to_string()),
+            ("key1".to_string(), "value1".to_string()),
+        ]);
+
+        let db = convert_to_database(&ns, &properties)?;
+
+        let expected = properties_from_database(&db);
+
+        assert_eq!(expected, properties);
+
+        Ok(())
+    }
 
     #[test]
     fn test_validate_owner_settings() {

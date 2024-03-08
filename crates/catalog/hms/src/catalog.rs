@@ -156,8 +156,30 @@ impl Catalog for HmsCatalog {
         Ok(Namespace::new(namespace.clone()))
     }
 
-    async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
-        todo!()
+    /// Retrieves a namespace by its identifier.
+    ///
+    /// Validates the given namespace identifier and then queries the
+    /// underlying database client to fetch the corresponding namespace data.
+    /// Constructs a `Namespace` object with the retrieved data and returns it.
+    ///
+    /// This function can return an error in any of the following situations:
+    /// - If the provided namespace identifier fails validation checks
+    /// - If there is an error querying the database, returned by
+    /// `from_thrift_error`.
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        let name = validate_namespace(namespace)?;
+
+        let db = self
+            .client
+            .0
+            .get_database(name.clone().into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        let properties = properties_from_database(&db);
+        let ns = Namespace::with_properties(NamespaceIdent::new(name.into()), properties);
+
+        Ok(ns)
     }
 
     async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {

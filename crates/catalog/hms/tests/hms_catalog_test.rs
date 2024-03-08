@@ -91,7 +91,7 @@ async fn test_list_namespace() -> Result<()> {
 async fn test_create_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_create_namespace").await;
 
-    let ns = Namespace::new(NamespaceIdent::new("my_namespace".to_string()));
+    let ns = Namespace::new(NamespaceIdent::new("my_namespace".into()));
     let properties = HashMap::from([
         ("comment".to_string(), "my_description".to_string()),
         ("location".to_string(), "my_location".to_string()),
@@ -112,6 +112,36 @@ async fn test_create_namespace() -> Result<()> {
         .await?;
 
     assert_eq!(result, ns);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_get_namespace").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let properties = HashMap::from([
+        (
+            "location".to_string(),
+            "file:/user/hive/warehouse".to_string(),
+        ),
+        (
+            "hive.metastore.database.owner-type".to_string(),
+            "Role".to_string(),
+        ),
+        ("comment".to_string(), "Default Hive database".to_string()),
+        (
+            "hive.metastore.database.owner".to_string(),
+            "public".to_string(),
+        ),
+    ]);
+
+    let expected = Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+
+    let result = fixture.hms_catalog.get_namespace(ns.name()).await?;
+
+    assert_eq!(expected, result);
 
     Ok(())
 }
