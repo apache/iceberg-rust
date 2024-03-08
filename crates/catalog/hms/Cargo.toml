@@ -33,10 +33,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
-typed-builder = { workspace = true }
-volo-thrift = { workspace = true }
 log = "0.4.20"
 pilota = "0.10.0"
+typed-builder = { workspace = true }
+volo-thrift = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
