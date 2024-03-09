@@ -101,6 +101,11 @@ impl Manifest {
             entries: entries.into_iter().map(Arc::new).collect(),
         }
     }
+
+    /// Get the ID for this Manifest's partition_spec [`PartitionSpec`]
+    pub fn partition_spec_id(&self) -> i32 {
+        self.metadata.partition_spec.spec_id
+    }
 }
 
 /// A manifest writer.
@@ -866,6 +871,10 @@ impl ManifestEntry {
     #[inline]
     pub fn file_path(&self) -> &str {
         &self.data_file.file_path
+    }
+
+    pub fn get_partition_struct(&self) -> &Struct {
+        &self.data_file.partition
     }
 
     /// Inherit data from manifest list, such as snapshot id, sequence number.

@@ -18,14 +18,23 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::BoundPredicate::AlwaysTrue;
+use crate::expr::{Bind, BoundPredicate, BoundReference, LogicalExpression, Predicate, PredicateOperator};
 use crate::io::FileIO;
-use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
+use crate::spec::{
+    DataContentType, FieldSummary, Manifest, ManifestEntry, ManifestEntryRef, ManifestFile,
+    PartitionField, PartitionSpec, PartitionSpecRef, Schema, SchemaRef, SnapshotRef,
+    TableMetadataRef, Transform,
+};
 use crate::table::Table;
 use crate::{Error, ErrorKind};
 use arrow_array::RecordBatch;
-use async_stream::try_stream;
 use futures::stream::{iter, BoxStream};
 use futures::StreamExt;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
+use async_stream::try_stream;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -34,6 +43,8 @@ pub struct TableScanBuilder<'a> {
     column_names: Vec<String>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -43,6 +54,8 @@ impl<'a> TableScanBuilder<'a> {
             column_names: vec![],
             snapshot_id: None,
             batch_size: None,
+            case_sensitive: true,
+            filter: None,
         }
     }
 
@@ -50,6 +63,18 @@ impl<'a> TableScanBuilder<'a> {
     /// to something other than the default
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    /// Sets the scan as being case-insensitive
+    pub fn with_case_insensitivity(mut self) -> Self {
+        self.case_sensitive = false;
+        self
+    }
+
+    /// Specifies a predicate to use as a filter
+    pub fn with_filter(mut self, predicate: Predicate) -> Self {
+        self.filter = Some(predicate);
         self
     }
 
@@ -122,6 +147,8 @@ impl<'a> TableScanBuilder<'a> {
             column_names: self.column_names,
             schema,
             batch_size: self.batch_size,
+            case_sensitive: self.case_sensitive,
+            filter: self.filter,
         })
     }
 }
@@ -136,6 +163,8 @@ pub struct TableScan {
     column_names: Vec<String>,
     schema: SchemaRef,
     batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
 }
 
 /// A stream of [`FileScanTask`].
@@ -143,7 +172,12 @@ pub type FileScanTaskStream = BoxStream<'static, crate::Result<FileScanTask>>;
 
 impl TableScan {
     /// Returns a stream of file scan tasks.
+
+
     pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
+        // Cache `PartitionEvaluator`s created as part of this scan
+        let mut partition_evaluator_cache: HashMap<i32, PartitionEvaluator> = HashMap::new();
+
         let snapshot = self.snapshot.clone();
         let table_metadata = self.table_metadata.clone();
         let file_io = self.file_io.clone();
@@ -158,6 +192,29 @@ impl TableScan {
             let mut entries = iter(manifest_list.entries());
             while let Some(entry) = entries.next().await {
                 let manifest = entry.load_manifest(&file_io).await?;
+
+                // If this scan has a filter, check the partition evaluator cache for an existing
+                // PartitionEvaluator that matches this manifest's partition spec ID.
+                // Use one from the cache if there is one. If not, create one, put it in
+                // the cache, and take a reference to it.
+                let partition_evaluator = if let Some(filter) = self.filter.as_ref() {
+                    Some(
+                        partition_evaluator_cache
+                            .entry(manifest.partition_spec_id())
+                            .or_insert_with_key(self.create_partition_evaluator(filter))
+                            .deref(),
+                    )
+                } else {
+                    None
+                };
+
+                // If this scan has a filter, reject any manifest files whose partition values
+                // don't match the filter.
+                if let Some(partition_evaluator) = partition_evaluator {
+                    if !partition_evaluator.filter_manifest_file(&entry) {
+                        continue;
+                    }
+                }
 
                 let mut manifest_entries = iter(manifest.entries().iter().filter(|e| e.is_alive()));
                 while let Some(manifest_entry) = manifest_entries.next().await {
@@ -179,8 +236,17 @@ impl TableScan {
                     }
                 }
             }
+        }.boxed())
+    }
+
+    fn create_partition_evaluator(&self, filter: &Predicate) -> fn(&i32) -> crate::Result<PartitionEvaluator> {
+        |&id| {
+            // TODO: predicate binding not yet merged to main
+            let bound_predicate = filter.bind(self.schema.clone(), self.case_sensitive)?;
+
+            let partition_spec = self.table_metadata.partition_spec_by_id(id).unwrap();
+            PartitionEvaluator::new(partition_spec.clone(), bound_predicate, self.schema.clone())
         }
-        .boxed())
     }
 
     pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
@@ -214,11 +280,221 @@ impl FileScanTask {
     }
 }
 
+/// Evaluates manifest files to see if their partition values comply with a filter predicate
+pub struct PartitionEvaluator {
+    manifest_eval_visitor: ManifestEvalVisitor,
+}
+
+impl PartitionEvaluator {
+    pub(crate) fn new(
+        partition_spec: PartitionSpecRef,
+        partition_filter: BoundPredicate,
+        table_schema: SchemaRef,
+    ) -> crate::Result<Self> {
+        let manifest_eval_visitor = ManifestEvalVisitor::manifest_evaluator(
+            partition_spec,
+            table_schema,
+            partition_filter,
+            true,
+        )?;
+
+        Ok(PartitionEvaluator {
+            manifest_eval_visitor,
+        })
+    }
+
+    pub(crate) fn filter_manifest_file(&self, _manifest_file: &ManifestFile) -> bool {
+        self.manifest_eval_visitor.eval(_manifest_file)
+    }
+}
+
+struct ManifestEvalVisitor {
+    partition_schema: SchemaRef,
+    partition_filter: BoundPredicate,
+    case_sensitive: bool,
+}
+
+impl ManifestEvalVisitor {
+    fn new(partition_schema: SchemaRef, partition_filter: Predicate, case_sensitive: bool) -> crate::Result<Self> {
+        let partition_filter = partition_filter.bind(partition_schema.clone(), case_sensitive)?;
+
+        Ok(Self {
+            partition_schema,
+            partition_filter,
+            case_sensitive,
+        })
+    }
+
+    pub(crate) fn manifest_evaluator(
+        partition_spec: PartitionSpecRef,
+        table_schema: SchemaRef,
+        partition_filter: BoundPredicate,
+        case_sensitive: bool,
+    ) -> crate::Result<Self> {
+        let partition_type = partition_spec.partition_type(&table_schema)?;
+        let partition_schema = Schema::builder()
+            .with_fields(partition_type.fields())
+            .build()?;
+
+        let partition_schema_ref = Arc::new(partition_schema);
+
+        let inclusive_projection =
+            InclusiveProjection::new(table_schema.clone(), partition_spec.clone());
+        let unbound_partition_filter = inclusive_projection.project(&partition_filter);
+
+        Ok(Self::new(
+            partition_schema_ref.clone(),
+            unbound_partition_filter,
+            case_sensitive,
+        )?)
+    }
+
+    pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> bool {
+        if manifest_file.partitions.is_empty() {
+            return true;
+        }
+
+        self.visit(&self.partition_filter, &manifest_file.partitions)
+    }
+
+    // see https://github.com/apache/iceberg-python/blob/ea9da8856a686eaeda0d5c2be78d5e3102b67c44/pyiceberg/expressions/visitors.py#L548
+    fn visit(&self, predicate: &BoundPredicate, partitions: &Vec<FieldSummary>) -> bool {
+        match predicate {
+            AlwaysTrue => true,
+            BoundPredicate::AlwaysFalse => false,
+            BoundPredicate::And(expr) => {
+                self.visit(expr.inputs()[0], partitions) && self.visit(expr.inputs()[1], partitions)
+            }
+            BoundPredicate::Or(expr) => {
+                self.visit(expr.inputs()[0], partitions) || self.visit(expr.inputs()[1], partitions)
+            }
+            BoundPredicate::Not(_) => {
+                panic!("NOT predicates should be eliminated before calling this function")
+            }
+            BoundPredicate::Unary(expr) => {
+                // TODO: pos = term.ref().accessor.position in python impl
+                let pos = 0;
+                let field = &partitions[pos];
+                match expr.op {
+                    PredicateOperator::IsNull => field.contains_null,
+                    PredicateOperator::NotNull => {
+                        todo!()
+                    }
+                    PredicateOperator::IsNan => field.contains_nan.is_some(),
+                    PredicateOperator::NotNan => {
+                        todo!()
+                    }
+                    _ => {
+                        panic!("unexpected op")
+                    }
+                }
+            }
+            BoundPredicate::Binary(expr) => match expr.op {
+                PredicateOperator::LessThan => {
+                    todo!()
+                }
+                PredicateOperator::LessThanOrEq => {
+                    todo!()
+                }
+                PredicateOperator::GreaterThan => {
+                    todo!()
+                }
+                PredicateOperator::GreaterThanOrEq => {
+                    todo!()
+                }
+                PredicateOperator::Eq => {
+                    todo!()
+                }
+                PredicateOperator::NotEq => {
+                    todo!()
+                }
+                PredicateOperator::StartsWith => {
+                    todo!()
+                }
+                PredicateOperator::NotStartsWith => {
+                    todo!()
+                }
+                _ => {
+                    panic!("unexpected op")
+                }
+            },
+            BoundPredicate::Set(expr) => match expr.op {
+                PredicateOperator::In => {
+                    todo!()
+                }
+                PredicateOperator::NotIn => true,
+                _ => {
+                    panic!("unexpected op")
+                }
+            },
+        }
+    }
+}
+
+struct InclusiveProjection {
+    table_schema: SchemaRef,
+    partition_spec: PartitionSpecRef,
+}
+
+impl InclusiveProjection {
+    pub(crate) fn new(table_schema: SchemaRef, partition_spec: PartitionSpecRef) -> Self {
+        Self {
+            table_schema,
+            partition_spec,
+        }
+    }
+
+    pub(crate) fn project(&self, predicate: &BoundPredicate) -> Predicate {
+        //  TODO: apply rewrite_not() as projection assumes that there are no NOT nodes
+        self.visit(predicate)
+    }
+
+    fn visit(&self, bound_predicate: &BoundPredicate) -> Predicate {
+        match bound_predicate {
+            BoundPredicate::AlwaysTrue => Predicate::AlwaysTrue,
+            BoundPredicate::AlwaysFalse => Predicate::AlwaysFalse,
+            BoundPredicate::And(expr) => Predicate::And(LogicalExpression::new(
+                expr.inputs().map(|expr| Box::new(self.visit(expr))),
+            )),
+            BoundPredicate::Or(expr) => Predicate::Or(LogicalExpression::new(
+                expr.inputs().map(|expr| Box::new(self.visit(expr))),
+            )),
+            BoundPredicate::Not(_) => {
+                panic!("should not get here as NOT-rewriting should have removed NOT nodes")
+            }
+            bp => self.visit_bound_predicate(bp),
+        }
+    }
+
+    fn visit_bound_predicate(&self, predicate: &BoundPredicate) -> Predicate {
+        let field_id = match predicate {
+            BoundPredicate::Unary(expr) => expr.field_id(),
+            BoundPredicate::Binary(expr) => expr.field_id(),
+            BoundPredicate::Set(expr) => expr.field_id(),
+            _ => {
+                panic!("Should not get here as these brances handled in self.visit")
+            }
+        };
+
+        // TODO: cache this?
+        let mut parts: Vec<&PartitionField> = vec![];
+        for partition_spec_field in self.partition_spec.fields {
+            if partition_spec_field.source_id == field_id {
+                parts.push(&partition_spec_field)
+            }
+        }
+
+        parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
+            res.and(part.transform.project(&part.name, &predicate))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
+        DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
     };
@@ -321,15 +597,14 @@ mod tests {
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
                         .data_file(
-                            DataFileBuilder::default()
+                            DataFile::builder()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/1.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                .build()
-                                .unwrap(),
+                                .build(),
                         )
                         .build(),
                     ManifestEntry::builder()
@@ -338,15 +613,14 @@ mod tests {
                         .sequence_number(parent_snapshot.sequence_number())
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
-                            DataFileBuilder::default()
+                            DataFile::builder()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/2.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(200))]))
-                                .build()
-                                .unwrap(),
+                                .build(),
                         )
                         .build(),
                     ManifestEntry::builder()
@@ -355,15 +629,14 @@ mod tests {
                         .sequence_number(parent_snapshot.sequence_number())
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
-                            DataFileBuilder::default()
+                            DataFile::builder()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/3.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(300))]))
-                                .build()
-                                .unwrap(),
+                                .build(),
                         )
                         .build(),
                 ],
