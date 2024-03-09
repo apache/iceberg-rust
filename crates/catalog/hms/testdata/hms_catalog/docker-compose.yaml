@@ -29,20 +29,22 @@ services:
       - MINIO_DOMAIN=minio
     command: [ "server", "/data", "--console-address", ":9001" ]
 
-  hive-mysql:
-    image: mysql:5.7
-    expose:
-      - 3306
+  mc:
+    depends_on:
+      - minio
+    image: minio/mc:RELEASE.2024-03-07T00-31-49Z
     environment:
-      - MYSQL_ROOT_PASSWORD=admin
-      - MYSQL_DATABASE=metastore
-      - MYSQL_USER=hive
-      - MYSQL_PASSWORD=hive
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+    entrypoint: >
+      /bin/sh -c " until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done; /usr/bin/mc mb minio/warehouse; /usr/bin/mc policy set public minio/warehouse; tail -f /dev/null "
 
   hive-metastore:
-    image: iceberg-hms
+    image: iceberg-hive-metastore
     build: ./
-    depends_on:
-      - hive-mysql
     expose:
       - 9083
+    environment:
+      SERVICE_NAME: "metastore"
+      SERVICE_OPTS: "-Dmetastore.warehouse.dir=s3a://warehouse/hive/"

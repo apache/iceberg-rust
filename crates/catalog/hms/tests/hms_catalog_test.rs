@@ -122,10 +122,7 @@ async fn test_get_namespace() -> Result<()> {
 
     let ns = Namespace::new(NamespaceIdent::new("default".into()));
     let properties = HashMap::from([
-        (
-            "location".to_string(),
-            "file:/user/hive/warehouse".to_string(),
-        ),
+        ("location".to_string(), "s3a://warehouse/hive".to_string()),
         (
             "hive.metastore.database.owner-type".to_string(),
             "Role".to_string(),
