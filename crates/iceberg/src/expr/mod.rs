@@ -30,7 +30,7 @@ pub use predicate::*;
 /// The discriminant of this enum is used for determining the type of the operator, see
 /// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
 pub enum PredicateOperator {
     // Unary operators
@@ -111,6 +111,39 @@ impl PredicateOperator {
     /// ```
     pub fn is_set(self) -> bool {
         (self as u16) > (PredicateOperator::NotStartsWith as u16)
+    }
+
+    /// Returns the predicate that is the inverse of self
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::PredicateOperator;
+    /// assert!(PredicateOperator::IsNull.negate() == PredicateOperator::NotNull);
+    /// assert!(PredicateOperator::IsNan.negate() == PredicateOperator::NotNan);
+    /// assert!(PredicateOperator::LessThan.negate() == PredicateOperator::GreaterThanOrEq);
+    /// assert!(PredicateOperator::GreaterThan.negate() == PredicateOperator::LessThanOrEq);
+    /// assert!(PredicateOperator::Eq.negate() == PredicateOperator::NotEq);
+    /// assert!(PredicateOperator::In.negate() == PredicateOperator::NotIn);
+    /// assert!(PredicateOperator::StartsWith.negate() == PredicateOperator::NotStartsWith);
+    /// ```
+    pub fn negate(self) -> PredicateOperator {
+        match self {
+            PredicateOperator::IsNull => PredicateOperator::NotNull,
+            PredicateOperator::NotNull => PredicateOperator::IsNull,
+            PredicateOperator::IsNan => PredicateOperator::NotNan,
+            PredicateOperator::NotNan => PredicateOperator::IsNan,
+            PredicateOperator::LessThan => PredicateOperator::GreaterThanOrEq,
+            PredicateOperator::LessThanOrEq => PredicateOperator::GreaterThan,
+            PredicateOperator::GreaterThan => PredicateOperator::LessThanOrEq,
+            PredicateOperator::GreaterThanOrEq => PredicateOperator::LessThan,
+            PredicateOperator::Eq => PredicateOperator::NotEq,
+            PredicateOperator::NotEq => PredicateOperator::Eq,
+            PredicateOperator::In => PredicateOperator::NotIn,
+            PredicateOperator::NotIn => PredicateOperator::In,
+            PredicateOperator::StartsWith => PredicateOperator::NotStartsWith,
+            PredicateOperator::NotStartsWith => PredicateOperator::StartsWith,
+        }
     }
 }
 
