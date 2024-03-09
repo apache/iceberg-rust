@@ -151,7 +151,10 @@ pub fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     if name.len() != 1 {
         return Err(Error::new(
             ErrorKind::DataInvalid,
-            "Invalid database, hierarchical namespaces are not supported",
+            format!(
+                "Invalid database name: {:?}, hierarchical namespaces are not supported",
+                namespace
+            ),
         ));
     }
 
