@@ -33,7 +33,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
-log = "0.4.20"
+log = { workspace = true }
 pilota = "0.10.0"
 typed-builder = { workspace = true }
 volo-thrift = { workspace = true }
