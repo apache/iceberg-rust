@@ -34,7 +34,7 @@ async-trait = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
-pilota = "0.10.0"
+pilota = { workspace = true }
 typed-builder = { workspace = true }
 volo-thrift = { workspace = true }
 
