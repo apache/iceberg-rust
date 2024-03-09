@@ -50,7 +50,7 @@ services:
   mc:
     depends_on:
       - minio
-    image: minio/mc
+    image: minio/mc:RELEASE.2024-03-07T00-31-49Z
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
