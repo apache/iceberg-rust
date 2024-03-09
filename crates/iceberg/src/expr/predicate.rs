@@ -20,9 +20,9 @@
 //! `a > 10` is a predicate expression, and it evaluates to `true` if `a` is greater than `10`,
 
 use std::fmt::{Debug, Display, Formatter};
-use std::mem::MaybeUninit;
 use std::ops::Not;
 
+use array_init::array_init;
 use fnv::FnvHashSet;
 use itertools::Itertools;
 
@@ -60,25 +60,20 @@ impl<T, const N: usize> LogicalExpression<T, N> {
     }
 }
 
-impl<T: Bind, const N: usize> Bind for LogicalExpression<T, N> {
+impl<T: Bind, const N: usize> Bind for LogicalExpression<T, N>
+where
+    T::Bound: Sized,
+{
     type Bound = LogicalExpression<T::Bound, N>;
 
     fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
-        let mut bound_inputs = MaybeUninit::<[Box<T::Bound>; N]>::uninit();
+        let mut outputs: [Option<Box<T::Bound>>; N] = array_init(|_| None);
         for (i, input) in self.inputs.into_iter().enumerate() {
-            let input = input.bind(schema.clone(), case_sensitive)?;
-            // SAFETY: The pointer is valid from [`MaybeUninit`].
-            unsafe {
-                bound_inputs
-                    .as_mut_ptr()
-                    .cast::<Box<T::Bound>>()
-                    .add(i)
-                    .write(Box::new(input));
-            }
+            outputs[i] = Some(Box::new(input.bind(schema.clone(), case_sensitive)?));
         }
 
-        // SAFETY: We have initialized all elements of the array.
-        let bound_inputs = unsafe { bound_inputs.assume_init() };
+        // It's safe to use `unwrap` here since they are all `Some`.
+        let bound_inputs = array_init::from_iter(outputs.into_iter().map(Option::unwrap)).unwrap();
         Ok(LogicalExpression::new(bound_inputs))
     }
 }
@@ -250,13 +245,8 @@ impl Bind for Predicate {
                 })
             }
             Predicate::Not(expr) => {
-                let bound_expr = expr.bind(schema, case_sensitive)?;
-                let [inner] = bound_expr.inputs;
-                Ok(match inner {
-                    e if matches!(&*e, &BoundPredicate::AlwaysTrue) => BoundPredicate::AlwaysFalse,
-                    e if matches!(&*e, &BoundPredicate::AlwaysFalse) => BoundPredicate::AlwaysTrue,
-                    e => BoundPredicate::Not(LogicalExpression::new([e])),
-                })
+                let [inner] = expr.inputs;
+                inner.negate().bind(schema, case_sensitive)
             }
             Predicate::Or(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
@@ -857,7 +847,7 @@ mod tests {
         let schema = table_schema_simple();
         let expr = !Reference::new("bar").less_than(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "NOT (bar < 10)");
+        assert_eq!(&format!("{bound_expr}"), "bar >= 10");
     }
 
     #[test]

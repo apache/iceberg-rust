@@ -31,6 +31,7 @@ keywords = ["iceberg"]
 [dependencies]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
+array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }

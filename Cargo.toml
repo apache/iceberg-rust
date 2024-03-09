@@ -31,6 +31,7 @@ rust-version = "1.75.0"
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.16"
+array-init = "2"
 arrow-arith = { version = ">=46" }
 arrow-array = { version = ">=46" }
 arrow-schema = { version = ">=46" }

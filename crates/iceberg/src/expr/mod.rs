@@ -151,7 +151,7 @@ impl PredicateOperator {
 
 /// Bind expression to a schema.
 pub trait Bind {
-    /// The type of the bounded result.
+    /// The type of the bound result.
     type Bound;
     /// Bind an expression to a schema.
     fn bind(self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound>;
