@@ -54,8 +54,8 @@ use crate::{error::Result, Error, ErrorKind};
 use futures::{AsyncRead, AsyncSeek, AsyncWrite};
 use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
-use tokio::io::{AsyncRead as TokioAsyncRead, AsyncSeek as TokioAsyncSeek};
 use tokio::io::AsyncWrite as TokioAsyncWrite;
+use tokio::io::{AsyncRead as TokioAsyncRead, AsyncSeek as TokioAsyncSeek};
 use url::Url;
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).

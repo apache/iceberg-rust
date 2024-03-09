@@ -314,14 +314,15 @@ mod tests {
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
                         .data_file(
-                            DataFile::builder()
+                            DataFileBuilder::default()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/1.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                .build(),
+                                .build()
+                                .unwrap(),
                         )
                         .build(),
                     ManifestEntry::builder()
@@ -330,14 +331,15 @@ mod tests {
                         .sequence_number(parent_snapshot.sequence_number())
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
-                            DataFile::builder()
+                            DataFileBuilder::default()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/2.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(200))]))
-                                .build(),
+                                .build()
+                                .unwrap(),
                         )
                         .build(),
                     ManifestEntry::builder()
@@ -346,14 +348,15 @@ mod tests {
                         .sequence_number(parent_snapshot.sequence_number())
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
-                            DataFile::builder()
+                            DataFileBuilder::default()
                                 .content(DataContentType::Data)
                                 .file_path(format!("{}/3.parquet", &self.table_location))
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(300))]))
-                                .build(),
+                                .build()
+                                .unwrap(),
                         )
                         .build(),
                 ],
