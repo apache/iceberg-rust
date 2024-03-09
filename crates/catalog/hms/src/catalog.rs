@@ -177,8 +177,7 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        let properties = properties_from_database(&db);
-        let ns = Namespace::with_properties(NamespaceIdent::new(name), properties);
+        let ns = convert_to_namespace(&db)?;
 
         Ok(ns)
     }

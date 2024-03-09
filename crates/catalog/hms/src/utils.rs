@@ -17,7 +17,7 @@
 
 use anyhow::anyhow;
 use hive_metastore::{Database, PrincipalType};
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result};
+use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -55,9 +55,19 @@ pub fn from_io_error(error: io::Error) -> Error {
     .with_source(error)
 }
 
-/// Create and extract properties from `hive_metastore::hms::Database`.
-pub fn properties_from_database(database: &Database) -> HashMap<String, String> {
+/// Returns a `Namespace` by extracting database name and properties
+/// from `hive_metastore::hms::Database`
+pub(crate) fn convert_to_namespace(database: &Database) -> Result<Namespace> {
     let mut properties = HashMap::new();
+
+    let name = if let Some(name) = &database.name {
+        name.to_string()
+    } else {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Database name must be specified",
+        ));
+    };
 
     if let Some(description) = &database.description {
         properties.insert(COMMENT.to_string(), description.to_string());
@@ -87,12 +97,15 @@ pub fn properties_from_database(database: &Database) -> HashMap<String, String> 
         });
     };
 
-    properties
+    Ok(Namespace::with_properties(
+        NamespaceIdent::new(name),
+        properties,
+    ))
 }
 
 /// Converts name and properties into `hive_metastore::hms::Database`
 /// after validating the `namespace` and `owner-settings`.
-pub fn convert_to_database(
+pub(crate) fn convert_to_database(
     namespace: &NamespaceIdent,
     properties: &HashMap<String, String>,
 ) -> Result<Database> {
@@ -145,7 +158,7 @@ pub fn convert_to_database(
 }
 
 /// Checks if provided `NamespaceIdent` is valid.
-pub fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
+pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
 
     if name.len() != 1 {
@@ -211,8 +224,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_properties_from_database() -> Result<()> {
-        let ns = NamespaceIdent::new("my_namespace".into());
+    fn test_convert_to_namespace() -> Result<()> {
         let properties = HashMap::from([
             (COMMENT.to_string(), "my_description".to_string()),
             (LOCATION.to_string(), "/my_location".to_string()),
@@ -221,11 +233,13 @@ mod tests {
             ("key1".to_string(), "value1".to_string()),
         ]);
 
-        let db = convert_to_database(&ns, &properties)?;
+        let ident = NamespaceIdent::new("my_namespace".into());
+        let db = convert_to_database(&ident, &properties)?;
 
-        let expected = properties_from_database(&db);
+        let expected_ns = Namespace::with_properties(ident, properties);
+        let result_ns = convert_to_namespace(&db)?;
 
-        assert_eq!(expected, properties);
+        assert_eq!(expected_ns, result_ns);
 
         Ok(())
     }
