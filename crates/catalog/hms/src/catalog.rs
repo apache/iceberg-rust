@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::from_io_error;
+use crate::error::from_thrift_error;
+
 use super::utils::*;
 use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;

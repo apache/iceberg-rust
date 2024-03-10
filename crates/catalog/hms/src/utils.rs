@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use anyhow::anyhow;
 use hive_metastore::{Database, PrincipalType};
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::io;
 
 /// hive.metastore.database.owner setting
 pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
@@ -33,27 +30,6 @@ pub const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
 pub const COMMENT: &str = "comment";
 /// hive metatore `location` property
 pub const LOCATION: &str = "location";
-
-/// Format a thrift error into iceberg error.
-pub fn from_thrift_error<T>(error: volo_thrift::error::ResponseError<T>) -> Error
-where
-    T: Debug,
-{
-    Error::new(
-        ErrorKind::Unexpected,
-        "operation failed for hitting thrift error".to_string(),
-    )
-    .with_source(anyhow!("thrift error: {:?}", error))
-}
-
-/// Format an io error into iceberg error.
-pub fn from_io_error(error: io::Error) -> Error {
-    Error::new(
-        ErrorKind::Unexpected,
-        "operation failed for hitting io error".to_string(),
-    )
-    .with_source(error)
-}
 
 /// Returns a `Namespace` by extracting database name and properties
 /// from `hive_metastore::hms::Database`
