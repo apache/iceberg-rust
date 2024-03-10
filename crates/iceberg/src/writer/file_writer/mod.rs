@@ -22,6 +22,12 @@ use crate::Result;
 use arrow_array::RecordBatch;
 use futures::Future;
 
+mod parquet_writer;
+pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
+mod track_writer;
+
+pub mod location_generator;
+
 /// File writer builder trait.
 pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
