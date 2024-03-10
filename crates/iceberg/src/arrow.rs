@@ -17,17 +17,22 @@
 
 //! Parquet file data reader
 
+use crate::{Error, ErrorKind};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use async_stream::try_stream;
 use futures::stream::StreamExt;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::ParquetMetaData;
+use std::sync::Arc;
 
 use crate::io::FileIO;
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
+use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
 use crate::spec::SchemaRef;
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
+    column_names: Vec<String>,
     file_io: FileIO,
     schema: SchemaRef,
 }
@@ -37,6 +42,7 @@ impl ArrowReaderBuilder {
     pub fn new(file_io: FileIO, schema: SchemaRef) -> Self {
         ArrowReaderBuilder {
             batch_size: None,
+            column_names: vec![],
             file_io,
             schema,
         }
@@ -49,10 +55,17 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Sets the desired column projection.
+    pub fn with_column_projection(mut self, column_names: Vec<String>) -> Self {
+        self.column_names = column_names;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
+            column_names: self.column_names,
             schema: self.schema,
             file_io: self.file_io,
         }
@@ -62,6 +75,7 @@ impl ArrowReaderBuilder {
 /// Reads data from Parquet files
 pub struct ArrowReader {
     batch_size: Option<usize>,
+    column_names: Vec<String>,
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
@@ -75,17 +89,18 @@ impl ArrowReader {
 
         Ok(try_stream! {
             while let Some(Ok(task)) = tasks.next().await {
-
-                let projection_mask = self.get_arrow_projection_mask(&task);
-
                 let parquet_reader = file_io
                     .new_input(task.data_file().file_path())?
                     .reader()
                     .await?;
 
                 let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(parquet_reader)
-                    .await?
-                    .with_projection(projection_mask);
+                    .await?;
+
+                let metadata = batch_stream_builder.metadata();
+                let parquet_schema = batch_stream_builder.schema();
+                let projection_mask = self.get_arrow_projection_mask(metadata, parquet_schema)?;
+                batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 if let Some(batch_size) = self.batch_size {
                     batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
@@ -101,8 +116,33 @@ impl ArrowReader {
         .boxed())
     }
 
-    fn get_arrow_projection_mask(&self, _task: &FileScanTask) -> ProjectionMask {
-        // TODO: full implementation
-        ProjectionMask::all()
+    fn get_arrow_projection_mask(
+        &self,
+        metadata: &Arc<ParquetMetaData>,
+        parquet_schema: &ArrowSchemaRef,
+    ) -> crate::Result<ProjectionMask> {
+        if self.column_names.is_empty() {
+            Ok(ProjectionMask::all())
+        } else {
+            let mut indices = vec![];
+            for column_name in &self.column_names {
+                match parquet_schema.index_of(column_name) {
+                    Ok(index) => indices.push(index),
+                    Err(_) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Column {} not found in table. Schema: {}",
+                                column_name, parquet_schema
+                            ),
+                        ));
+                    }
+                }
+            }
+            Ok(ProjectionMask::roots(
+                metadata.file_metadata().schema_descr(),
+                indices,
+            ))
+        }
     }
 }
