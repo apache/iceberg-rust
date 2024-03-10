@@ -50,7 +50,7 @@ pub trait Catalog: Debug + Sync + Send {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace>;
 
     /// Check if namespace exists in catalog.
-    async fn namespace_exists(&self, namesace: &NamespaceIdent) -> Result<bool>;
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool>;
 
     /// Update a namespace inside the catalog.
     ///

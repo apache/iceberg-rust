@@ -17,7 +17,12 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/catalog/*", "crates/examples", "crates/iceberg", "crates/test_utils"]
+members = [
+  "crates/catalog/*",
+  "crates/examples",
+  "crates/iceberg",
+  "crates/test_utils",
+]
 
 [workspace.package]
 version = "0.2.0"
@@ -55,6 +60,7 @@ once_cell = "1"
 opendal = "0.45"
 ordered-float = "4.0.0"
 parquet = "50"
+pilota = "0.10.0"
 pretty_assertions = "1.4.0"
 port_scanner = "0.1.5"
 reqwest = { version = "^0.11", features = ["json"] }

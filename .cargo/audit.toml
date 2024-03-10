@@ -17,8 +17,8 @@
 
 [advisories]
 ignore = [
-    # rsa
-    # Marvin Attack: potential key recovery through timing sidechannels
-    # Issues: https://github.com/apache/iceberg-rust/issues/221
-    "RUSTSEC-2023-0071",
+  # rsa
+  # Marvin Attack: potential key recovery through timing sidechannels
+  # Issues: https://github.com/apache/iceberg-rust/issues/221
+  "RUSTSEC-2023-0071",
 ]
