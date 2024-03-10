@@ -32,7 +32,7 @@ use crate::spec::SchemaRef;
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
-    column_names: Vec<String>,
+    columns: Vec<usize>,
     file_io: FileIO,
     schema: SchemaRef,
 }
@@ -42,7 +42,7 @@ impl ArrowReaderBuilder {
     pub fn new(file_io: FileIO, schema: SchemaRef) -> Self {
         ArrowReaderBuilder {
             batch_size: None,
-            column_names: vec![],
+            columns: vec![],
             file_io,
             schema,
         }
@@ -56,8 +56,8 @@ impl ArrowReaderBuilder {
     }
 
     /// Sets the desired column projection.
-    pub fn with_column_projection(mut self, column_names: Vec<String>) -> Self {
-        self.column_names = column_names;
+    pub fn with_column_projection(mut self, columns: Vec<usize>) -> Self {
+        self.columns = columns;
         self
     }
 
@@ -65,7 +65,7 @@ impl ArrowReaderBuilder {
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
-            column_names: self.column_names,
+            columns: self.columns,
             schema: self.schema,
             file_io: self.file_io,
         }
@@ -75,7 +75,7 @@ impl ArrowReaderBuilder {
 /// Reads data from Parquet files
 pub struct ArrowReader {
     batch_size: Option<usize>,
-    column_names: Vec<String>,
+    columns: Vec<usize>,
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
@@ -121,23 +121,21 @@ impl ArrowReader {
         metadata: &Arc<ParquetMetaData>,
         parquet_schema: &ArrowSchemaRef,
     ) -> crate::Result<ProjectionMask> {
-        if self.column_names.is_empty() {
+        if self.columns.is_empty() {
             Ok(ProjectionMask::all())
         } else {
             let mut indices = vec![];
-            for column_name in &self.column_names {
-                match parquet_schema.index_of(column_name) {
-                    Ok(index) => indices.push(index),
-                    Err(_) => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Column {} not found in table. Schema: {}",
-                                column_name, parquet_schema
-                            ),
-                        ));
-                    }
+            for col in &self.columns {
+                if *col > parquet_schema.fields().len() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Column index {} out of range. Schema: {}",
+                            col, parquet_schema
+                        ),
+                    ));
                 }
+                indices.push(*col - 1);
             }
             Ok(ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),

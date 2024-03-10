@@ -190,8 +190,21 @@ impl TableScan {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
 
-        arrow_reader_builder =
-            arrow_reader_builder.with_column_projection(self.column_names.clone());
+        let mut field_ids = vec![];
+        for column_name in &self.column_names {
+            let field_id = self.schema.field_id_by_name(column_name).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Column {} not found in table. Schema: {}",
+                        column_name, self.schema
+                    ),
+                )
+            })?;
+            field_ids.push(field_id as usize);
+        }
+
+        arrow_reader_builder = arrow_reader_builder.with_column_projection(field_ids);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
