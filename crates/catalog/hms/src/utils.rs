@@ -162,7 +162,7 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     Ok(name)
 }
 
-/// Gets default table location from `Namespace` properties
+/// Get default table location from `Namespace` properties
 pub(crate) fn get_default_table_location(
     namespace: &Namespace,
     table_name: impl AsRef<str> + Display,
@@ -180,6 +180,7 @@ pub(crate) fn get_default_table_location(
         })
 }
 
+/// Get metadata location
 pub(crate) fn get_metadata_location(
     location: impl AsRef<str> + Display,
     version: i32,
