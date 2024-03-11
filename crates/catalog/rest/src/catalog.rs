@@ -525,6 +525,9 @@ impl RestCatalog {
     }
 
     async fn fetch_access_token(&mut self) -> Result<()> {
+        if self.config.props.contains_key("token") {
+            return Ok(());
+        }
         if let Some(credential) = self.config.props.get("credential") {
             let (client_id, client_secret) = if credential.contains(':') {
                 let (client_id, client_secret) = credential.split_once(':').unwrap();
