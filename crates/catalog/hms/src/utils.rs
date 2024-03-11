@@ -19,6 +19,7 @@ use hive_metastore::{Database, PrincipalType};
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 use std::{collections::HashMap, fmt::Display};
+use uuid::Uuid;
 
 /// hive.metastore.database.owner setting
 pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
@@ -179,6 +180,27 @@ pub(crate) fn get_default_table_location(
         })
 }
 
+pub(crate) fn get_metadata_location(
+    location: impl AsRef<str> + Display,
+    version: i32,
+) -> Result<String> {
+    if version < 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata version: '{}' must be a non-negative integer",
+                version
+            ),
+        ));
+    };
+
+    let version = format!("{:0>5}", version);
+    let id = Uuid::new_v4();
+    let metadata_location = format!("{}/metadata/{}-{}.metadata.json", location, version, id);
+
+    Ok(metadata_location)
+}
+
 /// Formats location_uri by e.g. removing trailing slashes.
 fn format_location_uri(location: String) -> String {
     let mut location = location;
@@ -218,6 +240,21 @@ mod tests {
     use iceberg::{Namespace, NamespaceIdent};
 
     use super::*;
+    #[test]
+    fn test_get_metadata_location() -> Result<()> {
+        let location = "my_base_location";
+        let valid_version = 0;
+        let invalid_version = -1;
+
+        let valid_result = get_metadata_location(location, valid_version)?;
+        let invalid_result = get_metadata_location(location, invalid_version);
+
+        assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
+        assert!(valid_result.ends_with(".metadata.json"));
+        assert!(invalid_result.is_err());
+
+        Ok(())
+    }
 
     #[test]
     fn test_get_default_table_location() -> Result<()> {
