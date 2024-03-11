@@ -38,7 +38,7 @@ use iceberg::{
 
 use self::_serde::{
     CatalogConfig, ErrorResponse, ListNamespaceResponse, ListTableResponse, NamespaceSerde,
-    RenameTableRequest, NO_CONTENT, OK,
+    RenameTableRequest, TokenResponse, NO_CONTENT, OK,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -96,9 +96,13 @@ impl RestCatalogConfig {
         .join("/")
     }
 
+    fn get_token_endpoint(&self) -> String {
+        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+    }
+
     fn try_create_rest_client(&self) -> Result<HttpClient> {
-        //TODO: We will add oauth, ssl config, sigv4 later
-        let headers = HeaderMap::from_iter([
+        // TODO: We will add ssl config, sigv4 later
+        let mut headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/json"),
@@ -112,6 +116,19 @@ impl RestCatalogConfig {
                 HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
             ),
         ]);
+
+        if let Some(token) = self.props.get("token") {
+            headers.insert(
+                "Authorization",
+                HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid token received from catalog server!",
+                    )
+                    .with_source(e)
+                })?,
+            );
+        }
 
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
@@ -144,6 +161,7 @@ impl HttpClient {
                 .with_source(e)
             })?)
         } else {
+            let code = resp.status();
             let text = resp.bytes().await?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
@@ -151,6 +169,7 @@ impl HttpClient {
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("json", String::from_utf8_lossy(&text))
+                .with_context("code", code.to_string())
                 .with_source(e)
             })?;
             Err(e.into())
@@ -497,11 +516,51 @@ impl RestCatalog {
             client: config.try_create_rest_client()?,
             config,
         };
-
+        catalog.fetch_access_token().await?;
+        catalog.client = catalog.config.try_create_rest_client()?;
         catalog.update_config().await?;
         catalog.client = catalog.config.try_create_rest_client()?;
 
         Ok(catalog)
+    }
+
+    async fn fetch_access_token(&mut self) -> Result<()> {
+        if let Some(credential) = self.config.props.get("credential") {
+            let (client_id, client_secret) = if credential.contains(':') {
+                let (client_id, client_secret) = credential.split_once(':').unwrap();
+                (Some(client_id), client_secret)
+            } else {
+                (None, credential.as_str())
+            };
+            let mut params = HashMap::with_capacity(4);
+            params.insert("grant_type", "client_credentials");
+            if let Some(client_id) = client_id {
+                params.insert("client_id", client_id);
+            }
+            params.insert("client_secret", client_secret);
+            params.insert("scope", "catalog");
+            let req = self
+                .client
+                .0
+                .post(self.config.get_token_endpoint())
+                .form(&params)
+                .build()?;
+            let res = self
+                .client
+                .query::<TokenResponse, ErrorResponse, OK>(req)
+                .await
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to fetch access token from catalog server!",
+                    )
+                    .with_source(e)
+                })?;
+            let token = res.access_token;
+            self.config.props.insert("token".to_string(), token);
+        }
+
+        Ok(())
     }
 
     async fn update_config(&mut self) -> Result<()> {
@@ -624,6 +683,14 @@ mod _serde {
 
             error
         }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct TokenResponse {
+        pub(super) access_token: String,
+        pub(super) token_type: String,
+        pub(super) expires_in: u64,
+        pub(super) issued_token_type: String,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -1557,7 +1624,7 @@ mod tests {
         "type": "NoSuchTableException",
         "code": 404
     }
-}      
+}
             "#,
             )
             .create_async()
