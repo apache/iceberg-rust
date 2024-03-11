@@ -245,8 +245,13 @@ impl Bind for Predicate {
                 })
             }
             Predicate::Not(expr) => {
-                let [inner] = expr.inputs;
-                inner.negate().bind(schema, case_sensitive)
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let [inner] = bound_expr.inputs;
+                Ok(match inner {
+                    e if matches!(&*e, &BoundPredicate::AlwaysTrue) => BoundPredicate::AlwaysFalse,
+                    e if matches!(&*e, &BoundPredicate::AlwaysFalse) => BoundPredicate::AlwaysTrue,
+                    e => BoundPredicate::Not(LogicalExpression::new([e])),
+                })
             }
             Predicate::Or(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
@@ -847,7 +852,7 @@ mod tests {
         let schema = table_schema_simple();
         let expr = !Reference::new("bar").less_than(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "bar >= 10");
+        assert_eq!(&format!("{bound_expr}"), "NOT (bar < 10)");
     }
 
     #[test]
