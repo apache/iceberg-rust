@@ -18,7 +18,7 @@
 use hive_metastore::{Database, PrincipalType};
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 /// hive.metastore.database.owner setting
 pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
@@ -30,6 +30,8 @@ pub const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
 pub const COMMENT: &str = "comment";
 /// hive metatore `location` property
 pub const LOCATION: &str = "location";
+/// hive metatore `warehouse` location property
+pub const WAREHOUSE_LOCATION: &str = "warehouse";
 
 /// Returns a `Namespace` by extracting database name and properties
 /// from `hive_metastore::hms::Database`
@@ -159,6 +161,24 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     Ok(name)
 }
 
+/// Gets default table location from `Namespace` properties
+pub(crate) fn get_default_table_location(
+    namespace: &Namespace,
+    table_name: impl AsRef<str> + Display,
+) -> Result<String> {
+    let properties = namespace.properties();
+    properties
+        .get(LOCATION)
+        .or_else(|| properties.get(WAREHOUSE_LOCATION))
+        .map(|location| format!("{}/{}", location, table_name))
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "No default path is set, please specify  a location when creating a table",
+            )
+        })
+}
+
 /// Formats location_uri by e.g. removing trailing slashes.
 fn format_location_uri(location: String) -> String {
     let mut location = location;
@@ -198,6 +218,51 @@ mod tests {
     use iceberg::{Namespace, NamespaceIdent};
 
     use super::*;
+
+    #[test]
+    fn test_get_default_table_location() -> Result<()> {
+        let properties = HashMap::from([(LOCATION.to_string(), "db_location".to_string())]);
+
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let table_name = "my_table";
+
+        let expected = "db_location/my_table";
+        let result = get_default_table_location(&namespace, table_name)?;
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_warehouse() -> Result<()> {
+        let properties = HashMap::from([(
+            WAREHOUSE_LOCATION.to_string(),
+            "warehouse_location".to_string(),
+        )]);
+
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let table_name = "my_table";
+
+        let expected = "warehouse_location/my_table";
+        let result = get_default_table_location(&namespace, table_name)?;
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_missing() {
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let table_name = "my_table";
+
+        let result = get_default_table_location(&namespace, table_name);
+
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_convert_to_namespace() -> Result<()> {
