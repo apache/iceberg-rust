@@ -692,7 +692,7 @@ mod _serde {
     pub(super) struct TokenResponse {
         pub(super) access_token: String,
         pub(super) token_type: String,
-        pub(super) expires_in: u64,
+        pub(super) expires_in: Option<u64>,
         pub(super) issued_token_type: Option<String>,
     }
 
