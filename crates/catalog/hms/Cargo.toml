@@ -31,6 +31,7 @@ keywords = ["iceberg", "hive", "catalog"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }

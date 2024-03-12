@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use hive_metastore::{Database, PrincipalType};
-use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
+use chrono::Utc;
+use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
+use iceberg::{spec::Schema, Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 use std::{collections::HashMap, fmt::Display};
 use uuid::Uuid;
+
+use crate::schema::HiveSchemaBuilder;
 
 /// hive.metastore.database.owner setting
 pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
@@ -31,8 +34,22 @@ pub const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
 pub const COMMENT: &str = "comment";
 /// hive metatore `location` property
 pub const LOCATION: &str = "location";
+/// hive metatore `metadat_location` property
+pub const METADATA_LOCATION: &str = "metadata_location";
+/// hive metatore `external` property
+pub const EXTERNAL: &str = "EXTERNAL";
+/// hive metatore `external_table` property
+pub const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
+/// hive metatore `table_type` property
+pub const TABLE_TYPE: &str = "table_type";
 /// hive metatore `warehouse` location property
 pub const WAREHOUSE_LOCATION: &str = "warehouse";
+/// hive metatore `SerDeInfo` serialization_lib parameter
+pub const SERIALIZATION_LIB: &str = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
+/// hive metatore input format
+pub const INPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileInputFormat";
+/// hive metatore output format
+pub const OUTPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileOutputFormat";
 
 /// Returns a `Namespace` by extracting database name and properties
 /// from `hive_metastore::hms::Database`
@@ -136,6 +153,57 @@ pub(crate) fn convert_to_database(
     Ok(db)
 }
 
+pub(crate) fn convert_to_hive_table(
+    db_name: String,
+    schema: Schema,
+    table_name: String,
+    location: String,
+    metadata_location: String,
+    properties: &HashMap<String, String>,
+) -> Result<hive_metastore::Table> {
+    let serde_info = SerDeInfo {
+        serialization_lib: Some(SERIALIZATION_LIB.into()),
+        ..Default::default()
+    };
+
+    let hive_schema = HiveSchemaBuilder::new(schema).schema()?;
+
+    let storage_descriptor = StorageDescriptor {
+        location: Some(location.into()),
+        cols: Some(hive_schema),
+        input_format: Some(INPUT_FORMAT.into()),
+        output_format: Some(OUTPUT_FORMAT.into()),
+        serde_info: Some(serde_info),
+        ..Default::default()
+    };
+
+    let parameters = AHashMap::from([
+        (FastStr::from(EXTERNAL), FastStr::from("TRUE")),
+        (FastStr::from(TABLE_TYPE), FastStr::from("ICEBERG")),
+        (
+            FastStr::from(METADATA_LOCATION),
+            FastStr::from(metadata_location),
+        ),
+    ]);
+
+    let current_time_ms = get_current_time()?;
+    let owner = properties
+        .get("owner")
+        .map_or(HMS_DEFAULT_DB_OWNER.to_string(), |v| v.into());
+
+    Ok(hive_metastore::Table {
+        table_name: Some(table_name.into()),
+        db_name: Some(db_name.into()),
+        table_type: Some(EXTERNAL_TABLE.into()),
+        owner: Some(owner.into()),
+        create_time: Some(current_time_ms),
+        last_access_time: Some(current_time_ms),
+        sd: Some(storage_descriptor),
+        parameters: Some(parameters),
+        ..Default::default()
+    })
+}
+
 /// Checks if provided `NamespaceIdent` is valid.
 pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
@@ -236,11 +304,74 @@ fn validate_owner_settings(properties: &HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+fn get_current_time() -> Result<i32> {
+    let now = Utc::now();
+    now.timestamp().try_into().map_err(|_| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Current time is out of range for i32",
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use iceberg::{Namespace, NamespaceIdent};
+    use iceberg::{
+        spec::{NestedField, PrimitiveType, Type},
+        Namespace, NamespaceIdent,
+    };
 
     use super::*;
+
+    #[test]
+    fn test_convert_to_hive_table() -> Result<()> {
+        let db_name = "my_db".to_string();
+        let table_name = "my_table".to_string();
+        let location = "s3a://warehouse/hms".to_string();
+        let metadata_location = get_metadata_location(location.clone(), 0)?;
+        let properties = HashMap::new();
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()?;
+
+        let result = convert_to_hive_table(
+            db_name.clone(),
+            schema.clone(),
+            table_name.clone(),
+            location.clone(),
+            metadata_location,
+            &properties,
+        )?;
+
+        let serde_info = SerDeInfo {
+            serialization_lib: Some(SERIALIZATION_LIB.into()),
+            ..Default::default()
+        };
+
+        let hive_schema = HiveSchemaBuilder::new(schema).schema()?;
+
+        let sd = StorageDescriptor {
+            location: Some(location.into()),
+            cols: Some(hive_schema),
+            input_format: Some(INPUT_FORMAT.into()),
+            output_format: Some(OUTPUT_FORMAT.into()),
+            serde_info: Some(serde_info),
+            ..Default::default()
+        };
+
+        assert_eq!(result.db_name, Some(db_name.into()));
+        assert_eq!(result.table_name, Some(table_name.into()));
+        assert_eq!(result.table_type, Some(EXTERNAL_TABLE.into()));
+        assert_eq!(result.owner, Some(HMS_DEFAULT_DB_OWNER.into()));
+        assert_eq!(result.sd, Some(sd));
+
+        Ok(())
+    }
+
     #[test]
     fn test_get_metadata_location() -> Result<()> {
         let location = "my_base_location";
