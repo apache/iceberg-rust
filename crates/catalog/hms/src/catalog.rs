@@ -23,6 +23,8 @@ use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;
 use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
+use hive_metastore::ThriftHiveMetastoreGetTableException;
+use iceberg::io::FileIO;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -31,6 +33,7 @@ use iceberg::{
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
+use tokio::io::AsyncReadExt;
 use typed_builder::TypedBuilder;
 use volo_thrift::ResponseError;
 
@@ -272,6 +275,15 @@ impl Catalog for HmsCatalog {
         Ok(())
     }
 
+    /// Asynchronously lists all tables within a specified namespace.
+    ///
+    /// # Returns
+    ///
+    /// A `Result<Vec<TableIdent>>`, which is:
+    /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
+    /// representing a table within the specified namespace.
+    /// - `Err(...)` if an error occurs during namespace validation or while  
+    /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = validate_namespace(namespace)?;
 
@@ -292,29 +304,185 @@ impl Catalog for HmsCatalog {
 
     async fn create_table(
         &self,
-        _namespace: &NamespaceIdent,
-        _creation: TableCreation,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
     ) -> Result<Table> {
-        todo!()
+        let db_name = validate_namespace(namespace)?;
+        let table_name = &creation.name;
+
+        let location = match &creation.location {
+            Some(location) => location.clone(),
+            None => {
+                let ns = self.get_namespace(namespace).await?;
+                get_default_table_location(&ns, table_name)?
+            }
+        };
+
+        let metadata_location = get_metadata_location(location.clone(), 0)?;
+        let _file_io = FileIO::from_path(&metadata_location)?.build()?;
+
+        // TODO: Create `TableMetadata` and write to storage
+        // blocked by: https://github.com/apache/iceberg-rust/issues/250
+
+        let hive_table = convert_to_hive_table(
+            db_name,
+            creation.schema.clone(),
+            table_name.clone(),
+            location,
+            metadata_location,
+            &creation.properties,
+        )?;
+
+        self.client
+            .0
+            .create_table(hive_table)
+            .await
+            .map_err(from_thrift_error)?;
+
+        // TODO: Create & return Result<Table>
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Table creation is not supported yet",
+        ))
     }
 
-    async fn load_table(&self, _table: &TableIdent) -> Result<Table> {
-        todo!()
+    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+        let dbname = validate_namespace(table.namespace())?;
+        let tbl_name = table.name.clone();
+
+        let hive_table = self
+            .client
+            .0
+            .get_table(dbname.into(), tbl_name.into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        // TODO: extract into utils
+        let metadata_location = match hive_table.parameters {
+            Some(properties) => match properties.get(METADATA_LOCATION) {
+                Some(location) => location.to_string(),
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("No '{}' set on table", METADATA_LOCATION),
+                    ))
+                }
+            },
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "No 'parameters' set on table. Location of metadata is undefined",
+                ))
+            }
+        };
+
+        let file_io = FileIO::from_path(&metadata_location)?.build()?;
+
+        // TODO: extract into utils
+        let mut reader = file_io.new_input(&metadata_location)?.reader().await?;
+        let mut metadata_str = String::new();
+        reader.read_to_string(&mut metadata_str).await?;
+
+        let _metadata = serde_json::from_str(&metadata_str)?;
+
+        // TODO: Create `TableMetadata`
+        // blocked by: https://github.com/apache/iceberg-rust/issues/250
+        // Create and return Result<Table>
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Loading a table is not supported yet",
+        ))
     }
 
-    async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
-        todo!()
+    /// Asynchronously drops a table from the database.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The namespace provided in `table` cannot be validated
+    /// or does not exist.
+    /// - The underlying database client encounters an error while
+    /// attempting to drop the table. This includes scenarios where
+    /// the table does not exist.
+    /// - Any network or communication error occurs with the database backend.
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        let dbname = validate_namespace(table.namespace())?;
+
+        self.client
+            .0
+            .drop_table(dbname.into(), table.name.clone().into(), false)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
-    async fn stat_table(&self, _table: &TableIdent) -> Result<bool> {
-        todo!()
+    /// Asynchronously checks the existence of a specified table
+    /// in the database.
+    ///
+    /// # Returns
+    /// - `Ok(true)` if the table exists in the database.
+    /// - `Ok(false)` if the table does not exist in the database.
+    /// - `Err(...)` if an error occurs during the process
+    async fn stat_table(&self, table: &TableIdent) -> Result<bool> {
+        let dbname = validate_namespace(table.namespace())?;
+        let tbl_name = table.name.clone();
+
+        let resp = self
+            .client
+            .0
+            .get_table(dbname.into(), tbl_name.into())
+            .await;
+
+        match resp {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if let ResponseError::UserException(ThriftHiveMetastoreGetTableException::O2(_)) =
+                    &err
+                {
+                    Ok(false)
+                } else {
+                    Err(from_thrift_error(err))
+                }
+            }
+        }
     }
 
-    async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
-        todo!()
+    /// Asynchronously renames a table within the database
+    /// or moves it between namespaces (databases).
+    ///
+    /// # Returns
+    /// - `Ok(())` on successful rename or move of the table.
+    /// - `Err(...)` if an error occurs during the process.
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        let src_dbname = validate_namespace(src.namespace())?;
+        let dest_dbname = validate_namespace(dest.namespace())?;
+
+        let src_tbl_name = src.name.clone();
+        let dest_tbl_name = dest.name.clone();
+
+        let mut tbl = self
+            .client
+            .0
+            .get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        tbl.db_name = Some(dest_dbname.into());
+        tbl.table_name = Some(dest_tbl_name.into());
+
+        self.client
+            .0
+            .alter_table(src_dbname.into(), src_tbl_name.into(), tbl)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        todo!()
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Updating a table is not supported yet",
+        ))
     }
 }
