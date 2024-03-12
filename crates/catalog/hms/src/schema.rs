@@ -16,28 +16,32 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{NestedFieldRef, PrimitiveType, SchemaVisitor};
+use iceberg::spec::{visit_schema, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor};
+use iceberg::Result;
 
 pub(crate) type HiveSchema = Vec<FieldSchema>;
 
 #[derive(Debug)]
 pub(crate) struct HiveSchemaBuilder {
+    schema: Schema,
     cols: HiveSchema,
     context: Vec<NestedFieldRef>,
 }
 
 impl HiveSchemaBuilder {
     /// Create new `HiveSchemaBuilder`
-    pub fn new() -> Self {
+    pub fn new(schema: Schema) -> Self {
         HiveSchemaBuilder {
+            schema,
             cols: Vec::new(),
             context: Vec::new(),
         }
     }
 
     /// Get converted `HiveSchema`
-    pub fn schema(&self) -> HiveSchema {
-        self.cols.clone()
+    pub fn schema(&mut self) -> Result<HiveSchema> {
+        visit_schema(&self.schema.clone(), self)?;
+        Ok(self.cols.clone())
     }
 
     /// Check if visitor is in `StructType`
@@ -141,7 +145,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::{
-        spec::{visit_schema, ListType, MapType, NestedField, Schema, StructType, Type},
+        spec::{ListType, MapType, NestedField, Schema, StructType, Type},
         Result,
     };
 
@@ -149,8 +153,6 @@ mod tests {
 
     #[test]
     fn test_schema_with_nested_maps() -> Result<()> {
-        let mut visitor = HiveSchemaBuilder::new();
-
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![NestedField::required(
@@ -185,23 +187,21 @@ mod tests {
             .into()])
             .build()?;
 
+        let result = HiveSchemaBuilder::new(schema).schema()?;
+
         let expected = vec![FieldSchema {
             name: Some("quux".into()),
             r#type: Some("map<string,map<string,int>>".into()),
             comment: None,
         }];
 
-        visit_schema(&schema, &mut visitor)?;
-
-        assert_eq!(visitor.schema(), expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
 
     #[test]
     fn test_schema_with_struct_inside_list() -> Result<()> {
-        let mut visitor = HiveSchemaBuilder::new();
-
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![NestedField::required(
@@ -232,23 +232,21 @@ mod tests {
             .into()])
             .build()?;
 
+        let result = HiveSchemaBuilder::new(schema).schema()?;
+
         let expected = vec![FieldSchema {
             name: Some("location".into()),
             r#type: Some("array<struct<latitude:float, longitude:float>>".into()),
             comment: None,
         }];
 
-        visit_schema(&schema, &mut visitor)?;
-
-        assert_eq!(visitor.schema(), expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
 
     #[test]
     fn test_schema_with_structs() -> Result<()> {
-        let mut visitor = HiveSchemaBuilder::new();
-
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![NestedField::required(
@@ -262,23 +260,21 @@ mod tests {
             .into()])
             .build()?;
 
+        let result = HiveSchemaBuilder::new(schema).schema()?;
+
         let expected = vec![FieldSchema {
             name: Some("person".into()),
             r#type: Some("struct<name:string, age:int>".into()),
             comment: None,
         }];
 
-        visit_schema(&schema, &mut visitor)?;
-
-        assert_eq!(visitor.schema(), expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
 
     #[test]
     fn test_schema_with_simple_fields() -> Result<()> {
-        let mut visitor = HiveSchemaBuilder::new();
-
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
@@ -286,8 +282,7 @@ mod tests {
                 NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
-
-        visit_schema(&schema, &mut visitor)?;
+        let result = HiveSchemaBuilder::new(schema).schema()?;
 
         let expected = vec![
             FieldSchema {
@@ -302,7 +297,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(visitor.schema(), expected);
+        assert_eq!(result, expected);
 
         Ok(())
     }
