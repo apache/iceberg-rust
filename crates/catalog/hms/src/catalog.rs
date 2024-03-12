@@ -303,7 +303,7 @@ impl Catalog for HmsCatalog {
         todo!()
     }
 
-    async fn stat_table(&self, _table: &TableIdent) -> Result<bool> {
+    async fn table_exists(&self, _table: &TableIdent) -> Result<bool> {
         todo!()
     }
 
