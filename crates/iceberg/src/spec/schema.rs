@@ -32,6 +32,8 @@ use std::sync::Arc;
 
 use _serde::SchemaEnum;
 
+use super::NestedField;
+
 /// Type alias for schema id.
 pub type SchemaId = i32;
 /// Reference to [`Schema`].
@@ -639,6 +641,191 @@ impl SchemaVisitor for IndexByName {
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
         Ok(())
+    }
+}
+
+struct PruneColumn {
+    selected: HashSet<i32>,
+    select_full_types: bool,
+}
+
+impl PruneColumn {
+    fn new(selected: HashSet<i32>, select_full_types: bool) -> Self {
+        Self {
+            selected,
+            select_full_types,
+        }
+    }
+
+    fn project_selected_struct(projected_field: Option<Type>) -> Result<StructType> {
+        match projected_field {
+            // If the field is a StructType, return it as such
+            Some(field) if field.is_struct() => Ok(field.as_struct_type().unwrap_or_default()),
+            // If projected_field is None or not a StructType, return an empty StructType
+            _ => Ok(StructType::default()),
+        }
+    }
+    fn project_list(list: &ListType, result: Option<Type>) -> Result<ListType> {
+        if let Some(value_type) = result {
+            if *list.element_field.field_type == value_type {
+                return Ok(list.clone());
+            }
+            Ok(ListType {
+                element_field: Arc::new(NestedField {
+                    id: list.element_field.id,
+                    name: list.element_field.name.clone(),
+                    required: list.element_field.required,
+                    field_type: Box::new(value_type),
+                    doc: list.element_field.doc.clone(),
+                    initial_default: list.element_field.initial_default.clone(),
+                    write_default: list.element_field.write_default.clone(),
+                }),
+            })
+        } else {
+            Err(Error::new(ErrorKind::DataInvalid, "Type value is none"))
+        }
+    }
+    fn project_map(map: &MapType, value: Option<Type>) -> Result<MapType> {
+        if let Some(value_type) = value {
+            if *map.value_field.field_type == value_type {
+                return Ok(map.clone());
+            }
+            Ok(MapType {
+                key_field: map.key_field.clone(),
+                value_field: Arc::new(NestedField {
+                    id: map.value_field.id,
+                    name: map.value_field.name.clone(),
+                    required: map.value_field.required,
+                    field_type: Box::new(value_type),
+                    doc: map.value_field.doc.clone(),
+                    initial_default: map.value_field.initial_default.clone(),
+                    write_default: map.value_field.write_default.clone(),
+                }),
+            })
+        } else {
+            Err(Error::new(ErrorKind::DataInvalid, "Type value is none"))
+        }
+    }
+}
+
+impl SchemaVisitor for PruneColumn {
+    type T = Type;
+
+    fn schema(&mut self, _schema: &Schema, value: Self::T) -> Result<Self::T> {
+        Ok(value)
+    }
+
+    fn field(&mut self, field: &NestedFieldRef, value: Self::T) -> Result<Self::T> {
+        if self.selected.contains(&field.id) {
+            if self.select_full_types {
+                Ok(*field.field_type.clone())
+            } else if field.field_type.is_struct() {
+                return Ok(Type::Struct(PruneColumn::project_selected_struct(Some(
+                    value,
+                ))?));
+            } else if !field.field_type.is_nested() {
+                return Ok(*field.field_type.clone());
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Nested field types not allowed in this context".to_string(),
+                ));
+            }
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn r#struct(&mut self, r#struct: &StructType, results: Vec<Self::T>) -> Result<Self::T> {
+        let fields = r#struct.fields();
+        let mut selected_field = Vec::with_capacity(fields.len());
+        let mut same_type = true;
+
+        for i in 0..results.len() {
+            let field = fields.get(i).unwrap();
+            if let Some(projected_type) = results.get(i) {
+                if *field.field_type == *projected_type {
+                    selected_field.push(field.clone());
+                } else {
+                    same_type = false;
+                    let new_field = NestedField {
+                        id: field.id,
+                        name: field.name.clone(),
+                        required: field.required,
+                        field_type: Box::new(projected_type.clone()),
+                        doc: field.doc.clone(),
+                        initial_default: field.initial_default.clone(),
+                        write_default: field.write_default.clone(),
+                    };
+                    selected_field.push(Arc::new(new_field));
+                }
+            }
+        }
+
+        if !selected_field.is_empty() {
+            if selected_field.len() == fields.len() && same_type {
+                return Ok(Type::Struct(r#struct.clone()));
+            } else {
+                return Ok(Type::Struct(StructType::new(selected_field)));
+            }
+        }
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Selected field list is empty",
+        ))
+    }
+
+    fn list(&mut self, list: &ListType, value: Self::T) -> Result<Self::T> {
+        if self.selected.contains(&list.element_field.id) {
+            if self.select_full_types {
+                Ok(Type::List(list.clone()))
+            } else if list.element_field.field_type.is_struct() {
+                let projected_struct = PruneColumn::project_selected_struct(Some(value)).unwrap();
+                return Ok(Type::List(PruneColumn::project_list(
+                    list,
+                    Some(Type::Struct(projected_struct)),
+                )?));
+            } else if !list.element_field.field_type.is_primitive() {
+                return Ok(Type::List(list.clone()));
+            } else {
+                return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
+                    ));
+            }
+        } else {
+            Ok(Type::List(PruneColumn::project_list(list, Some(value))?))
+        }
+    }
+
+    fn map(&mut self, map: &MapType, _key_value: Self::T, value: Self::T) -> Result<Self::T> {
+        if self.selected.contains(&map.value_field.id) {
+            if self.select_full_types {
+                Ok(Type::Map(map.clone()))
+            } else if map.value_field.field_type.is_struct() {
+                let projected_struct = PruneColumn::project_selected_struct(Some(value)).unwrap();
+                return Ok(Type::Map(PruneColumn::project_map(
+                    map,
+                    Some(Type::Struct(projected_struct)),
+                )?));
+            } else if !map.value_field.field_type.is_primitive() {
+                return Ok(Type::Map(map.clone()));
+            } else {
+                return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
+                    ));
+            }
+        } else {
+            Ok(Type::Map(PruneColumn::project_map(map, Some(value))?))
+        }
+    }
+
+    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Primitive type is not supported",
+        ))
     }
 }
 
