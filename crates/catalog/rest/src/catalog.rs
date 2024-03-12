@@ -693,7 +693,7 @@ mod _serde {
         pub(super) access_token: String,
         pub(super) token_type: String,
         pub(super) expires_in: u64,
-        pub(super) issued_token_type: String,
+        pub(super) issued_token_type: Option<String>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
