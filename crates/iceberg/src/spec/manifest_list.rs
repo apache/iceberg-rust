@@ -603,11 +603,11 @@ impl FromStr for ManifestContentType {
     }
 }
 
-impl ToString for ManifestContentType {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for ManifestContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ManifestContentType::Data => "data".to_string(),
-            ManifestContentType::Deletes => "deletes".to_string(),
+            ManifestContentType::Data => write!(f, "data"),
+            ManifestContentType::Deletes => write!(f, "deletes"),
         }
     }
 }

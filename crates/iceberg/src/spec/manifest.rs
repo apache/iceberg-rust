@@ -1107,14 +1107,13 @@ impl FromStr for DataFileFormat {
     }
 }
 
-impl ToString for DataFileFormat {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for DataFileFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DataFileFormat::Avro => "avro",
-            DataFileFormat::Orc => "orc",
-            DataFileFormat::Parquet => "parquet",
+            DataFileFormat::Avro => write!(f, "avro"),
+            DataFileFormat::Orc => write!(f, "orc"),
+            DataFileFormat::Parquet => write!(f, "parquet"),
         }
-        .to_string()
     }
 }
 
