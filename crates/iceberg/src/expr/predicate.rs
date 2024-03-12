@@ -257,10 +257,10 @@ impl Bind for Predicate {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
                 let [left, right] = bound_expr.inputs;
                 Ok(match (left, right) {
-                    (_, r) if matches!(&*r, &BoundPredicate::AlwaysTrue) => {
-                        BoundPredicate::AlwaysTrue
-                    }
-                    (l, _) if matches!(&*l, &BoundPredicate::AlwaysTrue) => {
+                    (l, r)
+                        if matches!(&*r, &BoundPredicate::AlwaysTrue)
+                            || matches!(&*l, &BoundPredicate::AlwaysTrue) =>
+                    {
                         BoundPredicate::AlwaysTrue
                     }
                     (left, r) if matches!(&*r, &BoundPredicate::AlwaysFalse) => *left,
@@ -296,7 +296,7 @@ impl Bind for Predicate {
                     op => {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            format!("Expecting unary operator,but found {op}"),
+                            format!("Expecting unary operator, but found {op}"),
                         ))
                     }
                 }
