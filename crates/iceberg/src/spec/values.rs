@@ -106,7 +106,7 @@ impl Display for Datum {
             (_, PrimitiveLiteral::TimestampTZ(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
-            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (_, PrimitiveLiteral::UUID(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
@@ -529,7 +529,7 @@ impl Datum {
     /// use iceberg::spec::Datum;
     /// let t = Datum::string("ss");
     ///
-    /// assert_eq!(&format!("{t}"), "ss");
+    /// assert_eq!(&format!("{t}"), r#""ss""#);
     /// ```
     pub fn string<S: ToString>(s: S) -> Self {
         Self {
@@ -656,6 +656,21 @@ impl Datum {
             })
         } else {
             unreachable!("Decimal type must be primitive.")
+        }
+    }
+
+    /// Convert the datum to `target_type`.
+    pub fn to(self, target_type: &Type) -> Result<Datum> {
+        // TODO: We should allow more type conversions
+        match target_type {
+            Type::Primitive(typ) if typ == &self.r#type => Ok(self),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Can't convert datum from {} type to {} type.",
+                    self.r#type, target_type
+                ),
+            )),
         }
     }
 }

@@ -17,10 +17,14 @@
 
 //! Term definition.
 
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
-use crate::spec::{Datum, NestedField, NestedFieldRef};
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+
+use fnv::FnvHashSet;
+
+use crate::expr::Bind;
+use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
+use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
+use crate::{Error, ErrorKind};
 
 /// Unbound term before binding to a schema.
 pub type Term = Reference;
@@ -123,16 +127,20 @@ impl Reference {
     ///
     /// ```rust
     ///
-    /// use std::collections::HashSet;
+    /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// let expr = Reference::new("a").is_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    /// let expr = Reference::new("a").is_in([Datum::long(5), Datum::long(6)]);
     ///
     /// let as_string = format!("{expr}");
     /// assert!(&as_string == "a IN (5, 6)" || &as_string == "a IN (6, 5)");
     /// ```
-    pub fn is_in(self, literals: HashSet<Datum>) -> Predicate {
-        Predicate::Set(SetExpression::new(PredicateOperator::In, self, literals))
+    pub fn is_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            self,
+            FnvHashSet::from_iter(literals),
+        ))
     }
 
     /// Creates an is-not-in expression. For example, `a IS NOT IN (5, 6)`.
@@ -141,16 +149,20 @@ impl Reference {
     ///
     /// ```rust
     ///
-    /// use std::collections::HashSet;
+    /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// let expr = Reference::new("a").is_not_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    /// let expr = Reference::new("a").is_not_in([Datum::long(5), Datum::long(6)]);
     ///
     /// let as_string = format!("{expr}");
     /// assert!(&as_string == "a NOT IN (5, 6)" || &as_string == "a NOT IN (6, 5)");
     /// ```
-    pub fn is_not_in(self, literals: HashSet<Datum>) -> Predicate {
-        Predicate::Set(SetExpression::new(PredicateOperator::NotIn, self, literals))
+    pub fn is_not_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::NotIn,
+            self,
+            FnvHashSet::from_iter(literals),
+        ))
     }
 }
 
@@ -160,8 +172,28 @@ impl Display for Reference {
     }
 }
 
+impl Bind for Reference {
+    type Bound = BoundReference;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
+        let field = if case_sensitive {
+            schema.field_by_name(&self.name)
+        } else {
+            schema.field_by_name_case_insensitive(&self.name)
+        };
+
+        let field = field.ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Field {} not found in schema", self.name),
+            )
+        })?;
+        Ok(BoundReference::new(self.name, field.clone()))
+    }
+}
+
 /// A named reference in a bound expression after binding to a schema.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundReference {
     // This maybe different from [`name`] filed in [`NestedField`] since this contains full path.
     // For example, if the field is `a.b.c`, then `field.name` is `c`, but `original_name` is `a.b.c`.
@@ -192,3 +224,67 @@ impl Display for BoundReference {
 
 /// Bound term after binding to a schema.
 pub type BoundTerm = BoundReference;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::expr::{Bind, BoundReference, Reference};
+    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+
+    fn table_schema_simple() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_bind_reference() {
+        let schema = table_schema_simple();
+        let reference = Reference::new("bar").bind(schema, true).unwrap();
+
+        let expected_ref = BoundReference::new(
+            "bar",
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+        );
+
+        assert_eq!(expected_ref, reference);
+    }
+
+    #[test]
+    fn test_bind_reference_case_insensitive() {
+        let schema = table_schema_simple();
+        let reference = Reference::new("BAR").bind(schema, false).unwrap();
+
+        let expected_ref = BoundReference::new(
+            "BAR",
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+        );
+
+        assert_eq!(expected_ref, reference);
+    }
+
+    #[test]
+    fn test_bind_reference_failure() {
+        let schema = table_schema_simple();
+        let result = Reference::new("bar_not_eix").bind(schema, true);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bind_reference_case_insensitive_failure() {
+        let schema = table_schema_simple();
+        let result = Reference::new("bar_non_exist").bind(schema, false);
+        assert!(result.is_err());
+    }
+}
