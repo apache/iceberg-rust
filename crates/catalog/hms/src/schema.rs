@@ -23,24 +23,22 @@ pub(crate) type HiveSchema = Vec<FieldSchema>;
 
 #[derive(Debug)]
 pub(crate) struct HiveSchemaBuilder {
-    schema: Schema,
     cols: HiveSchema,
     context: Vec<NestedFieldRef>,
 }
 
 impl HiveSchemaBuilder {
     /// Create new `HiveSchemaBuilder`
-    pub fn new(schema: Schema) -> Self {
+    pub fn new() -> Self {
         HiveSchemaBuilder {
-            schema,
             cols: Vec::new(),
             context: Vec::new(),
         }
     }
 
-    /// Get converted `HiveSchema`
-    pub fn schema(&mut self) -> Result<HiveSchema> {
-        visit_schema(&self.schema.clone(), self)?;
+    /// Convert `Schema` into `HiveSchema` by applying the `SchemaVisitor`
+    pub fn from_iceberg(&mut self, schema: &Schema) -> Result<HiveSchema> {
+        visit_schema(schema, self)?;
         Ok(self.cols.clone())
     }
 
@@ -187,7 +185,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new(schema).schema()?;
+        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("quux".into()),
@@ -232,7 +230,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new(schema).schema()?;
+        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("location".into()),
@@ -260,7 +258,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new(schema).schema()?;
+        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("person".into()),
@@ -282,7 +280,7 @@ mod tests {
                 NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
-        let result = HiveSchemaBuilder::new(schema).schema()?;
+        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
         let expected = vec![
             FieldSchema {

@@ -155,7 +155,7 @@ pub(crate) fn convert_to_database(
 
 pub(crate) fn convert_to_hive_table(
     db_name: String,
-    schema: Schema,
+    schema: &Schema,
     table_name: String,
     location: String,
     metadata_location: String,
@@ -166,7 +166,7 @@ pub(crate) fn convert_to_hive_table(
         ..Default::default()
     };
 
-    let hive_schema = HiveSchemaBuilder::new(schema).schema()?;
+    let hive_schema = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
     let storage_descriptor = StorageDescriptor {
         location: Some(location.into()),
@@ -340,7 +340,7 @@ mod tests {
 
         let result = convert_to_hive_table(
             db_name.clone(),
-            schema.clone(),
+            &schema,
             table_name.clone(),
             location.clone(),
             metadata_location,
@@ -352,7 +352,7 @@ mod tests {
             ..Default::default()
         };
 
-        let hive_schema = HiveSchemaBuilder::new(schema).schema()?;
+        let hive_schema = HiveSchemaBuilder::new().from_iceberg(&schema)?;
 
         let sd = StorageDescriptor {
             location: Some(location.into()),
