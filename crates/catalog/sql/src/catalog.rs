@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use sqlx::{
     any::{install_default_drivers, AnyRow},
-    AnyPool, Row,
+    AnyPool, Connection, Row,
 };
 use std::collections::HashMap;
 
@@ -50,32 +50,48 @@ impl SqlCatalog {
 
         let pool = AnyPool::connect(url).await.map_err(from_sqlx_error)?;
 
-        sqlx::query(
-            "create table if not exists iceberg_tables (
+        let mut connection = pool.acquire().await.map_err(from_sqlx_error)?;
+
+        connection
+            .transaction(|txn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "create table if not exists iceberg_tables (
                                 catalog_name text not null,
                                 table_namespace text not null,
                                 table_name text not null,
-                                metadata_location text not null,
+                                metadata_location text,
                                 previous_metadata_location text,
                                 primary key (catalog_name, table_namespace, table_name)
                             );",
-        )
-        .execute(&pool)
-        .await
-        .map_err(from_sqlx_error)?;
+                    )
+                    .fetch_all(&mut **txn)
+                    .await
+                })
+            })
+            .await
+            .map_err(from_sqlx_error)?;
 
-        sqlx::query(
-            "create table if not exists iceberg_namespace_properties (
+        connection
+            .transaction(|txn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "create table if not exists iceberg_namespace_properties (
                                 catalog_name text not null,
                                 namespace text not null,
                                 property_key text,
                                 property_value text,
                                 primary key (catalog_name, namespace, property_key)
                             );",
-        )
-        .execute(&pool)
-        .await
-        .map_err(from_sqlx_error)?;
+                    )
+                    .fetch_all(&mut **txn)
+                    .await
+                })
+            })
+            .await
+            .map_err(from_sqlx_error)?;
+
+        connection.close().await.map_err(from_sqlx_error)?;
 
         Ok(SqlCatalog {
             name: name.to_owned(),
