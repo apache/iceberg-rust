@@ -709,22 +709,22 @@ impl PruneColumn {
 }
 
 impl SchemaVisitor for PruneColumn {
-    type T = Type;
+    type T = Option<Type>;
 
     fn schema(&mut self, _schema: &Schema, value: Self::T) -> Result<Self::T> {
-        Ok(value)
+        Ok(Some(value.unwrap()))
     }
 
     fn field(&mut self, field: &NestedFieldRef, value: Self::T) -> Result<Self::T> {
         if self.selected.contains(&field.id) {
             if self.select_full_types {
-                Ok(*field.field_type.clone())
+                Ok(Some(*field.field_type.clone()))
             } else if field.field_type.is_struct() {
-                return Ok(Type::Struct(PruneColumn::project_selected_struct(Some(
+                return Ok(Some(Type::Struct(PruneColumn::project_selected_struct(
                     value,
-                ))?));
+                )?)));
             } else if !field.field_type.is_nested() {
-                return Ok(*field.field_type.clone());
+                return Ok(Some(*field.field_type.clone()));
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -743,8 +743,8 @@ impl SchemaVisitor for PruneColumn {
 
         for i in 0..results.len() {
             let field = fields.get(i).unwrap();
-            if let Some(projected_type) = results.get(i) {
-                if *field.field_type == *projected_type {
+            if let Some(Some(projected_type)) = results.get(i) {
+                if *field.field_type == (projected_type).clone() {
                     selected_field.push(field.clone());
                 } else {
                     same_type = false;
@@ -764,68 +764,76 @@ impl SchemaVisitor for PruneColumn {
 
         if !selected_field.is_empty() {
             if selected_field.len() == fields.len() && same_type {
-                return Ok(Type::Struct(r#struct.clone()));
+                return Ok(Some(Type::Struct(r#struct.clone())));
             } else {
-                return Ok(Type::Struct(StructType::new(selected_field)));
+                return Ok(Some(Type::Struct(StructType::new(selected_field))));
             }
         }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Selected field list is empty",
-        ))
+        Ok(None)
     }
 
     fn list(&mut self, list: &ListType, value: Self::T) -> Result<Self::T> {
         if self.selected.contains(&list.element_field.id) {
             if self.select_full_types {
-                Ok(Type::List(list.clone()))
+                Ok(Some(Type::List(list.clone())))
             } else if list.element_field.field_type.is_struct() {
-                let projected_struct = PruneColumn::project_selected_struct(Some(value)).unwrap();
-                return Ok(Type::List(PruneColumn::project_list(
+                let projected_struct =
+                    PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
+                return Ok(Some(Type::List(PruneColumn::project_list(
                     list,
                     Some(Type::Struct(projected_struct)),
-                )?));
-            } else if !list.element_field.field_type.is_primitive() {
-                return Ok(Type::List(list.clone()));
+                )?)));
+            } else if list.element_field.field_type.is_primitive() {
+                return Ok(Some(Type::List(list.clone())));
             } else {
                 return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
                     ));
             }
+        } else if let Some(result) = value {
+            Ok(Some(Type::List(PruneColumn::project_list(
+                list,
+                Some(result),
+            )?)))
         } else {
-            Ok(Type::List(PruneColumn::project_list(list, Some(value))?))
+            Ok(None)
         }
     }
 
     fn map(&mut self, map: &MapType, _key_value: Self::T, value: Self::T) -> Result<Self::T> {
         if self.selected.contains(&map.value_field.id) {
             if self.select_full_types {
-                Ok(Type::Map(map.clone()))
+                Ok(Some(Type::Map(map.clone())))
             } else if map.value_field.field_type.is_struct() {
-                let projected_struct = PruneColumn::project_selected_struct(Some(value)).unwrap();
-                return Ok(Type::Map(PruneColumn::project_map(
+                let projected_struct =
+                    PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
+                return Ok(Some(Type::Map(PruneColumn::project_map(
                     map,
                     Some(Type::Struct(projected_struct)),
-                )?));
-            } else if !map.value_field.field_type.is_primitive() {
-                return Ok(Type::Map(map.clone()));
+                )?)));
+            } else if map.value_field.field_type.is_primitive() {
+                return Ok(Some(Type::Map(map.clone())));
             } else {
                 return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
                     ));
             }
+        } else if let Some(value_result) = value {
+            return Ok(Some(Type::Map(PruneColumn::project_map(
+                map,
+                Some(value_result),
+            )?)));
+        } else if self.selected.contains(&map.key_field.id) {
+            Ok(Some(Type::Map(map.clone())))
         } else {
-            Ok(Type::Map(PruneColumn::project_map(map, Some(value))?))
+            Ok(None)
         }
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Primitive type is not supported",
-        ))
+        Ok(None)
     }
 }
 
