@@ -19,12 +19,17 @@
 //! Predicate expressions are used to filter data, and evaluates to a boolean value. For example,
 //! `a > 10` is a predicate expression, and it evaluates to `true` if `a` is greater than `10`,
 
-use crate::expr::{BoundReference, PredicateOperator, Reference};
-use crate::spec::Datum;
-use itertools::Itertools;
-use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Not;
+
+use array_init::array_init;
+use fnv::FnvHashSet;
+use itertools::Itertools;
+
+use crate::error::Result;
+use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
+use crate::spec::{Datum, SchemaRef};
+use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
 #[derive(PartialEq)]
@@ -55,6 +60,24 @@ impl<T, const N: usize> LogicalExpression<T, N> {
     }
 }
 
+impl<T: Bind, const N: usize> Bind for LogicalExpression<T, N>
+where
+    T::Bound: Sized,
+{
+    type Bound = LogicalExpression<T::Bound, N>;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+        let mut outputs: [Option<Box<T::Bound>>; N] = array_init(|_| None);
+        for (i, input) in self.inputs.into_iter().enumerate() {
+            outputs[i] = Some(Box::new(input.bind(schema.clone(), case_sensitive)?));
+        }
+
+        // It's safe to use `unwrap` here since they are all `Some`.
+        let bound_inputs = array_init::from_iter(outputs.into_iter().map(Option::unwrap)).unwrap();
+        Ok(LogicalExpression::new(bound_inputs))
+    }
+}
+
 /// Unary predicate, for example, `a IS NULL`.
 #[derive(PartialEq)]
 pub struct UnaryExpression<T> {
@@ -76,6 +99,15 @@ impl<T: Debug> Debug for UnaryExpression<T> {
 impl<T: Display> Display for UnaryExpression<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.term, self.op)
+    }
+}
+
+impl<T: Bind> Bind for UnaryExpression<T> {
+    type Bound = UnaryExpression<T::Bound>;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+        let bound_term = self.term.bind(schema, case_sensitive)?;
+        Ok(UnaryExpression::new(self.op, bound_term))
     }
 }
 
@@ -120,6 +152,15 @@ impl<T: Display> Display for BinaryExpression<T> {
     }
 }
 
+impl<T: Bind> Bind for BinaryExpression<T> {
+    type Bound = BinaryExpression<T::Bound>;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+        let bound_term = self.term.bind(schema.clone(), case_sensitive)?;
+        Ok(BinaryExpression::new(self.op, bound_term, self.literal))
+    }
+}
+
 /// Set predicates, for example, `a in (1, 2, 3)`.
 #[derive(PartialEq)]
 pub struct SetExpression<T> {
@@ -128,7 +169,7 @@ pub struct SetExpression<T> {
     /// Term of this predicate, for example, `a` in `a in (1, 2, 3)`.
     term: T,
     /// Literals of this predicate, for example, `(1, 2, 3)` in `a in (1, 2, 3)`.
-    literals: HashSet<Datum>,
+    literals: FnvHashSet<Datum>,
 }
 
 impl<T: Debug> Debug for SetExpression<T> {
@@ -141,9 +182,19 @@ impl<T: Debug> Debug for SetExpression<T> {
     }
 }
 
-impl<T: Debug> SetExpression<T> {
-    pub(crate) fn new(op: PredicateOperator, term: T, literals: HashSet<Datum>) -> Self {
+impl<T> SetExpression<T> {
+    pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
+        debug_assert!(op.is_set());
         Self { op, term, literals }
+    }
+}
+
+impl<T: Bind> Bind for SetExpression<T> {
+    type Bound = SetExpression<T::Bound>;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+        let bound_term = self.term.bind(schema.clone(), case_sensitive)?;
+        Ok(SetExpression::new(self.op, bound_term, self.literals))
     }
 }
 
@@ -170,6 +221,146 @@ pub enum Predicate {
     Binary(BinaryExpression<Reference>),
     /// Set predicates, for example, `a in (1, 2, 3)`.
     Set(SetExpression<Reference>),
+}
+
+impl Bind for Predicate {
+    type Bound = BoundPredicate;
+
+    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<BoundPredicate> {
+        match self {
+            Predicate::And(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+
+                let [left, right] = bound_expr.inputs;
+                Ok(match (left, right) {
+                    (_, r) if matches!(&*r, &BoundPredicate::AlwaysFalse) => {
+                        BoundPredicate::AlwaysFalse
+                    }
+                    (l, _) if matches!(&*l, &BoundPredicate::AlwaysFalse) => {
+                        BoundPredicate::AlwaysFalse
+                    }
+                    (left, r) if matches!(&*r, &BoundPredicate::AlwaysTrue) => *left,
+                    (l, right) if matches!(&*l, &BoundPredicate::AlwaysTrue) => *right,
+                    (left, right) => BoundPredicate::And(LogicalExpression::new([left, right])),
+                })
+            }
+            Predicate::Not(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let [inner] = bound_expr.inputs;
+                Ok(match inner {
+                    e if matches!(&*e, &BoundPredicate::AlwaysTrue) => BoundPredicate::AlwaysFalse,
+                    e if matches!(&*e, &BoundPredicate::AlwaysFalse) => BoundPredicate::AlwaysTrue,
+                    e => BoundPredicate::Not(LogicalExpression::new([e])),
+                })
+            }
+            Predicate::Or(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let [left, right] = bound_expr.inputs;
+                Ok(match (left, right) {
+                    (l, r)
+                        if matches!(&*r, &BoundPredicate::AlwaysTrue)
+                            || matches!(&*l, &BoundPredicate::AlwaysTrue) =>
+                    {
+                        BoundPredicate::AlwaysTrue
+                    }
+                    (left, r) if matches!(&*r, &BoundPredicate::AlwaysFalse) => *left,
+                    (l, right) if matches!(&*l, &BoundPredicate::AlwaysFalse) => *right,
+                    (left, right) => BoundPredicate::Or(LogicalExpression::new([left, right])),
+                })
+            }
+            Predicate::Unary(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+
+                match &bound_expr.op {
+                    &PredicateOperator::IsNull => {
+                        if bound_expr.term.field().required {
+                            return Ok(BoundPredicate::AlwaysFalse);
+                        }
+                    }
+                    &PredicateOperator::NotNull => {
+                        if bound_expr.term.field().required {
+                            return Ok(BoundPredicate::AlwaysTrue);
+                        }
+                    }
+                    &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
+                        if !bound_expr.term.field().field_type.is_floating_type() {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Expecting floating point type, but found {}",
+                                    bound_expr.term.field().field_type
+                                ),
+                            ));
+                        }
+                    }
+                    op => {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Expecting unary operator, but found {op}"),
+                        ))
+                    }
+                }
+
+                Ok(BoundPredicate::Unary(bound_expr))
+            }
+            Predicate::Binary(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let bound_literal = bound_expr.literal.to(&bound_expr.term.field().field_type)?;
+                Ok(BoundPredicate::Binary(BinaryExpression::new(
+                    bound_expr.op,
+                    bound_expr.term,
+                    bound_literal,
+                )))
+            }
+            Predicate::Set(expr) => {
+                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let bound_literals = bound_expr
+                    .literals
+                    .into_iter()
+                    .map(|l| l.to(&bound_expr.term.field().field_type))
+                    .collect::<Result<FnvHashSet<Datum>>>()?;
+
+                match &bound_expr.op {
+                    &PredicateOperator::In => {
+                        if bound_literals.is_empty() {
+                            return Ok(BoundPredicate::AlwaysFalse);
+                        }
+                        if bound_literals.len() == 1 {
+                            return Ok(BoundPredicate::Binary(BinaryExpression::new(
+                                PredicateOperator::Eq,
+                                bound_expr.term,
+                                bound_literals.into_iter().next().unwrap(),
+                            )));
+                        }
+                    }
+                    &PredicateOperator::NotIn => {
+                        if bound_literals.is_empty() {
+                            return Ok(BoundPredicate::AlwaysTrue);
+                        }
+                        if bound_literals.len() == 1 {
+                            return Ok(BoundPredicate::Binary(BinaryExpression::new(
+                                PredicateOperator::NotEq,
+                                bound_expr.term,
+                                bound_literals.into_iter().next().unwrap(),
+                            )));
+                        }
+                    }
+                    op => {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Expecting unary operator,but found {op}"),
+                        ))
+                    }
+                }
+
+                Ok(BoundPredicate::Set(SetExpression::new(
+                    bound_expr.op,
+                    bound_expr.term,
+                    bound_literals,
+                )))
+            }
+        }
+    }
 }
 
 impl Display for Predicate {
@@ -292,7 +483,11 @@ impl Predicate {
 impl Not for Predicate {
     type Output = Predicate;
 
-    /// Create a predicate which is the reverse of this predicate. For example: `NOT (a > 10)`
+    /// Create a predicate which is the reverse of this predicate. For example: `NOT (a > 10)`.
+    ///
+    /// This is different from [`Predicate::negate()`] since it doesn't rewrite expression, but
+    /// just adds a `NOT` operator.
+    ///
     /// # Example
     ///     
     ///```rust
@@ -332,12 +527,46 @@ pub enum BoundPredicate {
     Set(SetExpression<BoundReference>),
 }
 
+impl Display for BoundPredicate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BoundPredicate::AlwaysTrue => {
+                write!(f, "True")
+            }
+            BoundPredicate::AlwaysFalse => {
+                write!(f, "False")
+            }
+            BoundPredicate::And(expr) => {
+                write!(f, "({}) AND ({})", expr.inputs()[0], expr.inputs()[1])
+            }
+            BoundPredicate::Or(expr) => {
+                write!(f, "({}) OR ({})", expr.inputs()[0], expr.inputs()[1])
+            }
+            BoundPredicate::Not(expr) => {
+                write!(f, "NOT ({})", expr.inputs()[0])
+            }
+            BoundPredicate::Unary(expr) => {
+                write!(f, "{}", expr)
+            }
+            BoundPredicate::Binary(expr) => {
+                write!(f, "{}", expr)
+            }
+            BoundPredicate::Set(expr) => {
+                write!(f, "{}", expr)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+    use std::sync::Arc;
+
+    use crate::expr::Bind;
     use crate::expr::Reference;
     use crate::spec::Datum;
-    use std::collections::HashSet;
-    use std::ops::Not;
+    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     #[test]
     fn test_predicate_negate_and() {
@@ -406,13 +635,239 @@ mod tests {
 
     #[test]
     fn test_predicate_negate_set() {
-        let expression = Reference::new("a").is_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+        let expression = Reference::new("a").is_in([Datum::long(5), Datum::long(6)]);
 
-        let expected =
-            Reference::new("a").is_not_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+        let expected = Reference::new("a").is_not_in([Datum::long(5), Datum::long(6)]);
 
         let result = expression.negate();
 
         assert_eq!(result, expected);
+    }
+
+    fn table_schema_simple() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_bind_is_null() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").is_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "foo IS NULL");
+    }
+
+    #[test]
+    fn test_bind_is_null_required() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+    }
+
+    #[test]
+    fn test_bind_is_not_null() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").is_not_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "foo IS NOT NULL");
+    }
+
+    #[test]
+    fn test_bind_is_not_null_required() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+    }
+
+    #[test]
+    fn test_bind_less_than() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").less_than(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar < 10");
+    }
+
+    #[test]
+    fn test_bind_less_than_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").less_than(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_greater_than_or_eq() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").greater_than_or_equal_to(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar >= 10");
+    }
+
+    #[test]
+    fn test_bind_greater_than_or_eq_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").greater_than_or_equal_to(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_in() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_in([Datum::int(10), Datum::int(20)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar IN (20, 10)");
+    }
+
+    #[test]
+    fn test_bind_in_empty() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_in(vec![]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+    }
+
+    #[test]
+    fn test_bind_in_one_literal() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_in(vec![Datum::int(10)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar = 10");
+    }
+
+    #[test]
+    fn test_bind_in_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_in(vec![Datum::int(10), Datum::string("abcd")]);
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_not_in() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in([Datum::int(10), Datum::int(20)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar NOT IN (20, 10)");
+    }
+
+    #[test]
+    fn test_bind_not_in_empty() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in(vec![]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+    }
+
+    #[test]
+    fn test_bind_not_in_one_literal() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in(vec![Datum::int(10)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar != 10");
+    }
+
+    #[test]
+    fn test_bind_not_in_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in([Datum::int(10), Datum::string("abcd")]);
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_and() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar")
+            .less_than(Datum::int(10))
+            .and(Reference::new("foo").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "(bar < 10) AND (foo IS NULL)");
+    }
+
+    #[test]
+    fn test_bind_and_always_false() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo")
+            .less_than(Datum::string("abcd"))
+            .and(Reference::new("bar").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+    }
+
+    #[test]
+    fn test_bind_and_always_true() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo")
+            .less_than(Datum::string("abcd"))
+            .and(Reference::new("bar").is_not_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), r#"foo < "abcd""#);
+    }
+
+    #[test]
+    fn test_bind_or() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar")
+            .less_than(Datum::int(10))
+            .or(Reference::new("foo").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "(bar < 10) OR (foo IS NULL)");
+    }
+
+    #[test]
+    fn test_bind_or_always_true() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo")
+            .less_than(Datum::string("abcd"))
+            .or(Reference::new("bar").is_not_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+    }
+
+    #[test]
+    fn test_bind_or_always_false() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo")
+            .less_than(Datum::string("abcd"))
+            .or(Reference::new("bar").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), r#"foo < "abcd""#);
+    }
+
+    #[test]
+    fn test_bind_not() {
+        let schema = table_schema_simple();
+        let expr = !Reference::new("bar").less_than(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "NOT (bar < 10)");
+    }
+
+    #[test]
+    fn test_bind_not_always_true() {
+        let schema = table_schema_simple();
+        let expr = !Reference::new("bar").is_not_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+    }
+
+    #[test]
+    fn test_bind_not_always_false() {
+        let schema = table_schema_simple();
+        let expr = !Reference::new("bar").is_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), r#"True"#);
     }
 }

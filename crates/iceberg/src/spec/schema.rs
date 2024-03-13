@@ -51,6 +51,7 @@ pub struct Schema {
     id_to_field: HashMap<i32, NestedFieldRef>,
 
     name_to_id: HashMap<String, i32>,
+    lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
 }
 
@@ -117,6 +118,11 @@ impl SchemaBuilder {
             index.indexes()
         };
 
+        let lowercase_name_to_id = name_to_id
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), *v))
+            .collect();
+
         Ok(Schema {
             r#struct,
             schema_id: self.schema_id,
@@ -127,6 +133,7 @@ impl SchemaBuilder {
             id_to_field,
 
             name_to_id,
+            lowercase_name_to_id,
             id_to_name,
         })
     }
@@ -209,6 +216,15 @@ impl Schema {
     pub fn field_by_name(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.name_to_id
             .get(field_name)
+            .and_then(|id| self.field_by_id(*id))
+    }
+
+    /// Get field by field name, but in case-insensitive way.
+    ///
+    /// Both full name and short name could work here.
+    pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
+        self.lowercase_name_to_id
+            .get(&field_name.to_lowercase())
             .and_then(|id| self.field_by_id(*id))
     }
 
@@ -1030,6 +1046,42 @@ table {
 
         let schema = table_schema_nested();
         assert_eq!(&expected_name_to_id, &schema.name_to_id);
+    }
+
+    #[test]
+    fn test_schema_index_by_name_case_insensitive() {
+        let expected_name_to_id = HashMap::from(
+            [
+                ("fOo", 1),
+                ("Bar", 2),
+                ("BAz", 3),
+                ("quX", 4),
+                ("quX.ELEment", 5),
+                ("qUUx", 6),
+                ("QUUX.KEY", 7),
+                ("QUUX.Value", 8),
+                ("qUUX.VALUE.Key", 9),
+                ("qUux.VaLue.Value", 10),
+                ("lOCAtION", 11),
+                ("LOCAtioN.ELeMENt", 12),
+                ("LoCATion.element.LATitude", 13),
+                ("locatION.ElemeNT.LONgitude", 14),
+                ("LOCAtiON.LATITUDE", 13),
+                ("LOCATION.LONGITUDE", 14),
+                ("PERSon", 15),
+                ("PERSON.Name", 16),
+                ("peRSON.AGe", 17),
+            ]
+            .map(|e| (e.0.to_string(), e.1)),
+        );
+
+        let schema = table_schema_nested();
+        for (name, id) in expected_name_to_id {
+            assert_eq!(
+                Some(id),
+                schema.field_by_name_case_insensitive(&name).map(|f| f.id)
+            );
+        }
     }
 
     #[test]

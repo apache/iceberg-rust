@@ -31,6 +31,7 @@ keywords = ["iceberg"]
 [dependencies]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
+array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -42,6 +43,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
 either = { workspace = true }
+fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }

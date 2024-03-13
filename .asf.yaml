@@ -46,7 +46,7 @@ github:
   features:
     wiki: false
     issues: true
-    projects: false
+    projects: true
   collaborators:
     - Xuanwo
     - liurenjie1024
@@ -55,7 +55,7 @@ github:
   ghp_path: /
 
 notifications:
-    commits:      commits@iceberg.apache.org
-    issues:       issues@iceberg.apache.org
-    pullrequests: issues@iceberg.apache.org
-    jira_options: link label link label
+  commits: commits@iceberg.apache.org
+  issues: issues@iceberg.apache.org
+  pullrequests: issues@iceberg.apache.org
+  jira_options: link label link label

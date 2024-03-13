@@ -36,6 +36,7 @@ rust-version = "1.75.0"
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.16"
+array-init = "2"
 arrow-arith = { version = ">=46" }
 arrow-array = { version = ">=46" }
 arrow-schema = { version = ">=46" }
@@ -48,6 +49,7 @@ chrono = "0.4"
 derive_builder = "0.20.0"
 either = "1"
 env_logger = "0.11.0"
+fnv = "1"
 futures = "0.3"
 iceberg = { version = "0.2.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
