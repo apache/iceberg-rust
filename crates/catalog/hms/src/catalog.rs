@@ -25,6 +25,7 @@ use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
 use hive_metastore::ThriftHiveMetastoreGetTableException;
 use iceberg::io::FileIO;
+use iceberg::spec::TableMetadata;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -326,7 +327,7 @@ impl Catalog for HmsCatalog {
 
         let hive_table = convert_to_hive_table(
             db_name,
-            creation.schema.clone(),
+            &creation.schema,
             table_name.clone(),
             location,
             metadata_location,
@@ -339,6 +340,18 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
+        // let table = Table::builder()
+        //     .metadata(metadata)
+        //     .metadata_location(metadata_location)
+        //     .identifier(TableIdent::new(
+        //         NamespaceIdent::new(db_name),
+        //         table_name.clone(),
+        //     ))
+        //     .file_io(file_io)
+        //     .build();
+
+        // Ok(table)
+
         // TODO: Create & return Result<Table>
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -347,13 +360,12 @@ impl Catalog for HmsCatalog {
     }
 
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
-        let dbname = validate_namespace(table.namespace())?;
-        let tbl_name = table.name.clone();
+        let db_name = validate_namespace(table.namespace())?;
 
         let hive_table = self
             .client
             .0
-            .get_table(dbname.into(), tbl_name.into())
+            .get_table(db_name.clone().into(), table.name.clone().into())
             .await
             .map_err(from_thrift_error)?;
 
@@ -382,16 +394,19 @@ impl Catalog for HmsCatalog {
         let mut reader = file_io.new_input(&metadata_location)?.reader().await?;
         let mut metadata_str = String::new();
         reader.read_to_string(&mut metadata_str).await?;
+        let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
 
-        let _metadata = serde_json::from_str(&metadata_str)?;
+        let table = Table::builder()
+            .metadata(metadata)
+            .metadata_location(metadata_location)
+            .identifier(TableIdent::new(
+                NamespaceIdent::new(db_name),
+                table.name.clone(),
+            ))
+            .file_io(file_io)
+            .build();
 
-        // TODO: Create `TableMetadata`
-        // blocked by: https://github.com/apache/iceberg-rust/issues/250
-        // Create and return Result<Table>
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Loading a table is not supported yet",
-        ))
+        Ok(table)
     }
 
     /// Asynchronously drops a table from the database.
