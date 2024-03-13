@@ -133,6 +133,25 @@ impl UnboundPartitionSpec {
     pub fn builder() -> UnboundPartitionSpecBuilder {
         UnboundPartitionSpecBuilder::default()
     }
+
+    /// Create a [`PartitionSpec`] for a new table. So it don't need
+    /// to specify the partition id for each field.
+    pub fn create_new(self) -> PartitionSpec {
+        PartitionSpec {
+            spec_id: self.spec_id.unwrap_or(0),
+            fields: self
+                .fields
+                .into_iter()
+                .enumerate()
+                .map(|(field_id, f)| PartitionField {
+                    source_id: f.source_id,
+                    field_id: f.partition_id.unwrap_or(field_id as i32),
+                    name: f.name,
+                    transform: f.transform,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
