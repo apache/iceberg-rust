@@ -21,7 +21,7 @@ use iceberg::{Error, ErrorKind};
 pub fn from_sqlx_error(error: sqlx::Error) -> Error {
     Error::new(
         ErrorKind::Unexpected,
-        "operation failed for hitting io error".to_string(),
+        "operation failed for hitting sqlx error".to_string(),
     )
     .with_source(error)
 }
