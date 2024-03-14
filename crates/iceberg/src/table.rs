@@ -19,7 +19,9 @@
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
+use crate::Result;
 use crate::TableIdent;
+use futures::AsyncReadExt;
 use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.
@@ -61,5 +63,101 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+}
+
+/// `StaticTable` is a read-only table struct that can be created from a metadata file or from `TableMetaData` without a catalog.
+/// It can only be used to read metadata and for table scan.
+/// # Examples
+///
+/// ```rust, no_run
+/// # use iceberg::io::FileIO;
+/// # use iceberg::table::StaticTable;
+/// # use iceberg::TableIdent;
+/// # async fn example() {
+/// let metadata_file_location = "s3://bucket_name/path/to/metadata.json";
+/// let file_io = FileIO::from_path(&metadata_file_location).unwrap().build().unwrap();
+/// let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+/// let static_table = StaticTable::from_metadata_file(&metadata_file_location, static_identifier, file_io).await.unwrap();
+/// let snapshot_id = static_table
+/// .metadata()
+/// .current_snapshot()
+/// .unwrap()
+/// .snapshot_id();
+/// # }
+/// ```
+pub struct StaticTable(Table);
+
+impl StaticTable {
+    /// Creates a static table from a given `TableMetadata` and `FileIO`
+    pub async fn from_metadata(
+        metadata: TableMetadata,
+        table_ident: TableIdent,
+        file_io: FileIO,
+    ) -> Result<Self> {
+        let table = Table::builder()
+            .metadata(metadata)
+            .identifier(table_ident)
+            .file_io(file_io)
+            .build();
+
+        Ok(Self(table))
+    }
+    /// Creates a static table directly from metadata file and `FileIO`
+    pub async fn from_metadata_file(
+        metadata_file_path: &str,
+        table_ident: TableIdent,
+        file_io: FileIO,
+    ) -> Result<Self> {
+        let metadata_file = file_io.new_input(metadata_file_path)?;
+        let mut metadata_file_reader = metadata_file.reader().await?;
+        let mut metadata_file_content = String::new();
+        metadata_file_reader
+            .read_to_string(&mut metadata_file_content)
+            .await?;
+        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_file_content)?;
+        Self::from_metadata(table_metadata, table_ident, file_io).await
+    }
+
+    /// Create a TableScanBuilder for the static table.
+    pub fn scan(&self) -> TableScanBuilder<'_> {
+        self.0.scan()
+    }
+
+    /// Get TableMetadataRef for the static table
+    pub fn metadata(&self) -> TableMetadataRef {
+        self.0.metadata_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn test_static_table_from_file() {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::from_path(&metadata_file_path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_file_path, static_identifier, file_io)
+                .await
+                .unwrap();
+        let snapshot_id = static_table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+        assert_eq!(
+            snapshot_id, 3055729675574597004,
+            "snapshot id from metadata don't match"
+        );
     }
 }
