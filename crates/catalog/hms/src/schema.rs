@@ -28,11 +28,16 @@ pub(crate) struct HiveSchemaBuilder {
 }
 
 impl HiveSchemaBuilder {
-    /// Convert `Schema` into `HiveSchema` by applying the `SchemaVisitor`
-    pub fn from_iceberg(schema: &Schema) -> Result<HiveSchema> {
-        let mut visitor = Self::default();
-        visit_schema(schema, &mut visitor)?;
-        Ok(visitor.schema.clone())
+    /// Creates a new `HiveSchemaBuilder` from iceberg `Schema`
+    pub fn from_iceberg(schema: &Schema) -> Result<HiveSchemaBuilder> {
+        let mut builder = Self::default();
+        visit_schema(schema, &mut builder)?;
+        Ok(builder)
+    }
+
+    /// Returns the newly converted `HiveSchema`
+    pub fn build(self) -> HiveSchema {
+        self.schema
     }
 
     /// Check if is in `StructType` while traversing schema
@@ -178,7 +183,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![FieldSchema {
             name: Some("quux".into()),
@@ -223,7 +228,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![FieldSchema {
             name: Some("location".into()),
@@ -251,7 +256,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![FieldSchema {
             name: Some("person".into()),
@@ -273,7 +278,7 @@ mod tests {
                 NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
-        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![
             FieldSchema {
