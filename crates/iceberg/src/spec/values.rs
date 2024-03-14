@@ -141,6 +141,10 @@ impl From<Datum> for Literal {
 }
 
 impl Datum {
+    /// Prototype
+    pub fn literal(&self) -> PrimitiveLiteral {
+        self.literal.clone()
+    }
     /// Creates a boolean value.
     ///
     /// Example:

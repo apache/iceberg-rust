@@ -18,11 +18,19 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
+use crate::expr::{
+    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
+};
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::create_transform_function;
 use crate::ErrorKind;
+use arrow_array::{Int32Array, Int64Array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
+
+use super::{Datum, PrimitiveLiteral};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -261,6 +269,50 @@ impl Transform {
             _ => self == other,
         }
     }
+    /// Projects predicate to `Transform`
+    pub fn project(&self, name: String, pred: &BoundPredicate) -> Result<Option<Predicate>> {
+        let func = create_transform_function(self)?;
+
+        let projection = match self {
+            Transform::Bucket(_) => match pred {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    if expr.op() != PredicateOperator::Eq {
+                        return Ok(None);
+                    }
+
+                    let result = match expr.as_primitive_literal() {
+                        PrimitiveLiteral::Int(v) => func
+                            .transform(Arc::new(Int32Array::from_value(v, 1)))?
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Failed to downcast"))?
+                            .value(0),
+                        PrimitiveLiteral::Long(v) => func
+                            .transform(Arc::new(Int64Array::from_value(v, 1)))?
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Failed to downcast"))?
+                            .value(0),
+                        _ => return Ok(None),
+                    };
+
+                    Some(Predicate::Binary(BinaryExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        Datum::int(result),
+                    )))
+                }
+                _ => unimplemented!(),
+            },
+            _ => unimplemented!(),
+        };
+
+        Ok(projection)
+    }
 }
 
 impl Display for Transform {
@@ -358,6 +410,12 @@ impl<'de> Deserialize<'de> for Transform {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::expr::{
+        BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator,
+        UnaryExpression,
+    };
     use crate::spec::datatypes::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
         Timestamptz, Uuid,
@@ -365,6 +423,8 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
+    use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
+    use crate::Result;
 
     struct TestParameter {
         display: String,
@@ -396,6 +456,50 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_bucket_project_binary() -> Result<()> {
+        let trans = Transform::Bucket(8);
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let pred = BoundPredicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            BoundReference::new("original_name", Arc::new(field)),
+            Datum::int(5),
+        ));
+
+        let literal = match trans.project(name, &pred)? {
+            Some(pred) => match pred {
+                Predicate::Binary(expr) => expr.as_primitive_literal(),
+                _ => unimplemented!(),
+            },
+            _ => unimplemented!(),
+        };
+
+        assert_eq!(literal, PrimitiveLiteral::Int(7));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bucket_project_unary() {
+        let trans = Transform::Bucket(8);
+
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let pred = BoundPredicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNull,
+            BoundReference::new("original_name", Arc::new(field)),
+        ));
+
+        let result = trans.project(name, &pred).unwrap().unwrap();
+
+        assert_eq!(format!("{result}"), "projected_name IS NULL");
     }
 
     #[test]
