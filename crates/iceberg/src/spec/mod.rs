@@ -17,7 +17,6 @@
 
 //! Spec for Iceberg.
 
-mod arrow;
 mod datatypes;
 mod manifest;
 mod manifest_list;
