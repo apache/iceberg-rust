@@ -468,98 +468,15 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_arrow_primitive() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "2".to_string(),
-            )])),
-            Field::new("b", DataType::Utf8, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "0".to_string(),
-            )])),
-            Field::new("c", DataType::Timestamp(TimeUnit::Microsecond, None), false).with_metadata(
-                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "1".to_string())]),
-            ),
-        ]);
-        let schema = Arc::new(schema);
-        let result = arrow_schema_to_schema(&schema).unwrap();
-        let schema_struct = result.as_struct();
-        assert_eq!(schema_struct.fields().len(), 3);
-
-        assert_eq!(schema_struct.fields()[0].name, "a");
-        assert_eq!(schema_struct.fields()[0].id, 2);
-        assert_eq!(
-            schema_struct.fields()[0].field_type,
-            Box::new(Type::Primitive(PrimitiveType::Int))
-        );
-
-        assert_eq!(schema_struct.fields()[1].name, "b");
-        assert_eq!(schema_struct.fields()[1].id, 0);
-        assert_eq!(
-            schema_struct.fields()[1].field_type,
-            Box::new(Type::Primitive(PrimitiveType::String))
-        );
-
-        assert_eq!(schema_struct.fields()[2].name, "c");
-        assert_eq!(schema_struct.fields()[2].id, 1);
-        assert_eq!(
-            schema_struct.fields()[2].field_type,
-            Box::new(Type::Primitive(PrimitiveType::Timestamp))
-        );
-    }
-
-    #[test]
-    fn test_arrow_list() {
-        let schema = ArrowSchema::new(vec![Field::new(
-            "a",
-            DataType::List(Arc::new(
-                Field::new("item", DataType::Int32, false).with_metadata(HashMap::from([(
-                    ARROW_FIELD_ID_KEY.to_string(),
-                    "0".to_string(),
-                )])),
-            )),
-            true,
-        )
-        .with_metadata(HashMap::from([(
-            ARROW_FIELD_ID_KEY.to_string(),
-            "1".to_string(),
-        )]))]);
-        let schema = Arc::new(schema);
-        let mut visitor = ArrowSchemaConverter::new();
-        let result = visit_schema(&schema, &mut visitor).unwrap();
-        let schema_struct = result.as_struct();
-        assert_eq!(schema_struct.fields().len(), 1);
-
-        assert_eq!(schema_struct.fields()[0].name, "a");
-        assert_eq!(schema_struct.fields()[0].id, 1);
-        assert!(!schema_struct.fields()[0].required);
-        assert_eq!(
-            schema_struct.fields()[0].field_type,
-            Box::new(Type::List(ListType {
-                element_field: Arc::new(NestedField {
-                    id: 0,
-                    doc: None,
-                    name: "element".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    initial_default: None,
-                    write_default: None,
-                })
-            }))
-        );
-    }
-
-    #[test]
-    fn test_arrow_map() {
+    fn test_arrow_schema_to_schema() {
         let fields = Fields::from(vec![
             Field::new("key", DataType::Int32, false).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
-                "2".to_string(),
+                "17".to_string(),
             )])),
             Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
-                "0".to_string(),
+                "18".to_string(),
             )])),
         ]);
 
@@ -568,106 +485,260 @@ mod tests {
             Arc::new(
                 Field::new("entries", r#struct, false).with_metadata(HashMap::from([(
                     ARROW_FIELD_ID_KEY.to_string(),
-                    "1".to_string(),
+                    "19".to_string(),
                 )])),
             ),
             false,
         );
 
-        let schema = ArrowSchema::new(vec![Field::new("m", map, false).with_metadata(
-            HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "4".to_string())]),
-        )]);
-        let schema = Arc::new(schema);
-        let result = arrow_schema_to_schema(&schema).unwrap();
-        let schema_struct = result.as_struct();
-        assert_eq!(schema_struct.fields().len(), 1);
-
-        assert_eq!(schema_struct.fields()[0].name, "m");
-        assert_eq!(schema_struct.fields()[0].id, 4);
-        assert!(schema_struct.fields()[0].required);
-        assert_eq!(
-            schema_struct.fields()[0].field_type,
-            Box::new(Type::Map(MapType {
-                key_field: Arc::new(NestedField {
-                    id: 2,
-                    doc: None,
-                    name: "key".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    initial_default: None,
-                    write_default: None,
-                }),
-                value_field: Arc::new(NestedField {
-                    id: 0,
-                    doc: None,
-                    name: "value".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    initial_default: None,
-                    write_default: None,
-                })
-            }))
-        );
-    }
-
-    #[test]
-    fn test_arrow_struct() {
         let fields = Fields::from(vec![
+            Field::new("aa", DataType::Int32, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "18".to_string(),
+            )])),
+            Field::new("bb", DataType::Utf8, true).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "19".to_string(),
+            )])),
+            Field::new(
+                "cc",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "20".to_string(),
+            )])),
+        ]);
+
+        let r#struct = DataType::Struct(fields);
+
+        let schema = ArrowSchema::new(vec![
             Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
                 "2".to_string(),
             )])),
-            Field::new("b", DataType::Utf8, true).with_metadata(HashMap::from([(
+            Field::new("b", DataType::Int64, false).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
-                "0".to_string(),
+                "1".to_string(),
             )])),
-            Field::new("c", DataType::Timestamp(TimeUnit::Microsecond, None), false).with_metadata(
-                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "1".to_string())]),
+            Field::new("c", DataType::Utf8, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "3".to_string(),
+            )])),
+            Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true).with_metadata(
+                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "4".to_string())]),
             ),
+            Field::new("e", DataType::Boolean, true).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "6".to_string(),
+            )])),
+            Field::new("f", DataType::Float32, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "5".to_string(),
+            )])),
+            Field::new("g", DataType::Float64, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "7".to_string(),
+            )])),
+            Field::new("h", DataType::Date32, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "8".to_string(),
+            )])),
+            Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
+                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "9".to_string())]),
+            ),
+            Field::new(
+                "j",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "10".to_string(),
+            )])),
+            Field::new(
+                "k",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "12".to_string(),
+            )])),
+            Field::new("l", DataType::Binary, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "13".to_string(),
+            )])),
+            Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "11".to_string(),
+            )])),
+            Field::new(
+                "list",
+                DataType::List(Arc::new(
+                    Field::new("element", DataType::Int32, false).with_metadata(HashMap::from([(
+                        ARROW_FIELD_ID_KEY.to_string(),
+                        "15".to_string(),
+                    )])),
+                )),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "14".to_string(),
+            )])),
+            Field::new("map", map, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "16".to_string(),
+            )])),
+            Field::new("struct", r#struct, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "17".to_string(),
+            )])),
         ]);
-
-        let r#struct = DataType::Struct(fields);
-        let schema = ArrowSchema::new(vec![Field::new("s", r#struct, false).with_metadata(
-            HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "2".to_string())]),
-        )]);
         let schema = Arc::new(schema);
         let result = arrow_schema_to_schema(&schema).unwrap();
-        let schema_struct = result.as_struct();
-        assert_eq!(schema_struct.fields().len(), 1);
 
-        assert_eq!(schema_struct.fields()[0].name, "s");
-        assert_eq!(schema_struct.fields()[0].id, 2);
-        assert_eq!(
-            schema_struct.fields()[0].field_type,
-            Box::new(Type::Struct(StructType::new(vec![
-                Arc::new(NestedField {
-                    id: 2,
-                    doc: None,
-                    name: "a".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Int)),
-                    initial_default: None,
-                    write_default: None,
-                }),
-                Arc::new(NestedField {
-                    id: 0,
-                    doc: None,
-                    name: "b".to_string(),
-                    required: false,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::String)),
-                    initial_default: None,
-                    write_default: None,
-                }),
-                Arc::new(NestedField {
-                    id: 1,
-                    doc: None,
-                    name: "c".to_string(),
-                    required: true,
-                    field_type: Box::new(Type::Primitive(PrimitiveType::Timestamp)),
-                    initial_default: None,
-                    write_default: None,
-                }),
-            ])))
-        );
+        let schema_json = r#"{
+            "type":"struct",
+            "schema-id":0,
+            "fields":[
+                {
+                    "id":2,
+                    "name":"a",
+                    "required":true,
+                    "type":"int"
+                },
+                {
+                    "id":1,
+                    "name":"b",
+                    "required":true,
+                    "type":"long"
+                },
+                {
+                    "id":3,
+                    "name":"c",
+                    "required":true,
+                    "type":"string"
+                },
+                {
+                    "id":4,
+                    "name":"d",
+                    "required":false,
+                    "type":"timestamp"
+                },
+                {
+                    "id":6,
+                    "name":"e",
+                    "required":false,
+                    "type":"boolean"
+                },
+                {
+                    "id":5,
+                    "name":"f",
+                    "required":true,
+                    "type":"float"
+                },
+                {
+                    "id":7,
+                    "name":"g",
+                    "required":true,
+                    "type":"double"
+                },
+                {
+                    "id":8,
+                    "name":"h",
+                    "required":true,
+                    "type":"date"
+                },
+                {
+                    "id":9,
+                    "name":"i",
+                    "required":true,
+                    "type":"time"
+                },
+                {
+                    "id":10,
+                    "name":"j",
+                    "required":true,
+                    "type":"timestamptz"
+                },
+                {
+                    "id":12,
+                    "name":"k",
+                    "required":true,
+                    "type":"timestamptz"
+                },
+                {
+                    "id":13,
+                    "name":"l",
+                    "required":true,
+                    "type":"binary"
+                },
+                {
+                    "id":11,
+                    "name":"m",
+                    "required":true,
+                    "type":"fixed[10]"
+                },
+                {
+                    "id":14,
+                    "name":"list",
+                    "required": false,
+                    "type": {
+                        "type": "list",
+                        "element-id": 15,
+                        "element-required": true,
+                        "element": "int"
+                    }
+                },
+                {
+                    "id":16,
+                    "name":"map",
+                    "required": true,
+                    "type": {
+                        "type": "map",
+                        "key-id": 17,
+                        "key": "int",
+                        "value-id": 18,
+                        "value-required": false,
+                        "value": "string"
+                    }
+                },
+                {
+                    "id":17,
+                    "name":"struct",
+                    "required": true,
+                    "type": {
+                        "type": "struct",
+                        "fields": [
+                            {
+                                "id":18,
+                                "name":"aa",
+                                "required":true,
+                                "type":"int"
+                            },
+                            {
+                                "id":19,
+                                "name":"bb",
+                                "required":false,
+                                "type":"string"
+                            },
+                            {
+                                "id":20,
+                                "name":"cc",
+                                "required":true,
+                                "type":"timestamp"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "identifier-field-ids":[]
+        }"#;
+
+        let expected_type: Schema = serde_json::from_str(schema_json).unwrap();
+        assert_eq!(result, expected_type);
     }
 }
