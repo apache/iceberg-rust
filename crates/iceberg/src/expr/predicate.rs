@@ -28,7 +28,7 @@ use itertools::Itertools;
 
 use crate::error::Result;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
-use crate::spec::{Datum, SchemaRef};
+use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
@@ -116,6 +116,10 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
 }
 
 /// Binary predicate, for example, `a > 10`.
@@ -143,6 +147,14 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
+    }
+
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+
+    pub(crate) fn as_primitive_literal(&self) -> PrimitiveLiteral {
+        self.literal.literal()
     }
 }
 
