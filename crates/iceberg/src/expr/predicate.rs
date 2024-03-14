@@ -478,6 +478,47 @@ impl Predicate {
             )),
         }
     }
+    /// Simplifies the expression by removing `NOT` predicates,
+    /// directly negating the inner expressions instead. The transformation
+    /// applies logical laws (such as De Morgan's laws) to
+    /// recursively negate and simplify inner expressions within `NOT`
+    /// predicates.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::{LogicalExpression, Predicate, Reference};
+    /// use iceberg::spec::Datum;
+    /// use std::ops::Not;
+    ///
+    /// let expression = Reference::new("a").less_than(Datum::long(5)).not();
+    /// let result = expression.rewrite_not();
+    ///
+    /// assert_eq!(&format!("{result}"), "a >= 5");
+    /// ```
+    pub fn rewrite_not(self) -> Predicate {
+        match self {
+            Predicate::And(expr) => {
+                let [left, right] = expr.inputs;
+                let new_left = Box::new(left.rewrite_not());
+                let new_right = Box::new(right.rewrite_not());
+                Predicate::And(LogicalExpression::new([new_left, new_right]))
+            }
+            Predicate::Or(expr) => {
+                let [left, right] = expr.inputs;
+                let new_left = Box::new(left.rewrite_not());
+                let new_right = Box::new(right.rewrite_not());
+                Predicate::Or(LogicalExpression::new([new_left, new_right]))
+            }
+            Predicate::Not(expr) => {
+                let [inner] = expr.inputs;
+                inner.negate()
+            }
+            Predicate::Unary(expr) => Predicate::Unary(expr),
+            Predicate::Binary(expr) => Predicate::Binary(expr),
+            Predicate::Set(expr) => Predicate::Set(expr),
+        }
+    }
 }
 
 impl Not for Predicate {
@@ -567,6 +608,73 @@ mod tests {
     use crate::expr::Reference;
     use crate::spec::Datum;
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+
+    #[test]
+    fn test_logical_or_rewrite_not() {
+        let expression = Reference::new("b")
+            .less_than(Datum::long(5))
+            .or(Reference::new("c").less_than(Datum::long(10)))
+            .not();
+
+        let expected = Reference::new("b")
+            .greater_than_or_equal_to(Datum::long(5))
+            .and(Reference::new("c").greater_than_or_equal_to(Datum::long(10)));
+
+        let result = expression.rewrite_not();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_logical_and_rewrite_not() {
+        let expression = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(Reference::new("c").less_than(Datum::long(10)))
+            .not();
+
+        let expected = Reference::new("b")
+            .greater_than_or_equal_to(Datum::long(5))
+            .or(Reference::new("c").greater_than_or_equal_to(Datum::long(10)));
+
+        let result = expression.rewrite_not();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_set_rewrite_not() {
+        let expression = Reference::new("a")
+            .is_in([Datum::int(5), Datum::int(6)])
+            .not();
+
+        let expected = Reference::new("a").is_not_in([Datum::int(5), Datum::int(6)]);
+
+        let result = expression.rewrite_not();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_binary_rewrite_not() {
+        let expression = Reference::new("a").less_than(Datum::long(5)).not();
+
+        let expected = Reference::new("a").greater_than_or_equal_to(Datum::long(5));
+
+        let result = expression.rewrite_not();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_unary_rewrite_not() {
+        let expression = Reference::new("a").is_null().not();
+
+        let expected = Reference::new("a").is_not_null();
+
+        let result = expression.rewrite_not();
+
+        assert_eq!(result, expected);
+    }
 
     #[test]
     fn test_predicate_negate_and() {
