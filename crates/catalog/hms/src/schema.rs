@@ -19,30 +19,23 @@ use hive_metastore::FieldSchema;
 use iceberg::spec::{visit_schema, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor};
 use iceberg::Result;
 
-pub(crate) type HiveSchema = Vec<FieldSchema>;
+type HiveSchema = Vec<FieldSchema>;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct HiveSchemaBuilder {
-    cols: HiveSchema,
+    schema: HiveSchema,
     context: Vec<NestedFieldRef>,
 }
 
 impl HiveSchemaBuilder {
-    /// Create new `HiveSchemaBuilder`
-    pub fn new() -> Self {
-        HiveSchemaBuilder {
-            cols: Vec::new(),
-            context: Vec::new(),
-        }
-    }
-
     /// Convert `Schema` into `HiveSchema` by applying the `SchemaVisitor`
-    pub fn from_iceberg(&mut self, schema: &Schema) -> Result<HiveSchema> {
-        visit_schema(schema, self)?;
-        Ok(self.cols.clone())
+    pub fn from_iceberg(schema: &Schema) -> Result<HiveSchema> {
+        let mut visitor = Self::default();
+        visit_schema(schema, &mut visitor)?;
+        Ok(visitor.schema.clone())
     }
 
-    /// Check if visitor is in `StructType`
+    /// Check if is in `StructType` while traversing schema
     fn is_inside_struct(&self) -> bool {
         !self.context.is_empty()
     }
@@ -92,7 +85,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
             return Ok(format!("{}:{}", field.name, value));
         }
 
-        self.cols.push(FieldSchema {
+        self.schema.push(FieldSchema {
             name: Some(field.name.clone().into()),
             r#type: Some(value.clone().into()),
             comment: field.doc.clone().map(|doc| doc.into()),
@@ -185,7 +178,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("quux".into()),
@@ -230,7 +223,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("location".into()),
@@ -258,7 +251,7 @@ mod tests {
             .into()])
             .build()?;
 
-        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
 
         let expected = vec![FieldSchema {
             name: Some("person".into()),
@@ -280,7 +273,7 @@ mod tests {
                 NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
             ])
             .build()?;
-        let result = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?;
 
         let expected = vec![
             FieldSchema {

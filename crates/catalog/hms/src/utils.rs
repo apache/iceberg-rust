@@ -166,7 +166,7 @@ pub(crate) fn convert_to_hive_table(
         ..Default::default()
     };
 
-    let hive_schema = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+    let hive_schema = HiveSchemaBuilder::from_iceberg(schema)?;
 
     let storage_descriptor = StorageDescriptor {
         location: Some(location.into()),
@@ -352,7 +352,7 @@ mod tests {
             ..Default::default()
         };
 
-        let hive_schema = HiveSchemaBuilder::new().from_iceberg(&schema)?;
+        let hive_schema = HiveSchemaBuilder::from_iceberg(&schema)?;
 
         let sd = StorageDescriptor {
             location: Some(location.into()),
