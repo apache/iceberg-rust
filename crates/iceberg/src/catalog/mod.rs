@@ -84,7 +84,7 @@ pub trait Catalog: Debug + Sync + Send {
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
-    async fn stat_table(&self, table: &TableIdent) -> Result<bool>;
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;

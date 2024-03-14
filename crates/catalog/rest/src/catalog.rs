@@ -429,7 +429,7 @@ impl Catalog for RestCatalog {
     }
 
     /// Check if a table exists in the catalog.
-    async fn stat_table(&self, table: &TableIdent) -> Result<bool> {
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         let request = self
             .client
             .0
@@ -1036,7 +1036,7 @@ mod tests {
             .unwrap();
 
         assert!(catalog
-            .stat_table(&TableIdent::new(
+            .table_exists(&TableIdent::new(
                 NamespaceIdent::new("ns1".to_string()),
                 "table1".to_string(),
             ))
