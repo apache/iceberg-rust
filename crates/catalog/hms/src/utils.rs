@@ -56,14 +56,11 @@ pub const OUTPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileOutputFormat";
 pub(crate) fn convert_to_namespace(database: &Database) -> Result<Namespace> {
     let mut properties = HashMap::new();
 
-    let name = if let Some(name) = &database.name {
-        name.to_string()
-    } else {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Database name must be specified",
-        ));
-    };
+    let name = database
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Database name must be specified"))?
+        .to_string();
 
     if let Some(description) = &database.description {
         properties.insert(COMMENT.to_string(), description.to_string());
