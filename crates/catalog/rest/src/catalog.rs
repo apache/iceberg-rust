@@ -848,6 +848,44 @@ mod tests {
             .await
     }
 
+    async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_oauth() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let _catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+    }
+
     #[tokio::test]
     async fn test_list_namespace() {
         let mut server = Server::new_async().await;
