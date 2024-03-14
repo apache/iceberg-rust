@@ -33,6 +33,8 @@ pub struct Table {
     #[builder(setter(into))]
     metadata: TableMetadataRef,
     identifier: TableIdent,
+    #[builder(default = false)]
+    readonly: bool,
 }
 
 impl Table {
@@ -63,6 +65,11 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+
+    /// Returns the flag indicating whether the `Table` is readonly or not
+    pub fn readonly(&self) -> bool {
+        self.readonly
     }
 }
 
@@ -99,6 +106,7 @@ impl StaticTable {
             .metadata(metadata)
             .identifier(table_ident)
             .file_io(file_io)
+            .readonly(true)
             .build();
 
         Ok(Self(table))
@@ -127,6 +135,13 @@ impl StaticTable {
     /// Get TableMetadataRef for the static table
     pub fn metadata(&self) -> TableMetadataRef {
         self.0.metadata_ref()
+    }
+
+    /// Consumes the `StaticTable` and return it as a `Table`
+    /// Please use this method carefully as the Table it returns remains detached from a catalog
+    /// and can't be used to perform modifications on the table.
+    pub fn into_table(self) -> Table {
+        self.0
     }
 }
 
@@ -159,5 +174,57 @@ mod tests {
             snapshot_id, 3055729675574597004,
             "snapshot id from metadata don't match"
         );
+    }
+
+    #[tokio::test]
+    async fn test_static_into_table() {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::from_path(&metadata_file_path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_file_path, static_identifier, file_io)
+                .await
+                .unwrap();
+        let table = static_table.into_table();
+        assert!(table.readonly());
+        assert_eq!(table.identifier.name(), "static_table");
+    }
+
+    #[tokio::test]
+    async fn test_table_readonly_flag() {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::from_path(&metadata_file_path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let metadata_file = file_io.new_input(metadata_file_path).unwrap();
+        let mut metadata_file_reader = metadata_file.reader().await.unwrap();
+        let mut metadata_file_content = String::new();
+        metadata_file_reader
+            .read_to_string(&mut metadata_file_content)
+            .await
+            .unwrap();
+        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_file_content).unwrap();
+        let static_identifier = TableIdent::from_strs(["ns", "table"]).unwrap();
+        let table = Table::builder()
+            .metadata(table_metadata)
+            .identifier(static_identifier)
+            .file_io(file_io)
+            .build();
+        assert!(!table.readonly());
+        assert_eq!(table.identifier.name(), "table");
     }
 }
