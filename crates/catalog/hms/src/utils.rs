@@ -25,31 +25,31 @@ use uuid::Uuid;
 use crate::schema::HiveSchemaBuilder;
 
 /// hive.metastore.database.owner setting
-pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
+const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
 /// hive.metastore.database.owner default setting
-pub const HMS_DEFAULT_DB_OWNER: &str = "user.name";
+const HMS_DEFAULT_DB_OWNER: &str = "user.name";
 /// hive.metastore.database.owner-type setting
-pub const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
+const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
 /// hive metatore `description` property
-pub const COMMENT: &str = "comment";
+const COMMENT: &str = "comment";
 /// hive metatore `location` property
-pub const LOCATION: &str = "location";
+const LOCATION: &str = "location";
 /// hive metatore `metadat_location` property
-pub const METADATA_LOCATION: &str = "metadata_location";
+pub(crate) const METADATA_LOCATION: &str = "metadata_location";
 /// hive metatore `external` property
-pub const EXTERNAL: &str = "EXTERNAL";
+const EXTERNAL: &str = "EXTERNAL";
 /// hive metatore `external_table` property
-pub const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
+const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
 /// hive metatore `table_type` property
-pub const TABLE_TYPE: &str = "table_type";
+const TABLE_TYPE: &str = "table_type";
 /// hive metatore `warehouse` location property
-pub const WAREHOUSE_LOCATION: &str = "warehouse";
+const WAREHOUSE_LOCATION: &str = "warehouse";
 /// hive metatore `SerDeInfo` serialization_lib parameter
-pub const SERIALIZATION_LIB: &str = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
+const SERIALIZATION_LIB: &str = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
 /// hive metatore input format
-pub const INPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileInputFormat";
+const INPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileInputFormat";
 /// hive metatore output format
-pub const OUTPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileOutputFormat";
+const OUTPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileOutputFormat";
 
 /// Returns a `Namespace` by extracting database name and properties
 /// from `hive_metastore::hms::Database`
