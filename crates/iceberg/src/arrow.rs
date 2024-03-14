@@ -189,18 +189,17 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                 p,
                 DataType::Boolean
                     | DataType::Utf8
+                    | DataType::LargeUtf8
                     | DataType::Binary
+                    | DataType::LargeBinary
                     | DataType::FixedSizeBinary(_)
             ) =>
         {
             visitor.primitive(p)
         }
-        DataType::List(element_field) => {
-            visitor.before_list_element(element_field)?;
-            let value = visit_type(element_field.data_type(), visitor)?;
-            visitor.after_list_element(element_field)?;
-            visitor.list(r#type, value)
-        }
+        DataType::List(element_field) => visit_list(r#type, element_field, visitor),
+        DataType::LargeList(element_field) => visit_list(r#type, element_field, visitor),
+        DataType::FixedSizeList(element_field, _) => visit_list(r#type, element_field, visitor),
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
                 if fields.len() != 2 {
@@ -240,6 +239,19 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
             format!("Cannot visit Arrow data type: {other}"),
         )),
     }
+}
+
+/// Visit list types in post order.
+#[allow(dead_code)]
+fn visit_list<V: ArrowSchemaVisitor>(
+    data_type: &DataType,
+    element_field: &Field,
+    visitor: &mut V,
+) -> Result<V::T> {
+    visitor.before_list_element(element_field)?;
+    let value = visit_type(element_field.data_type(), visitor)?;
+    visitor.after_list_element(element_field)?;
+    visitor.list(data_type, value)
 }
 
 /// Visit struct type in post order.
@@ -347,26 +359,30 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
     }
 
     fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
-        match list {
-            DataType::List(element_field) => {
-                let id = get_field_id(element_field)?;
-                let doc = get_field_doc(element_field);
-                let element_field = Arc::new(NestedField {
-                    id,
-                    doc,
-                    name: "element".to_string(),
-                    required: !element_field.is_nullable(),
-                    field_type: Box::new(value.clone()),
-                    initial_default: None,
-                    write_default: None,
-                });
-                Ok(Type::List(ListType { element_field }))
+        let element_field = match list {
+            DataType::List(element_field) => element_field,
+            DataType::LargeList(element_field) => element_field,
+            DataType::FixedSizeList(element_field, _) => element_field,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "List type must have list data type",
+                ))
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "List type must have list data type",
-            )),
-        }
+        };
+
+        let id = get_field_id(element_field)?;
+        let doc = get_field_doc(element_field);
+        let element_field = Arc::new(NestedField {
+            id,
+            doc,
+            name: "element".to_string(),
+            required: !element_field.is_nullable(),
+            field_type: Box::new(value.clone()),
+            initial_default: None,
+            write_default: None,
+        });
+        Ok(Type::List(ListType { element_field }))
     }
 
     fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
@@ -444,11 +460,11 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             {
                 Ok(Type::Primitive(PrimitiveType::Timestamptz))
             }
-            DataType::Binary => Ok(Type::Primitive(PrimitiveType::Binary)),
+            DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
             DataType::FixedSizeBinary(width) => {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
-            DataType::Utf8 => Ok(Type::Primitive(PrimitiveType::String)),
+            DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::Primitive(PrimitiveType::String)),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Unsupported Arrow data type: {p}"),
@@ -526,6 +542,10 @@ mod tests {
                 ARROW_FIELD_ID_KEY.to_string(),
                 "3".to_string(),
             )])),
+            Field::new("n", DataType::LargeUtf8, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "21".to_string(),
+            )])),
             Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true).with_metadata(
                 HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "4".to_string())]),
             ),
@@ -570,6 +590,10 @@ mod tests {
                 ARROW_FIELD_ID_KEY.to_string(),
                 "13".to_string(),
             )])),
+            Field::new("o", DataType::LargeBinary, false).with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "22".to_string(),
+            )])),
             Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
                 "11".to_string(),
@@ -587,6 +611,36 @@ mod tests {
             .with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
                 "14".to_string(),
+            )])),
+            Field::new(
+                "large_list",
+                DataType::LargeList(Arc::new(
+                    Field::new("element", DataType::Utf8, false).with_metadata(HashMap::from([(
+                        ARROW_FIELD_ID_KEY.to_string(),
+                        "23".to_string(),
+                    )])),
+                )),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "24".to_string(),
+            )])),
+            Field::new(
+                "fixed_list",
+                DataType::FixedSizeList(
+                    Arc::new(
+                        Field::new("element", DataType::Binary, false).with_metadata(
+                            HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "26".to_string())]),
+                        ),
+                    ),
+                    10,
+                ),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                ARROW_FIELD_ID_KEY.to_string(),
+                "25".to_string(),
             )])),
             Field::new("map", map, false).with_metadata(HashMap::from([(
                 ARROW_FIELD_ID_KEY.to_string(),
@@ -619,6 +673,12 @@ mod tests {
                 {
                     "id":3,
                     "name":"c",
+                    "required":true,
+                    "type":"string"
+                },
+                {
+                    "id":21,
+                    "name":"n",
                     "required":true,
                     "type":"string"
                 },
@@ -677,6 +737,12 @@ mod tests {
                     "type":"binary"
                 },
                 {
+                    "id":22,
+                    "name":"o",
+                    "required":true,
+                    "type":"binary"
+                },
+                {
                     "id":11,
                     "name":"m",
                     "required":true,
@@ -691,6 +757,28 @@ mod tests {
                         "element-id": 15,
                         "element-required": true,
                         "element": "int"
+                    }
+                },
+                {
+                    "id":24,
+                    "name":"large_list",
+                    "required": false,
+                    "type": {
+                        "type": "list",
+                        "element-id": 23,
+                        "element-required": true,
+                        "element": "string"
+                    }
+                },
+                {
+                    "id":25,
+                    "name":"fixed_list",
+                    "required": false,
+                    "type": {
+                        "type": "list",
+                        "element-id": 26,
+                        "element-required": true,
+                        "element": "binary"
                     }
                 },
                 {
