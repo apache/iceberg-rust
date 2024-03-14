@@ -297,6 +297,20 @@ impl TableMetadataBuilder {
             properties,
         } = table_creation;
 
+        if partition_spec.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Can't create table with partition spec now",
+            ));
+        }
+
+        if sort_order.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Can't create table with sort order now",
+            ));
+        }
+
         let table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::new_v4(),
@@ -307,29 +321,19 @@ impl TableMetadataBuilder {
                 )
             })?,
             last_sequence_number: 0,
-            last_updated_ms: 0,
-            last_column_id: 0,
-            schemas: HashMap::from([(0, Arc::new(schema))]),
-            current_schema_id: 0,
-            partition_specs: partition_spec
-                .map(|x| {
-                    let partition_spec = PartitionSpecRef::new(x.create_new());
-                    HashMap::from([(partition_spec.spec_id, partition_spec)])
-                })
-                .unwrap_or_default(),
+            last_updated_ms: Utc::now().timestamp_millis(),
+            last_column_id: schema.highest_field_id(),
+            current_schema_id: schema.schema_id(),
+            schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
+            partition_specs: Default::default(),
             default_spec_id: 0,
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
             snapshots: Default::default(),
             snapshot_log: vec![],
+            sort_orders: Default::default(),
             metadata_log: vec![],
-            sort_orders: sort_order
-                .map(|x| {
-                    let sort_order = SortOrderRef::new(x);
-                    HashMap::from([(sort_order.order_id, sort_order)])
-                })
-                .unwrap_or_default(),
             default_sort_order_id: 0,
             refs: Default::default(),
         };
@@ -916,7 +920,7 @@ mod tests {
         spec::{
             table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
             PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-            SortDirection, SortField, SortOrder, Summary, Transform, Type, UnboundPartitionSpec,
+            SortDirection, SortField, SortOrder, Summary, Transform, Type,
         },
         TableCreation,
     };
@@ -1652,10 +1656,8 @@ mod tests {
         let table_creation = TableCreation::builder()
             .location("s3://db/table".to_string())
             .name("table".to_string())
-            .partition_spec(UnboundPartitionSpec::default())
             .properties(HashMap::new())
             .schema(Schema::builder().build().unwrap())
-            .sort_order(SortOrder::default())
             .build();
         let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
@@ -1673,13 +1675,9 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(table_metadata.partition_specs.len(), 1);
-        assert_eq!(
-            table_metadata.partition_specs.get(&0).unwrap().fields.len(),
-            0
-        );
+        assert_eq!(table_metadata.partition_specs.len(), 0);
         assert_eq!(table_metadata.properties.len(), 0);
-        assert_eq!(table_metadata.sort_orders.len(), 1);
+        assert_eq!(table_metadata.sort_orders.len(), 0);
     }
 
     #[test]

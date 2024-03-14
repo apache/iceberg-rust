@@ -1082,10 +1082,8 @@ mod tests {
         let table_creation = TableCreation::builder()
             .location("s3://db/table".to_string())
             .name("table".to_string())
-            .partition_spec(UnboundPartitionSpec::default())
             .properties(HashMap::new())
             .schema(Schema::builder().build().unwrap())
-            .sort_order(SortOrder::default())
             .build();
         let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
