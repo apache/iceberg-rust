@@ -119,7 +119,7 @@ impl RestCatalogConfig {
 
         if let Some(token) = self.props.get("token") {
             headers.insert(
-                "Authorization",
+                header::AUTHORIZATION,
                 HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
