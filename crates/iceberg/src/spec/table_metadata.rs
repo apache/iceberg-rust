@@ -29,6 +29,7 @@ use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
     PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
 };
+use super::{PartitionSpec, SortOrder};
 
 use _serde::TableMetadataEnum;
 
@@ -297,19 +298,37 @@ impl TableMetadataBuilder {
             properties,
         } = table_creation;
 
-        if partition_spec.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Can't create table with partition spec now",
-            ));
-        }
+        let partition_specs = match partition_spec {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with partition spec now",
+                ))
+            }
+            None => HashMap::from([(
+                0,
+                Arc::new(PartitionSpec {
+                    spec_id: 0,
+                    fields: vec![],
+                }),
+            )]),
+        };
 
-        if sort_order.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Can't create table with sort order now",
-            ));
-        }
+        let sort_orders = match sort_order {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with sort order now",
+                ))
+            }
+            None => HashMap::from([(
+                0,
+                Arc::new(SortOrder {
+                    order_id: 0,
+                    fields: vec![],
+                }),
+            )]),
+        };
 
         let table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
@@ -325,14 +344,14 @@ impl TableMetadataBuilder {
             last_column_id: schema.highest_field_id(),
             current_schema_id: schema.schema_id(),
             schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
-            partition_specs: Default::default(),
+            partition_specs,
             default_spec_id: 0,
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
             snapshots: Default::default(),
             snapshot_log: vec![],
-            sort_orders: Default::default(),
+            sort_orders,
             metadata_log: vec![],
             default_sort_order_id: 0,
             refs: Default::default(),
