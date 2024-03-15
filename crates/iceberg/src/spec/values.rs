@@ -106,7 +106,7 @@ impl Display for Datum {
             (_, PrimitiveLiteral::TimestampTZ(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
-            (_, PrimitiveLiteral::String(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (_, PrimitiveLiteral::UUID(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
@@ -401,10 +401,10 @@ impl Datum {
     /// ```
     pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
         let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
-            .ok_or_else(|| Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
-            ))?;
+             .ok_or_else(|| Error::new(
+                 ErrorKind::DataInvalid,
+                 format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
+             ))?;
         Ok(Self::time_from_naive_time(t))
     }
 
@@ -529,7 +529,7 @@ impl Datum {
     /// use iceberg::spec::Datum;
     /// let t = Datum::string("ss");
     ///
-    /// assert_eq!(&format!("{t}"), "ss");
+    /// assert_eq!(&format!("{t}"), r#""ss""#);
     /// ```
     pub fn string<S: ToString>(s: S) -> Self {
         Self {
@@ -656,6 +656,21 @@ impl Datum {
             })
         } else {
             unreachable!("Decimal type must be primitive.")
+        }
+    }
+
+    /// Convert the datum to `target_type`.
+    pub fn to(self, target_type: &Type) -> Result<Datum> {
+        // TODO: We should allow more type conversions
+        match target_type {
+            Type::Primitive(typ) if typ == &self.r#type => Ok(self),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Can't convert datum from {} type to {} type.",
+                    self.r#type, target_type
+                ),
+            )),
         }
     }
 }
@@ -872,10 +887,10 @@ impl Literal {
     /// ```
     pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
         let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
-            .ok_or_else(|| Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
-            ))?;
+             .ok_or_else(|| Error::new(
+                 ErrorKind::DataInvalid,
+                 format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
+             ))?;
         Ok(Self::time_from_naive_time(t))
     }
 
@@ -1530,7 +1545,7 @@ impl Literal {
 }
 
 mod date {
-    use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
 
     pub(crate) fn date_to_days(date: &NaiveDate) -> i32 {
         date.signed_duration_since(
@@ -1964,32 +1979,32 @@ mod _serde {
                             })
                         } else {
                             let list = map.into_iter().map(|(k,v)| {
-                                let raw_k =
-                                    RawLiteralEnum::try_from(k, &map_ty.key_field.field_type)?;
-                                let raw_v = v
-                                    .map(|v| {
-                                        RawLiteralEnum::try_from(v, &map_ty.value_field.field_type)
-                                    })
-                                    .transpose()?;
-                                if map_ty.value_field.required {
-                                    Ok(Some(RawLiteralEnum::Record(Record {
-                                        required: vec![
-                                            (MAP_KEY_FIELD_NAME.to_string(), raw_k),
-                                            (MAP_VALUE_FIELD_NAME.to_string(), raw_v.ok_or_else(||Error::new(ErrorKind::DataInvalid, "Map value is required, value cannot be null"))?),
-                                        ],
-                                        optional: vec![],
-                                    })))
-                                } else {
-                                    Ok(Some(RawLiteralEnum::Record(Record {
-                                        required: vec![
-                                            (MAP_KEY_FIELD_NAME.to_string(), raw_k),
-                                        ],
-                                        optional: vec![
-                                            (MAP_VALUE_FIELD_NAME.to_string(), raw_v)
-                                        ],
-                                    })))
-                                }
-                            }).collect::<Result<_, Error>>()?;
+                                 let raw_k =
+                                     RawLiteralEnum::try_from(k, &map_ty.key_field.field_type)?;
+                                 let raw_v = v
+                                     .map(|v| {
+                                         RawLiteralEnum::try_from(v, &map_ty.value_field.field_type)
+                                     })
+                                     .transpose()?;
+                                 if map_ty.value_field.required {
+                                     Ok(Some(RawLiteralEnum::Record(Record {
+                                         required: vec![
+                                             (MAP_KEY_FIELD_NAME.to_string(), raw_k),
+                                             (MAP_VALUE_FIELD_NAME.to_string(), raw_v.ok_or_else(||Error::new(ErrorKind::DataInvalid, "Map value is required, value cannot be null"))?),
+                                         ],
+                                         optional: vec![],
+                                     })))
+                                 } else {
+                                     Ok(Some(RawLiteralEnum::Record(Record {
+                                         required: vec![
+                                             (MAP_KEY_FIELD_NAME.to_string(), raw_k),
+                                         ],
+                                         optional: vec![
+                                             (MAP_VALUE_FIELD_NAME.to_string(), raw_v)
+                                         ],
+                                     })))
+                                 }
+                             }).collect::<Result<_, Error>>()?;
                             RawLiteralEnum::List(List {
                                 list,
                                 required: true,
@@ -2009,12 +2024,12 @@ mod _serde {
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
             let invalid_err = |v: &str| {
                 Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Unable to convert raw literal ({}) fail convert to type {} for: type mismatch",
-                        v, ty
-                    ),
-                )
+                     ErrorKind::DataInvalid,
+                     format!(
+                         "Unable to convert raw literal ({}) fail convert to type {} for: type mismatch",
+                         v, ty
+                     ),
+                 )
             };
             let invalid_err_with_reason = |v: &str, reason: &str| {
                 Error::new(
