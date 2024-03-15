@@ -727,14 +727,10 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
-                properties: if v.properties.is_empty() {
-                    None
-                } else {
-                    Some(v.properties)
-                },
+                properties: Some(v.properties),
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
                 snapshots: if v.snapshots.is_empty() {
-                    None
+                    Some(vec![])
                 } else {
                     Some(
                         v.snapshots
