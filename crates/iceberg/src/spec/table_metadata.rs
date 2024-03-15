@@ -32,6 +32,8 @@ use super::{
 
 use _serde::TableMetadataEnum;
 
+use crate::error::Result;
+use crate::{Error, ErrorKind, TableCreation};
 use chrono::{DateTime, TimeZone, Utc};
 
 static MAIN_BRANCH: &str = "main";
@@ -272,6 +274,82 @@ impl TableMetadata {
         self.snapshot_log.push(snapshot.log());
         self.snapshots
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
+    }
+}
+
+/// Manipulating table metadata.
+pub struct TableMetadataBuilder(TableMetadata);
+
+impl TableMetadataBuilder {
+    /// Creates a new table metadata builder from the given table metadata.
+    pub fn new(origin: TableMetadata) -> Self {
+        Self(origin)
+    }
+
+    /// Creates a new table metadata builder from the given table creation.
+    pub fn from_table_creation(table_creation: TableCreation) -> Result<Self> {
+        let TableCreation {
+            name: _,
+            location,
+            schema,
+            partition_spec,
+            sort_order,
+            properties,
+        } = table_creation;
+
+        if partition_spec.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Can't create table with partition spec now",
+            ));
+        }
+
+        if sort_order.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Can't create table with sort order now",
+            ));
+        }
+
+        let table_metadata = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::new_v4(),
+            location: location.ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't create table without location",
+                )
+            })?,
+            last_sequence_number: 0,
+            last_updated_ms: Utc::now().timestamp_millis(),
+            last_column_id: schema.highest_field_id(),
+            current_schema_id: schema.schema_id(),
+            schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
+            partition_specs: Default::default(),
+            default_spec_id: 0,
+            last_partition_id: 0,
+            properties,
+            current_snapshot_id: None,
+            snapshots: Default::default(),
+            snapshot_log: vec![],
+            sort_orders: Default::default(),
+            metadata_log: vec![],
+            default_sort_order_id: 0,
+            refs: Default::default(),
+        };
+
+        Ok(Self(table_metadata))
+    }
+
+    /// Changes uuid of table metadata.
+    pub fn assign_uuid(mut self, uuid: Uuid) -> Result<Self> {
+        self.0.table_uuid = uuid;
+        Ok(self)
+    }
+
+    /// Returns the new table metadata after changes.
+    pub fn build(self) -> Result<TableMetadata> {
+        Ok(self.0)
     }
 }
 
@@ -838,13 +916,16 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::spec::{
-        table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-        SortDirection, SortField, SortOrder, Summary, Transform, Type,
+    use crate::{
+        spec::{
+            table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
+            PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
+            SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        },
+        TableCreation,
     };
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1568,5 +1649,47 @@ mod tests {
             table_meta_data.default_sort_order(),
             table_meta_data.sort_orders.get(&default_sort_order_id)
         )
+    }
+
+    #[test]
+    fn test_table_metadata_builder_from_table_creation() {
+        let table_creation = TableCreation::builder()
+            .location("s3://db/table".to_string())
+            .name("table".to_string())
+            .properties(HashMap::new())
+            .schema(Schema::builder().build().unwrap())
+            .build();
+        let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(table_metadata.location, "s3://db/table");
+        assert_eq!(table_metadata.schemas.len(), 1);
+        assert_eq!(
+            table_metadata
+                .schemas
+                .get(&0)
+                .unwrap()
+                .as_struct()
+                .fields()
+                .len(),
+            0
+        );
+        assert_eq!(table_metadata.partition_specs.len(), 0);
+        assert_eq!(table_metadata.properties.len(), 0);
+        assert_eq!(table_metadata.sort_orders.len(), 0);
+    }
+
+    #[test]
+    fn test_table_builder_from_table_metadata() {
+        let table_metadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+        let uuid = Uuid::new_v4();
+        let table_metadata = table_metadata_builder
+            .assign_uuid(uuid)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(table_metadata.uuid(), uuid);
     }
 }

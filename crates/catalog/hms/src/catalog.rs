@@ -438,7 +438,7 @@ impl Catalog for HmsCatalog {
     /// - `Ok(true)` if the table exists in the database.
     /// - `Ok(false)` if the table does not exist in the database.
     /// - `Err(...)` if an error occurs during the process
-    async fn stat_table(&self, table: &TableIdent) -> Result<bool> {
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         let dbname = validate_namespace(table.namespace())?;
         let tbl_name = table.name.clone();
 
