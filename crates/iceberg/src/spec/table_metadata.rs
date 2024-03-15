@@ -1690,9 +1690,27 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(table_metadata.partition_specs.len(), 0);
         assert_eq!(table_metadata.properties.len(), 0);
-        assert_eq!(table_metadata.sort_orders.len(), 0);
+        assert_eq!(
+            table_metadata.partition_specs,
+            HashMap::from([(
+                0,
+                Arc::new(PartitionSpec {
+                    spec_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
+        assert_eq!(
+            table_metadata.sort_orders,
+            HashMap::from([(
+                0,
+                Arc::new(SortOrder {
+                    order_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
     }
 
     #[test]
