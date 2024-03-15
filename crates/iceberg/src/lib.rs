@@ -54,4 +54,5 @@ pub mod transform;
 
 mod runtime;
 
+pub mod arrow;
 pub mod writer;

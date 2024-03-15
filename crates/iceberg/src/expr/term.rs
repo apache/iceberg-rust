@@ -17,8 +17,9 @@
 
 //! Term definition.
 
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator};
+use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
 use crate::spec::{Datum, NestedField, NestedFieldRef};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
 /// Unbound term before binding to a schema.
@@ -26,7 +27,7 @@ pub type Term = Reference;
 
 /// A named reference in an unbound expression.
 /// For example, `a` in `a > 10`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Reference {
     name: String,
 }
@@ -62,6 +63,94 @@ impl Reference {
             self,
             datum,
         ))
+    }
+
+    /// Creates a greater-than-or-equal-to than expression. For example, `a >= 10`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").greater_than_or_equal_to(Datum::long(10));
+    ///
+    /// assert_eq!(&format!("{expr}"), "a >= 10");
+    /// ```
+    pub fn greater_than_or_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThanOrEq,
+            self,
+            datum,
+        ))
+    }
+
+    /// Creates an is-null expression. For example, `a IS NULL`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_null();
+    ///
+    /// assert_eq!(&format!("{expr}"), "a IS NULL");
+    /// ```
+    pub fn is_null(self) -> Predicate {
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNull, self))
+    }
+
+    /// Creates an is-not-null expression. For example, `a IS NOT NULL`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_not_null();
+    ///
+    /// assert_eq!(&format!("{expr}"), "a IS NOT NULL");
+    /// ```
+    pub fn is_not_null(self) -> Predicate {
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNull, self))
+    }
+
+    /// Creates an is-in expression. For example, `a IS IN (5, 6)`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use std::collections::HashSet;
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    ///
+    /// let as_string = format!("{expr}");
+    /// assert!(&as_string == "a IN (5, 6)" || &as_string == "a IN (6, 5)");
+    /// ```
+    pub fn is_in(self, literals: HashSet<Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(PredicateOperator::In, self, literals))
+    }
+
+    /// Creates an is-not-in expression. For example, `a IS NOT IN (5, 6)`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use std::collections::HashSet;
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_not_in(HashSet::from([Datum::long(5), Datum::long(6)]));
+    ///
+    /// let as_string = format!("{expr}");
+    /// assert!(&as_string == "a NOT IN (5, 6)" || &as_string == "a NOT IN (6, 5)");
+    /// ```
+    pub fn is_not_in(self, literals: HashSet<Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(PredicateOperator::NotIn, self, literals))
     }
 }
 
