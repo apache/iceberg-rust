@@ -39,9 +39,9 @@ apache-avro = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+async-std = { workspace = true, optional = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
-async-std = { workspace = true, optional = true }
 bimap = { workspace = true }
 bitvec = { workspace = true }
 bytes = { workspace = true }
