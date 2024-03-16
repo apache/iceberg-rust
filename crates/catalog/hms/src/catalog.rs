@@ -25,7 +25,9 @@ use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
 use hive_metastore::ThriftHiveMetastoreGetTableException;
 use iceberg::io::FileIO;
+use iceberg::io::FileIOBuilder;
 use iceberg::spec::TableMetadata;
+use iceberg::spec::TableMetadataBuilder;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -35,6 +37,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use typed_builder::TypedBuilder;
 use volo_thrift::ResponseError;
 
@@ -54,6 +57,8 @@ pub enum HmsThriftTransport {
 pub struct HmsCatalogConfig {
     address: String,
     thrift_transport: HmsThriftTransport,
+    #[builder(default, setter(prefix = "with_"))]
+    props: HashMap<String, String>,
 }
 
 struct HmsClient(ThriftHiveMetastoreClient);
@@ -309,29 +314,33 @@ impl Catalog for HmsCatalog {
         creation: TableCreation,
     ) -> Result<Table> {
         let db_name = validate_namespace(namespace)?;
-        let table_name = &creation.name;
+        let table_name = creation.name.clone();
 
         let location = match &creation.location {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, table_name)?
+                get_default_table_location(&ns, &table_name)?
             }
         };
 
-        let metadata_location = get_metadata_location(location.clone(), 0)?;
-        let _file_io = FileIO::from_path(&metadata_location)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+        let metadata_location = get_metadata_location(&location, 0)?;
 
-        // TODO: Create `TableMetadata` and write to storage
-        // blocked by: https://github.com/apache/iceberg-rust/issues/250
+        let file_io = FileIOBuilder::new("s3a")
+            .with_props(&self.config.props)
+            .build()?;
+        let mut file = file_io.new_output(&metadata_location)?.writer().await?;
+        file.write_all(&serde_json::to_vec(&metadata)?).await?;
+        file.shutdown().await?;
 
         let hive_table = convert_to_hive_table(
-            db_name,
-            &creation.schema,
+            db_name.clone(),
+            metadata.current_schema(),
             table_name.clone(),
             location,
-            metadata_location,
-            &creation.properties,
+            metadata_location.clone(),
+            metadata.properties(),
         )?;
 
         self.client
@@ -340,23 +349,14 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        // let table = Table::builder()
-        //     .metadata(metadata)
-        //     .metadata_location(metadata_location)
-        //     .identifier(TableIdent::new(
-        //         NamespaceIdent::new(db_name),
-        //         table_name.clone(),
-        //     ))
-        //     .file_io(file_io)
-        //     .build();
+        let table = Table::builder()
+            .file_io(file_io)
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .build();
 
-        // Ok(table)
-
-        // TODO: Create & return Result<Table>
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Table creation is not supported yet",
-        ))
+        Ok(table)
     }
 
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {

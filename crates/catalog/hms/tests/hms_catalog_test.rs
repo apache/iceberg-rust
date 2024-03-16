@@ -19,7 +19,11 @@
 
 use std::collections::HashMap;
 
-use iceberg::{Catalog, Namespace, NamespaceIdent};
+use iceberg::io::{
+    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -27,11 +31,13 @@ use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
+const MINIO_PORT: u16 = 9000;
 type Result<T> = std::result::Result<T, iceberg::Error>;
 
 struct TestFixture {
     _docker_compose: DockerCompose,
     hms_catalog: HmsCatalog,
+    file_io: FileIO,
 }
 
 async fn set_test_fixture(func: &str) -> TestFixture {
@@ -45,6 +51,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     docker_compose.run();
 
     let hms_catalog_ip = docker_compose.get_container_ip("hive-metastore");
+    let minio_ip = docker_compose.get_container_ip("minio");
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
     loop {
@@ -56,9 +63,25 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         }
     }
 
+    let props = HashMap::from([
+        (
+            S3_ENDPOINT.to_string(),
+            format!("http://{}:{}", minio_ip, MINIO_PORT),
+        ),
+        (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+        (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+        (S3_REGION.to_string(), "us-east-1".to_string()),
+    ]);
+
+    let file_io = FileIOBuilder::new("s3a")
+        .with_props(&props)
+        .build()
+        .unwrap();
+
     let config = HmsCatalogConfig::builder()
         .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
         .thrift_transport(HmsThriftTransport::Buffered)
+        .with_props(props)
         .build();
 
     let hms_catalog = HmsCatalog::new(config).unwrap();
@@ -66,7 +89,48 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     TestFixture {
         _docker_compose: docker_compose,
         hms_catalog,
+        file_io,
     }
+}
+
+#[tokio::test]
+async fn test_create_table() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+
+    let creation = TableCreation::builder()
+        .location("s3a://warehouse/hive".to_string())
+        .name("my_table".to_string())
+        .properties(HashMap::new())
+        .schema(schema)
+        .build();
+
+    let result = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    assert_eq!(result.identifier().name(), "my_table");
+    assert!(result
+        .metadata_location()
+        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        fixture
+            .file_io
+            .is_exist("s3a://warehouse/hive/metadata/")
+            .await?
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
