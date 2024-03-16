@@ -23,7 +23,7 @@ use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -93,12 +93,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     }
 }
 
-#[tokio::test]
-async fn test_create_table() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
-
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
-
+fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
     let schema = Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
@@ -108,11 +103,46 @@ async fn test_create_table() -> Result<()> {
         .build()?;
 
     let creation = TableCreation::builder()
-        .location("s3a://warehouse/hive".to_string())
-        .name("my_table".to_string())
+        .location(location.to_string())
+        .name(name.to_string())
         .properties(HashMap::new())
         .schema(schema)
         .build();
+
+    Ok(creation)
+}
+
+#[tokio::test]
+async fn test_load_table() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let expected = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture
+        .hms_catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(result.identifier(), expected.identifier());
+    assert_eq!(result.metadata_location(), expected.metadata_location());
+    assert_eq!(result.metadata(), expected.metadata());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_table() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
     let result = fixture
         .hms_catalog
