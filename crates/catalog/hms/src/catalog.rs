@@ -25,7 +25,6 @@ use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
 use hive_metastore::ThriftHiveMetastoreGetTableException;
 use iceberg::io::FileIO;
-use iceberg::io::FileIOBuilder;
 use iceberg::spec::TableMetadata;
 use iceberg::spec::TableMetadataBuilder;
 use iceberg::table::Table;
@@ -327,7 +326,7 @@ impl Catalog for HmsCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_location = get_metadata_location(&location, 0)?;
 
-        let file_io = FileIOBuilder::new("s3a")
+        let file_io = FileIO::from_path(&metadata_location)?
             .with_props(&self.config.props)
             .build()?;
         let mut file = file_io.new_output(&metadata_location)?.writer().await?;
