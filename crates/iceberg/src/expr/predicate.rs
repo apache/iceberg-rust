@@ -283,12 +283,16 @@ impl Bind for Predicate {
                         }
                     }
                     &PredicateOperator::IsNan => {
-                        if bound_expr.term.field().field_type.is_floating_type() | bound_expr.term.field().required {
+                        if bound_expr.term.field().field_type.is_floating_type()
+                            | bound_expr.term.field().required
+                        {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNan => {
-                        if bound_expr.term.field().field_type.is_floating_type() | bound_expr.term.field().required{
+                        if bound_expr.term.field().field_type.is_floating_type()
+                            | bound_expr.term.field().required
+                        {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
