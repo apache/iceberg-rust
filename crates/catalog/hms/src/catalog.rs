@@ -184,7 +184,7 @@ impl Catalog for HmsCatalog {
         let db = self
             .client
             .0
-            .get_database(name.clone().into())
+            .get_database(name.into())
             .await
             .map_err(from_thrift_error)?;
 
@@ -208,7 +208,7 @@ impl Catalog for HmsCatalog {
     async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
         let name = validate_namespace(namespace)?;
 
-        let resp = self.client.0.get_database(name.clone().into()).await;
+        let resp = self.client.0.get_database(name.into()).await;
 
         match resp {
             Ok(_) => Ok(true),
@@ -295,7 +295,7 @@ impl Catalog for HmsCatalog {
         let tables = self
             .client
             .0
-            .get_all_tables(name.clone().into())
+            .get_all_tables(name.into())
             .await
             .map_err(from_thrift_error)?;
 
@@ -307,6 +307,18 @@ impl Catalog for HmsCatalog {
         Ok(tables)
     }
 
+    /// Creates a new table within a specified namespace using the provided
+    /// table creation settings.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object representing the newly created
+    /// table.
+    ///
+    /// # Errors
+    /// This function may return an error in several cases, including invalid
+    /// namespace identifiers, failure to determine a default storage location,
+    /// issues generating or writing table metadata, and errors communicating
+    /// with the Hive Metastore.
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
@@ -358,6 +370,18 @@ impl Catalog for HmsCatalog {
         Ok(table)
     }
 
+    /// Loads a table from the Hive Metastore and constructs a `Table` object
+    /// based on its metadata.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object that represents the loaded table.
+    ///
+    /// # Errors
+    /// This function may return an error in several scenarios, including:
+    /// - Failure to validate the namespace.
+    /// - Failure to retrieve the table from the Hive Metastore.
+    /// - Absence of metadata location information in the table's properties.
+    /// - Issues reading or deserializing the table's metadata file.
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
         let db_name = validate_namespace(table.namespace())?;
 
@@ -368,7 +392,6 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        // TODO: extract into utils
         let metadata_location = match hive_table.parameters {
             Some(properties) => match properties.get(METADATA_LOCATION) {
                 Some(location) => location.to_string(),
@@ -387,22 +410,22 @@ impl Catalog for HmsCatalog {
             }
         };
 
-        let file_io = FileIO::from_path(&metadata_location)?.build()?;
-
-        // TODO: extract into utils
+        let file_io = FileIO::from_path(&metadata_location)?
+            .with_props(&self.config.props)
+            .build()?;
         let mut reader = file_io.new_input(&metadata_location)?.reader().await?;
         let mut metadata_str = String::new();
         reader.read_to_string(&mut metadata_str).await?;
         let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
 
         let table = Table::builder()
-            .metadata(metadata)
+            .file_io(file_io)
             .metadata_location(metadata_location)
+            .metadata(metadata)
             .identifier(TableIdent::new(
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
-            .file_io(file_io)
             .build();
 
         Ok(table)
