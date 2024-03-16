@@ -442,11 +442,11 @@ impl Catalog for HmsCatalog {
     /// the table does not exist.
     /// - Any network or communication error occurs with the database backend.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        let dbname = validate_namespace(table.namespace())?;
+        let db_name = validate_namespace(table.namespace())?;
 
         self.client
             .0
-            .drop_table(dbname.into(), table.name.clone().into(), false)
+            .drop_table(db_name.into(), table.name.clone().into(), false)
             .await
             .map_err(from_thrift_error)?;
 
@@ -461,13 +461,13 @@ impl Catalog for HmsCatalog {
     /// - `Ok(false)` if the table does not exist in the database.
     /// - `Err(...)` if an error occurs during the process
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let dbname = validate_namespace(table.namespace())?;
-        let tbl_name = table.name.clone();
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name.clone();
 
         let resp = self
             .client
             .0
-            .get_table(dbname.into(), tbl_name.into())
+            .get_table(db_name.into(), table_name.into())
             .await;
 
         match resp {
