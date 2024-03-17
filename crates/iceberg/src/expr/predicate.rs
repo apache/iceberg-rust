@@ -46,7 +46,7 @@ impl<T: Debug, const N: usize> Debug for LogicalExpression<T, N> {
 }
 
 impl<T, const N: usize> LogicalExpression<T, N> {
-    fn new(inputs: [Box<T>; N]) -> Self {
+    pub(crate) fn new(inputs: [Box<T>; N]) -> Self {
         Self { inputs }
     }
 
@@ -82,9 +82,9 @@ where
 #[derive(PartialEq)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
-    op: PredicateOperator,
+    pub(crate) op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a IS NULL`.
-    term: T,
+    pub(crate) term: T,
 }
 
 impl<T: Debug> Debug for UnaryExpression<T> {
@@ -116,13 +116,20 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+
+    pub(crate) fn field_id(&self) -> i32 {
+        todo!();
+
+        // The below is not yet working since T may not implement `.field()`
+        // self.term.field().id
+    }
 }
 
 /// Binary predicate, for example, `a > 10`.
 #[derive(PartialEq)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
-    op: PredicateOperator,
+    pub(crate) op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a > 10`.
     term: T,
     /// Literal of this predicate, for example, `10` in `a > 10`.
@@ -143,6 +150,13 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
+    }
+
+    pub(crate) fn field_id(&self) -> i32 {
+        todo!();
+
+        // The below is not yet working since T may not implement `.field()`
+        // self.term.field().id
     }
 }
 
@@ -169,7 +183,7 @@ impl<T: Bind> Bind for BinaryExpression<T> {
 #[derive(PartialEq)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
-    op: PredicateOperator,
+    pub(crate) op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a in (1, 2, 3)`.
     term: T,
     /// Literals of this predicate, for example, `(1, 2, 3)` in `a in (1, 2, 3)`.
@@ -190,6 +204,13 @@ impl<T> SetExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
         Self { op, term, literals }
+    }
+
+    pub(crate) fn field_id(&self) -> i32 {
+        todo!();
+
+        // The below is not yet working since T may not implement `.field()`
+        // self.term.field().id
     }
 }
 
@@ -217,6 +238,9 @@ impl<T: Display + Debug> Display for SetExpression<T> {
 /// Unbound predicate expression before binding to a schema.
 #[derive(Debug, PartialEq)]
 pub enum Predicate {
+    AlwaysTrue,
+    AlwaysFalse,
+
     /// And predicate, for example, `a > 10 AND b < 20`.
     And(LogicalExpression<Predicate, 2>),
     /// Or predicate, for example, `a > 10 OR b < 20`.
@@ -367,6 +391,8 @@ impl Bind for Predicate {
                     bound_literals,
                 )))
             }
+            Predicate::AlwaysTrue => Ok(BoundPredicate::AlwaysTrue),
+            Predicate::AlwaysFalse => Ok(BoundPredicate::AlwaysFalse),
         }
     }
 }
@@ -374,6 +400,12 @@ impl Bind for Predicate {
 impl Display for Predicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Predicate::AlwaysTrue => {
+                write!(f, "TRUE")
+            }
+            Predicate::AlwaysFalse => {
+                write!(f, "FALSE")
+            }
             Predicate::And(expr) => {
                 write!(f, "({}) AND ({})", expr.inputs()[0], expr.inputs()[1])
             }
@@ -461,6 +493,8 @@ impl Predicate {
     /// ```
     pub fn negate(self) -> Predicate {
         match self {
+            Predicate::AlwaysTrue => Predicate::AlwaysFalse,
+            Predicate::AlwaysFalse => Predicate::AlwaysTrue,
             Predicate::And(expr) => Predicate::Or(LogicalExpression::new(
                 expr.inputs.map(|expr| Box::new(expr.negate())),
             )),
@@ -525,6 +559,8 @@ impl Predicate {
             Predicate::Unary(expr) => Predicate::Unary(expr),
             Predicate::Binary(expr) => Predicate::Binary(expr),
             Predicate::Set(expr) => Predicate::Set(expr),
+            Predicate::AlwaysTrue => Predicate::AlwaysTrue,
+            Predicate::AlwaysFalse => Predicate::AlwaysFalse,
         }
     }
 }
@@ -605,6 +641,14 @@ impl Display for BoundPredicate {
             }
         }
     }
+}
+
+pub(crate) trait PredicateVisitor<T> {
+    fn visit(predicate: Predicate) -> T;
+}
+
+pub(crate) trait BoundPredicateVisitor<T> {
+    fn visit(predicate: BoundPredicate) -> T;
 }
 
 #[cfg(test)]

@@ -19,22 +19,20 @@
 
 use crate::arrow::ArrowReaderBuilder;
 use crate::expr::BoundPredicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, BoundReference, LogicalExpression, Predicate, PredicateOperator};
+use crate::expr::{Bind, BoundPredicate, LogicalExpression, Predicate, PredicateOperator};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, FieldSummary, Manifest, ManifestEntry, ManifestEntryRef, ManifestFile,
-    PartitionField, PartitionSpec, PartitionSpecRef, Schema, SchemaRef, SnapshotRef,
-    TableMetadataRef, Transform,
+    DataContentType, FieldSummary, ManifestEntryRef, ManifestFile, PartitionField,
+    PartitionSpecRef, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind};
 use arrow_array::RecordBatch;
+use async_stream::try_stream;
 use futures::stream::{iter, BoxStream};
 use futures::StreamExt;
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
-use async_stream::try_stream;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -173,8 +171,7 @@ pub type FileScanTaskStream = BoxStream<'static, crate::Result<FileScanTask>>;
 impl TableScan {
     /// Returns a stream of file scan tasks.
 
-
-    pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
+    pub async fn plan_files(&'static self) -> crate::Result<FileScanTaskStream> {
         // Cache `PartitionEvaluator`s created as part of this scan
         let mut partition_evaluator_cache: HashMap<i32, PartitionEvaluator> = HashMap::new();
 
@@ -197,20 +194,12 @@ impl TableScan {
                 // PartitionEvaluator that matches this manifest's partition spec ID.
                 // Use one from the cache if there is one. If not, create one, put it in
                 // the cache, and take a reference to it.
-                let partition_evaluator = if let Some(filter) = self.filter.as_ref() {
-                    Some(
-                        partition_evaluator_cache
+                if let Some(filter) = self.filter.as_ref() {
+                    let partition_evaluator = partition_evaluator_cache
                             .entry(manifest.partition_spec_id())
-                            .or_insert_with_key(self.create_partition_evaluator(filter))
-                            .deref(),
-                    )
-                } else {
-                    None
-                };
+                            .or_insert_with_key(|key| self.create_partition_evaluator(key, filter));
 
-                // If this scan has a filter, reject any manifest files whose partition values
-                // don't match the filter.
-                if let Some(partition_evaluator) = partition_evaluator {
+                    // reject any manifest files whose partition values don't match the filter.
                     if !partition_evaluator.filter_manifest_file(&entry) {
                         continue;
                     }
@@ -236,20 +225,24 @@ impl TableScan {
                     }
                 }
             }
-        }.boxed())
-    }
-
-    fn create_partition_evaluator(&self, filter: &Predicate) -> fn(&i32) -> crate::Result<PartitionEvaluator> {
-        |&id| {
-            // TODO: predicate binding not yet merged to main
-            let bound_predicate = filter.bind(self.schema.clone(), self.case_sensitive)?;
-
-            let partition_spec = self.table_metadata.partition_spec_by_id(id).unwrap();
-            PartitionEvaluator::new(partition_spec.clone(), bound_predicate, self.schema.clone())
         }
+        .boxed())
     }
 
-    pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
+    fn create_partition_evaluator(&self, id: &i32, filter: &Predicate) -> PartitionEvaluator {
+
+        // TODO: this does not work yet. `bind` consumes self, but `Predicate`
+        //       does not implement `Clone` or `Copy`.
+        let bound_predicate = filter.clone()
+            .bind(self.schema.clone(), self.case_sensitive)
+            .unwrap();
+
+        let partition_spec = self.table_metadata.partition_spec_by_id(*id).unwrap();
+        PartitionEvaluator::new(partition_spec.clone(), bound_predicate, self.schema.clone())
+            .unwrap()
+    }
+
+    pub async fn to_arrow(&'static self) -> crate::Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
 
@@ -315,7 +308,11 @@ struct ManifestEvalVisitor {
 }
 
 impl ManifestEvalVisitor {
-    fn new(partition_schema: SchemaRef, partition_filter: Predicate, case_sensitive: bool) -> crate::Result<Self> {
+    fn new(
+        partition_schema: SchemaRef,
+        partition_filter: Predicate,
+        case_sensitive: bool,
+    ) -> crate::Result<Self> {
         let partition_filter = partition_filter.bind(partition_schema.clone(), case_sensitive)?;
 
         Ok(Self {
@@ -332,8 +329,13 @@ impl ManifestEvalVisitor {
         case_sensitive: bool,
     ) -> crate::Result<Self> {
         let partition_type = partition_spec.partition_type(&table_schema)?;
+
+        // this is needed as SchemaBuilder.with_fields expects an iterator over
+        // Arc<NestedField> rather than &Arc<NestedField>
+        let cloned_partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
+
         let partition_schema = Schema::builder()
-            .with_fields(partition_type.fields())
+            .with_fields(cloned_partition_fields)
             .build()?;
 
         let partition_schema_ref = Arc::new(partition_schema);
@@ -478,14 +480,20 @@ impl InclusiveProjection {
 
         // TODO: cache this?
         let mut parts: Vec<&PartitionField> = vec![];
-        for partition_spec_field in self.partition_spec.fields {
+        for partition_spec_field in &self.partition_spec.fields {
             if partition_spec_field.source_id == field_id {
                 parts.push(&partition_spec_field)
             }
         }
 
         parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
-            res.and(part.transform.project(&part.name, &predicate))
+            // should this use ? instead of destructuring Ok() so that the whole call fails
+            // if the transform project() call errors? This would require changing the signature of `visit`.
+            if let Ok(Some(pred_for_part)) = part.transform.project(&part.name, &predicate) {
+                res.and(pred_for_part)
+            } else {
+                res
+            }
         })
     }
 }

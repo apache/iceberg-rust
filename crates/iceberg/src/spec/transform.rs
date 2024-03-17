@@ -18,6 +18,7 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
+use crate::expr::{BoundPredicate, Predicate};
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::ErrorKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -260,6 +261,12 @@ impl Transform {
             Transform::Month => matches!(other, Transform::Month | Transform::Year),
             _ => self == other,
         }
+    }
+
+    pub fn project(&self, _name: &str, _predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+        // Waiting on https://github.com/apache/iceberg-rust/pull/269
+        // to deliver https://github.com/apache/iceberg-rust/issues/264
+        todo!()
     }
 }
 
