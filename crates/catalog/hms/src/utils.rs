@@ -240,7 +240,7 @@ pub(crate) fn get_default_table_location(
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
-                "No default path is set, please specify  a location when creating a table",
+                "No default path is set, please specify a location when creating a table",
             )
         })
 }
