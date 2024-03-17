@@ -35,7 +35,7 @@ const COMMENT: &str = "comment";
 /// hive metatore `location` property
 const LOCATION: &str = "location";
 /// hive metatore `metadat_location` property
-pub(crate) const METADATA_LOCATION: &str = "metadata_location";
+const METADATA_LOCATION: &str = "metadata_location";
 /// hive metatore `external` property
 const EXTERNAL: &str = "EXTERNAL";
 /// hive metatore `external_table` property
@@ -245,8 +245,8 @@ pub(crate) fn get_default_table_location(
         })
 }
 
-/// Get metadata location
-pub(crate) fn get_metadata_location(
+/// Create metadata location from `location` and `version`
+pub(crate) fn create_metadata_location(
     location: impl AsRef<str> + Display,
     version: i32,
 ) -> Result<String> {
@@ -265,6 +265,29 @@ pub(crate) fn get_metadata_location(
     let metadata_location = format!("{}/metadata/{}-{}.metadata.json", location, version, id);
 
     Ok(metadata_location)
+}
+
+/// Get metadata location from `HiveTable` parameters
+pub(crate) fn get_metadata_location(
+    parameters: &Option<AHashMap<FastStr, FastStr>>,
+) -> Result<String> {
+    match parameters {
+        Some(properties) => match properties.get(METADATA_LOCATION) {
+            Some(location) => Ok(location.to_string()),
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("No '{}' set on table", METADATA_LOCATION),
+                ))
+            }
+        },
+        None => {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "No 'parameters' set on table. Location of metadata is undefined",
+            ))
+        }
+    }
 }
 
 /// Formats location_uri by e.g. removing trailing slashes.
@@ -321,11 +344,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_get_metadata_location() -> Result<()> {
+        let params_valid = Some(AHashMap::from([(
+            FastStr::new(METADATA_LOCATION),
+            FastStr::new("my_location"),
+        )]));
+        let params_missing_key = Some(AHashMap::from([(
+            FastStr::new("not_here"),
+            FastStr::new("my_location"),
+        )]));
+
+        let result_valid = get_metadata_location(&params_valid)?;
+        let result_missing_key = get_metadata_location(&params_missing_key);
+        let result_no_params = get_metadata_location(&None);
+
+        assert_eq!(result_valid, "my_location");
+        assert!(result_missing_key.is_err());
+        assert!(result_no_params.is_err());
+
+        Ok(())
+    }
+
+    #[test]
     fn test_convert_to_hive_table() -> Result<()> {
         let db_name = "my_db".to_string();
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hms".to_string();
-        let metadata_location = get_metadata_location(location.clone(), 0)?;
+        let metadata_location = create_metadata_location(location.clone(), 0)?;
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
@@ -370,13 +415,13 @@ mod tests {
     }
 
     #[test]
-    fn test_get_metadata_location() -> Result<()> {
+    fn test_create_metadata_location() -> Result<()> {
         let location = "my_base_location";
         let valid_version = 0;
         let invalid_version = -1;
 
-        let valid_result = get_metadata_location(location, valid_version)?;
-        let invalid_result = get_metadata_location(location, invalid_version);
+        let valid_result = create_metadata_location(location, valid_version)?;
+        let invalid_result = create_metadata_location(location, invalid_version);
 
         assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
         assert!(valid_result.ends_with(".metadata.json"));

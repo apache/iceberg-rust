@@ -336,7 +336,7 @@ impl Catalog for HmsCatalog {
         };
 
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
-        let metadata_location = get_metadata_location(&location, 0)?;
+        let metadata_location = create_metadata_location(&location, 0)?;
 
         let file_io = FileIO::from_path(&metadata_location)?
             .with_props(&self.config.props)
@@ -392,23 +392,7 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        let metadata_location = match hive_table.parameters {
-            Some(properties) => match properties.get(METADATA_LOCATION) {
-                Some(location) => location.to_string(),
-                None => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("No '{}' set on table", METADATA_LOCATION),
-                    ))
-                }
-            },
-            None => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "No 'parameters' set on table. Location of metadata is undefined",
-                ))
-            }
-        };
+        let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
         let file_io = FileIO::from_path(&metadata_location)?
             .with_props(&self.config.props)
