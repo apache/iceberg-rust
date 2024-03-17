@@ -274,19 +274,15 @@ pub(crate) fn get_metadata_location(
     match parameters {
         Some(properties) => match properties.get(METADATA_LOCATION) {
             Some(location) => Ok(location.to_string()),
-            None => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("No '{}' set on table", METADATA_LOCATION),
-                ))
-            }
-        },
-        None => {
-            return Err(Error::new(
+            None => Err(Error::new(
                 ErrorKind::DataInvalid,
-                "No 'parameters' set on table. Location of metadata is undefined",
-            ))
-        }
+                format!("No '{}' set on table", METADATA_LOCATION),
+            )),
+        },
+        None => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "No 'parameters' set on table. Location of metadata is undefined",
+        )),
     }
 }
 
