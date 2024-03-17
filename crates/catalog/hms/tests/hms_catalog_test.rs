@@ -113,6 +113,69 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 }
 
 #[tokio::test]
+async fn test_rename_table() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
+
+    fixture
+        .hms_catalog
+        .rename_table(table.identifier(), &dest)
+        .await?;
+
+    let result = fixture.hms_catalog.table_exists(&dest).await?;
+
+    assert!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture.hms_catalog.table_exists(table.identifier()).await?;
+
+    assert!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_table() -> Result<()> {
+    let fixture = set_test_fixture("test_list_namespace").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    fixture.hms_catalog.drop_table(table.identifier()).await?;
+
+    let result = fixture.hms_catalog.table_exists(table.identifier()).await?;
+
+    assert!(!result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_load_table() -> Result<()> {
     let fixture = set_test_fixture("test_list_namespace").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
