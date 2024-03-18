@@ -134,6 +134,22 @@ impl RestCatalogConfig {
             Client::builder().default_headers(headers).build()?,
         ))
     }
+
+    fn extract_optional_oauth_params(&self) -> HashMap<&str, &str> {
+        let mut optional_oauth_param = HashMap::new();
+        if let Some(scope) = self.props.get("scope") {
+            optional_oauth_param.insert("scope", scope.as_str());
+        } else {
+            optional_oauth_param.insert("scope", "catalog");
+        }
+        let set_of_optional_params = ["audience", "resource"];
+        for param_name in set_of_optional_params.iter() {
+            if let Some(value) = self.props.get(*param_name) {
+                optional_oauth_param.insert(param_name.to_owned(), value);
+            }
+        }
+        optional_oauth_param
+    }
 }
 
 #[derive(Debug)]
@@ -541,7 +557,8 @@ impl RestCatalog {
                 params.insert("client_id", client_id);
             }
             params.insert("client_secret", client_secret);
-            params.insert("scope", "catalog");
+            let optional_oauth_params = self.config.extract_optional_oauth_params();
+            params.extend(optional_oauth_params);
             let req = self
                 .client
                 .0
@@ -872,6 +889,51 @@ mod tests {
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let _catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_oauth_with_optional_param() {
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert("scope".to_string(), "custom_scope".to_string());
+        props.insert("audience".to_string(), "custom_audience".to_string());
+        props.insert("resource".to_string(), "custom_resource".to_string());
+
+        let mut server = Server::new_async().await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .match_body(mockito::Matcher::Regex("scope=custom_scope".to_string()))
+            .match_body(mockito::Matcher::Regex(
+                "audience=custom_audience".to_string(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "resource=custom_resource".to_string(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let config_mock = create_config_mock(&mut server).await;
 
         let _catalog = RestCatalog::new(
             RestCatalogConfig::builder()
