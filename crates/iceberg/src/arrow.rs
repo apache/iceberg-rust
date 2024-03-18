@@ -447,6 +447,10 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
+            DataType::Decimal128(p, s) => Ok(Type::Primitive(PrimitiveType::Decimal {
+                precision: *p as u32,
+                scale: *s as u32,
+            })),
             DataType::Date32 => Ok(Type::Primitive(PrimitiveType::Date)),
             DataType::Time64(unit) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Time))
@@ -529,128 +533,131 @@ mod tests {
 
         let r#struct = DataType::Struct(fields);
 
-        let schema = ArrowSchema::new(vec![
-            Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "2".to_string(),
-            )])),
-            Field::new("b", DataType::Int64, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("c", DataType::Utf8, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "3".to_string(),
-            )])),
-            Field::new("n", DataType::LargeUtf8, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "21".to_string(),
-            )])),
-            Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true).with_metadata(
-                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "4".to_string())]),
-            ),
-            Field::new("e", DataType::Boolean, true).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "6".to_string(),
-            )])),
-            Field::new("f", DataType::Float32, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "5".to_string(),
-            )])),
-            Field::new("g", DataType::Float64, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "7".to_string(),
-            )])),
-            Field::new("h", DataType::Date32, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "8".to_string(),
-            )])),
-            Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
-                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "9".to_string())]),
-            ),
-            Field::new(
-                "j",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "10".to_string(),
-            )])),
-            Field::new(
-                "k",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "12".to_string(),
-            )])),
-            Field::new("l", DataType::Binary, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "13".to_string(),
-            )])),
-            Field::new("o", DataType::LargeBinary, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "22".to_string(),
-            )])),
-            Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "11".to_string(),
-            )])),
-            Field::new(
-                "list",
-                DataType::List(Arc::new(
-                    Field::new("element", DataType::Int32, false).with_metadata(HashMap::from([(
+        let schema =
+            ArrowSchema::new(vec![
+                Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "2".to_string(),
+                )])),
+                Field::new("b", DataType::Int64, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+                Field::new("c", DataType::Utf8, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "3".to_string(),
+                )])),
+                Field::new("n", DataType::LargeUtf8, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "21".to_string(),
+                )])),
+                Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true)
+                    .with_metadata(HashMap::from([(
                         ARROW_FIELD_ID_KEY.to_string(),
-                        "15".to_string(),
+                        "4".to_string(),
                     )])),
-                )),
-                true,
-            )
-            .with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "14".to_string(),
-            )])),
-            Field::new(
-                "large_list",
-                DataType::LargeList(Arc::new(
-                    Field::new("element", DataType::Utf8, false).with_metadata(HashMap::from([(
-                        ARROW_FIELD_ID_KEY.to_string(),
-                        "23".to_string(),
-                    )])),
-                )),
-                true,
-            )
-            .with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "24".to_string(),
-            )])),
-            Field::new(
-                "fixed_list",
-                DataType::FixedSizeList(
-                    Arc::new(
-                        Field::new("element", DataType::Binary, false).with_metadata(
-                            HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "26".to_string())]),
-                        ),
-                    ),
-                    10,
+                Field::new("e", DataType::Boolean, true).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "6".to_string(),
+                )])),
+                Field::new("f", DataType::Float32, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "5".to_string(),
+                )])),
+                Field::new("g", DataType::Float64, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "7".to_string(),
+                )])),
+                Field::new("p", DataType::Decimal128(10, 2), false).with_metadata(HashMap::from([
+                    (ARROW_FIELD_ID_KEY.to_string(), "27".to_string()),
+                ])),
+                Field::new("h", DataType::Date32, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "8".to_string(),
+                )])),
+                Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
+                    HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "9".to_string())]),
                 ),
-                true,
-            )
-            .with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "25".to_string(),
-            )])),
-            Field::new("map", map, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "16".to_string(),
-            )])),
-            Field::new("struct", r#struct, false).with_metadata(HashMap::from([(
-                ARROW_FIELD_ID_KEY.to_string(),
-                "17".to_string(),
-            )])),
-        ]);
+                Field::new(
+                    "j",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "10".to_string(),
+                )])),
+                Field::new(
+                    "k",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "12".to_string(),
+                )])),
+                Field::new("l", DataType::Binary, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "13".to_string(),
+                )])),
+                Field::new("o", DataType::LargeBinary, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "22".to_string(),
+                )])),
+                Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from(
+                    [(ARROW_FIELD_ID_KEY.to_string(), "11".to_string())],
+                )),
+                Field::new(
+                    "list",
+                    DataType::List(Arc::new(
+                        Field::new("element", DataType::Int32, false).with_metadata(HashMap::from(
+                            [(ARROW_FIELD_ID_KEY.to_string(), "15".to_string())],
+                        )),
+                    )),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "14".to_string(),
+                )])),
+                Field::new(
+                    "large_list",
+                    DataType::LargeList(Arc::new(
+                        Field::new("element", DataType::Utf8, false).with_metadata(HashMap::from(
+                            [(ARROW_FIELD_ID_KEY.to_string(), "23".to_string())],
+                        )),
+                    )),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "24".to_string(),
+                )])),
+                Field::new(
+                    "fixed_list",
+                    DataType::FixedSizeList(
+                        Arc::new(
+                            Field::new("element", DataType::Binary, false).with_metadata(
+                                HashMap::from([(ARROW_FIELD_ID_KEY.to_string(), "26".to_string())]),
+                            ),
+                        ),
+                        10,
+                    ),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "25".to_string(),
+                )])),
+                Field::new("map", map, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "16".to_string(),
+                )])),
+                Field::new("struct", r#struct, false).with_metadata(HashMap::from([(
+                    ARROW_FIELD_ID_KEY.to_string(),
+                    "17".to_string(),
+                )])),
+            ]);
         let schema = Arc::new(schema);
         let result = arrow_schema_to_schema(&schema).unwrap();
 
@@ -705,6 +712,12 @@ mod tests {
                     "name":"g",
                     "required":true,
                     "type":"double"
+                },
+                {
+                    "id":27,
+                    "name":"p",
+                    "required":true,
+                    "type":"decimal(10,2)"
                 },
                 {
                     "id":8,
