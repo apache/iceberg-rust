@@ -21,8 +21,11 @@
 
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{any::Any, collections::BTreeMap};
 
+use arrow_array::{ArrayRef, Int32Array, Int64Array};
+use arrow_schema::DataType;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
@@ -141,10 +144,54 @@ impl From<Datum> for Literal {
 }
 
 impl Datum {
-    /// Prototype
-    pub fn literal(&self) -> PrimitiveLiteral {
-        self.literal.clone()
+    /// Convert `Datum` into `arrow_array::ArrayRef`
+    pub fn to_arrow_array(&self) -> ArrayRef {
+        // TODO: Support more PrimitiveLiterals
+        match self.literal {
+            PrimitiveLiteral::Int(v) => Arc::new(Int32Array::from_value(v.clone(), 1)),
+            PrimitiveLiteral::Long(v) => Arc::new(Int64Array::from_value(v.clone(), 1)),
+            _ => todo!(),
+        }
     }
+    /// Creates `Datum` from `arrow_array::ArrayRef`
+    pub fn from_arrow_array(input: &ArrayRef) -> Result<Self> {
+        if input.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Input array must not be empty",
+            ));
+        }
+
+        let downcast_err = || Error::new(ErrorKind::Unexpected, "Failed to downcast");
+
+        // TODO: Support more data_types
+        match input.data_type() {
+            DataType::Int32 => {
+                let arr = input
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(downcast_err)?;
+
+                Ok(Self {
+                    r#type: PrimitiveType::Int,
+                    literal: PrimitiveLiteral::Int(arr.value(0)),
+                })
+            }
+            DataType::Int64 => {
+                let arr = input
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(downcast_err)?;
+
+                Ok(Self {
+                    r#type: PrimitiveType::Long,
+                    literal: PrimitiveLiteral::Long(arr.value(0)),
+                })
+            }
+            _ => todo!(),
+        }
+    }
+
     /// Creates a boolean value.
     ///
     /// Example:
