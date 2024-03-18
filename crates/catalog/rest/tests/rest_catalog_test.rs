@@ -66,6 +66,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         rest_catalog,
     }
 }
+
 #[tokio::test]
 async fn test_get_non_exist_namespace() {
     let fixture = set_test_fixture("test_get_non_exist_namespace").await;
