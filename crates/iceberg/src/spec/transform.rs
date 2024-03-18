@@ -19,18 +19,18 @@
 
 use crate::error::{Error, Result};
 use crate::expr::{
-    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
+    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, SetExpression,
+    UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::transform::create_transform_function;
 use crate::ErrorKind;
-use arrow_array::{Int32Array, Int64Array};
+use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use std::sync::Arc;
 
-use super::{Datum, PrimitiveLiteral};
+use super::Datum;
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -273,6 +273,7 @@ impl Transform {
     pub fn project(&self, name: String, pred: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
+        // TODO: Support other transforms
         let projection = match self {
             Transform::Bucket(_) => match pred {
                 BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
@@ -284,31 +285,37 @@ impl Transform {
                         return Ok(None);
                     }
 
-                    let result = match expr.as_primitive_literal() {
-                        PrimitiveLiteral::Int(v) => func
-                            .transform(Arc::new(Int32Array::from_value(v, 1)))?
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Failed to downcast"))?
-                            .value(0),
-                        PrimitiveLiteral::Long(v) => func
-                            .transform(Arc::new(Int64Array::from_value(v, 1)))?
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Failed to downcast"))?
-                            .value(0),
-                        _ => return Ok(None),
-                    };
+                    let result = func.transform(expr.literal().to_arrow_array())?;
 
                     Some(Predicate::Binary(BinaryExpression::new(
                         expr.op(),
                         Reference::new(name),
-                        Datum::int(result),
+                        Datum::from_arrow_array(&result)?,
                     )))
                 }
-                _ => unimplemented!(),
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    let result: FnvHashSet<Datum> = expr
+                        .literals()
+                        .iter()
+                        .map(|lit| {
+                            let res = func.transform(lit.to_arrow_array()).unwrap();
+                            Datum::from_arrow_array(&res).unwrap()
+                        })
+                        .collect();
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        result,
+                    )))
+                }
+                _ => None,
             },
-            _ => unimplemented!(),
+            _ => todo!(),
         };
 
         Ok(projection)
@@ -412,9 +419,11 @@ impl<'de> Deserialize<'de> for Transform {
 mod tests {
     use std::sync::Arc;
 
+    use fnv::FnvHashSet;
+
     use crate::expr::{
-        BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator,
-        UnaryExpression,
+        BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
+        SetExpression, UnaryExpression,
     };
     use crate::spec::datatypes::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
@@ -423,7 +432,7 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
-    use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
+    use crate::spec::{Datum, PrimitiveType};
     use crate::Result;
 
     struct TestParameter {
@@ -459,6 +468,32 @@ mod tests {
     }
 
     #[test]
+    fn test_bucket_project_set() -> Result<()> {
+        let trans = Transform::Bucket(8);
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let pred = BoundPredicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            BoundReference::new("original_name", Arc::new(field)),
+            FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
+        ));
+
+        let expected = Some(Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Reference::new(&name),
+            FnvHashSet::from_iter([Datum::int(7), Datum::int(1)]),
+        )));
+
+        let result = trans.project(name, &pred)?;
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_bucket_project_binary() -> Result<()> {
         let trans = Transform::Bucket(8);
         let name = "projected_name".to_string();
@@ -471,15 +506,15 @@ mod tests {
             Datum::int(5),
         ));
 
-        let literal = match trans.project(name, &pred)? {
-            Some(pred) => match pred {
-                Predicate::Binary(expr) => expr.as_primitive_literal(),
-                _ => unimplemented!(),
-            },
-            _ => unimplemented!(),
-        };
+        let expected = Some(Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            Reference::new(&name),
+            Datum::int(7),
+        )));
 
-        assert_eq!(literal, PrimitiveLiteral::Int(7));
+        let result = trans.project(name, &pred)?;
+
+        assert_eq!(result, expected);
 
         Ok(())
     }
