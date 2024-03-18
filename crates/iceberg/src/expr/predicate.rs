@@ -28,7 +28,7 @@ use itertools::Itertools;
 
 use crate::error::Result;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
-use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
+use crate::spec::{Datum, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
@@ -153,8 +153,8 @@ impl<T> BinaryExpression<T> {
         self.op
     }
 
-    pub(crate) fn as_primitive_literal(&self) -> PrimitiveLiteral {
-        self.literal.literal()
+    pub(crate) fn literal(&self) -> &Datum {
+        &self.literal
     }
 }
 
@@ -198,6 +198,14 @@ impl<T> SetExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
         Self { op, term, literals }
+    }
+
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+
+    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+        &self.literals
     }
 }
 
