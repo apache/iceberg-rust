@@ -298,20 +298,23 @@ impl Transform {
                         return Ok(None);
                     }
 
-                    let result: FnvHashSet<Datum> = expr
+                    let projected_set: Result<FnvHashSet<Datum>> = expr
                         .literals()
                         .iter()
                         .map(|lit| {
-                            let res = func.transform(lit.to_arrow_array()).unwrap();
-                            Datum::from_arrow_array(&res).unwrap()
+                            func.transform(lit.to_arrow_array())
+                                .and_then(|arr| Datum::from_arrow_array(&arr))
                         })
                         .collect();
 
-                    Some(Predicate::Set(SetExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        result,
-                    )))
+                    match projected_set {
+                        Err(e) => return Err(e),
+                        Ok(set) => Some(Predicate::Set(SetExpression::new(
+                            expr.op(),
+                            Reference::new(name),
+                            set,
+                        ))),
+                    }
                 }
                 _ => None,
             },
