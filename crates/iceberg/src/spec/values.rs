@@ -148,8 +148,8 @@ impl Datum {
     pub fn to_arrow_array(&self) -> ArrayRef {
         // TODO: Support more PrimitiveLiterals
         match self.literal {
-            PrimitiveLiteral::Int(v) => Arc::new(Int32Array::from_value(v.clone(), 1)),
-            PrimitiveLiteral::Long(v) => Arc::new(Int64Array::from_value(v.clone(), 1)),
+            PrimitiveLiteral::Int(v) => Arc::new(Int32Array::from_value(v, 1)),
+            PrimitiveLiteral::Long(v) => Arc::new(Int64Array::from_value(v, 1)),
             _ => todo!(),
         }
     }
