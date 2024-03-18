@@ -18,10 +18,10 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/test_utils",
 ]
 
 [workspace.package]
@@ -37,9 +37,9 @@ rust-version = "1.75.0"
 anyhow = "1.0.72"
 apache-avro = "0.16"
 array-init = "2"
-arrow-arith = { version = ">=46" }
-arrow-array = { version = ">=46" }
-arrow-schema = { version = ">=46" }
+arrow-arith = { version = "51" }
+arrow-array = { version = "51" }
+arrow-schema = { version = "51" }
 async-stream = "0.3.5"
 async-trait = "0.1"
 bimap = "0.6"
@@ -61,7 +61,7 @@ murmur3 = "0.5.2"
 once_cell = "1"
 opendal = "0.45"
 ordered-float = "4.0.0"
-parquet = "50"
+parquet = "51"
 pilota = "0.10.0"
 pretty_assertions = "1.4.0"
 port_scanner = "0.1.5"
