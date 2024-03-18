@@ -36,7 +36,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
-/// A manifest contains metadata and a list of entries.
+/// A manifest contains metadata and a list of entries
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Manifest {
     metadata: ManifestMetadata,
