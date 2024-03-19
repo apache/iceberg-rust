@@ -306,9 +306,9 @@ impl TableMetadataBuilder {
                 ))
             }
             None => HashMap::from([(
-                0,
+                DEFAULT_SPEC_ID,
                 Arc::new(PartitionSpec {
-                    spec_id: 0,
+                    spec_id: DEFAULT_SPEC_ID,
                     fields: vec![],
                 }),
             )]),
@@ -322,9 +322,9 @@ impl TableMetadataBuilder {
                 ))
             }
             None => HashMap::from([(
-                0,
+                DEFAULT_SORT_ORDER_ID,
                 Arc::new(SortOrder {
-                    order_id: 0,
+                    order_id: DEFAULT_SORT_ORDER_ID,
                     fields: vec![],
                 }),
             )]),
@@ -345,7 +345,7 @@ impl TableMetadataBuilder {
             current_schema_id: schema.schema_id(),
             schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
             partition_specs,
-            default_spec_id: 0,
+            default_spec_id: DEFAULT_SPEC_ID,
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
@@ -353,7 +353,7 @@ impl TableMetadataBuilder {
             snapshot_log: vec![],
             sort_orders,
             metadata_log: vec![],
-            default_sort_order_id: 0,
+            default_sort_order_id: DEFAULT_SORT_ORDER_ID,
             refs: Default::default(),
         };
 
