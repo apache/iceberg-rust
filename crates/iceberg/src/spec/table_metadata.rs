@@ -29,6 +29,7 @@ use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
     PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
 };
+use super::{PartitionSpec, SortOrder};
 
 use _serde::TableMetadataEnum;
 
@@ -297,19 +298,37 @@ impl TableMetadataBuilder {
             properties,
         } = table_creation;
 
-        if partition_spec.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Can't create table with partition spec now",
-            ));
-        }
+        let partition_specs = match partition_spec {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with partition spec now",
+                ))
+            }
+            None => HashMap::from([(
+                DEFAULT_SPEC_ID,
+                Arc::new(PartitionSpec {
+                    spec_id: DEFAULT_SPEC_ID,
+                    fields: vec![],
+                }),
+            )]),
+        };
 
-        if sort_order.is_some() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Can't create table with sort order now",
-            ));
-        }
+        let sort_orders = match sort_order {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with sort order now",
+                ))
+            }
+            None => HashMap::from([(
+                DEFAULT_SORT_ORDER_ID,
+                Arc::new(SortOrder {
+                    order_id: DEFAULT_SORT_ORDER_ID,
+                    fields: vec![],
+                }),
+            )]),
+        };
 
         let table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
@@ -325,16 +344,16 @@ impl TableMetadataBuilder {
             last_column_id: schema.highest_field_id(),
             current_schema_id: schema.schema_id(),
             schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
-            partition_specs: Default::default(),
-            default_spec_id: 0,
+            partition_specs,
+            default_spec_id: DEFAULT_SPEC_ID,
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
             snapshots: Default::default(),
             snapshot_log: vec![],
-            sort_orders: Default::default(),
+            sort_orders,
             metadata_log: vec![],
-            default_sort_order_id: 0,
+            default_sort_order_id: DEFAULT_SORT_ORDER_ID,
             refs: Default::default(),
         };
 
@@ -727,14 +746,10 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
-                properties: if v.properties.is_empty() {
-                    None
-                } else {
-                    Some(v.properties)
-                },
+                properties: Some(v.properties),
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
                 snapshots: if v.snapshots.is_empty() {
-                    None
+                    Some(vec![])
                 } else {
                     Some(
                         v.snapshots
@@ -1675,9 +1690,27 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(table_metadata.partition_specs.len(), 0);
         assert_eq!(table_metadata.properties.len(), 0);
-        assert_eq!(table_metadata.sort_orders.len(), 0);
+        assert_eq!(
+            table_metadata.partition_specs,
+            HashMap::from([(
+                0,
+                Arc::new(PartitionSpec {
+                    spec_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
+        assert_eq!(
+            table_metadata.sort_orders,
+            HashMap::from([(
+                0,
+                Arc::new(SortOrder {
+                    order_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
     }
 
     #[test]
