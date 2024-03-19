@@ -18,12 +18,11 @@
 //! Parquet file data reader
 
 use crate::{Error, ErrorKind};
-use arrow_schema::SchemaRef as ArrowSchemaRef;
 use async_stream::try_stream;
 use futures::stream::StreamExt;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::ParquetMetaData;
-use std::sync::Arc;
+use parquet::schema::types::{SchemaDescriptor, Type};
+use std::collections::HashMap;
 
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
@@ -40,7 +39,7 @@ use std::sync::Arc;
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
-    columns: Vec<usize>,
+    field_ids: Vec<usize>,
     file_io: FileIO,
     schema: SchemaRef,
 }
@@ -50,7 +49,7 @@ impl ArrowReaderBuilder {
     pub fn new(file_io: FileIO, schema: SchemaRef) -> Self {
         ArrowReaderBuilder {
             batch_size: None,
-            columns: vec![],
+            field_ids: vec![],
             file_io,
             schema,
         }
@@ -63,9 +62,9 @@ impl ArrowReaderBuilder {
         self
     }
 
-    /// Sets the desired column projection.
-    pub fn with_column_projection(mut self, columns: Vec<usize>) -> Self {
-        self.columns = columns;
+    /// Sets the desired column projection with a list of field ids.
+    pub fn with_field_ids(mut self, field_ids: Vec<usize>) -> Self {
+        self.field_ids = field_ids;
         self
     }
 
@@ -73,7 +72,7 @@ impl ArrowReaderBuilder {
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
-            columns: self.columns,
+            field_ids: self.field_ids,
             schema: self.schema,
             file_io: self.file_io,
         }
@@ -83,7 +82,7 @@ impl ArrowReaderBuilder {
 /// Reads data from Parquet files
 pub struct ArrowReader {
     batch_size: Option<usize>,
-    columns: Vec<usize>,
+    field_ids: Vec<usize>,
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
@@ -105,9 +104,8 @@ impl ArrowReader {
                 let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(parquet_reader)
                     .await?;
 
-                let metadata = batch_stream_builder.metadata();
-                let parquet_schema = batch_stream_builder.schema();
-                let projection_mask = self.get_arrow_projection_mask(metadata, parquet_schema)?;
+                let parquet_schema = batch_stream_builder.parquet_schema();
+                let projection_mask = self.get_arrow_projection_mask(parquet_schema)?;
                 batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 if let Some(batch_size) = self.batch_size {
@@ -126,29 +124,51 @@ impl ArrowReader {
 
     fn get_arrow_projection_mask(
         &self,
-        metadata: &Arc<ParquetMetaData>,
-        parquet_schema: &ArrowSchemaRef,
+        parquet_schema: &SchemaDescriptor,
     ) -> crate::Result<ProjectionMask> {
-        if self.columns.is_empty() {
+        if self.field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
+            let mut column_map = HashMap::new();
+            for (idx, field) in parquet_schema.columns().iter().enumerate() {
+                let field_type = field.self_type();
+                match field_type {
+                    Type::PrimitiveType { basic_info, .. } => {
+                        if !basic_info.has_id() {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Leave column {:?} in schema doesn't have field id",
+                                    field_type
+                                ),
+                            ));
+                        }
+                        column_map.insert(basic_info.id(), idx);
+                    }
+                    Type::GroupType { .. } => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Leave column in schema should be primitive type but got {:?}",
+                                field_type
+                            ),
+                        ));
+                    }
+                };
+            }
+
             let mut indices = vec![];
-            for col in &self.columns {
-                if *col > parquet_schema.fields().len() {
+            for field_id in &self.field_ids {
+                if let Some(col_idx) = column_map.get(&(*field_id as i32)) {
+                    indices.push(*col_idx);
+                } else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "Column index {} out of range. Schema: {}",
-                            col, parquet_schema
-                        ),
+                        format!("Field {} is not found in Parquet schema.", field_id),
                     ));
                 }
-                indices.push(*col - 1);
             }
-            Ok(ProjectionMask::roots(
-                metadata.file_metadata().schema_descr(),
-                indices,
-            ))
+            Ok(ProjectionMask::leaves(parquet_schema, indices))
         }
     }
 }
