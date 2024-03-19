@@ -193,15 +193,15 @@ pub enum PrimitiveType {
     },
     /// Calendar date without timezone or time.
     Date,
-    /// Time of day without date or timezone.
+    /// Time of day in microsecond precision, without date or timezone.
     Time,
-    /// Timestamp without timezone
+    /// Timestamp in microsecond precision, without timezone
     Timestamp,
-    /// Timestamp with timezone
+    /// Timestamp in microsecond precision, with timezone
     Timestamptz,
     /// Arbitrary-length character sequences encoded in utf-8
     String,
-    /// Universally Unique Identifiers
+    /// Universally Unique Identifiers, should use 16-byte fixed
     Uuid,
     /// Fixed length byte array
     Fixed(u64),
