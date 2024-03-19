@@ -114,7 +114,7 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = set_test_fixture("test_rename_table").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
@@ -139,7 +139,7 @@ async fn test_rename_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = set_test_fixture("test_table_exists").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
@@ -157,7 +157,7 @@ async fn test_table_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = set_test_fixture("test_drop_table").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
@@ -177,7 +177,7 @@ async fn test_drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = set_test_fixture("test_load_table").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
@@ -203,7 +203,7 @@ async fn test_load_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_table() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = set_test_fixture("test_create_table").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("default".into()));
 
@@ -222,6 +222,19 @@ async fn test_create_table() -> Result<()> {
             .is_exist("s3a://warehouse/hive/metadata/")
             .await?
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_list_tables() -> Result<()> {
+    let fixture = set_test_fixture("test_list_tables").await;
+
+    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
+
+    assert_eq!(result, vec![]);
 
     Ok(())
 }
@@ -362,19 +375,6 @@ async fn test_drop_namespace() -> Result<()> {
 
     let result = fixture.hms_catalog.namespace_exists(ns.name()).await?;
     assert!(!result);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_list_tables() -> Result<()> {
-    let fixture = set_test_fixture("test_list_tables").await;
-
-    let ns = Namespace::new(NamespaceIdent::new("default".into()));
-
-    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
-
-    assert_eq!(result, vec![]);
 
     Ok(())
 }
