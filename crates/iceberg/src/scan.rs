@@ -204,7 +204,7 @@ impl TableScan {
             field_ids.push(field_id as usize);
         }
 
-        arrow_reader_builder = arrow_reader_builder.with_column_projection(field_ids);
+        arrow_reader_builder = arrow_reader_builder.with_field_ids(field_ids);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -413,17 +413,17 @@ mod tests {
                     arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "0".to_string(),
+                            "1".to_string(),
                         )])),
                     arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "1".to_string(),
+                            "2".to_string(),
                         )])),
                     arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "2".to_string(),
+                            "3".to_string(),
                         )])),
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
