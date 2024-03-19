@@ -209,7 +209,7 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub(crate) fn data_file(&self) -> ManifestEntryRef {
+    pub fn data_file(&self) -> ManifestEntryRef {
         self.data_file.clone()
     }
 }

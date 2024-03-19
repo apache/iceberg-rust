@@ -938,28 +938,28 @@ pub struct DataFile {
     ///
     /// Type of content stored by the data file: data, equality deletes,
     /// or position deletes (all v1 files are data files)
-    pub(crate) content: DataContentType,
+    pub content: DataContentType,
     /// field id: 100
     ///
     /// Full URI for the file with FS scheme
-    pub(crate) file_path: String,
+    pub file_path: String,
     /// field id: 101
     ///
     /// String file format name, avro, orc or parquet
-    pub(crate) file_format: DataFileFormat,
+    pub file_format: DataFileFormat,
     /// field id: 102
     ///
     /// Partition data tuple, schema based on the partition spec output using
     /// partition field ids for the struct field ids
-    pub(crate) partition: Struct,
+    pub partition: Struct,
     /// field id: 103
     ///
     /// Number of records in this file
-    pub(crate) record_count: u64,
+    pub record_count: u64,
     /// field id: 104
     ///
     /// Total file size in bytes
-    pub(crate) file_size_in_bytes: u64,
+    pub file_size_in_bytes: u64,
     /// field id: 108
     /// key field id: 117
     /// value field id: 118
@@ -968,7 +968,7 @@ pub struct DataFile {
     /// store the column. Does not include bytes necessary to read other
     /// columns, like footers. Leave null for row-oriented formats (Avro)
     #[builder(default)]
-    pub(crate) column_sizes: HashMap<i32, u64>,
+    pub column_sizes: HashMap<i32, u64>,
     /// field id: 109
     /// key field id: 119
     /// value field id: 120
@@ -976,21 +976,21 @@ pub struct DataFile {
     /// Map from column id to number of values in the column (including null
     /// and NaN values)
     #[builder(default)]
-    pub(crate) value_counts: HashMap<i32, u64>,
+    pub value_counts: HashMap<i32, u64>,
     /// field id: 110
     /// key field id: 121
     /// value field id: 122
     ///
     /// Map from column id to number of null values in the column
     #[builder(default)]
-    pub(crate) null_value_counts: HashMap<i32, u64>,
+    pub null_value_counts: HashMap<i32, u64>,
     /// field id: 137
     /// key field id: 138
     /// value field id: 139
     ///
     /// Map from column id to number of NaN values in the column
     #[builder(default)]
-    pub(crate) nan_value_counts: HashMap<i32, u64>,
+    pub nan_value_counts: HashMap<i32, u64>,
     /// field id: 125
     /// key field id: 126
     /// value field id: 127
@@ -1003,7 +1003,7 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) lower_bounds: HashMap<i32, Literal>,
+    pub lower_bounds: HashMap<i32, Literal>,
     /// field id: 128
     /// key field id: 129
     /// value field id: 130
@@ -1016,19 +1016,19 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) upper_bounds: HashMap<i32, Literal>,
+    pub upper_bounds: HashMap<i32, Literal>,
     /// field id: 131
     ///
     /// Implementation-specific key metadata for encryption
     #[builder(default)]
-    pub(crate) key_metadata: Vec<u8>,
+    pub key_metadata: Vec<u8>,
     /// field id: 132
     /// element field id: 133
     ///
     /// Split offsets for the data file. For example, all row group offsets
     /// in a Parquet file. Must be sorted ascending
     #[builder(default)]
-    pub(crate) split_offsets: Vec<i64>,
+    pub split_offsets: Vec<i64>,
     /// field id: 135
     /// element field id: 136
     ///
@@ -1037,7 +1037,7 @@ pub struct DataFile {
     /// otherwise. Fields with ids listed in this column must be present
     /// in the delete file
     #[builder(default)]
-    pub(crate) equality_ids: Vec<i32>,
+    pub equality_ids: Vec<i32>,
     /// field id: 140
     ///
     /// ID representing sort order for this file.
@@ -1049,7 +1049,7 @@ pub struct DataFile {
     /// order id to null. Readers must ignore sort order id for position
     /// delete files.
     #[builder(default, setter(strip_option))]
-    pub(crate) sort_order_id: Option<i32>,
+    pub sort_order_id: Option<i32>,
 }
 
 /// Type of content stored by the data file: data, equality deletes, or
