@@ -17,7 +17,7 @@
 
 use hive_metastore::FieldSchema;
 use iceberg::spec::{visit_schema, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor};
-use iceberg::Result;
+use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
 
@@ -124,13 +124,19 @@ impl SchemaVisitor for HiveSchemaBuilder {
             PrimitiveType::Float => "float".to_string(),
             PrimitiveType::Double => "double".to_string(),
             PrimitiveType::Date => "date".to_string(),
-            PrimitiveType::Timestamp | PrimitiveType::Timestamptz => "timestamp".to_string(),
+            PrimitiveType::Timestamp => "timestamp".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({},{})", precision, scale)
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Conversion from 'Timestamptz' is not supported",
+                ))
             }
         };
 
@@ -291,12 +297,10 @@ mod tests {
                 NestedField::required(7, "c7", Type::Primitive(PrimitiveType::Date)).into(),
                 NestedField::required(8, "c8", Type::Primitive(PrimitiveType::Time)).into(),
                 NestedField::required(9, "c9", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(10, "c10", Type::Primitive(PrimitiveType::Timestamptz))
-                    .into(),
-                NestedField::required(11, "c11", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(12, "c12", Type::Primitive(PrimitiveType::Uuid)).into(),
-                NestedField::required(13, "c13", Type::Primitive(PrimitiveType::Fixed(4))).into(),
-                NestedField::required(14, "c14", Type::Primitive(PrimitiveType::Binary)).into(),
+                NestedField::required(10, "c10", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(11, "c11", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::required(12, "c12", Type::Primitive(PrimitiveType::Fixed(4))).into(),
+                NestedField::required(13, "c13", Type::Primitive(PrimitiveType::Binary)).into(),
             ])
             .build()?;
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
@@ -349,7 +353,7 @@ mod tests {
             },
             FieldSchema {
                 name: Some("c10".into()),
-                r#type: Some("timestamp".into()),
+                r#type: Some("string".into()),
                 comment: None,
             },
             FieldSchema {
@@ -359,16 +363,11 @@ mod tests {
             },
             FieldSchema {
                 name: Some("c12".into()),
-                r#type: Some("string".into()),
-                comment: None,
-            },
-            FieldSchema {
-                name: Some("c13".into()),
                 r#type: Some("binary".into()),
                 comment: None,
             },
             FieldSchema {
-                name: Some("c14".into()),
+                name: Some("c13".into()),
                 r#type: Some("binary".into()),
                 comment: None,
             },
