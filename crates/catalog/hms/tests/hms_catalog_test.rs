@@ -230,12 +230,22 @@ async fn test_create_table() -> Result<()> {
 #[tokio::test]
 async fn test_list_tables() -> Result<()> {
     let fixture = set_test_fixture("test_list_tables").await;
-
     let ns = Namespace::new(NamespaceIdent::new("default".into()));
-
     let result = fixture.hms_catalog.list_tables(ns.name()).await?;
 
     assert_eq!(result, vec![]);
+
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    fixture
+        .hms_catalog
+        .create_table(ns.name(), creation)
+        .await?;
+    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
+
+    assert_eq!(
+        result,
+        vec![TableIdent::new(ns.name().clone(), "my_table".to_string())]
+    );
 
     Ok(())
 }
