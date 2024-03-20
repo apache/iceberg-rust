@@ -27,7 +27,7 @@ where
 {
     Error::new(
         ErrorKind::Unexpected,
-        "operation failed for hitting thrift error".to_string(),
+        "Operation failed for hitting thrift error".to_string(),
     )
     .with_source(anyhow!("thrift error: {:?}", error))
 }
@@ -36,7 +36,7 @@ where
 pub fn from_io_error(error: io::Error) -> Error {
     Error::new(
         ErrorKind::Unexpected,
-        "operation failed for hitting io error".to_string(),
+        "Operation failed for hitting io error".to_string(),
     )
     .with_source(error)
 }
