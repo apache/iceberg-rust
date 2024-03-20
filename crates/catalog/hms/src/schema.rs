@@ -274,21 +274,102 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(1, "c1", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(2, "c2", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(3, "c3", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "c4", Type::Primitive(PrimitiveType::Float)).into(),
+                NestedField::required(5, "c5", Type::Primitive(PrimitiveType::Double)).into(),
+                NestedField::required(
+                    6,
+                    "c6",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 2,
+                        scale: 2,
+                    }),
+                )
+                .into(),
+                NestedField::required(7, "c7", Type::Primitive(PrimitiveType::Date)).into(),
+                NestedField::required(8, "c8", Type::Primitive(PrimitiveType::Time)).into(),
+                NestedField::required(9, "c9", Type::Primitive(PrimitiveType::Timestamp)).into(),
+                NestedField::required(10, "c10", Type::Primitive(PrimitiveType::Timestamptz))
+                    .into(),
+                NestedField::required(11, "c11", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(12, "c12", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::required(13, "c13", Type::Primitive(PrimitiveType::Fixed(4))).into(),
+                NestedField::required(14, "c14", Type::Primitive(PrimitiveType::Binary)).into(),
             ])
             .build()?;
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![
             FieldSchema {
-                name: Some("foo".into()),
+                name: Some("c1".into()),
+                r#type: Some("boolean".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c2".into()),
                 r#type: Some("int".into()),
                 comment: None,
             },
             FieldSchema {
-                name: Some("bar".into()),
+                name: Some("c3".into()),
+                r#type: Some("bigint".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c4".into()),
+                r#type: Some("float".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c5".into()),
+                r#type: Some("double".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c6".into()),
+                r#type: Some("decimal(2,2)".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c7".into()),
+                r#type: Some("date".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c8".into()),
                 r#type: Some("string".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c9".into()),
+                r#type: Some("timestamp".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c10".into()),
+                r#type: Some("timestamp".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c11".into()),
+                r#type: Some("string".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c12".into()),
+                r#type: Some("string".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c13".into()),
+                r#type: Some("binary".into()),
+                comment: None,
+            },
+            FieldSchema {
+                name: Some("c14".into()),
+                r#type: Some("binary".into()),
                 comment: None,
             },
         ];
