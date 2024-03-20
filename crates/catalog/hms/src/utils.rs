@@ -231,24 +231,16 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
 pub(crate) fn get_default_table_location(
     namespace: &Namespace,
     table_name: impl AsRef<str>,
-    warehouse: Option<String>,
-) -> Result<String> {
+    warehouse: impl AsRef<str>,
+) -> String {
     let properties = namespace.properties();
 
     let location = match properties.get(LOCATION) {
-        Some(location) => location.to_string(),
-        None => match warehouse {
-            Some(location) => location,
-            None => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "No default path is set, please specify a location when creating a table",
-                ))
-            }
-        },
+        Some(location) => location,
+        None => warehouse.as_ref(),
     };
 
-    Ok(format!("{}/{}", location, table_name.as_ref()))
+    format!("{}/{}", location, table_name.as_ref())
 }
 
 /// Create metadata location from `location` and `version`
@@ -443,11 +435,7 @@ mod tests {
         let table_name = "my_table";
 
         let expected = "db_location/my_table";
-        let result = get_default_table_location(
-            &namespace,
-            table_name,
-            Some("warehouse_location".to_string()),
-        )?;
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
 
         assert_eq!(expected, result);
 
@@ -460,25 +448,11 @@ mod tests {
         let table_name = "my_table";
 
         let expected = "warehouse_location/my_table";
-        let result = get_default_table_location(
-            &namespace,
-            table_name,
-            Some("warehouse_location".to_string()),
-        )?;
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
 
         assert_eq!(expected, result);
 
         Ok(())
-    }
-
-    #[test]
-    fn test_get_default_table_location_missing() {
-        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
-        let table_name = "my_table";
-
-        let result = get_default_table_location(&namespace, table_name, None);
-
-        assert!(result.is_err());
     }
 
     #[test]

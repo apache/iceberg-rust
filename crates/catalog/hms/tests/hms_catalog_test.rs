@@ -19,9 +19,7 @@
 
 use std::collections::HashMap;
 
-use iceberg::io::{
-    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
-};
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
@@ -37,7 +35,6 @@ type Result<T> = std::result::Result<T, iceberg::Error>;
 struct TestFixture {
     _docker_compose: DockerCompose,
     hms_catalog: HmsCatalog,
-    file_io: FileIO,
 }
 
 async fn set_test_fixture(func: &str) -> TestFixture {
@@ -73,11 +70,6 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
-    let file_io = FileIOBuilder::new("s3a")
-        .with_props(&props)
-        .build()
-        .unwrap();
-
     let config = HmsCatalogConfig::builder()
         .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
         .thrift_transport(HmsThriftTransport::Buffered)
@@ -90,7 +82,6 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     TestFixture {
         _docker_compose: docker_compose,
         hms_catalog,
-        file_io,
     }
 }
 
@@ -219,7 +210,8 @@ async fn test_create_table() -> Result<()> {
         .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
     assert!(
         fixture
-            .file_io
+            .hms_catalog
+            .file_io()
             .is_exist("s3a://warehouse/hive/metadata/")
             .await?
     );

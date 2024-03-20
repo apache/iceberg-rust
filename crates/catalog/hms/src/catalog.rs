@@ -56,8 +56,7 @@ pub enum HmsThriftTransport {
 pub struct HmsCatalogConfig {
     address: String,
     thrift_transport: HmsThriftTransport,
-    #[builder(default, setter(strip_option))]
-    warehouse: Option<String>,
+    warehouse: String,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -68,6 +67,7 @@ struct HmsClient(ThriftHiveMetastoreClient);
 pub struct HmsCatalog {
     config: HmsCatalogConfig,
     client: HmsClient,
+    file_io: FileIO,
 }
 
 impl Debug for HmsCatalog {
@@ -105,10 +105,19 @@ impl HmsCatalog {
                 .build(),
         };
 
+        let file_io = FileIO::from_path(&config.warehouse)?
+            .with_props(&config.props)
+            .build()?;
+
         Ok(Self {
             config,
             client: HmsClient(client),
+            file_io,
         })
+    }
+    /// Get the catalogs `FileIO`
+    pub fn file_io(&self) -> FileIO {
+        self.file_io.clone()
     }
 }
 
@@ -333,17 +342,18 @@ impl Catalog for HmsCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &table_name, self.config.warehouse.clone())?
+                get_default_table_location(&ns, &table_name, &self.config.warehouse)
             }
         };
 
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        let file_io = FileIO::from_path(&metadata_location)?
-            .with_props(&self.config.props)
-            .build()?;
-        let mut file = file_io.new_output(&metadata_location)?.writer().await?;
+        let mut file = self
+            .file_io
+            .new_output(&metadata_location)?
+            .writer()
+            .await?;
         file.write_all(&serde_json::to_vec(&metadata)?).await?;
         file.shutdown().await?;
 
@@ -363,7 +373,7 @@ impl Catalog for HmsCatalog {
             .map_err(from_thrift_error)?;
 
         let table = Table::builder()
-            .file_io(file_io)
+            .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
@@ -396,16 +406,13 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let file_io = FileIO::from_path(&metadata_location)?
-            .with_props(&self.config.props)
-            .build()?;
-        let mut reader = file_io.new_input(&metadata_location)?.reader().await?;
+        let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
         let mut metadata_str = String::new();
         reader.read_to_string(&mut metadata_str).await?;
         let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
 
         let table = Table::builder()
-            .file_io(file_io)
+            .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(
