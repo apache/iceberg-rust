@@ -52,8 +52,8 @@ impl SchemaVisitor for HiveSchemaBuilder {
     fn schema(
         &mut self,
         _schema: &iceberg::spec::Schema,
-        value: Self::T,
-    ) -> iceberg::Result<Self::T> {
+        value: String,
+    ) -> iceberg::Result<String> {
         Ok(value)
     }
 
@@ -68,8 +68,8 @@ impl SchemaVisitor for HiveSchemaBuilder {
     fn r#struct(
         &mut self,
         r#_struct: &iceberg::spec::StructType,
-        results: Vec<Self::T>,
-    ) -> iceberg::Result<Self::T> {
+        results: Vec<String>,
+    ) -> iceberg::Result<String> {
         Ok(format!("struct<{}>", results.join(", ")))
     }
 
@@ -84,8 +84,8 @@ impl SchemaVisitor for HiveSchemaBuilder {
     fn field(
         &mut self,
         field: &iceberg::spec::NestedFieldRef,
-        value: Self::T,
-    ) -> iceberg::Result<Self::T> {
+        value: String,
+    ) -> iceberg::Result<String> {
         if self.is_inside_struct() {
             return Ok(format!("{}:{}", field.name, value));
         }
@@ -99,24 +99,20 @@ impl SchemaVisitor for HiveSchemaBuilder {
         Ok(value)
     }
 
-    fn list(
-        &mut self,
-        _list: &iceberg::spec::ListType,
-        value: Self::T,
-    ) -> iceberg::Result<Self::T> {
+    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
         Ok(format!("array<{}>", value))
     }
 
     fn map(
         &mut self,
         _map: &iceberg::spec::MapType,
-        key_value: Self::T,
-        value: Self::T,
-    ) -> iceberg::Result<Self::T> {
+        key_value: String,
+        value: String,
+    ) -> iceberg::Result<String> {
         Ok(format!("map<{},{}>", key_value, value))
     }
 
-    fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T> {
+    fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<String> {
         let hive_type = match p {
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
