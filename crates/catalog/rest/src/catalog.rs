@@ -135,7 +135,7 @@ impl RestCatalogConfig {
         ))
     }
 
-    fn extract_optional_oauth_params(&self) -> HashMap<&str, &str> {
+    fn optional_oauth_params(&self) -> HashMap<&str, &str> {
         let mut optional_oauth_param = HashMap::new();
         if let Some(scope) = self.props.get("scope") {
             optional_oauth_param.insert("scope", scope.as_str());
@@ -557,7 +557,7 @@ impl RestCatalog {
                 params.insert("client_id", client_id);
             }
             params.insert("client_secret", client_secret);
-            let optional_oauth_params = self.config.extract_optional_oauth_params();
+            let optional_oauth_params = self.config.optional_oauth_params();
             params.extend(optional_oauth_params);
             let req = self
                 .client
@@ -890,7 +890,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
 
-        let _catalog = RestCatalog::new(
+        let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
                 .uri(server.url())
                 .props(props)
@@ -901,6 +901,10 @@ mod tests {
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
+        assert_eq!(
+            catalog.config.props.get("token"),
+            Some(&"ey000000000000".to_string())
+        );
     }
 
     #[tokio::test]
@@ -935,7 +939,7 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
-        let _catalog = RestCatalog::new(
+        let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
                 .uri(server.url())
                 .props(props)
@@ -946,6 +950,10 @@ mod tests {
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
+        assert_eq!(
+            catalog.config.props.get("token"),
+            Some(&"ey000000000000".to_string())
+        );
     }
 
     #[tokio::test]
