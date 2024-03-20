@@ -16,7 +16,7 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{visit_schema, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor};
+use iceberg::spec::{visit_schema, PrimitiveType, Schema, SchemaVisitor};
 use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
@@ -24,7 +24,7 @@ type HiveSchema = Vec<FieldSchema>;
 #[derive(Debug, Default)]
 pub(crate) struct HiveSchemaBuilder {
     schema: HiveSchema,
-    context: Vec<NestedFieldRef>,
+    depth: usize,
 }
 
 impl HiveSchemaBuilder {
@@ -42,7 +42,7 @@ impl HiveSchemaBuilder {
 
     /// Check if is in `StructType` while traversing schema
     fn is_inside_struct(&self) -> bool {
-        !self.context.is_empty()
+        self.depth > 0
     }
 }
 
@@ -59,9 +59,9 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
     fn before_struct_field(
         &mut self,
-        field: &iceberg::spec::NestedFieldRef,
+        _field: &iceberg::spec::NestedFieldRef,
     ) -> iceberg::Result<()> {
-        self.context.push(field.clone());
+        self.depth += 1;
         Ok(())
     }
 
@@ -77,7 +77,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
         &mut self,
         _field: &iceberg::spec::NestedFieldRef,
     ) -> iceberg::Result<()> {
-        self.context.pop();
+        self.depth -= 1;
         Ok(())
     }
 
