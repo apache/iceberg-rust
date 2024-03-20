@@ -81,7 +81,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     let config = HmsCatalogConfig::builder()
         .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
         .thrift_transport(HmsThriftTransport::Buffered)
-        .with_props(props)
+        .props(props)
         .build();
 
     let hms_catalog = HmsCatalog::new(config).unwrap();

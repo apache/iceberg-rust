@@ -56,7 +56,7 @@ pub enum HmsThriftTransport {
 pub struct HmsCatalogConfig {
     address: String,
     thrift_transport: HmsThriftTransport,
-    #[builder(default, setter(prefix = "with_"))]
+    #[builder(default)]
     props: HashMap<String, String>,
 }
 
