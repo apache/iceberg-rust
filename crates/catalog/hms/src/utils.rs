@@ -30,6 +30,8 @@ const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
 const HMS_DEFAULT_DB_OWNER: &str = "user.name";
 /// hive.metastore.database.owner-type setting
 const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
+/// hive metatore `owner` property
+const OWNER: &str = "owner";
 /// hive metatore `description` property
 const COMMENT: &str = "comment";
 /// hive metatore `location` property
@@ -185,7 +187,7 @@ pub(crate) fn convert_to_hive_table(
 
     let current_time_ms = get_current_time()?;
     let owner = properties
-        .get("owner")
+        .get(OWNER)
         .map_or(HMS_DEFAULT_DB_OWNER.to_string(), |v| v.into());
 
     Ok(hive_metastore::Table {
