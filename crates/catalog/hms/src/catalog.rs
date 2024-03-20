@@ -56,6 +56,8 @@ pub enum HmsThriftTransport {
 pub struct HmsCatalogConfig {
     address: String,
     thrift_transport: HmsThriftTransport,
+    #[builder(default, setter(strip_option))]
+    warehouse: Option<String>,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -331,7 +333,7 @@ impl Catalog for HmsCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &table_name)?
+                get_default_table_location(&ns, &table_name, self.config.warehouse.clone())?
             }
         };
 

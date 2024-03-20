@@ -44,8 +44,6 @@ const EXTERNAL: &str = "EXTERNAL";
 const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
 /// hive metatore `table_type` property
 const TABLE_TYPE: &str = "table_type";
-/// hive metatore `warehouse` location property
-const WAREHOUSE_LOCATION: &str = "warehouse";
 /// hive metatore `SerDeInfo` serialization_lib parameter
 const SERIALIZATION_LIB: &str = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
 /// hive metatore input format
@@ -233,18 +231,24 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
 pub(crate) fn get_default_table_location(
     namespace: &Namespace,
     table_name: impl AsRef<str>,
+    warehouse: Option<String>,
 ) -> Result<String> {
     let properties = namespace.properties();
-    properties
-        .get(LOCATION)
-        .or_else(|| properties.get(WAREHOUSE_LOCATION))
-        .map(|location| format!("{}/{}", location, table_name.as_ref()))
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "No default path is set, please specify a location when creating a table",
-            )
-        })
+
+    let location = match properties.get(LOCATION) {
+        Some(location) => location.to_string(),
+        None => match warehouse {
+            Some(location) => location,
+            None => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "No default path is set, please specify a location when creating a table",
+                ))
+            }
+        },
+    };
+
+    Ok(format!("{}/{}", location, table_name.as_ref()))
 }
 
 /// Create metadata location from `location` and `version`
@@ -439,7 +443,11 @@ mod tests {
         let table_name = "my_table";
 
         let expected = "db_location/my_table";
-        let result = get_default_table_location(&namespace, table_name)?;
+        let result = get_default_table_location(
+            &namespace,
+            table_name,
+            Some("warehouse_location".to_string()),
+        )?;
 
         assert_eq!(expected, result);
 
@@ -448,17 +456,15 @@ mod tests {
 
     #[test]
     fn test_get_default_table_location_warehouse() -> Result<()> {
-        let properties = HashMap::from([(
-            WAREHOUSE_LOCATION.to_string(),
-            "warehouse_location".to_string(),
-        )]);
-
-        let namespace =
-            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
         let table_name = "my_table";
 
         let expected = "warehouse_location/my_table";
-        let result = get_default_table_location(&namespace, table_name)?;
+        let result = get_default_table_location(
+            &namespace,
+            table_name,
+            Some("warehouse_location".to_string()),
+        )?;
 
         assert_eq!(expected, result);
 
@@ -470,7 +476,7 @@ mod tests {
         let namespace = Namespace::new(NamespaceIdent::new("default".into()));
         let table_name = "my_table";
 
-        let result = get_default_table_location(&namespace, table_name);
+        let result = get_default_table_location(&namespace, table_name, None);
 
         assert!(result.is_err());
     }
