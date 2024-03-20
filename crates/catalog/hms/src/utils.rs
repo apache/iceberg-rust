@@ -19,7 +19,7 @@ use chrono::Utc;
 use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
 use iceberg::{spec::Schema, Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::schema::HiveSchemaBuilder;
@@ -230,13 +230,13 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
 /// Get default table location from `Namespace` properties
 pub(crate) fn get_default_table_location(
     namespace: &Namespace,
-    table_name: impl AsRef<str> + Display,
+    table_name: impl AsRef<str>,
 ) -> Result<String> {
     let properties = namespace.properties();
     properties
         .get(LOCATION)
         .or_else(|| properties.get(WAREHOUSE_LOCATION))
-        .map(|location| format!("{}/{}", location, table_name))
+        .map(|location| format!("{}/{}", location, table_name.as_ref()))
         .ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
@@ -246,10 +246,7 @@ pub(crate) fn get_default_table_location(
 }
 
 /// Create metadata location from `location` and `version`
-pub(crate) fn create_metadata_location(
-    location: impl AsRef<str> + Display,
-    version: i32,
-) -> Result<String> {
+pub(crate) fn create_metadata_location(location: impl AsRef<str>, version: i32) -> Result<String> {
     if version < 0 {
         return Err(Error::new(
             ErrorKind::DataInvalid,
@@ -262,7 +259,12 @@ pub(crate) fn create_metadata_location(
 
     let version = format!("{:0>5}", version);
     let id = Uuid::new_v4();
-    let metadata_location = format!("{}/metadata/{}-{}.metadata.json", location, version, id);
+    let metadata_location = format!(
+        "{}/metadata/{}-{}.metadata.json",
+        location.as_ref(),
+        version,
+        id
+    );
 
     Ok(metadata_location)
 }
