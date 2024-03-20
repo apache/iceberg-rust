@@ -28,4 +28,11 @@ impl TransformFunction for Identity {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
         Ok(input)
     }
+
+    fn transform_literal(
+        &self,
+        input: &crate::spec::Literal,
+    ) -> Result<Option<crate::spec::Literal>> {
+        Ok(Some(input.clone()))
+    }
 }

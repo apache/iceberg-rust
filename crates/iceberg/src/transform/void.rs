@@ -27,4 +27,11 @@ impl TransformFunction for Void {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
         Ok(new_null_array(input.data_type(), input.len()))
     }
+
+    fn transform_literal(
+        &self,
+        _input: &crate::spec::Literal,
+    ) -> Result<Option<crate::spec::Literal>> {
+        Ok(None)
+    }
 }
