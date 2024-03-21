@@ -294,9 +294,12 @@ const ARROW_FIELD_DOC_KEY: &str = "doc";
 fn get_field_id(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_ID_KEY) {
         return value.parse::<i32>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, format!("Failed to parse field id"))
-                .with_context("value", value)
-                .with_source(e)
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to parse field id".to_string(),
+            )
+            .with_context("value", value)
+            .with_source(e)
         });
     }
     Err(Error::new(
@@ -442,7 +445,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32).map_err(|e| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Failed to create decimal type"),
+                    "Failed to create decimal type".to_string(),
                 )
                 .with_source(e)
             }),
