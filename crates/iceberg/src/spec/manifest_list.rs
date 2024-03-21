@@ -649,6 +649,10 @@ impl ManifestFile {
 
         Ok(Manifest::new(metadata, entries))
     }
+
+    pub(crate) fn partition_spec_id(&self) -> i32 {
+        self.partition_spec_id
+    }
 }
 
 /// Field summary for partition field in the spec.

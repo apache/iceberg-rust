@@ -188,15 +188,13 @@ impl TableScan {
             // Generate data file stream
             let mut entries = iter(manifest_list.entries());
             while let Some(entry) = entries.next().await {
-                let manifest = entry.load_manifest(&file_io).await?;
-
                 // If this scan has a filter, check the partition evaluator cache for an existing
                 // PartitionEvaluator that matches this manifest's partition spec ID.
                 // Use one from the cache if there is one. If not, create one, put it in
                 // the cache, and take a reference to it.
                 if let Some(filter) = self.filter.as_ref() {
                     let partition_evaluator = partition_evaluator_cache
-                            .entry(manifest.partition_spec_id())
+                            .entry(entry.partition_spec_id())
                             .or_insert_with_key(|key| self.create_partition_evaluator(key, filter));
 
                     // reject any manifest files whose partition values don't match the filter.
@@ -204,6 +202,8 @@ impl TableScan {
                         continue;
                     }
                 }
+
+                let manifest = entry.load_manifest(&file_io).await?;
 
                 let mut manifest_entries = iter(manifest.entries().iter().filter(|e| e.is_alive()));
                 while let Some(manifest_entry) = manifest_entries.next().await {
