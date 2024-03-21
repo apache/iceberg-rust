@@ -1052,6 +1052,89 @@ pub struct DataFile {
     pub(crate) sort_order_id: Option<i32>,
 }
 
+impl DataFile {
+    /// Get the content type of the data file (data, equality deletes, or position deletes)
+    pub fn content(&self) -> DataContentType {
+        self.content
+    }
+    /// Get the file path as full URI with FS scheme
+    pub fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    /// Get the file format of the file (avro, orc or parquet).
+    pub fn file_format(&self) -> DataFileFormat {
+        self.file_format
+    }
+    /// Get the partition values of the file.
+    pub fn partition(&self) -> &Struct {
+        &self.partition
+    }
+    /// Get the record count in the data file.
+    pub fn record_count(&self) -> u64 {
+        self.record_count
+    }
+    /// Get the file size in bytes.
+    pub fn file_size_in_bytes(&self) -> u64 {
+        self.file_size_in_bytes
+    }
+    /// Get the column sizes.
+    /// Map from column id to the total size on disk of all regions that
+    /// store the column. Does not include bytes necessary to read other
+    /// columns, like footers. Null for row-oriented formats (Avro)
+    pub fn column_sizes(&self) -> &HashMap<i32, u64> {
+        &self.column_sizes
+    }
+    /// Get the columns value counts for the data file.
+    /// Map from column id to number of values in the column (including null
+    /// and NaN values)
+    pub fn value_counts(&self) -> &HashMap<i32, u64> {
+        &self.value_counts
+    }
+    /// Get the null value counts of the data file.
+    /// Map from column id to number of null values in the column
+    pub fn null_value_counts(&self) -> &HashMap<i32, u64> {
+        &self.null_value_counts
+    }
+    /// Get the nan value counts of the data file.
+    /// Map from column id to number of NaN values in the column
+    pub fn nan_value_counts(&self) -> &HashMap<i32, u64> {
+        &self.nan_value_counts
+    }
+    /// Get the lower bounds of the data file values per column.
+    /// Map from column id to lower bound in the column serialized as binary.
+    pub fn lower_bounds(&self) -> &HashMap<i32, Literal> {
+        &self.lower_bounds
+    }
+    /// Get the upper bounds of the data file values per column.
+    /// Map from column id to upper bound in the column serialized as binary.
+    pub fn upper_bounds(&self) -> &HashMap<i32, Literal> {
+        &self.upper_bounds
+    }
+    /// Get the Implementation-specific key metadata for the data file.
+    pub fn key_metadata(&self) -> &[u8] {
+        &self.key_metadata
+    }
+    /// Get the split offsets of the data file.
+    /// For example, all row group offsets in a Parquet file.
+    pub fn split_offsets(&self) -> &[i64] {
+        &self.split_offsets
+    }
+    /// Get the equality ids of the data file.
+    /// Field ids used to determine row equality in equality delete files.
+    /// null when content is not EqualityDeletes.
+    pub fn equality_ids(&self) -> &[i32] {
+        &self.equality_ids
+    }
+    /// Get the sort order id of the data file.
+    /// Only data files and equality delete files should be
+    /// written with a non-null order id. Position deletes are required to be
+    /// sorted by file and position, not a table order, and should set sort
+    /// order id to null. Readers must ignore sort order id for position
+    /// delete files.
+    pub fn sort_order_id(&self) -> Option<i32> {
+        self.sort_order_id
+    }
+}
 /// Type of content stored by the data file: data, equality deletes, or
 /// position deletes (all v1 files are data files)
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
