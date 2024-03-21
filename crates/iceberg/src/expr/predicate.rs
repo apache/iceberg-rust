@@ -116,12 +116,12 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+}
 
+impl UnaryExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
     pub(crate) fn field_id(&self) -> i32 {
-        todo!();
-
-        // The below is not yet working since T may not implement `.field()`
-        // self.term.field().id
+        self.term.field().id
     }
 }
 
@@ -151,12 +151,12 @@ impl<T> BinaryExpression<T> {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
     }
+}
 
+impl BinaryExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
     pub(crate) fn field_id(&self) -> i32 {
-        todo!();
-
-        // The below is not yet working since T may not implement `.field()`
-        // self.term.field().id
+        self.term.field().id
     }
 }
 
@@ -205,12 +205,12 @@ impl<T> SetExpression<T> {
         debug_assert!(op.is_set());
         Self { op, term, literals }
     }
+}
 
+impl SetExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
     pub(crate) fn field_id(&self) -> i32 {
-        todo!();
-
-        // The below is not yet working since T may not implement `.field()`
-        // self.term.field().id
+        self.term.field().id
     }
 }
 
