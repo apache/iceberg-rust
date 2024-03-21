@@ -142,48 +142,42 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::{
-        spec::{ListType, MapType, NestedField, Schema, StructType, Type},
-        Result,
-    };
+    use iceberg::{spec::Schema, Result};
 
     use super::*;
 
     #[test]
     fn test_schema_with_nested_maps() -> Result<()> {
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "quux",
-                Type::Map(MapType {
-                    key_field: NestedField::map_key_element(
-                        2,
-                        Type::Primitive(PrimitiveType::String),
-                    )
-                    .into(),
-                    value_field: NestedField::map_value_element(
-                        3,
-                        Type::Map(MapType {
-                            key_field: NestedField::map_key_element(
-                                4,
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
-                            value_field: NestedField::map_value_element(
-                                5,
-                                Type::Primitive(PrimitiveType::Int),
-                                true,
-                            )
-                            .into(),
-                        }),
-                        true,
-                    )
-                    .into(),
-                }),
-            )
-            .into()])
-            .build()?;
+        let record = r#"
+            {
+                "schema-id": 1,
+                "type": "struct",
+                "fields": [
+                    {
+                        "id": 1,
+                        "name": "quux",
+                        "required": true,
+                        "type": {
+                            "type": "map",
+                            "key-id": 2,
+                            "key": "string",
+                            "value-id": 3,
+                            "value-required": true,
+                            "value": {
+                                "type": "map",
+                                "key-id": 4,
+                                "key": "string",
+                                "value-id": 5,
+                                "value-required": true,
+                                "value": "int"
+                            }
+                        }
+                    }
+                ]
+            }
+        "#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
 
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
@@ -200,35 +194,43 @@ mod tests {
 
     #[test]
     fn test_schema_with_struct_inside_list() -> Result<()> {
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "location",
-                Type::List(ListType {
-                    element_field: NestedField::list_element(
-                        2,
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(
-                                3,
-                                "latitude",
-                                Type::Primitive(PrimitiveType::Float),
-                            )
-                            .into(),
-                            NestedField::optional(
-                                4,
-                                "longitude",
-                                Type::Primitive(PrimitiveType::Float),
-                            )
-                            .into(),
-                        ])),
-                        true,
-                    )
-                    .into(),
-                }),
-            )
-            .into()])
-            .build()?;
+        let record = r#"
+        {
+            "schema-id": 1,
+            "type": "struct",
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "location",
+                    "required": true,
+                    "type": {
+                        "type": "list",
+                        "element-id": 2,
+                        "element-required": true,
+                        "element": {
+                            "type": "struct",
+                            "fields": [
+                                {
+                                    "id": 3,
+                                    "name": "latitude",
+                                    "required": false,
+                                    "type": "float"
+                                },
+                                {
+                                    "id": 4,
+                                    "name": "longitude",
+                                    "required": false,
+                                    "type": "float"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+        "#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
 
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
@@ -245,18 +247,36 @@ mod tests {
 
     #[test]
     fn test_schema_with_structs() -> Result<()> {
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "person",
-                Type::Struct(StructType::new(vec![
-                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::optional(3, "age", Type::Primitive(PrimitiveType::Int)).into(),
-                ])),
-            )
-            .into()])
-            .build()?;
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "person",
+                    "required": true,
+                    "type": {
+                        "type": "struct",
+                        "fields": [
+                            {
+                                "id": 2,
+                                "name": "name",
+                                "required": true,
+                                "type": "string"
+                            },
+                            {
+                                "id": 3,
+                                "name": "age",
+                                "required": false,
+                                "type": "int"
+                            }
+                        ]
+                    }
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
 
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
@@ -273,32 +293,93 @@ mod tests {
 
     #[test]
     fn test_schema_with_simple_fields() -> Result<()> {
-        let schema = Schema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![
-                NestedField::required(1, "c1", Type::Primitive(PrimitiveType::Boolean)).into(),
-                NestedField::required(2, "c2", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(3, "c3", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(4, "c4", Type::Primitive(PrimitiveType::Float)).into(),
-                NestedField::required(5, "c5", Type::Primitive(PrimitiveType::Double)).into(),
-                NestedField::required(
-                    6,
-                    "c6",
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: 2,
-                        scale: 2,
-                    }),
-                )
-                .into(),
-                NestedField::required(7, "c7", Type::Primitive(PrimitiveType::Date)).into(),
-                NestedField::required(8, "c8", Type::Primitive(PrimitiveType::Time)).into(),
-                NestedField::required(9, "c9", Type::Primitive(PrimitiveType::Timestamp)).into(),
-                NestedField::required(10, "c10", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(11, "c11", Type::Primitive(PrimitiveType::Uuid)).into(),
-                NestedField::required(12, "c12", Type::Primitive(PrimitiveType::Fixed(4))).into(),
-                NestedField::required(13, "c13", Type::Primitive(PrimitiveType::Binary)).into(),
-            ])
-            .build()?;
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "c1",
+                    "required": true,
+                    "type": "boolean"
+                },
+                {
+                    "id": 2,
+                    "name": "c2",
+                    "required": true,
+                    "type": "int"
+                },
+                {
+                    "id": 3,
+                    "name": "c3",
+                    "required": true,
+                    "type": "long"
+                },
+                {
+                    "id": 4,
+                    "name": "c4",
+                    "required": true,
+                    "type": "float"
+                },
+                {
+                    "id": 5,
+                    "name": "c5",
+                    "required": true,
+                    "type": "double"
+                },
+                {
+                    "id": 6,
+                    "name": "c6",
+                    "required": true,
+                    "type": "decimal(2,2)"
+                },
+                {
+                    "id": 7,
+                    "name": "c7",
+                    "required": true,
+                    "type": "date"
+                },
+                {
+                    "id": 8,
+                    "name": "c8",
+                    "required": true,
+                    "type": "time"
+                },
+                {
+                    "id": 9,
+                    "name": "c9",
+                    "required": true,
+                    "type": "timestamp"
+                },
+                {
+                    "id": 10,
+                    "name": "c10",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "id": 11,
+                    "name": "c11",
+                    "required": true,
+                    "type": "uuid"
+                },
+                {
+                    "id": 12,
+                    "name": "c12",
+                    "required": true,
+                    "type": "fixed[4]"
+                },
+                {
+                    "id": 13,
+                    "name": "c13",
+                    "required": true,
+                    "type": "binary"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+
         let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
 
         let expected = vec![
