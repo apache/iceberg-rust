@@ -24,7 +24,7 @@ use crate::spec::datatypes::{
 };
 use crate::{ensure_data_valid, Error, ErrorKind};
 use bimap::BiHashMap;
-use itertools::Itertools;
+use itertools::{zip_eq, Itertools};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -649,6 +649,16 @@ struct PruneColumn {
     select_full_types: bool,
 }
 
+/// Visit a schema and returns only the fields selected by id set
+pub fn prune_columns(
+    schema: &Schema,
+    selected: HashSet<i32>,
+    select_full_types: bool,
+) -> Result<Option<Type>> {
+    let mut visitor = PruneColumn::new(selected, select_full_types);
+    visit_schema(schema, &mut visitor)
+}
+
 impl PruneColumn {
     fn new(selected: HashSet<i32>, select_full_types: bool) -> Self {
         Self {
@@ -660,58 +670,54 @@ impl PruneColumn {
     fn project_selected_struct(projected_field: Option<Type>) -> Result<StructType> {
         match projected_field {
             // If the field is a StructType, return it as such
-            Some(field) if field.is_struct() => Ok(field.as_struct_type().unwrap_or_default()),
+            Some(Type::Struct(s)) => Ok(s),
+            Some(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Projected Field must be Struct".to_string(),
+            )),
             // If projected_field is None or not a StructType, return an empty StructType
-            _ => Ok(StructType::default()),
+            None => Ok(StructType::default()),
         }
     }
-    fn project_list(list: &ListType, result: Option<Type>) -> Result<ListType> {
-        if let Some(value_type) = result {
-            if *list.element_field.field_type == value_type {
-                return Ok(list.clone());
-            }
-            Ok(ListType {
-                element_field: Arc::new(NestedField {
-                    id: list.element_field.id,
-                    name: list.element_field.name.clone(),
-                    required: list.element_field.required,
-                    field_type: Box::new(value_type),
-                    doc: list.element_field.doc.clone(),
-                    initial_default: list.element_field.initial_default.clone(),
-                    write_default: list.element_field.write_default.clone(),
-                }),
-            })
-        } else {
-            Err(Error::new(ErrorKind::DataInvalid, "Type value is none"))
+    fn project_list(list: &ListType, element_result: Type) -> Result<ListType> {
+        if *list.element_field.field_type == element_result {
+            return Ok(list.clone());
         }
+        Ok(ListType {
+            element_field: Arc::new(NestedField {
+                id: list.element_field.id,
+                name: list.element_field.name.clone(),
+                required: list.element_field.required,
+                field_type: Box::new(element_result),
+                doc: list.element_field.doc.clone(),
+                initial_default: list.element_field.initial_default.clone(),
+                write_default: list.element_field.write_default.clone(),
+            }),
+        })
     }
-    fn project_map(map: &MapType, value: Option<Type>) -> Result<MapType> {
-        if let Some(value_type) = value {
-            if *map.value_field.field_type == value_type {
-                return Ok(map.clone());
-            }
-            Ok(MapType {
-                key_field: map.key_field.clone(),
-                value_field: Arc::new(NestedField {
-                    id: map.value_field.id,
-                    name: map.value_field.name.clone(),
-                    required: map.value_field.required,
-                    field_type: Box::new(value_type),
-                    doc: map.value_field.doc.clone(),
-                    initial_default: map.value_field.initial_default.clone(),
-                    write_default: map.value_field.write_default.clone(),
-                }),
-            })
-        } else {
-            Err(Error::new(ErrorKind::DataInvalid, "Type value is none"))
+    fn project_map(map: &MapType, value_result: Type) -> Result<MapType> {
+        if *map.value_field.field_type == value_result {
+            return Ok(map.clone());
         }
+        Ok(MapType {
+            key_field: map.key_field.clone(),
+            value_field: Arc::new(NestedField {
+                id: map.value_field.id,
+                name: map.value_field.name.clone(),
+                required: map.value_field.required,
+                field_type: Box::new(value_result),
+                doc: map.value_field.doc.clone(),
+                initial_default: map.value_field.initial_default.clone(),
+                write_default: map.value_field.write_default.clone(),
+            }),
+        })
     }
 }
 
 impl SchemaVisitor for PruneColumn {
     type T = Option<Type>;
 
-    fn schema(&mut self, _schema: &Schema, value: Self::T) -> Result<Self::T> {
+    fn schema(&mut self, _schema: &Schema, value: Option<Type>) -> Result<Self::T> {
         Ok(Some(value.unwrap()))
     }
 
@@ -728,8 +734,11 @@ impl SchemaVisitor for PruneColumn {
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Nested field types not allowed in this context".to_string(),
-                ));
+                    "Can't project list or map field directly when not selecting full type."
+                        .to_string(),
+                )
+                .with_context("field_id", field.id.to_string())
+                .with_context("field_type", field.field_type.to_string()));
             }
         } else {
             Ok(value)
@@ -741,10 +750,9 @@ impl SchemaVisitor for PruneColumn {
         let mut selected_field = Vec::with_capacity(fields.len());
         let mut same_type = true;
 
-        for i in 0..results.len() {
-            let field = fields.get(i).unwrap();
-            if let Some(Some(projected_type)) = results.get(i) {
-                if *field.field_type == (projected_type).clone() {
+        for (field, projected_type) in zip_eq(fields.iter(), results.iter()) {
+            if let Some(projected_type) = projected_type {
+                if *field.field_type == *projected_type {
                     selected_field.push(field.clone());
                 } else {
                     same_type = false;
@@ -781,7 +789,7 @@ impl SchemaVisitor for PruneColumn {
                     PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
                 return Ok(Some(Type::List(PruneColumn::project_list(
                     list,
-                    Some(Type::Struct(projected_struct)),
+                    Type::Struct(projected_struct),
                 )?)));
             } else if list.element_field.field_type.is_primitive() {
                 return Ok(Some(Type::List(list.clone())));
@@ -792,10 +800,7 @@ impl SchemaVisitor for PruneColumn {
                     ));
             }
         } else if let Some(result) = value {
-            Ok(Some(Type::List(PruneColumn::project_list(
-                list,
-                Some(result),
-            )?)))
+            Ok(Some(Type::List(PruneColumn::project_list(list, result)?)))
         } else {
             Ok(None)
         }
@@ -810,7 +815,7 @@ impl SchemaVisitor for PruneColumn {
                     PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
                 return Ok(Some(Type::Map(PruneColumn::project_map(
                     map,
-                    Some(Type::Struct(projected_struct)),
+                    Type::Struct(projected_struct),
                 )?)));
             } else if map.value_field.field_type.is_primitive() {
                 return Ok(Some(Type::Map(map.clone())));
@@ -823,7 +828,7 @@ impl SchemaVisitor for PruneColumn {
         } else if let Some(value_result) = value {
             return Ok(Some(Type::Map(PruneColumn::project_map(
                 map,
-                Some(value_result),
+                value_result,
             )?)));
         } else if self.selected.contains(&map.key_field.id) {
             Ok(Some(Type::Map(map.clone())))
@@ -949,6 +954,8 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::SchemaBuilder;
+
     use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
@@ -1541,6 +1548,7 @@ table {
             Type::Primitive(PrimitiveType::String),
         )
         .into()]));
+
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([1]);
         let mut visitor = PruneColumn::new(selected, false);
