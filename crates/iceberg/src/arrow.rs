@@ -294,10 +294,9 @@ const ARROW_FIELD_DOC_KEY: &str = "doc";
 fn get_field_id(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_ID_KEY) {
         return value.parse::<i32>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to parse field id: {e}"),
-            )
+            Error::new(ErrorKind::DataInvalid, format!("Failed to parse field id"))
+                .with_context("value", value)
+                .with_source(e)
         });
     }
     Err(Error::new(
@@ -313,7 +312,7 @@ fn get_field_doc(field: &Field) -> Option<String> {
     None
 }
 
-struct ArrowSchemaConverter {}
+struct ArrowSchemaConverter;
 
 impl ArrowSchemaConverter {
     #[allow(dead_code)]
@@ -373,15 +372,12 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
         let id = get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
-        let element_field = Arc::new(NestedField {
-            id,
-            doc,
-            name: "element".to_string(),
-            required: !element_field.is_nullable(),
-            field_type: Box::new(value.clone()),
-            initial_default: None,
-            write_default: None,
-        });
+        let mut element_field =
+            NestedField::list_element(id, value.clone(), !element_field.is_nullable());
+        if let Some(doc) = doc {
+            element_field = element_field.with_doc(doc);
+        }
+        let element_field = Arc::new(element_field);
         Ok(Type::List(ListType { element_field }))
     }
 
@@ -401,27 +397,23 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
                     let key_id = get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
-                    let key_field = Arc::new(NestedField {
-                        id: key_id,
-                        doc: key_doc,
-                        name: "key".to_string(),
-                        required: !key_field.is_nullable(),
-                        field_type: Box::new(key_value.clone()),
-                        initial_default: None,
-                        write_default: None,
-                    });
+                    let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
+                    if let Some(doc) = key_doc {
+                        key_field = key_field.with_doc(doc);
+                    }
+                    let key_field = Arc::new(key_field);
 
                     let value_id = get_field_id(value_field)?;
                     let value_doc = get_field_doc(value_field);
-                    let value_field = Arc::new(NestedField {
-                        id: value_id,
-                        doc: value_doc,
-                        name: "value".to_string(),
-                        required: !value_field.is_nullable(),
-                        field_type: Box::new(value.clone()),
-                        initial_default: None,
-                        write_default: None,
-                    });
+                    let mut value_field = NestedField::map_value_element(
+                        value_id,
+                        value.clone(),
+                        !value_field.is_nullable(),
+                    );
+                    if let Some(doc) = value_doc {
+                        value_field = value_field.with_doc(doc);
+                    }
+                    let value_field = Arc::new(value_field);
 
                     Ok(Type::Map(MapType {
                         key_field,
@@ -447,10 +439,13 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
-            DataType::Decimal128(p, s) => Ok(Type::Primitive(PrimitiveType::Decimal {
-                precision: *p as u32,
-                scale: *s as u32,
-            })),
+            DataType::Decimal128(p, s) => Type::decimal(*p as u32, *s as u32).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to create decimal type"),
+                )
+                .with_source(e)
+            }),
             DataType::Date32 => Ok(Type::Primitive(PrimitiveType::Date)),
             DataType::Time64(unit) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Time))
