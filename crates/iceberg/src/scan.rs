@@ -186,8 +186,7 @@ impl TableScan {
             .await?;
 
             // Generate data file stream
-            let mut entries = iter(manifest_list.entries());
-            while let Some(entry) = entries.next().await {
+            for entry in manifest_list.entries() {
                 // If this scan has a filter, check the partition evaluator cache for an existing
                 // PartitionEvaluator that matches this manifest's partition spec ID.
                 // Use one from the cache if there is one. If not, create one, put it in
