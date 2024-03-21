@@ -954,8 +954,6 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::SchemaBuilder;
-
     use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
@@ -1850,15 +1848,11 @@ table {
                         .into(),
                     value_field: NestedField::map_value_element(
                         8,
-                        Type::Struct(
-                            StructType::new(vec![
-                                NestedField::optional(10, "name", Primitive(PrimitiveType::String))
-                                    .into(),
-                                NestedField::required(11, "age", Primitive(PrimitiveType::Int))
-                                    .into(),
-                            ])
-                            .into(),
-                        ),
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
+                        ])),
                         true,
                     )
                     .into(),
@@ -1875,15 +1869,12 @@ table {
                     .into(),
                 value_field: NestedField::map_value_element(
                     8,
-                    Type::Struct(
-                        StructType::new(vec![NestedField::required(
-                            11,
-                            "age",
-                            Primitive(PrimitiveType::Int),
-                        )
-                        .into()])
-                        .into(),
-                    ),
+                    Type::Struct(StructType::new(vec![NestedField::required(
+                        11,
+                        "age",
+                        Primitive(PrimitiveType::Int),
+                    )
+                    .into()])),
                     true,
                 )
                 .into(),
@@ -1908,15 +1899,11 @@ table {
                         .into(),
                     value_field: NestedField::map_value_element(
                         8,
-                        Type::Struct(
-                            StructType::new(vec![
-                                NestedField::optional(10, "name", Primitive(PrimitiveType::String))
-                                    .into(),
-                                NestedField::required(11, "age", Primitive(PrimitiveType::Int))
-                                    .into(),
-                            ])
-                            .into(),
-                        ),
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
+                        ])),
                         true,
                     )
                     .into(),
@@ -1933,15 +1920,12 @@ table {
                     .into(),
                 value_field: NestedField::map_value_element(
                     8,
-                    Type::Struct(
-                        StructType::new(vec![NestedField::required(
-                            11,
-                            "age",
-                            Primitive(PrimitiveType::Int),
-                        )
-                        .into()])
-                        .into(),
-                    ),
+                    Type::Struct(StructType::new(vec![NestedField::required(
+                        11,
+                        "age",
+                        Primitive(PrimitiveType::Int),
+                    )
+                    .into()])),
                     true,
                 )
                 .into(),
