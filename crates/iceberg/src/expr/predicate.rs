@@ -238,9 +238,10 @@ impl<T: Display + Debug> Display for SetExpression<T> {
 /// Unbound predicate expression before binding to a schema.
 #[derive(Debug, PartialEq)]
 pub enum Predicate {
+    /// AlwaysTrue predicate, for example, `TRUE`.
     AlwaysTrue,
+    /// AlwaysFalse predicate, for example, `FALSE`.
     AlwaysFalse,
-
     /// And predicate, for example, `a > 10 AND b < 20`.
     And(LogicalExpression<Predicate, 2>),
     /// Or predicate, for example, `a > 10 OR b < 20`.

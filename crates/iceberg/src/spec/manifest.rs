@@ -873,6 +873,7 @@ impl ManifestEntry {
         &self.data_file.file_path
     }
 
+    /// Get a reference to the Partition Struct of the data file of this manifest entry
     pub fn get_partition_struct(&self) -> &Struct {
         &self.data_file.partition
     }

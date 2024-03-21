@@ -197,7 +197,7 @@ impl TableScan {
                             .or_insert_with_key(|key| self.create_partition_evaluator(key, filter));
 
                     // reject any manifest files whose partition values don't match the filter.
-                    if !partition_evaluator.filter_manifest_file(&entry) {
+                    if !partition_evaluator.filter_manifest_file(entry) {
                         continue;
                     }
                 }
@@ -229,10 +229,9 @@ impl TableScan {
     }
 
     fn create_partition_evaluator(&self, id: &i32, filter: &Predicate) -> PartitionEvaluator {
-
         // TODO: this does not work yet. `bind` consumes self, but `Predicate`
         //       does not implement `Clone` or `Copy`.
-        let bound_predicate = filter.clone()
+        let bound_predicate = filter
             .bind(self.schema.clone(), self.case_sensitive)
             .unwrap();
 
@@ -301,8 +300,10 @@ impl PartitionEvaluator {
 }
 
 struct ManifestEvalVisitor {
+    #[allow(dead_code)]
     partition_schema: SchemaRef,
     partition_filter: BoundPredicate,
+    #[allow(dead_code)]
     case_sensitive: bool,
 }
 
@@ -331,7 +332,8 @@ impl ManifestEvalVisitor {
 
         // this is needed as SchemaBuilder.with_fields expects an iterator over
         // Arc<NestedField> rather than &Arc<NestedField>
-        let cloned_partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
+        let cloned_partition_fields: Vec<_> =
+            partition_type.fields().iter().map(Arc::clone).collect();
 
         let partition_schema = Schema::builder()
             .with_fields(cloned_partition_fields)
@@ -343,11 +345,11 @@ impl ManifestEvalVisitor {
             InclusiveProjection::new(table_schema.clone(), partition_spec.clone());
         let unbound_partition_filter = inclusive_projection.project(&partition_filter);
 
-        Ok(Self::new(
+        Self::new(
             partition_schema_ref.clone(),
             unbound_partition_filter,
             case_sensitive,
-        )?)
+        )
     }
 
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> bool {
@@ -433,6 +435,7 @@ impl ManifestEvalVisitor {
 }
 
 struct InclusiveProjection {
+    #[allow(dead_code)]
     table_schema: SchemaRef,
     partition_spec: PartitionSpecRef,
 }
@@ -481,14 +484,14 @@ impl InclusiveProjection {
         let mut parts: Vec<&PartitionField> = vec![];
         for partition_spec_field in &self.partition_spec.fields {
             if partition_spec_field.source_id == field_id {
-                parts.push(&partition_spec_field)
+                parts.push(partition_spec_field)
             }
         }
 
         parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
             // should this use ? instead of destructuring Ok() so that the whole call fails
             // if the transform project() call errors? This would require changing the signature of `visit`.
-            if let Ok(Some(pred_for_part)) = part.transform.project(&part.name, &predicate) {
+            if let Ok(Some(pred_for_part)) = part.transform.project(&part.name, predicate) {
                 res.and(pred_for_part)
             } else {
                 res
