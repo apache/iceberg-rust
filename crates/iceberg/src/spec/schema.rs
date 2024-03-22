@@ -652,10 +652,10 @@ struct PruneColumn {
 /// Visit a schema and returns only the fields selected by id set
 pub fn prune_columns(
     schema: &Schema,
-    selected: HashSet<i32>,
+    selected: impl IntoIterator<Item = i32>,
     select_full_types: bool,
 ) -> Result<Option<Type>> {
-    let mut visitor = PruneColumn::new(selected, select_full_types);
+    let mut visitor = PruneColumn::new(HashSet::from_iter(selected), select_full_types);
     visit_schema(schema, &mut visitor)
 }
 
@@ -672,8 +672,8 @@ impl PruneColumn {
             // If the field is a StructType, return it as such
             Some(Type::Struct(s)) => Ok(s),
             Some(_) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Projected Field must be Struct".to_string(),
+                ErrorKind::Unexpected,
+                "Projected field with struct type must be struct".to_string(),
             )),
             // If projected_field is None or not a StructType, return an empty StructType
             None => Ok(StructType::default()),
@@ -785,8 +785,7 @@ impl SchemaVisitor for PruneColumn {
             if self.select_full_types {
                 Ok(Some(Type::List(list.clone())))
             } else if list.element_field.field_type.is_struct() {
-                let projected_struct =
-                    PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
+                let projected_struct = PruneColumn::project_selected_struct(value).unwrap();
                 return Ok(Some(Type::List(PruneColumn::project_list(
                     list,
                     Type::Struct(projected_struct),
@@ -958,11 +957,12 @@ mod tests {
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
+    use crate::spec::prune_columns;
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
     use std::collections::{HashMap, HashSet};
 
-    use super::{visit_schema, PruneColumn, DEFAULT_SCHEMA_ID};
+    use super::DEFAULT_SCHEMA_ID;
 
     fn check_schema_serde(json: &str, expected_type: Schema, _expected_enum: SchemaEnum) {
         let desered_type: Schema = serde_json::from_str(json).unwrap();
@@ -1555,8 +1555,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([1]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1578,8 +1577,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([1]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1608,8 +1606,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([5]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1618,8 +1615,7 @@ table {
     fn test_prune_columns_list_itself() {
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([4]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_err());
     }
 
@@ -1647,8 +1643,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([5]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1694,8 +1689,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([9]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1704,8 +1698,7 @@ table {
     fn test_prune_columns_map_itself() {
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([6]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_err());
     }
 
@@ -1750,8 +1743,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([9]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1797,8 +1789,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([10]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1825,8 +1816,7 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([16]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -1853,15 +1843,14 @@ table {
         );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([16]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_empty_struct() {
-        let empty_schema = Schema::builder()
+        let schema_with_empty_struct_field = Schema::builder()
             .with_fields(vec![NestedField::optional(
                 15,
                 "person",
@@ -1884,15 +1873,14 @@ table {
                 .clone(),
         );
         let selected: HashSet<i32> = HashSet::from([15]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&empty_schema, &mut visitor);
+        let result = prune_columns(&schema_with_empty_struct_field, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_empty_struct_full() {
-        let empty_schema = Schema::builder()
+        let schema_with_empty_struct_field = Schema::builder()
             .with_fields(vec![NestedField::optional(
                 15,
                 "person",
@@ -1915,15 +1903,14 @@ table {
                 .clone(),
         );
         let selected: HashSet<i32> = HashSet::from([15]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&empty_schema, &mut visitor);
+        let result = prune_columns(&schema_with_empty_struct_field, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_struct_in_map() {
-        let empty_schema = Schema::builder()
+        let schema_with_struct_in_map_field = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![NestedField::required(
                 6,
@@ -1977,14 +1964,13 @@ table {
                 .clone(),
         );
         let selected: HashSet<i32> = HashSet::from([11]);
-        let mut visitor = PruneColumn::new(selected, false);
-        let result = visit_schema(&empty_schema, &mut visitor);
+        let result = prune_columns(&schema_with_struct_in_map_field, selected, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
     #[test]
     fn test_prune_columns_struct_in_map_full() {
-        let empty_schema = Schema::builder()
+        let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![NestedField::required(
                 6,
@@ -2038,8 +2024,7 @@ table {
                 .clone(),
         );
         let selected: HashSet<i32> = HashSet::from([11]);
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&empty_schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), expected_type);
     }
@@ -2048,8 +2033,7 @@ table {
     fn test_prune_columns_select_original_schema() {
         let schema = table_schema_nested();
         let selected: HashSet<i32> = (0..schema.highest_field_id() + 1).collect();
-        let mut visitor = PruneColumn::new(selected, true);
-        let result = visit_schema(&schema, &mut visitor);
+        let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap().unwrap(),
