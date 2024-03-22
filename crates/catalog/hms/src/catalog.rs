@@ -15,11 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::from_io_error;
+use crate::error::from_thrift_error;
+
 use super::utils::*;
 use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;
 use hive_metastore::ThriftHiveMetastoreClientBuilder;
 use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
+use hive_metastore::ThriftHiveMetastoreGetTableException;
+use iceberg::io::FileIO;
+use iceberg::spec::TableMetadata;
+use iceberg::spec::TableMetadataBuilder;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -28,6 +35,8 @@ use iceberg::{
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use typed_builder::TypedBuilder;
 use volo_thrift::ResponseError;
 
@@ -47,6 +56,9 @@ pub enum HmsThriftTransport {
 pub struct HmsCatalogConfig {
     address: String,
     thrift_transport: HmsThriftTransport,
+    warehouse: String,
+    #[builder(default)]
+    props: HashMap<String, String>,
 }
 
 struct HmsClient(ThriftHiveMetastoreClient);
@@ -55,6 +67,7 @@ struct HmsClient(ThriftHiveMetastoreClient);
 pub struct HmsCatalog {
     config: HmsCatalogConfig,
     client: HmsClient,
+    file_io: FileIO,
 }
 
 impl Debug for HmsCatalog {
@@ -92,10 +105,19 @@ impl HmsCatalog {
                 .build(),
         };
 
+        let file_io = FileIO::from_path(&config.warehouse)?
+            .with_props(&config.props)
+            .build()?;
+
         Ok(Self {
             config,
             client: HmsClient(client),
+            file_io,
         })
+    }
+    /// Get the catalogs `FileIO`
+    pub fn file_io(&self) -> FileIO {
+        self.file_io.clone()
     }
 }
 
@@ -173,7 +195,7 @@ impl Catalog for HmsCatalog {
         let db = self
             .client
             .0
-            .get_database(name.clone().into())
+            .get_database(name.into())
             .await
             .map_err(from_thrift_error)?;
 
@@ -197,7 +219,7 @@ impl Catalog for HmsCatalog {
     async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
         let name = validate_namespace(namespace)?;
 
-        let resp = self.client.0.get_database(name.clone().into()).await;
+        let resp = self.client.0.get_database(name.into()).await;
 
         match resp {
             Ok(_) => Ok(true),
@@ -269,13 +291,22 @@ impl Catalog for HmsCatalog {
         Ok(())
     }
 
+    /// Asynchronously lists all tables within a specified namespace.
+    ///
+    /// # Returns
+    ///
+    /// A `Result<Vec<TableIdent>>`, which is:
+    /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
+    /// representing a table within the specified namespace.
+    /// - `Err(...)` if an error occurs during namespace validation or while  
+    /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = validate_namespace(namespace)?;
 
         let tables = self
             .client
             .0
-            .get_all_tables(name.clone().into())
+            .get_all_tables(name.into())
             .await
             .map_err(from_thrift_error)?;
 
@@ -287,31 +318,201 @@ impl Catalog for HmsCatalog {
         Ok(tables)
     }
 
+    /// Creates a new table within a specified namespace using the provided
+    /// table creation settings.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object representing the newly created
+    /// table.
+    ///
+    /// # Errors
+    /// This function may return an error in several cases, including invalid
+    /// namespace identifiers, failure to determine a default storage location,
+    /// issues generating or writing table metadata, and errors communicating
+    /// with the Hive Metastore.
     async fn create_table(
         &self,
-        _namespace: &NamespaceIdent,
-        _creation: TableCreation,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
     ) -> Result<Table> {
-        todo!()
+        let db_name = validate_namespace(namespace)?;
+        let table_name = creation.name.clone();
+
+        let location = match &creation.location {
+            Some(location) => location.clone(),
+            None => {
+                let ns = self.get_namespace(namespace).await?;
+                get_default_table_location(&ns, &table_name, &self.config.warehouse)
+            }
+        };
+
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+        let metadata_location = create_metadata_location(&location, 0)?;
+
+        let mut file = self
+            .file_io
+            .new_output(&metadata_location)?
+            .writer()
+            .await?;
+        file.write_all(&serde_json::to_vec(&metadata)?).await?;
+        file.shutdown().await?;
+
+        let hive_table = convert_to_hive_table(
+            db_name.clone(),
+            metadata.current_schema(),
+            table_name.clone(),
+            location,
+            metadata_location.clone(),
+            metadata.properties(),
+        )?;
+
+        self.client
+            .0
+            .create_table(hive_table)
+            .await
+            .map_err(from_thrift_error)?;
+
+        let table = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .build();
+
+        Ok(table)
     }
 
-    async fn load_table(&self, _table: &TableIdent) -> Result<Table> {
-        todo!()
+    /// Loads a table from the Hive Metastore and constructs a `Table` object
+    /// based on its metadata.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object that represents the loaded table.
+    ///
+    /// # Errors
+    /// This function may return an error in several scenarios, including:
+    /// - Failure to validate the namespace.
+    /// - Failure to retrieve the table from the Hive Metastore.
+    /// - Absence of metadata location information in the table's properties.
+    /// - Issues reading or deserializing the table's metadata file.
+    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+        let db_name = validate_namespace(table.namespace())?;
+
+        let hive_table = self
+            .client
+            .0
+            .get_table(db_name.clone().into(), table.name.clone().into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        let metadata_location = get_metadata_location(&hive_table.parameters)?;
+
+        let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
+        let mut metadata_str = String::new();
+        reader.read_to_string(&mut metadata_str).await?;
+        let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
+
+        let table = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(TableIdent::new(
+                NamespaceIdent::new(db_name),
+                table.name.clone(),
+            ))
+            .build();
+
+        Ok(table)
     }
 
-    async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
-        todo!()
+    /// Asynchronously drops a table from the database.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The namespace provided in `table` cannot be validated
+    /// or does not exist.
+    /// - The underlying database client encounters an error while
+    /// attempting to drop the table. This includes scenarios where
+    /// the table does not exist.
+    /// - Any network or communication error occurs with the database backend.
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        let db_name = validate_namespace(table.namespace())?;
+
+        self.client
+            .0
+            .drop_table(db_name.into(), table.name.clone().into(), false)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
-    async fn table_exists(&self, _table: &TableIdent) -> Result<bool> {
-        todo!()
+    /// Asynchronously checks the existence of a specified table
+    /// in the database.
+    ///
+    /// # Returns
+    /// - `Ok(true)` if the table exists in the database.
+    /// - `Ok(false)` if the table does not exist in the database.
+    /// - `Err(...)` if an error occurs during the process
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name.clone();
+
+        let resp = self
+            .client
+            .0
+            .get_table(db_name.into(), table_name.into())
+            .await;
+
+        match resp {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if let ResponseError::UserException(ThriftHiveMetastoreGetTableException::O2(_)) =
+                    &err
+                {
+                    Ok(false)
+                } else {
+                    Err(from_thrift_error(err))
+                }
+            }
+        }
     }
 
-    async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
-        todo!()
+    /// Asynchronously renames a table within the database
+    /// or moves it between namespaces (databases).
+    ///
+    /// # Returns
+    /// - `Ok(())` on successful rename or move of the table.
+    /// - `Err(...)` if an error occurs during the process.
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        let src_dbname = validate_namespace(src.namespace())?;
+        let dest_dbname = validate_namespace(dest.namespace())?;
+
+        let src_tbl_name = src.name.clone();
+        let dest_tbl_name = dest.name.clone();
+
+        let mut tbl = self
+            .client
+            .0
+            .get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
+            .await
+            .map_err(from_thrift_error)?;
+
+        tbl.db_name = Some(dest_dbname.into());
+        tbl.table_name = Some(dest_tbl_name.into());
+
+        self.client
+            .0
+            .alter_table(src_dbname.into(), src_tbl_name.into(), tbl)
+            .await
+            .map_err(from_thrift_error)?;
+
+        Ok(())
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        todo!()
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Updating a table is not supported yet",
+        ))
     }
 }

@@ -15,13 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Hive Metastore Catalog implementation.
+use anyhow::anyhow;
+use iceberg::{Error, ErrorKind};
+use std::fmt::Debug;
+use std::io;
 
-#![deny(missing_docs)]
+/// Format a thrift error into iceberg error.
+pub fn from_thrift_error<T>(error: volo_thrift::error::ResponseError<T>) -> Error
+where
+    T: Debug,
+{
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting thrift error".to_string(),
+    )
+    .with_source(anyhow!("thrift error: {:?}", error))
+}
 
-mod catalog;
-pub use catalog::*;
-
-mod error;
-mod schema;
-mod utils;
+/// Format an io error into iceberg error.
+pub fn from_io_error(error: io::Error) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting io error".to_string(),
+    )
+    .with_source(error)
+}
