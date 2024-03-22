@@ -31,6 +31,7 @@ use std::{collections::HashMap, fmt::Debug};
 use typed_builder::TypedBuilder;
 
 use crate::error::from_aws_error;
+use crate::utils::get_sdk_config;
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
@@ -38,7 +39,7 @@ pub struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
     endpoint_url: Option<String>,
     #[builder(default)]
-    props: HashMap<String, String>,
+    properties: HashMap<String, String>,
 }
 
 struct GlueClient(aws_sdk_glue::Client);
@@ -60,19 +61,7 @@ impl Debug for GlueCatalog {
 impl GlueCatalog {
     /// Create a new glue catalog
     pub async fn new(config: GlueCatalogConfig) -> Self {
-        let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
-
-        let sdk_config = match &config.endpoint_url {
-            None => aws_config::defaults(BehaviorVersion::latest())
-                .region(region_provider)
-                .test_credentials(),
-            Some(url) => aws_config::defaults(BehaviorVersion::latest())
-                .region(region_provider)
-                .endpoint_url(url)
-                .test_credentials(),
-        };
-
-        let sdk_config = sdk_config.load().await;
+        let sdk_config = get_sdk_config(&config.properties, &config.endpoint_url).await;
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 

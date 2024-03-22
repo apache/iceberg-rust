@@ -21,4 +21,5 @@
 
 mod catalog;
 mod error;
+mod utils;
 pub use catalog::*;
