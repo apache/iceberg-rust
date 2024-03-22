@@ -1540,58 +1540,78 @@ table {
     }
     #[test]
     fn test_schema_prune_columns_string() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            1,
-            "foo",
-            Type::Primitive(PrimitiveType::String),
-        )
-        .into()]));
-
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "foo",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([1]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_schema_prune_columns_string_full() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            1,
-            "foo",
-            Type::Primitive(PrimitiveType::String),
-        )
-        .into()]));
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "foo",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([1]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_schema_prune_columns_list() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            4,
-            "qux",
-            Type::List(ListType {
-                element_field: NestedField::list_element(
-                    5,
-                    Type::Primitive(PrimitiveType::String),
-                    true,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    4,
+                    "qux",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                            true,
+                        )
+                        .into(),
+                    }),
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([5]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
@@ -1605,62 +1625,79 @@ table {
 
     #[test]
     fn test_schema_prune_columns_list_full() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            4,
-            "qux",
-            Type::List(ListType {
-                element_field: NestedField::list_element(
-                    5,
-                    Type::Primitive(PrimitiveType::String),
-                    true,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    4,
+                    "qux",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                            true,
+                        )
+                        .into(),
+                    }),
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([5]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_map() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            6,
-            "quux",
-            Type::Map(MapType {
-                key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
-                    .into(),
-                value_field: NestedField::map_value_element(
-                    8,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            9,
+                            7,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            10,
-                            Type::Primitive(PrimitiveType::Int),
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
                             true,
                         )
                         .into(),
                     }),
-                    true,
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([9]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
@@ -1674,118 +1711,152 @@ table {
 
     #[test]
     fn test_prune_columns_map_full() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            6,
-            "quux",
-            Type::Map(MapType {
-                key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
-                    .into(),
-                value_field: NestedField::map_value_element(
-                    8,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            9,
+                            7,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            10,
-                            Type::Primitive(PrimitiveType::Int),
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
                             true,
                         )
                         .into(),
                     }),
-                    true,
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([9]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_map_key() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            6,
-            "quux",
-            Type::Map(MapType {
-                key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
-                    .into(),
-                value_field: NestedField::map_value_element(
-                    8,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            9,
+                            7,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            10,
-                            Type::Primitive(PrimitiveType::Int),
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
                             true,
                         )
                         .into(),
                     }),
-                    true,
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([10]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_struct() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            15,
-            "person",
-            Type::Struct(StructType::new(vec![NestedField::optional(
-                16,
-                "name",
-                Type::Primitive(PrimitiveType::String),
-            )
-            .into()])),
-        )
-        .into()]));
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![NestedField::optional(
+                        16,
+                        "name",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into()])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([16]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
     fn test_prune_columns_struct_full() {
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            15,
-            "person",
-            Type::Struct(StructType::new(vec![NestedField::optional(
-                16,
-                "name",
-                Type::Primitive(PrimitiveType::String),
-            )
-            .into()])),
-        )
-        .into()]));
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![NestedField::optional(
+                        16,
+                        "name",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into()])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let schema = table_schema_nested();
         let selected: HashSet<i32> = HashSet::from([16]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
@@ -1799,17 +1870,24 @@ table {
             .into()])
             .build()
             .unwrap();
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            15,
-            "person",
-            Type::Struct(StructType::new(vec![])),
-        )
-        .into()]));
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let selected: HashSet<i32> = HashSet::from([15]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&empty_schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
@@ -1823,17 +1901,24 @@ table {
             .into()])
             .build()
             .unwrap();
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::optional(
-            15,
-            "person",
-            Type::Struct(StructType::new(vec![])),
-        )
-        .into()]));
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let selected: HashSet<i32> = HashSet::from([15]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&empty_schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
@@ -1861,31 +1946,41 @@ table {
             .into()])
             .build()
             .unwrap();
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            6,
-            "id_to_person",
-            Type::Map(MapType {
-                key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
-                    .into(),
-                value_field: NestedField::map_value_element(
-                    8,
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        11,
-                        "age",
-                        Primitive(PrimitiveType::Int),
-                    )
-                    .into()])),
-                    true,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "id_to_person",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Struct(StructType::new(vec![NestedField::required(
+                                11,
+                                "age",
+                                Primitive(PrimitiveType::Int),
+                            )
+                            .into()])),
+                            true,
+                        )
+                        .into(),
+                    }),
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let selected: HashSet<i32> = HashSet::from([11]);
         let mut visitor = PruneColumn::new(selected, false);
         let result = visit_schema(&empty_schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
     #[test]
     fn test_prune_columns_struct_in_map_full() {
@@ -1912,31 +2007,41 @@ table {
             .into()])
             .build()
             .unwrap();
-        let expected_schema = Type::Struct(StructType::new(vec![NestedField::required(
-            6,
-            "id_to_person",
-            Type::Map(MapType {
-                key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
-                    .into(),
-                value_field: NestedField::map_value_element(
-                    8,
-                    Type::Struct(StructType::new(vec![NestedField::required(
-                        11,
-                        "age",
-                        Primitive(PrimitiveType::Int),
-                    )
-                    .into()])),
-                    true,
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "id_to_person",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Struct(StructType::new(vec![NestedField::required(
+                                11,
+                                "age",
+                                Primitive(PrimitiveType::Int),
+                            )
+                            .into()])),
+                            true,
+                        )
+                        .into(),
+                    }),
                 )
-                .into(),
-            }),
-        )
-        .into()]));
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
         let selected: HashSet<i32> = HashSet::from([11]);
         let mut visitor = PruneColumn::new(selected, true);
         let result = visit_schema(&empty_schema, &mut visitor);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_schema);
+        assert_eq!(result.unwrap().unwrap(), expected_type);
     }
 
     #[test]
