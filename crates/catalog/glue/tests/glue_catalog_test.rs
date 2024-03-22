@@ -68,7 +68,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
 #[tokio::test]
 async fn test_list_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_hello_world").await;
+    let fixture = set_test_fixture("test_list_namespace").await;
 
     let expected = vec![];
     let result = fixture.glue_catalog.list_namespaces(None).await?;
