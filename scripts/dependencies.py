@@ -20,11 +20,9 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter, REMAINDER
 import subprocess
 import os
 
-
 DIRS = [
-    "crates/iceberg",
-    "crates/catalog/hms",
-    "crates/catalog/rest"
+    "crates/iceberg", "crates/catalog/hms", "crates/catalog/rest",
+    "crates/catalog/glue"
 ]
 
 
@@ -54,10 +52,9 @@ if __name__ == "__main__":
     parser.set_defaults(func=parser.print_help)
     subparsers = parser.add_subparsers()
 
-    parser_check = subparsers.add_parser(
-        'check',
-        description="Check dependencies",
-        help="Check dependencies")
+    parser_check = subparsers.add_parser('check',
+                                         description="Check dependencies",
+                                         help="Check dependencies")
     parser_check.set_defaults(func=check_deps)
 
     parser_generate = subparsers.add_parser(
