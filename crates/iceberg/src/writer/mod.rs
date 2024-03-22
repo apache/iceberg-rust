@@ -48,21 +48,23 @@
 pub mod base_writer;
 pub mod file_writer;
 
-use crate::{spec::DataFileBuilder, Result};
+use crate::{spec::DataFile, Result};
 use arrow_array::RecordBatch;
 
 type DefaultInput = RecordBatch;
-type DefaultOutput = Vec<DataFileBuilder>;
+type DefaultOutput = Vec<DataFile>;
 
 /// The builder for iceberg writer.
-#[allow(async_fn_in_trait)]
+#[async_trait::async_trait]
 pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
     Send + Clone + 'static
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
+    /// The associated writer config type used to build the writer.
+    type C;
     /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    async fn build(self, config: Self::C) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.

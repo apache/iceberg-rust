@@ -17,7 +17,7 @@
 
 //! This module provide `DataFileWriter`.
 
-use crate::spec::{DataContentType, DataFileBuilder};
+use crate::spec::{DataContentType, DataFile, Struct};
 use crate::writer::file_writer::FileWriter;
 use crate::writer::CurrentFileStatus;
 use crate::writer::{file_writer::FileWriterBuilder, IcebergWriter, IcebergWriterBuilder};
@@ -38,14 +38,30 @@ impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     }
 }
 
-#[allow(async_fn_in_trait)]
+/// Config for `DataFileWriter`.
+pub struct DataFileWriterConfig {
+    partition_value: Struct,
+}
+
+impl DataFileWriterConfig {
+    /// Create a new `DataFileWriterConfig` with partition value.
+    pub fn new(partition_value: Option<Struct>) -> Self {
+        Self {
+            partition_value: partition_value.unwrap_or(Struct::empty()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
+    type C = DataFileWriterConfig;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, config: Self::C) -> Result<Self::R> {
         Ok(DataFileWriter {
             inner_writer: self.inner.clone().build().await?,
             builder: self.inner,
+            partition_value: config.partition_value,
         })
     }
 }
@@ -54,6 +70,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 pub struct DataFileWriter<B: FileWriterBuilder> {
     builder: B,
     inner_writer: B::R,
+    partition_value: Struct,
 }
 
 #[async_trait::async_trait]
@@ -62,7 +79,7 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
         self.inner_writer.write(&batch).await
     }
 
-    async fn flush(&mut self) -> Result<Vec<DataFileBuilder>> {
+    async fn flush(&mut self) -> Result<Vec<DataFile>> {
         let writer = std::mem::replace(&mut self.inner_writer, self.builder.clone().build().await?);
         let res = writer
             .close()
@@ -70,7 +87,8 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
             .into_iter()
             .map(|mut res| {
                 res.content(DataContentType::Data);
-                res
+                res.partition(self.partition_value.clone());
+                res.build().expect("Guaranteed to be valid")
             })
             .collect_vec();
         Ok(res)
@@ -101,9 +119,9 @@ mod test {
 
     use crate::{
         io::FileIOBuilder,
-        spec::{DataFileFormat, Struct},
+        spec::DataFileFormat,
         writer::{
-            base_writer::data_file_writer::DataFileWriterBuilder,
+            base_writer::data_file_writer::{DataFileWriterBuilder, DataFileWriterConfig},
             file_writer::{
                 location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
                 ParquetWriterBuilder,
@@ -141,7 +159,7 @@ mod test {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "5".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -160,7 +178,7 @@ mod test {
                         arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
                             .with_metadata(HashMap::from([(
                                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "-1".to_string(),
+                                "6".to_string(),
                             )])),
                     )),
                     true,
@@ -182,7 +200,7 @@ mod test {
                                 )
                                 .with_metadata(HashMap::from([(
                                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    "-1".to_string(),
+                                    "7".to_string(),
                                 )]))]
                                 .into(),
                             ),
@@ -190,7 +208,7 @@ mod test {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "8".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -209,7 +227,7 @@ mod test {
                 arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "5".to_string(),
                     )])),
             ]
             .into(),
@@ -231,7 +249,7 @@ mod test {
             arrow_array::ListArray::new(
                 Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "-1".to_string(),
+                    "6".to_string(),
                 )]))),
                 list_parts.1,
                 list_parts.2,
@@ -249,7 +267,7 @@ mod test {
                     )
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "7".to_string(),
                     )]))]
                     .into(),
                 ),
@@ -257,7 +275,7 @@ mod test {
             )
             .with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                "-1".to_string(),
+                "8".to_string(),
             )]))]
             .into(),
             vec![Arc::new(StructArray::new(
@@ -265,7 +283,7 @@ mod test {
                     arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "7".to_string(),
                         )])),
                 ]
                 .into(),
@@ -285,20 +303,16 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut data_file_writer = DataFileWriterBuilder::new(pb).build().await?;
+        let mut data_file_writer = DataFileWriterBuilder::new(pb)
+            .build(DataFileWriterConfig::new(None))
+            .await?;
 
         for _ in 0..3 {
             // write
             data_file_writer.write(to_write.clone()).await?;
             let res = data_file_writer.flush().await?;
             assert_eq!(res.len(), 1);
-            let data_file = res
-                .into_iter()
-                .next()
-                .unwrap()
-                .partition(Struct::empty())
-                .build()
-                .unwrap();
+            let data_file = res.into_iter().next().unwrap();
 
             // check
             check_parquet_data_file(&file_io, &data_file, &to_write).await;

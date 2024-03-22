@@ -352,7 +352,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "5".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -371,7 +371,7 @@ mod tests {
                         arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
                             .with_metadata(HashMap::from([(
                                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "-1".to_string(),
+                                "6".to_string(),
                             )])),
                     )),
                     true,
@@ -393,7 +393,7 @@ mod tests {
                                 )
                                 .with_metadata(HashMap::from([(
                                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    "-1".to_string(),
+                                    "7".to_string(),
                                 )]))]
                                 .into(),
                             ),
@@ -401,7 +401,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "8".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -420,7 +420,7 @@ mod tests {
                 arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "5".to_string(),
                     )])),
             ]
             .into(),
@@ -442,7 +442,7 @@ mod tests {
             arrow_array::ListArray::new(
                 Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "-1".to_string(),
+                    "6".to_string(),
                 )]))),
                 list_parts.1,
                 list_parts.2,
@@ -460,7 +460,7 @@ mod tests {
                     )
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "7".to_string(),
                     )]))]
                     .into(),
                 ),
@@ -468,7 +468,7 @@ mod tests {
             )
             .with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                "-1".to_string(),
+                "8".to_string(),
             )]))]
             .into(),
             vec![Arc::new(StructArray::new(
@@ -476,7 +476,7 @@ mod tests {
                     arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "7".to_string(),
                         )])),
                 ]
                 .into(),
