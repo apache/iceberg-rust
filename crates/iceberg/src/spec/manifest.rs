@@ -195,7 +195,7 @@ impl ManifestWriter {
         partition_summary
     }
 
-    /// Write a manifest entry.
+    /// Write a manifest.
     pub async fn write(mut self, manifest: Manifest) -> Result<ManifestFile> {
         // Create the avro writer
         let partition_type = manifest
