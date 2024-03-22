@@ -82,7 +82,7 @@ where
 #[derive(PartialEq)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
-    pub(crate) op: PredicateOperator,
+    op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a IS NULL`.
     term: T,
 }
@@ -120,6 +120,10 @@ impl<T> UnaryExpression<T> {
     pub(crate) fn term(&self) -> &T {
         &self.term
     }
+
+    pub(crate) fn op(&self) -> &PredicateOperator {
+        &self.op
+    }
 }
 
 impl UnaryExpression<BoundReference> {
@@ -133,7 +137,7 @@ impl UnaryExpression<BoundReference> {
 #[derive(PartialEq)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
-    pub(crate) op: PredicateOperator,
+    op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a > 10`.
     term: T,
     /// Literal of this predicate, for example, `10` in `a > 10`.
@@ -158,6 +162,10 @@ impl<T> BinaryExpression<T> {
 
     pub(crate) fn term(&self) -> &T {
         &self.term
+    }
+
+    pub(crate) fn op(&self) -> &PredicateOperator {
+        &self.op
     }
 }
 
@@ -191,7 +199,7 @@ impl<T: Bind> Bind for BinaryExpression<T> {
 #[derive(PartialEq)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
-    pub(crate) op: PredicateOperator,
+    op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a in (1, 2, 3)`.
     term: T,
     /// Literals of this predicate, for example, `(1, 2, 3)` in `a in (1, 2, 3)`.
@@ -216,6 +224,10 @@ impl<T> SetExpression<T> {
 
     pub(crate) fn term(&self) -> &T {
         &self.term
+    }
+
+    pub(crate) fn op(&self) -> &PredicateOperator {
+        &self.op
     }
 }
 

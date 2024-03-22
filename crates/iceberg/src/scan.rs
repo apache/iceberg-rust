@@ -378,7 +378,7 @@ impl ManifestEvalVisitor {
                 let pos = expr.term().accessor().position();
                 let field = &partitions[pos];
 
-                match expr.op {
+                match expr.op() {
                     PredicateOperator::IsNull => field.contains_null,
                     PredicateOperator::NotNull => {
                         todo!()
@@ -396,7 +396,7 @@ impl ManifestEvalVisitor {
                 let pos = expr.term().accessor().position();
                 let _field = &partitions[pos];
 
-                match expr.op {
+                match expr.op() {
                     PredicateOperator::LessThan => {
                         todo!()
                     }
@@ -430,7 +430,7 @@ impl ManifestEvalVisitor {
                 let pos = expr.term().accessor().position();
                 let _field = &partitions[pos];
 
-                match expr.op {
+                match expr.op() {
                     PredicateOperator::In => {
                         todo!()
                     }
