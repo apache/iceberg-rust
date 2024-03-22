@@ -66,9 +66,9 @@ where
 {
     type Bound = LogicalExpression<T::Bound, N>;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
         let mut outputs: [Option<Box<T::Bound>>; N] = array_init(|_| None);
-        for (i, input) in self.inputs.into_iter().enumerate() {
+        for (i, input) in self.inputs.iter().enumerate() {
             outputs[i] = Some(Box::new(input.bind(schema.clone(), case_sensitive)?));
         }
 
@@ -105,7 +105,7 @@ impl<T: Display> Display for UnaryExpression<T> {
 impl<T: Bind> Bind for UnaryExpression<T> {
     type Bound = UnaryExpression<T::Bound>;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
         let bound_term = self.term.bind(schema, case_sensitive)?;
         Ok(UnaryExpression::new(self.op, bound_term))
     }
@@ -155,9 +155,13 @@ impl<T: Display> Display for BinaryExpression<T> {
 impl<T: Bind> Bind for BinaryExpression<T> {
     type Bound = BinaryExpression<T::Bound>;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
         let bound_term = self.term.bind(schema.clone(), case_sensitive)?;
-        Ok(BinaryExpression::new(self.op, bound_term, self.literal))
+        Ok(BinaryExpression::new(
+            self.op,
+            bound_term,
+            self.literal.clone(),
+        ))
     }
 }
 
@@ -192,9 +196,13 @@ impl<T> SetExpression<T> {
 impl<T: Bind> Bind for SetExpression<T> {
     type Bound = SetExpression<T::Bound>;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
         let bound_term = self.term.bind(schema.clone(), case_sensitive)?;
-        Ok(SetExpression::new(self.op, bound_term, self.literals))
+        Ok(SetExpression::new(
+            self.op,
+            bound_term,
+            self.literals.clone(),
+        ))
     }
 }
 
@@ -226,7 +234,7 @@ pub enum Predicate {
 impl Bind for Predicate {
     type Bound = BoundPredicate;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> Result<BoundPredicate> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<BoundPredicate> {
         match self {
             Predicate::And(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;

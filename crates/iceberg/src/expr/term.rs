@@ -175,7 +175,7 @@ impl Display for Reference {
 impl Bind for Reference {
     type Bound = BoundReference;
 
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
         let field = if case_sensitive {
             schema.field_by_name(&self.name)
         } else {
@@ -188,7 +188,7 @@ impl Bind for Reference {
                 format!("Field {} not found in schema", self.name),
             )
         })?;
-        Ok(BoundReference::new(self.name, field.clone()))
+        Ok(BoundReference::new(self.name.clone(), field.clone()))
     }
 }
 
