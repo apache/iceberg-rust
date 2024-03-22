@@ -84,7 +84,7 @@ pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
     pub(crate) op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a IS NULL`.
-    pub(crate) term: T,
+    term: T,
 }
 
 impl<T: Debug> Debug for UnaryExpression<T> {
@@ -115,6 +115,10 @@ impl<T> UnaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T) -> Self {
         debug_assert!(op.is_unary());
         Self { op, term }
+    }
+
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 
@@ -150,6 +154,10 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
+    }
+
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 
@@ -204,6 +212,10 @@ impl<T> SetExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
         Self { op, term, literals }
+    }
+
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 

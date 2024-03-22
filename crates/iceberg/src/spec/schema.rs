@@ -18,6 +18,7 @@
 //! This module defines schema in iceberg.
 
 use crate::error::Result;
+use crate::expr::accessor::Accessor;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
@@ -53,6 +54,8 @@ pub struct Schema {
     name_to_id: HashMap<String, i32>,
     lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
+
+    field_id_to_accessor: HashMap<i32, Accessor>,
 }
 
 impl PartialEq for Schema {
@@ -103,6 +106,13 @@ impl SchemaBuilder {
     pub fn build(self) -> Result<Schema> {
         let highest_field_id = self.fields.iter().map(|f| f.id).max().unwrap_or(0);
 
+        // TODO: handle nested field accessors and types
+        // base this on https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/Accessors.java#L214
+        let mut field_id_to_accessor = HashMap::new();
+        for (idx, field) in self.fields.iter().enumerate() {
+            field_id_to_accessor.insert(field.id, Accessor::new(idx, None));
+        }
+
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
 
@@ -135,6 +145,8 @@ impl SchemaBuilder {
             name_to_id,
             lowercase_name_to_id,
             id_to_name,
+
+            field_id_to_accessor,
         })
     }
 
@@ -261,6 +273,11 @@ impl Schema {
     /// Get field id by full name.
     pub fn name_by_field_id(&self, field_id: i32) -> Option<&str> {
         self.id_to_name.get(&field_id).map(String::as_str)
+    }
+
+    /// Get an accessor for retrieving data in a struct
+    pub fn accessor_for_field_id(&self, field_id: i32) -> &Accessor {
+        &self.field_id_to_accessor[&field_id]
     }
 }
 
