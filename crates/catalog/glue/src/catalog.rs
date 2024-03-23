@@ -17,15 +17,9 @@
 
 //! Iceberg Glue Catalog implementation.
 
-#![allow(unused)]
-
 use async_trait::async_trait;
-use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
 use iceberg::table::Table;
-use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
-};
+use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 use std::{collections::HashMap, fmt::Debug};
 
 use typed_builder::TypedBuilder;
@@ -110,33 +104,33 @@ impl Catalog for GlueCatalog {
 
     async fn create_namespace(
         &self,
-        namespace: &NamespaceIdent,
-        properties: HashMap<String, String>,
+        _namespace: &NamespaceIdent,
+        _properties: HashMap<String, String>,
     ) -> Result<Namespace> {
         todo!()
     }
 
-    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+    async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
         todo!()
     }
 
-    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+    async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
         todo!()
     }
 
     async fn update_namespace(
         &self,
-        namespace: &NamespaceIdent,
-        properties: HashMap<String, String>,
+        _namespace: &NamespaceIdent,
+        _properties: HashMap<String, String>,
     ) -> Result<()> {
         todo!()
     }
 
-    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
         todo!()
     }
 
-    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+    async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         todo!()
     }
 
