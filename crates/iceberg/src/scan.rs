@@ -229,8 +229,6 @@ impl TableScan {
     }
 
     fn create_partition_evaluator(&self, id: &i32, filter: &Predicate) -> PartitionEvaluator {
-        // TODO: this does not work yet. `bind` consumes self, but `Predicate`
-        //       does not implement `Clone` or `Copy`.
         let bound_predicate = filter
             .bind(self.schema.clone(), self.case_sensitive)
             .unwrap();
@@ -486,7 +484,7 @@ impl InclusiveProjection {
             BoundPredicate::Binary(expr) => expr.field_id(),
             BoundPredicate::Set(expr) => expr.field_id(),
             _ => {
-                panic!("Should not get here as these brances handled in self.visit")
+                panic!("Should not get here as these branches handled in self.visit")
             }
         };
 
