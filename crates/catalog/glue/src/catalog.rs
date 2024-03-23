@@ -78,22 +78,34 @@ impl Catalog for GlueCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let dbs = if parent.is_some() {
+        if parent.is_some() {
             return Ok(vec![]);
-        } else {
-            self.client
-                .0
-                .get_databases()
-                .send()
-                .await
-                .map_err(from_aws_error)?
-        };
+        }
 
-        Ok(dbs
-            .database_list()
-            .into_iter()
-            .map(|v| NamespaceIdent::new(v.name().to_string()))
-            .collect())
+        let mut database_list: Vec<NamespaceIdent> = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let resp = match &next_token {
+                Some(token) => self.client.0.get_databases().next_token(token),
+                None => self.client.0.get_databases(),
+            };
+            let resp = resp.send().await.map_err(from_aws_error)?;
+
+            let dbs: Vec<NamespaceIdent> = resp
+                .database_list()
+                .into_iter()
+                .map(|db| NamespaceIdent::new(db.name().to_string()))
+                .collect();
+            database_list.extend(dbs);
+
+            next_token = resp.next_token().map(ToOwned::to_owned);
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(database_list)
     }
 
     async fn create_namespace(
@@ -156,6 +168,3 @@ impl Catalog for GlueCatalog {
         todo!()
     }
 }
-
-#[cfg(test)]
-mod tests {}
