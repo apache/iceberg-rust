@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Integration tests for hms catalog.
+//! Integration tests for glue catalog.
 
 use iceberg::{Catalog, Result};
 use iceberg_catalog_glue::{GlueCatalog, GlueCatalogConfig};
