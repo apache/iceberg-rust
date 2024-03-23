@@ -64,9 +64,9 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Sets the scan as being case-insensitive
-    pub fn with_case_insensitivity(mut self) -> Self {
-        self.case_sensitive = false;
+    /// Sets the scan's case sensitivity
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
         self
     }
 
