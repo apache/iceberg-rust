@@ -21,7 +21,7 @@ use std::fmt::{Display, Formatter};
 
 use fnv::FnvHashSet;
 
-use crate::expr::accessor::Accessor;
+use crate::expr::accessor::StructAccessor;
 use crate::expr::Bind;
 use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
@@ -207,12 +207,12 @@ pub struct BoundReference {
     // For example, if the field is `a.b.c`, then `field.name` is `c`, but `original_name` is `a.b.c`.
     column_name: String,
     field: NestedFieldRef,
-    accessor: Accessor,
+    accessor: StructAccessor,
 }
 
 impl BoundReference {
     /// Creates a new bound reference.
-    pub fn new(name: impl Into<String>, field: NestedFieldRef, accessor: Accessor) -> Self {
+    pub fn new(name: impl Into<String>, field: NestedFieldRef, accessor: StructAccessor) -> Self {
         Self {
             column_name: name.into(),
             field,
@@ -226,7 +226,7 @@ impl BoundReference {
     }
 
     /// Get this BoundReference's Accessor
-    pub fn accessor(&self) -> &Accessor {
+    pub fn accessor(&self) -> &StructAccessor {
         &self.accessor
     }
 }
@@ -244,7 +244,7 @@ pub type BoundTerm = BoundReference;
 mod tests {
     use std::sync::Arc;
 
-    use crate::expr::accessor::Accessor;
+    use crate::expr::accessor::{StructAccessor, StructAccessor};
     use crate::expr::{Bind, BoundReference, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
@@ -271,7 +271,7 @@ mod tests {
         let expected_ref = BoundReference::new(
             "bar",
             NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            Accessor::new(1, None),
+            StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)),
         );
 
         assert_eq!(expected_ref, reference);
@@ -285,7 +285,7 @@ mod tests {
         let expected_ref = BoundReference::new(
             "BAR",
             NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            Accessor::new(1, None),
+            StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)),
         );
 
         assert_eq!(expected_ref, reference);

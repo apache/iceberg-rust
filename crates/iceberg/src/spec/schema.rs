@@ -18,7 +18,7 @@
 //! This module defines schema in iceberg.
 
 use crate::error::Result;
-use crate::expr::accessor::Accessor;
+use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
@@ -55,7 +55,7 @@ pub struct Schema {
     lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
 
-    field_id_to_accessor: HashMap<i32, Accessor>,
+    field_id_to_accessor: HashMap<i32, StructAccessor>,
 }
 
 impl PartialEq for Schema {
@@ -106,12 +106,7 @@ impl SchemaBuilder {
     pub fn build(self) -> Result<Schema> {
         let highest_field_id = self.fields.iter().map(|f| f.id).max().unwrap_or(0);
 
-        // TODO: handle nested field accessors and types
-        // base this on https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/Accessors.java#L214
-        let mut field_id_to_accessor = HashMap::new();
-        for (idx, field) in self.fields.iter().enumerate() {
-            field_id_to_accessor.insert(field.id, Accessor::new(idx, None));
-        }
+        let field_id_to_accessor = self.build_accessors();
 
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
@@ -148,6 +143,49 @@ impl SchemaBuilder {
 
             field_id_to_accessor,
         })
+    }
+
+    fn build_accessors(&self) -> HashMap<i32, StructAccessor> {
+        let mut map = HashMap::new();
+
+        for (pos, field) in self.fields.iter().enumerate() {
+            // add an accessor for this field
+            map.insert(
+                field.id,
+                StructAccessor::new(pos as i32, *field.field_type.clone()),
+            );
+
+            if let Type::Struct(nested) = field.field_type.as_ref() {
+                // add accessors for nested fields
+                for (field_id, accessor) in Self::build_accessors_nested(nested.fields()) {
+                    map.insert(field_id, StructAccessor::wrap(pos as i32, accessor));
+                }
+            }
+        }
+
+        map
+    }
+
+    fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, StructAccessor)> {
+        let mut results = vec![];
+        for (pos, field) in fields.iter().enumerate() {
+            if let Type::Struct(nested) = field.field_type.as_ref() {
+                let nested_accessors = Self::build_accessors_nested(nested.fields());
+
+                let wrapped_nested_accessors = nested_accessors
+                    .into_iter()
+                    .map(|(id, accessor)| (id, StructAccessor::wrap(pos as i32, accessor)));
+
+                results.extend(wrapped_nested_accessors);
+            }
+
+            results.push((
+                field.id,
+                StructAccessor::new(pos as i32, *field.field_type.clone()),
+            ));
+        }
+
+        results
     }
 
     fn validate_identifier_ids(
@@ -276,7 +314,7 @@ impl Schema {
     }
 
     /// Get an accessor for retrieving data in a struct
-    pub fn accessor_for_field_id(&self, field_id: i32) -> &Accessor {
+    pub fn accessor_for_field_id(&self, field_id: i32) -> &StructAccessor {
         &self.field_id_to_accessor[&field_id]
     }
 }
@@ -396,7 +434,7 @@ pub fn visit_schema<V: SchemaVisitor>(schema: &Schema, visitor: &mut V) -> Resul
     visitor.schema(schema, result)
 }
 
-/// Creates an field id to field map.
+/// Creates a field id to field map.
 pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>> {
     struct IndexById(HashMap<i32, NestedFieldRef>);
 

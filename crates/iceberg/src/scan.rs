@@ -374,7 +374,7 @@ impl ManifestEvalVisitor {
             }
             BoundPredicate::Unary(expr) => {
                 let pos = expr.term().accessor().position();
-                let field = &partitions[pos];
+                let field = &partitions[pos as usize];
 
                 match expr.op() {
                     PredicateOperator::IsNull => field.contains_null,
@@ -392,7 +392,7 @@ impl ManifestEvalVisitor {
             }
             BoundPredicate::Binary(expr) => {
                 let pos = expr.term().accessor().position();
-                let _field = &partitions[pos];
+                let _field = &partitions[pos as usize];
 
                 match expr.op() {
                     PredicateOperator::LessThan => {
@@ -426,7 +426,7 @@ impl ManifestEvalVisitor {
             }
             BoundPredicate::Set(expr) => {
                 let pos = expr.term().accessor().position();
-                let _field = &partitions[pos];
+                let _field = &partitions[pos as usize];
 
                 match expr.op() {
                     PredicateOperator::In => {
