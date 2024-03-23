@@ -42,6 +42,8 @@ arrow-array = { version = "51" }
 arrow-schema = { version = "51" }
 async-stream = "0.3.5"
 async-trait = "0.1"
+aws-config = "1.1.8"
+aws-sdk-glue = "1.21.0"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.5"

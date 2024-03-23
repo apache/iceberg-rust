@@ -31,8 +31,8 @@ keywords = ["iceberg", "glue", "catalog"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.1.8"
-aws-sdk-glue = "1.21.0"
+aws-config = { workspace = true }
+aws-sdk-glue = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
 typed-builder = { workspace = true }
