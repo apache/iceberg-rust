@@ -17,8 +17,12 @@
 
 //! Integration tests for glue catalog.
 
+use std::collections::HashMap;
+
 use iceberg::{Catalog, Result};
-use iceberg_catalog_glue::{GlueCatalog, GlueCatalogConfig};
+use iceberg_catalog_glue::{
+    GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
+};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
@@ -54,8 +58,18 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         }
     }
 
+    let props = HashMap::from([
+        (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
+        (
+            AWS_SECRET_ACCESS_KEY.to_string(),
+            "my_secret_key".to_string(),
+        ),
+        (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+    ]);
+
     let config = GlueCatalogConfig::builder()
         .endpoint_url(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
+        .props(props)
         .build();
 
     let glue_catalog = GlueCatalog::new(config).await;

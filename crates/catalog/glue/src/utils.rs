@@ -26,15 +26,15 @@ const _GLUE_ID: &str = "glue.id";
 const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
 const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
 /// Property aws profile name
-const PROFILE_NAME: &str = "profile_name";
+pub const AWS_PROFILE_NAME: &str = "profile_name";
 /// Property aws region
-const REGION_NAME: &str = "region_name";
+pub const AWS_REGION_NAME: &str = "region_name";
 /// Property aws access key
-const ACCESS_KEY_ID: &str = "aws_access_key_id";
+pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
 /// Property aws secret access key
-const SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
+pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
 /// Property aws session token
-const SESSION_TOKEN: &str = "aws_session_token";
+pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 
 /// Creates an AWS SDK configuration (SdkConfig) based on
 /// provided properties and an optional endpoint URL.
@@ -53,21 +53,21 @@ pub(crate) async fn create_sdk_config(
     }
 
     if let (Some(access_key), Some(secret_key)) = (
-        properties.get(ACCESS_KEY_ID),
-        properties.get(SECRET_ACCESS_KEY),
+        properties.get(AWS_ACCESS_KEY_ID),
+        properties.get(AWS_SECRET_ACCESS_KEY),
     ) {
-        let session_token = properties.get(SESSION_TOKEN).cloned();
+        let session_token = properties.get(AWS_SESSION_TOKEN).cloned();
         let credentials_provider =
             Credentials::new(access_key, secret_key, session_token, None, "properties");
 
         config = config.credentials_provider(credentials_provider)
     };
 
-    if let Some(profile_name) = properties.get(PROFILE_NAME) {
+    if let Some(profile_name) = properties.get(AWS_PROFILE_NAME) {
         config = config.profile_name(profile_name);
     }
 
-    if let Some(region_name) = properties.get(REGION_NAME) {
+    if let Some(region_name) = properties.get(AWS_REGION_NAME) {
         let region = Region::new(region_name.clone());
         config = config.region(region);
     }
@@ -96,11 +96,14 @@ mod tests {
     #[tokio::test]
     async fn test_config_with_properties() {
         let properties = HashMap::from([
-            (PROFILE_NAME.to_string(), "my_profile".to_string()),
-            (REGION_NAME.to_string(), "us-east-1".to_string()),
-            (ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
-            (SECRET_ACCESS_KEY.to_string(), "my-secret-key".to_string()),
-            (SESSION_TOKEN.to_string(), "my-token".to_string()),
+            (AWS_PROFILE_NAME.to_string(), "my_profile".to_string()),
+            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+            (AWS_ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
+            (
+                AWS_SECRET_ACCESS_KEY.to_string(),
+                "my-secret-key".to_string(),
+            ),
+            (AWS_SESSION_TOKEN.to_string(), "my-token".to_string()),
         ]);
 
         let sdk_config = create_sdk_config(&properties, None).await;
