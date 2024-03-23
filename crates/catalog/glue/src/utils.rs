@@ -25,16 +25,22 @@ use aws_sdk_glue::config::Credentials;
 const _GLUE_ID: &str = "glue.id";
 const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
 const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
+/// Property aws profile name
 const PROFILE_NAME: &str = "profile_name";
+/// Property aws region
 const REGION_NAME: &str = "region_name";
-
+/// Property aws access key
 const ACCESS_KEY_ID: &str = "aws_access_key_id";
+/// Property aws secret access key
 const SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
+/// Property aws session token
 const SESSION_TOKEN: &str = "aws_session_token";
 
-pub(crate) async fn get_sdk_config(
+/// Creates an AWS SDK configuration (SdkConfig) based on
+/// provided properties and an optional endpoint URL.
+pub(crate) async fn create_sdk_config(
     properties: &HashMap<String, String>,
-    endpoint_url: &Option<String>,
+    endpoint_url: Option<&String>,
 ) -> SdkConfig {
     let mut config = aws_config::defaults(BehaviorVersion::latest());
 
@@ -67,4 +73,49 @@ pub(crate) async fn get_sdk_config(
     }
 
     config.load().await
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_sdk_glue::config::ProvideCredentials;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_config_with_custom_endpoint() {
+        let properties = HashMap::new();
+        let endpoint_url = "http://custom_url:5000";
+
+        let sdk_config = create_sdk_config(&properties, Some(&endpoint_url.to_string())).await;
+
+        let result = sdk_config.endpoint_url().unwrap();
+
+        assert_eq!(result, endpoint_url);
+    }
+
+    #[tokio::test]
+    async fn test_config_with_properties() {
+        let properties = HashMap::from([
+            (PROFILE_NAME.to_string(), "my_profile".to_string()),
+            (REGION_NAME.to_string(), "us-east-1".to_string()),
+            (ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
+            (SECRET_ACCESS_KEY.to_string(), "my-secret-key".to_string()),
+            (SESSION_TOKEN.to_string(), "my-token".to_string()),
+        ]);
+
+        let sdk_config = create_sdk_config(&properties, None).await;
+
+        let region = sdk_config.region().unwrap().as_ref();
+        let credentials = sdk_config
+            .credentials_provider()
+            .unwrap()
+            .provide_credentials()
+            .await
+            .unwrap();
+
+        assert_eq!("us-east-1", region);
+        assert_eq!("my-access-id", credentials.access_key_id());
+        assert_eq!("my-secret-key", credentials.secret_access_key());
+        assert_eq!("my-token", credentials.session_token().unwrap());
+    }
 }

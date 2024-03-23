@@ -31,7 +31,7 @@ use std::{collections::HashMap, fmt::Debug};
 use typed_builder::TypedBuilder;
 
 use crate::error::from_aws_error;
-use crate::utils::get_sdk_config;
+use crate::utils::create_sdk_config;
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
@@ -39,7 +39,7 @@ pub struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
     endpoint_url: Option<String>,
     #[builder(default)]
-    properties: HashMap<String, String>,
+    props: HashMap<String, String>,
 }
 
 struct GlueClient(aws_sdk_glue::Client);
@@ -61,7 +61,7 @@ impl Debug for GlueCatalog {
 impl GlueCatalog {
     /// Create a new glue catalog
     pub async fn new(config: GlueCatalogConfig) -> Self {
-        let sdk_config = get_sdk_config(&config.properties, &config.endpoint_url).await;
+        let sdk_config = create_sdk_config(&config.props, config.endpoint_url.as_ref()).await;
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
