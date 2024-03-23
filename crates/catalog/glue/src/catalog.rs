@@ -94,7 +94,7 @@ impl Catalog for GlueCatalog {
 
             let dbs: Vec<NamespaceIdent> = resp
                 .database_list()
-                .into_iter()
+                .iter()
                 .map(|db| NamespaceIdent::new(db.name().to_string()))
                 .collect();
             database_list.extend(dbs);
