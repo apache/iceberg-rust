@@ -154,7 +154,7 @@ pub trait Bind {
     /// The type of the bound result.
     type Bound;
     /// Bind an expression to a schema.
-    fn bind(self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound>;
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound>;
 }
 
 #[cfg(test)]

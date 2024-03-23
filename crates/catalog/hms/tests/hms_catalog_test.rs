@@ -19,7 +19,9 @@
 
 use std::collections::HashMap;
 
-use iceberg::{Catalog, Namespace, NamespaceIdent};
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
@@ -27,6 +29,7 @@ use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
+const MINIO_PORT: u16 = 9000;
 type Result<T> = std::result::Result<T, iceberg::Error>;
 
 struct TestFixture {
@@ -45,6 +48,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     docker_compose.run();
 
     let hms_catalog_ip = docker_compose.get_container_ip("hive-metastore");
+    let minio_ip = docker_compose.get_container_ip("minio");
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
     loop {
@@ -56,9 +60,21 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         }
     }
 
+    let props = HashMap::from([
+        (
+            S3_ENDPOINT.to_string(),
+            format!("http://{}:{}", minio_ip, MINIO_PORT),
+        ),
+        (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+        (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+        (S3_REGION.to_string(), "us-east-1".to_string()),
+    ]);
+
     let config = HmsCatalogConfig::builder()
         .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
         .thrift_transport(HmsThriftTransport::Buffered)
+        .warehouse("s3a://warehouse/hive".to_string())
+        .props(props)
         .build();
 
     let hms_catalog = HmsCatalog::new(config).unwrap();
@@ -67,6 +83,163 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         _docker_compose: docker_compose,
         hms_catalog,
     }
+}
+
+fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+
+    let creation = TableCreation::builder()
+        .location(location.to_string())
+        .name(name.to_string())
+        .properties(HashMap::new())
+        .schema(schema)
+        .build();
+
+    Ok(creation)
+}
+
+#[tokio::test]
+async fn test_rename_table() -> Result<()> {
+    let fixture = set_test_fixture("test_rename_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
+
+    fixture
+        .hms_catalog
+        .rename_table(table.identifier(), &dest)
+        .await?;
+
+    let result = fixture.hms_catalog.table_exists(&dest).await?;
+
+    assert!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_table_exists").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture.hms_catalog.table_exists(table.identifier()).await?;
+
+    assert!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_table() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let table = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    fixture.hms_catalog.drop_table(table.identifier()).await?;
+
+    let result = fixture.hms_catalog.table_exists(table.identifier()).await?;
+
+    assert!(!result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_load_table() -> Result<()> {
+    let fixture = set_test_fixture("test_load_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let expected = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture
+        .hms_catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(result.identifier(), expected.identifier());
+    assert_eq!(result.metadata_location(), expected.metadata_location());
+    assert_eq!(result.metadata(), expected.metadata());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_table() -> Result<()> {
+    let fixture = set_test_fixture("test_create_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+
+    let result = fixture
+        .hms_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    assert_eq!(result.identifier().name(), "my_table");
+    assert!(result
+        .metadata_location()
+        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        fixture
+            .hms_catalog
+            .file_io()
+            .is_exist("s3a://warehouse/hive/metadata/")
+            .await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_list_tables() -> Result<()> {
+    let fixture = set_test_fixture("test_list_tables").await;
+    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
+
+    assert_eq!(result, vec![]);
+
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    fixture
+        .hms_catalog
+        .create_table(ns.name(), creation)
+        .await?;
+    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
+
+    assert_eq!(
+        result,
+        vec![TableIdent::new(ns.name().clone(), "my_table".to_string())]
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -205,19 +378,6 @@ async fn test_drop_namespace() -> Result<()> {
 
     let result = fixture.hms_catalog.namespace_exists(ns.name()).await?;
     assert!(!result);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_list_tables() -> Result<()> {
-    let fixture = set_test_fixture("test_list_tables").await;
-
-    let ns = Namespace::new(NamespaceIdent::new("default".into()));
-
-    let result = fixture.hms_catalog.list_tables(ns.name()).await?;
-
-    assert_eq!(result, vec![]);
 
     Ok(())
 }
