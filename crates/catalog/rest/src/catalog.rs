@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -57,6 +58,14 @@ pub struct RestCatalogConfig {
 }
 
 impl RestCatalogConfig {
+    fn url_prefixed(&self, parts: &[&str]) -> String {
+        [&self.uri, PATH_V1]
+            .into_iter()
+            .chain(self.props.get("prefix").map(|s| &**s))
+            .chain(parts.into_iter().cloned())
+            .join("/")
+    }
+
     fn config_endpoint(&self) -> String {
         [&self.uri, PATH_V1, "config"].join("/")
     }
@@ -66,60 +75,28 @@ impl RestCatalogConfig {
     }
 
     fn namespaces_endpoint(&self) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
-            "namespaces",
-        ]
-        .join("/")
+        self.url_prefixed(&["namespaces"])
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
-            "namespaces",
-            &ns.encode_in_url(),
-        ]
-        .join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url()])
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
-            "namespaces",
-            &ns.encode_in_url(),
-            "tables",
-        ]
-        .join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url(), "tables"])
     }
 
     fn rename_table_endpoint(&self) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
-            "tables",
-            "rename",
-        ]
-        .join("/")
+        self.url_prefixed(&["tables", "rename"])
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
+        self.url_prefixed(&[
             "namespaces",
             &table.namespace.encode_in_url(),
             "tables",
             encode(&table.name).as_ref(),
-        ]
-        .join("/")
+        ])
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
