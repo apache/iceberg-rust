@@ -62,7 +62,7 @@ impl RestCatalogConfig {
         [&self.uri, PATH_V1]
             .into_iter()
             .chain(self.props.get("prefix").map(|s| &**s))
-            .chain(parts.into_iter().cloned())
+            .chain(parts.iter().cloned())
             .join("/")
     }
 
