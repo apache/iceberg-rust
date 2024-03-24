@@ -979,6 +979,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_config_override_prefix() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": {
+                    "warehouse": "s3://iceberg-catalog",
+                    "prefix": "ice/warehouses/my"
+                },
+                "defaults": {}
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let list_ns_mock = server
+            .mock("GET", "/v1/ice/warehouses/my/namespaces")
+            .with_body(
+                r#"{
+                    "namespaces": []
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let _namespaces = catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_list_namespace() {
         let mut server = Server::new_async().await;
 
