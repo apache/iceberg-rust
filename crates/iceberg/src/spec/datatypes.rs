@@ -112,6 +112,21 @@ impl Type {
         matches!(self, Type::Struct(_))
     }
 
+    /// Whether the type is nested type.
+    #[inline(always)]
+    pub fn is_nested(&self) -> bool {
+        matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
+    }
+
+    /// Convert Type to StructType
+    pub fn as_struct_type(self) -> Option<StructType> {
+        if let Type::Struct(struct_type) = self {
+            Some(struct_type)
+        } else {
+            None
+        }
+    }
+
     /// Return max precision for decimal given [`num_bytes`] bytes.
     #[inline(always)]
     pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
@@ -334,7 +349,7 @@ impl fmt::Display for PrimitiveType {
 }
 
 /// DataType for a specific struct
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields
