@@ -68,7 +68,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     ]);
 
     let config = GlueCatalogConfig::builder()
-        .endpoint_url(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
+        .uri(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
         .props(props)
         .build();
 

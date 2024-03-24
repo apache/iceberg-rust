@@ -31,7 +31,7 @@ use crate::utils::create_sdk_config;
 /// Glue Catalog configuration
 pub struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
-    endpoint_url: Option<String>,
+    uri: Option<String>,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -55,7 +55,7 @@ impl Debug for GlueCatalog {
 impl GlueCatalog {
     /// Create a new glue catalog
     pub async fn new(config: GlueCatalogConfig) -> Self {
-        let sdk_config = create_sdk_config(&config.props, config.endpoint_url.as_ref()).await;
+        let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
