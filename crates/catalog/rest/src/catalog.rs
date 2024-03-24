@@ -61,18 +61,36 @@ impl RestCatalogConfig {
         [&self.uri, PATH_V1, "config"].join("/")
     }
 
+    fn get_token_endpoint(&self) -> String {
+        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+    }
+
     fn namespaces_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "namespaces"].join("/")
+        [
+            &self.uri,
+            PATH_V1,
+            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
+            "namespaces",
+        ]
+        .join("/")
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [&self.uri, PATH_V1, "namespaces", &ns.encode_in_url()].join("/")
+        [
+            &self.uri,
+            PATH_V1,
+            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
+            "namespaces",
+            &ns.encode_in_url(),
+        ]
+        .join("/")
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
         [
             &self.uri,
             PATH_V1,
+            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
             "namespaces",
             &ns.encode_in_url(),
             "tables",
@@ -81,23 +99,27 @@ impl RestCatalogConfig {
     }
 
     fn rename_table_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "tables", "rename"].join("/")
+        [
+            &self.uri,
+            PATH_V1,
+            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
+            "tables",
+            "rename",
+        ]
+        .join("/")
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
         [
             &self.uri,
             PATH_V1,
+            self.props.get("prefix").map(|s| &**s).unwrap_or(""),
             "namespaces",
             &table.namespace.encode_in_url(),
             "tables",
             encode(&table.name).as_ref(),
         ]
         .join("/")
-    }
-
-    fn get_token_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
