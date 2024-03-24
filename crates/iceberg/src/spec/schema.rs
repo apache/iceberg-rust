@@ -654,9 +654,20 @@ pub fn prune_columns(
     schema: &Schema,
     selected: impl IntoIterator<Item = i32>,
     select_full_types: bool,
-) -> Result<Option<Type>> {
+) -> Result<Type> {
     let mut visitor = PruneColumn::new(HashSet::from_iter(selected), select_full_types);
-    visit_schema(schema, &mut visitor)
+    let result = visit_schema(schema, &mut visitor);
+
+    match result {
+        Ok(s) => {
+            if let Some(struct_type) = s {
+                Ok(struct_type)
+            } else {
+                Ok(Type::Struct(StructType::default()))
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 impl PruneColumn {
@@ -717,11 +728,11 @@ impl PruneColumn {
 impl SchemaVisitor for PruneColumn {
     type T = Option<Type>;
 
-    fn schema(&mut self, _schema: &Schema, value: Option<Type>) -> Result<Self::T> {
+    fn schema(&mut self, _schema: &Schema, value: Option<Type>) -> Result<Option<Type>> {
         Ok(Some(value.unwrap()))
     }
 
-    fn field(&mut self, field: &NestedFieldRef, value: Self::T) -> Result<Self::T> {
+    fn field(&mut self, field: &NestedFieldRef, value: Option<Type>) -> Result<Option<Type>> {
         if self.selected.contains(&field.id) {
             if self.select_full_types {
                 Ok(Some(*field.field_type.clone()))
@@ -745,7 +756,11 @@ impl SchemaVisitor for PruneColumn {
         }
     }
 
-    fn r#struct(&mut self, r#struct: &StructType, results: Vec<Self::T>) -> Result<Self::T> {
+    fn r#struct(
+        &mut self,
+        r#struct: &StructType,
+        results: Vec<Option<Type>>,
+    ) -> Result<Option<Type>> {
         let fields = r#struct.fields();
         let mut selected_field = Vec::with_capacity(fields.len());
         let mut same_type = true;
@@ -780,7 +795,7 @@ impl SchemaVisitor for PruneColumn {
         Ok(None)
     }
 
-    fn list(&mut self, list: &ListType, value: Self::T) -> Result<Self::T> {
+    fn list(&mut self, list: &ListType, value: Option<Type>) -> Result<Option<Type>> {
         if self.selected.contains(&list.element_field.id) {
             if self.select_full_types {
                 Ok(Some(Type::List(list.clone())))
@@ -805,7 +820,12 @@ impl SchemaVisitor for PruneColumn {
         }
     }
 
-    fn map(&mut self, map: &MapType, _key_value: Self::T, value: Self::T) -> Result<Self::T> {
+    fn map(
+        &mut self,
+        map: &MapType,
+        _key_value: Option<Type>,
+        value: Option<Type>,
+    ) -> Result<Option<Type>> {
         if self.selected.contains(&map.value_field.id) {
             if self.select_full_types {
                 Ok(Some(Type::Map(map.clone())))
@@ -836,7 +856,7 @@ impl SchemaVisitor for PruneColumn {
         }
     }
 
-    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Option<Type>> {
         Ok(None)
     }
 }
@@ -1557,7 +1577,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([1]);
         let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1579,7 +1599,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([1]);
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1608,7 +1628,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([5]);
         let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1645,7 +1665,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([5]);
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1691,7 +1711,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([9]);
         let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1745,7 +1765,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([9]);
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1791,7 +1811,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([10]);
         let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1818,7 +1838,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([16]);
         let result = prune_columns(&schema, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1845,7 +1865,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([16]);
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1875,7 +1895,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([15]);
         let result = prune_columns(&schema_with_empty_struct_field, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1905,7 +1925,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([15]);
         let result = prune_columns(&schema_with_empty_struct_field, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -1966,7 +1986,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([11]);
         let result = prune_columns(&schema_with_struct_in_map_field, selected, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
     #[test]
     fn test_prune_columns_struct_in_map_full() {
@@ -2026,7 +2046,7 @@ table {
         let selected: HashSet<i32> = HashSet::from([11]);
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().unwrap(), expected_type);
+        assert_eq!(result.unwrap(), expected_type);
     }
 
     #[test]
@@ -2035,9 +2055,6 @@ table {
         let selected: HashSet<i32> = (0..schema.highest_field_id() + 1).collect();
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap().unwrap(),
-            Type::Struct(schema.as_struct().clone())
-        );
+        assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
     }
 }
