@@ -17,7 +17,7 @@
 
 //! Transform function used to compute partition values.
 use crate::{
-    spec::{Literal, Transform},
+    spec::{Datum, Transform},
     Result,
 };
 use arrow_array::ArrayRef;
@@ -35,7 +35,7 @@ pub trait TransformFunction: Send {
     /// type.
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef>;
     /// transform_literal will take an input literal and transform it into a new literal.
-    fn transform_literal(&self, input: &Literal) -> Result<Option<Literal>>;
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>>;
 }
 
 /// BoxedTransformFunction is a boxed trait object of TransformFunction.

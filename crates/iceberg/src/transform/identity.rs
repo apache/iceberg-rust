@@ -29,10 +29,7 @@ impl TransformFunction for Identity {
         Ok(input)
     }
 
-    fn transform_literal(
-        &self,
-        input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
+    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         Ok(Some(input.clone()))
     }
 }

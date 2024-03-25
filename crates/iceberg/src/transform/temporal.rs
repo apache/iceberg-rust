@@ -16,7 +16,7 @@
 // under the License.
 
 use super::TransformFunction;
-use crate::spec::{Literal, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind, Result};
 use arrow_arith::temporal::DatePart;
 use arrow_arith::{arity::binary, temporal::date_part};
@@ -24,7 +24,7 @@ use arrow_array::{
     types::Date32Type, Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Datelike, NaiveDate};
+use chrono::{DateTime, Datelike};
 use std::sync::Arc;
 
 /// Hour in one second.
@@ -41,11 +41,7 @@ pub struct Year;
 impl Year {
     #[inline]
     fn timestamp_to_year(timestamp: i64) -> i32 {
-        (DateTime::from_timestamp_micros(timestamp)
-            .unwrap()
-            .signed_duration_since(DateTime::from_timestamp(0, 0).unwrap())
-            .num_days()
-            / 365) as i32
+        DateTime::from_timestamp_micros(timestamp).unwrap().year() - UNIX_EPOCH_YEAR
     }
 }
 
@@ -62,22 +58,22 @@ impl TransformFunction for Year {
         ))
     }
 
-    fn transform_literal(
-        &self,
-        input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Date(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Timestamp(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::timestamp_to_year(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::timestamp_to_year(*v)),
-            ))),
-            _ => unreachable!("Should not call internally for unsupported literal type"),
-        }
+    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+        let val = match input.literal() {
+            PrimitiveLiteral::Date(v) => Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR,
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year(*v),
+            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_year(*v),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for year transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
+        };
+        Ok(Some(Datum::int(val)))
     }
 }
 
@@ -88,17 +84,17 @@ pub struct Month;
 impl Month {
     #[inline]
     fn timestamp_to_month(timestamp: i64) -> i32 {
-        let day = DateTime::from_timestamp_micros(timestamp)
-            .unwrap()
-            .signed_duration_since(DateTime::from_timestamp_micros(0).unwrap())
-            .num_days();
-        let m = NaiveDate::from_num_days_from_ce_opt(day as i32)
-            .unwrap()
-            .month0();
-        if day < 0 {
-            m as i32 - 12
+        // date: aaaa-aa-aa
+        // unix epoch date: 1970-01-01
+        // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
+        // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
+        let date = DateTime::from_timestamp_micros(timestamp).unwrap();
+        let unix_epoch_date = DateTime::from_timestamp_micros(0).unwrap();
+        if date > unix_epoch_date {
+            (date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR)
         } else {
-            m as i32
+            let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
+            -delta
         }
     }
 }
@@ -125,25 +121,25 @@ impl TransformFunction for Month {
         ))
     }
 
-    fn transform_literal(
-        &self,
-        input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Date(v)) => {
-                Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
-                    (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
-                        + Date32Type::to_naive_date(*v).month0() as i32,
-                ))))
+    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+        let val = match input.literal() {
+            PrimitiveLiteral::Date(v) => {
+                (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
+                    + Date32Type::to_naive_date(*v).month0() as i32
             }
-            Literal::Primitive(PrimitiveLiteral::Timestamp(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::timestamp_to_month(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::timestamp_to_month(*v)),
-            ))),
-            _ => unreachable!("Should not call internally for unsupported literal type"),
-        }
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month(*v),
+            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_month(*v),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for month transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
+        };
+        Ok(Some(Datum::int(val)))
     }
 }
 
@@ -184,22 +180,22 @@ impl TransformFunction for Day {
         Ok(Arc::new(res))
     }
 
-    fn transform_literal(
-        &self,
-        input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Date(v)) => {
-                Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(*v))))
+    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+        let val = match input.literal() {
+            PrimitiveLiteral::Date(v) => *v,
+            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v),
+            PrimitiveLiteral::TimestampTZ(v) => Self::day_timestamp_micro(*v),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for day transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
             }
-            Literal::Primitive(PrimitiveLiteral::Timestamp(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::day_timestamp_micro(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::day_timestamp_micro(*v)),
-            ))),
-            _ => unreachable!("Should not call internally for unsupported literal type"),
-        }
+        };
+        Ok(Some(Datum::int(val)))
     }
 }
 
@@ -223,31 +219,33 @@ impl TransformFunction for Hour {
                 .unwrap()
                 .unary(|v| -> i32 { Self::hour_timestamp_micro(v) }),
             _ => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
                     format!(
-                        "Should not call internally for unsupported data type {:?}",
+                        "Unsupported data type for hour transform: {:?}",
                         input.data_type()
                     ),
-                ))
+                ));
             }
         };
         Ok(Arc::new(res))
     }
 
-    fn transform_literal(
-        &self,
-        input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Timestamp(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::hour_timestamp_micro(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(Self::hour_timestamp_micro(*v)),
-            ))),
-            _ => unreachable!("Should not call internally for unsupported literal type"),
-        }
+    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+        let val = match input.literal() {
+            PrimitiveLiteral::Timestamp(v) => Self::hour_timestamp_micro(*v),
+            PrimitiveLiteral::TimestampTZ(v) => Self::hour_timestamp_micro(*v),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for hour transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
+        };
+        Ok(Some(Datum::int(val)))
     }
 }
 
@@ -257,7 +255,10 @@ mod test {
     use chrono::{NaiveDate, NaiveDateTime};
     use std::sync::Arc;
 
-    use crate::transform::TransformFunction;
+    use crate::{
+        spec::Datum,
+        transform::{BoxedTransformFunction, TransformFunction},
+    };
 
     #[test]
     fn test_transform_years() {
@@ -329,71 +330,63 @@ mod test {
         assert_eq!(res.value(4), -1);
     }
 
-    #[test]
-    fn test_transform_year_literal() {
-        let year = super::Year;
-
-        // Test Date32
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(18628));
-        let res = year.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                2021 - super::UNIX_EPOCH_YEAR
-            ))
-        );
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(-365));
-        let res = year.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
-
-        // Test TimestampMicrosecond
-        let timestamp =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(186280000000));
-        let res = year.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                1970 - super::UNIX_EPOCH_YEAR
-            ))
-        );
-        let timestamp = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(
-            NaiveDateTime::parse_from_str("1969-01-01 00:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
+    fn test_timestamp_and_tz_transform(
+        time: &str,
+        transform: &BoxedTransformFunction,
+        expect: Datum,
+    ) {
+        let timestamp = Datum::timestamp_micros(
+            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
                 .unwrap()
                 .and_utc()
                 .timestamp_micros(),
-        ));
-        let res = year.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
         );
+        let timestamp_tz = Datum::timestamptz_micros(
+            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap()
+                .and_utc()
+                .timestamp_micros(),
+        );
+        let res = transform.transform_literal(&timestamp).unwrap().unwrap();
+        assert_eq!(res, expect);
+        let res = transform.transform_literal(&timestamp_tz).unwrap().unwrap();
+        assert_eq!(res, expect);
+    }
 
-        // Test TimestampMicrosecond with timezone
-        let timestamp_tz = crate::spec::Literal::Primitive(
-            crate::spec::PrimitiveLiteral::TimestampTZ(186280000000),
+    fn test_timestamp_and_tz_transform_using_i64(
+        time: i64,
+        transform: &BoxedTransformFunction,
+        expect: Datum,
+    ) {
+        let timestamp = Datum::timestamp_micros(time);
+        let timestamp_tz = Datum::timestamptz_micros(time);
+        let res = transform.transform_literal(&timestamp).unwrap().unwrap();
+        assert_eq!(res, expect);
+        let res = transform.transform_literal(&timestamp_tz).unwrap().unwrap();
+        assert_eq!(res, expect);
+    }
+
+    fn test_date(date: i32, transform: &BoxedTransformFunction, expect: Datum) {
+        let date = Datum::date(date);
+        let res = transform.transform_literal(&date).unwrap().unwrap();
+        assert_eq!(res, expect);
+    }
+
+    #[test]
+    fn test_transform_year_literal() {
+        let year = Box::new(super::Year) as BoxedTransformFunction;
+
+        // Test Date32
+        test_date(18628, &year, Datum::int(2021 - super::UNIX_EPOCH_YEAR));
+        test_date(-365, &year, Datum::int(-1));
+
+        // Test TimestampMicrosecond
+        test_timestamp_and_tz_transform_using_i64(
+            186280000000,
+            &year,
+            Datum::int(1970 - super::UNIX_EPOCH_YEAR),
         );
-        let res = year.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                1970 - super::UNIX_EPOCH_YEAR
-            ))
-        );
-        let timestamp_tz =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::TimestampTZ(
-                NaiveDateTime::parse_from_str("1969-01-01 00:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros(),
-            ));
-        let res = year.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
+        test_timestamp_and_tz_transform("1969-01-01 00:00:00.00", &year, Datum::int(-1));
     }
 
     #[test]
@@ -468,71 +461,26 @@ mod test {
 
     #[test]
     fn test_transform_month_literal() {
-        let month = super::Month;
-        // Test Date32
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(18628));
-        let res = month.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                (2021 - super::UNIX_EPOCH_YEAR) * 12
-            ))
-        );
+        let month = Box::new(super::Month) as BoxedTransformFunction;
 
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(-31));
-        let res = month.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
+        // Test Date32
+        test_date(
+            18628,
+            &month,
+            Datum::int((2021 - super::UNIX_EPOCH_YEAR) * 12),
         );
+        test_date(-31, &month, Datum::int(-1));
 
         // Test TimestampMicrosecond
-        let timestamp =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(186280000000));
-        let res = month.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                (1970 - super::UNIX_EPOCH_YEAR) * 12
-            ))
+        test_timestamp_and_tz_transform_using_i64(
+            186280000000,
+            &month,
+            Datum::int((1970 - super::UNIX_EPOCH_YEAR) * 12),
         );
-
-        let timestamp = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(
-            NaiveDateTime::parse_from_str("1969-12-01 23:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        ));
-        let res = month.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
-
-        // Test TimestampMicrosecond with timezone
-        let timestamp_tz = crate::spec::Literal::Primitive(
-            crate::spec::PrimitiveLiteral::TimestampTZ(186280000000),
-        );
-        let res = month.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(
-                (1970 - super::UNIX_EPOCH_YEAR) * 12
-            ))
-        );
-
-        let timestamp_tz =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::TimestampTZ(
-                NaiveDateTime::parse_from_str("1969-12-01 23:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros(),
-            ));
-        let res = month.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
+        test_timestamp_and_tz_transform("1969-12-01 23:00:00.00", &month, Datum::int(-1));
+        test_timestamp_and_tz_transform("2017-12-01 00:00:00.00", &month, Datum::int(575));
+        test_timestamp_and_tz_transform("1970-01-01 00:00:00.00", &month, Datum::int(0));
+        test_timestamp_and_tz_transform("1969-12-31 00:00:00.00", &month, Datum::int(-1));
     }
 
     #[test]
@@ -615,63 +563,15 @@ mod test {
 
     #[test]
     fn test_transform_days_literal() {
-        let day = super::Day;
+        let day = Box::new(super::Day) as BoxedTransformFunction;
         // Test Date32
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(18628));
-        let res = day.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(18628))
-        );
-
-        let date = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Date(-31));
-        let res = day.transform_literal(&date).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-31))
-        );
+        test_date(18628, &day, Datum::int(18628));
+        test_date(-31, &day, Datum::int(-31));
 
         // Test TimestampMicrosecond
-        let timestamp = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(
-            1512151975038194,
-        ));
-        let res = day.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(17501))
-        );
-
-        let timestamp_tz = crate::spec::Literal::Primitive(
-            crate::spec::PrimitiveLiteral::TimestampTZ(-115200000000),
-        );
-        let res = day.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
-
-        // Test TimestampMicrosecond with timezone
-        let timestamp_tz =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::TimestampTZ(
-                NaiveDateTime::parse_from_str("2017-12-01 10:30:42.123", "%Y-%m-%d %H:%M:%S.%f")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros(),
-            ));
-        let res = day.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(17501))
-        );
-
-        let timestamp_tz = crate::spec::Literal::Primitive(
-            crate::spec::PrimitiveLiteral::TimestampTZ(-115200000000),
-        );
-        let res = day.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
+        test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17501));
+        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-1));
+        test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
     }
 
     #[test]
@@ -735,58 +635,10 @@ mod test {
 
     #[test]
     fn test_transform_hours_literal() {
-        let hour = super::Hour;
+        let hour = Box::new(super::Hour) as BoxedTransformFunction;
 
         // Test TimestampMicrosecond
-        let timestamp = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(
-            NaiveDateTime::parse_from_str("2017-12-01 18:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        ));
-        let res = hour.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(420042))
-        );
-
-        let timestamp = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Timestamp(
-            NaiveDateTime::parse_from_str("1969-12-31 23:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        ));
-        let res = hour.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
-
-        // Test TimestampMicrosecond with timezone
-        let timestamp_tz =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::TimestampTZ(
-                NaiveDateTime::parse_from_str("2017-12-01 18:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros(),
-            ));
-        let res = hour.transform_literal(&timestamp_tz).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(420042))
-        );
-
-        let timestamp =
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::TimestampTZ(
-                NaiveDateTime::parse_from_str("1969-12-31 23:00:00.00", "%Y-%m-%d %H:%M:%S.%f")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros(),
-            ));
-        let res = hour.transform_literal(&timestamp).unwrap().unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1))
-        );
+        test_timestamp_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
+        test_timestamp_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
     }
 }

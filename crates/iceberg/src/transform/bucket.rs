@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow_array::ArrayRef;
 use arrow_schema::{DataType, TimeUnit};
 
-use crate::spec::{Literal, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral};
 
 use super::TransformFunction;
 
@@ -208,45 +208,42 @@ impl TransformFunction for Bucket {
                     .iter()
                     .map(|v| v.map(|v| self.bucket_bytes(v))),
             ),
-            _ => unreachable!("Unsupported data type: {:?}", input.data_type()),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for bucket transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
         };
         Ok(Arc::new(res))
     }
 
-    fn transform_literal(&self, input: &Literal) -> crate::Result<Option<Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Int(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_int(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Long(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_long(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Decimal(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_decimal(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Date(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_date(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Time(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_time(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Timestamp(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_timestamp(*v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::String(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_str(v)),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::UUID(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_bytes(v.as_ref())),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Binary(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_bytes(v.as_ref())),
-            ))),
-            Literal::Primitive(PrimitiveLiteral::Fixed(v)) => Ok(Some(Literal::Primitive(
-                PrimitiveLiteral::Int(self.bucket_bytes(v.as_ref())),
-            ))),
-            _ => unreachable!("Unsupported literal: {:?}", input),
-        }
+    fn transform_literal(&self, input: &Datum) -> crate::Result<Option<Datum>> {
+        let val = match input.literal() {
+            PrimitiveLiteral::Int(v) => self.bucket_int(*v),
+            PrimitiveLiteral::Long(v) => self.bucket_long(*v),
+            PrimitiveLiteral::Decimal(v) => self.bucket_decimal(*v),
+            PrimitiveLiteral::Date(v) => self.bucket_date(*v),
+            PrimitiveLiteral::Time(v) => self.bucket_time(*v),
+            PrimitiveLiteral::Timestamp(v) => self.bucket_timestamp(*v),
+            PrimitiveLiteral::String(v) => self.bucket_str(v.as_str()),
+            PrimitiveLiteral::UUID(v) => self.bucket_bytes(v.as_ref()),
+            PrimitiveLiteral::Binary(v) => self.bucket_bytes(v.as_ref()),
+            PrimitiveLiteral::Fixed(v) => self.bucket_bytes(v.as_ref()),
+            _ => {
+                return Err(crate::Error::new(
+                    crate::ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Unsupported data type for bucket transform: {:?}",
+                        input.data_type()
+                    ),
+                ))
+            }
+        };
+        Ok(Some(Datum::int(val)))
     }
 }
 
@@ -254,14 +251,9 @@ impl TransformFunction for Bucket {
 mod test {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
-    use crate::transform::TransformFunction;
+    use crate::{spec::Datum, transform::TransformFunction};
 
     use super::Bucket;
-    #[test]
-    fn t() {
-        let bucket = Bucket::new(10);
-        println!("{}", bucket.bucket_n(-653330422));
-    }
     #[test]
     fn test_hash() {
         // test int
@@ -341,13 +333,8 @@ mod test {
     fn test_int_literal() {
         let bucket = Bucket::new(10);
         assert_eq!(
-            bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Int(34)
-                ))
-                .unwrap()
-                .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(9))
+            bucket.transform_literal(&Datum::int(34)).unwrap().unwrap(),
+            Datum::int(9)
         );
     }
 
@@ -355,13 +342,8 @@ mod test {
     fn test_long_literal() {
         let bucket = Bucket::new(10);
         assert_eq!(
-            bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Long(34)
-                ))
-                .unwrap()
-                .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(9))
+            bucket.transform_literal(&Datum::long(34)).unwrap().unwrap(),
+            Datum::int(9)
         );
     }
 
@@ -370,12 +352,10 @@ mod test {
         let bucket = Bucket::new(10);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Decimal(1420)
-                ))
+                .transform_literal(&Datum::decimal(1420).unwrap())
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(9))
+            Datum::int(9)
         );
     }
 
@@ -384,12 +364,10 @@ mod test {
         let bucket = Bucket::new(100);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Date(17486)
-                ))
+                .transform_literal(&Datum::date(17486))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(26))
+            Datum::int(26)
         );
     }
 
@@ -398,12 +376,10 @@ mod test {
         let bucket = Bucket::new(100);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Time(81068000000)
-                ))
+                .transform_literal(&Datum::time_micros(81068000000).unwrap())
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(59))
+            Datum::int(59)
         );
     }
 
@@ -412,12 +388,10 @@ mod test {
         let bucket = Bucket::new(100);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Timestamp(1510871468000000)
-                ))
+                .transform_literal(&Datum::timestamp_micros(1510871468000000))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(7))
+            Datum::int(7)
         );
     }
 
@@ -426,12 +400,10 @@ mod test {
         let bucket = Bucket::new(100);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::String("iceberg".to_string())
-                ))
+                .transform_literal(&Datum::string("iceberg"))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(89))
+            Datum::int(89)
         );
     }
 
@@ -440,14 +412,12 @@ mod test {
         let bucket = Bucket::new(100);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::UUID(
-                        "F79C3E09-677C-4BBD-A479-3F349CB785E7".parse().unwrap()
-                    )
+                .transform_literal(&Datum::uuid(
+                    "F79C3E09-677C-4BBD-A479-3F349CB785E7".parse().unwrap()
                 ))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(40))
+            Datum::int(40)
         );
     }
 
@@ -456,12 +426,10 @@ mod test {
         let bucket = Bucket::new(128);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Binary(b"\x00\x01\x02\x03".to_vec())
-                ))
+                .transform_literal(&Datum::binary(b"\x00\x01\x02\x03".to_vec()))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(57))
+            Datum::int(57)
         );
     }
 
@@ -470,12 +438,10 @@ mod test {
         let bucket = Bucket::new(128);
         assert_eq!(
             bucket
-                .transform_literal(&crate::spec::Literal::Primitive(
-                    crate::spec::PrimitiveLiteral::Fixed(b"foo".to_vec())
-                ))
+                .transform_literal(&Datum::fixed(b"foo".to_vec()))
                 .unwrap()
                 .unwrap(),
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(32))
+            Datum::int(32)
         );
     }
 }

@@ -21,7 +21,7 @@ use arrow_array::ArrayRef;
 use arrow_schema::DataType;
 
 use crate::{
-    spec::{Literal, PrimitiveLiteral},
+    spec::{Datum, PrimitiveLiteral},
     Error,
 };
 
@@ -122,38 +122,46 @@ impl TransformFunction for Truncate {
                 );
                 Ok(Arc::new(res))
             }
-            _ => unreachable!("Truncate transform only supports (int,long,decimal,string) types"),
+            _ => Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                format!(
+                    "Unsupported data type for truncate transform: {:?}",
+                    input.data_type()
+                ),
+            )),
         }
     }
 
-    fn transform_literal(&self, input: &Literal) -> crate::Result<Option<Literal>> {
-        match input {
-            Literal::Primitive(PrimitiveLiteral::Int(v)) => Ok(Some({
+    fn transform_literal(&self, input: &Datum) -> crate::Result<Option<Datum>> {
+        match input.literal() {
+            PrimitiveLiteral::Int(v) => Ok(Some({
                 let width: i32 = self.width.try_into().map_err(|_| {
                     Error::new(
                         crate::ErrorKind::DataInvalid,
                         "width is failed to convert to i32 when truncate Int32Array",
                     )
                 })?;
-                Literal::Primitive(PrimitiveLiteral::Int(Self::truncate_i32(*v, width)))
+                Datum::int(Self::truncate_i32(*v, width))
             })),
-            Literal::Primitive(PrimitiveLiteral::Long(v)) => Ok(Some({
+            PrimitiveLiteral::Long(v) => Ok(Some({
                 let width = self.width as i64;
-                Literal::Primitive(PrimitiveLiteral::Long(Self::truncate_i64(*v, width)))
+                Datum::long(Self::truncate_i64(*v, width))
             })),
-            Literal::Primitive(PrimitiveLiteral::Decimal(v)) => Ok(Some({
+            PrimitiveLiteral::Decimal(v) => Ok(Some({
                 let width = self.width as i128;
-                Literal::Primitive(PrimitiveLiteral::Decimal(Self::truncate_decimal_i128(
-                    *v, width,
-                )))
+                Datum::decimal(Self::truncate_decimal_i128(*v, width))?
             })),
-            Literal::Primitive(PrimitiveLiteral::String(v)) => Ok(Some({
+            PrimitiveLiteral::String(v) => Ok(Some({
                 let len = self.width as usize;
-                Literal::Primitive(PrimitiveLiteral::String(
-                    Self::truncate_str(v, len).to_string(),
-                ))
+                Datum::string(Self::truncate_str(v, len).to_string())
             })),
-            _ => unreachable!("Truncate transform only supports (int,long,decimal,string) types"),
+            _ => Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                format!(
+                    "Unsupported data type for truncate transform: {:?}",
+                    input.data_type()
+                ),
+            )),
         }
     }
 }
@@ -166,7 +174,7 @@ mod test {
         builder::PrimitiveBuilder, types::Decimal128Type, Decimal128Array, Int32Array, Int64Array,
     };
 
-    use crate::transform::TransformFunction;
+    use crate::{spec::Datum, transform::TransformFunction};
 
     // Test case ref from: https://iceberg.apache.org/spec/#truncate-transform-details
     #[test]
@@ -256,77 +264,55 @@ mod test {
 
     #[test]
     fn test_literal_int() {
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(1));
+        let input = Datum::int(1);
         let res = super::Truncate::new(10)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(0))
-        );
+        assert_eq!(res, Datum::int(0),);
 
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-1));
+        let input = Datum::int(-1);
         let res = super::Truncate::new(10)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Int(-10))
-        );
+        assert_eq!(res, Datum::int(-10),);
     }
 
     #[test]
     fn test_literal_long() {
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Long(1));
+        let input = Datum::long(1);
         let res = super::Truncate::new(10)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Long(0))
-        );
+        assert_eq!(res, Datum::long(0),);
 
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Long(-1));
+        let input = Datum::long(-1);
         let res = super::Truncate::new(10)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Long(-10))
-        );
+        assert_eq!(res, Datum::long(-10),);
     }
 
     #[test]
     fn test_decimal_literal() {
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Decimal(1065));
+        let input = Datum::decimal(1065).unwrap();
         let res = super::Truncate::new(50)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::Decimal(1050))
-        );
+        assert_eq!(res, Datum::decimal(1050).unwrap(),);
     }
 
     #[test]
     fn test_string_literal() {
-        let input = crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::String(
-            "iceberg".to_string(),
-        ));
+        let input = Datum::string("iceberg".to_string());
         let res = super::Truncate::new(3)
             .transform_literal(&input)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            res,
-            crate::spec::Literal::Primitive(crate::spec::PrimitiveLiteral::String(
-                "ice".to_string()
-            ))
-        );
+        assert_eq!(res, Datum::string("ice".to_string()),);
     }
 }

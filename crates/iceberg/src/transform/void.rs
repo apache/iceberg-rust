@@ -28,10 +28,7 @@ impl TransformFunction for Void {
         Ok(new_null_array(input.data_type(), input.len()))
     }
 
-    fn transform_literal(
-        &self,
-        _input: &crate::spec::Literal,
-    ) -> Result<Option<crate::spec::Literal>> {
+    fn transform_literal(&self, _input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         Ok(None)
     }
 }
