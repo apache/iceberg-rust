@@ -170,7 +170,7 @@ impl TableScan {
                         }
                         DataContentType::Data => {
                             let scan_task: crate::Result<FileScanTask> = Ok(FileScanTask {
-                                data_file: manifest_entry.clone(),
+                                data_manifest_entry: manifest_entry.clone(),
                                 start: 0,
                                 length: manifest_entry.file_size_in_bytes(),
                             });
@@ -198,7 +198,7 @@ impl TableScan {
 /// A task to scan part of file.
 #[derive(Debug)]
 pub struct FileScanTask {
-    data_file: ManifestEntryRef,
+    data_manifest_entry: ManifestEntryRef,
     #[allow(dead_code)]
     start: u64,
     #[allow(dead_code)]
@@ -209,8 +209,8 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub fn data_file(&self) -> ManifestEntryRef {
-        self.data_file.clone()
+    pub fn data_manifest_entry(&self) -> ManifestEntryRef {
+        self.data_manifest_entry.clone()
     }
 }
 
@@ -504,17 +504,17 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file.file_path().to_string());
+        tasks.sort_by_key(|t| t.data_manifest_entry().data_file().file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file.file_path(),
+            tasks[0].data_manifest_entry().data_file().file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file.file_path(),
+            tasks[1].data_manifest_entry().data_file().file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
     }

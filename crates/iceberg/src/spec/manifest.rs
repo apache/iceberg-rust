@@ -900,6 +900,12 @@ impl ManifestEntry {
     pub fn file_size_in_bytes(&self) -> u64 {
         self.data_file.file_size_in_bytes
     }
+
+    /// get a reference to the actual data file
+    #[inline]
+    pub fn data_file(&self) -> &DataFile {
+        &self.data_file
+    }
 }
 
 /// Used to track additions and deletions in ManifestEntry.
