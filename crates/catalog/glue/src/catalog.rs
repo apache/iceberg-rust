@@ -140,8 +140,27 @@ impl Catalog for GlueCatalog {
         }
     }
 
-    async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
-        todo!()
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+        let db_name = validate_namespace(namespace)?;
+
+        let builder = self.client.0.get_database().name(&db_name);
+        let builder = with_catalog_id!(builder, self.config);
+
+        let resp = builder.send().await;
+
+        match resp {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if err
+                    .as_service_error()
+                    .map(|e| e.is_entity_not_found_exception())
+                    == Some(true)
+                {
+                    return Ok(false);
+                }
+                Err(from_sdk_error(err))
+            }
+        }
     }
 
     async fn update_namespace(
