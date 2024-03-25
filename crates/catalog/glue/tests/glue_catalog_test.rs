@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use iceberg::{Catalog, Result};
+use iceberg::{Catalog, Namespace, NamespaceIdent, Result};
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
@@ -78,6 +78,25 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         _docker_compose: docker_compose,
         glue_catalog,
     }
+}
+
+#[tokio::test]
+async fn test_create_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_create_namespace").await;
+
+    let properties = HashMap::new();
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    let expected = Namespace::new(namespace.clone());
+
+    let result = fixture
+        .glue_catalog
+        .create_namespace(&namespace, properties)
+        .await?;
+
+    assert_eq!(result, expected);
+
+    Ok(())
 }
 
 #[tokio::test]

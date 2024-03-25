@@ -24,8 +24,8 @@ use std::{collections::HashMap, fmt::Debug};
 
 use typed_builder::TypedBuilder;
 
-use crate::error::from_aws_error;
-use crate::utils::create_sdk_config;
+use crate::error::from_sdk_error;
+use crate::utils::{convert_to_database, create_sdk_config, GLUE_ID};
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
@@ -84,7 +84,7 @@ impl Catalog for GlueCatalog {
                 Some(token) => self.client.0.get_databases().next_token(token),
                 None => self.client.0.get_databases(),
             };
-            let resp = resp.send().await.map_err(from_aws_error)?;
+            let resp = resp.send().await.map_err(from_sdk_error)?;
 
             let dbs: Vec<NamespaceIdent> = resp
                 .database_list()
@@ -104,10 +104,20 @@ impl Catalog for GlueCatalog {
 
     async fn create_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        todo!()
+        let db_input = convert_to_database(namespace, &self.config.uri, &properties)?;
+
+        let mut builder = self.client.0.create_database().database_input(db_input);
+
+        if let Some(catalog_id) = properties.get(GLUE_ID) {
+            builder = builder.catalog_id(catalog_id);
+        }
+
+        builder.send().await.map_err(from_sdk_error)?;
+
+        Ok(Namespace::new(namespace.clone()))
     }
 
     async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
