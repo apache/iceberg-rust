@@ -81,6 +81,39 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 }
 
 #[tokio::test]
+async fn test_update_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_update_namespace").await;
+
+    let properties = HashMap::new();
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    fixture
+        .glue_catalog
+        .create_namespace(&namespace, properties)
+        .await?;
+
+    let before_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let before_update = before_update.properties().get("description");
+    assert_eq!(before_update, None);
+
+    let properties = HashMap::from([("description".to_string(), "my_update".to_string())]);
+
+    fixture
+        .glue_catalog
+        .update_namespace(&namespace, properties)
+        .await?;
+
+    let after_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let after_update = after_update.properties().get("description");
+    assert_eq!(
+        after_update.as_deref(),
+        Some("my_update".to_string()).as_ref()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_namespace_exists() -> Result<()> {
     let fixture = set_test_fixture("test_namespace_exists").await;
 

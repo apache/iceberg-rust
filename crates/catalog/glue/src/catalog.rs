@@ -28,7 +28,9 @@ use std::{collections::HashMap, fmt::Debug};
 use typed_builder::TypedBuilder;
 
 use crate::error::from_sdk_error;
-use crate::utils::{convert_to_database, create_sdk_config, validate_namespace};
+use crate::utils::{
+    convert_to_database, convert_to_namespace, create_sdk_config, validate_namespace,
+};
 use crate::with_catalog_id;
 
 #[derive(Debug, TypedBuilder)]
@@ -113,14 +115,14 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        let db_input = convert_to_database(namespace, &self.config.uri, &properties)?;
+        let db_input = convert_to_database(namespace, &properties)?;
 
         let builder = self.client.0.create_database().database_input(db_input);
         let builder = with_catalog_id!(builder, self.config);
 
         builder.send().await.map_err(from_sdk_error)?;
 
-        Ok(Namespace::new(namespace.clone()))
+        Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
@@ -132,7 +134,10 @@ impl Catalog for GlueCatalog {
         let resp = builder.send().await.map_err(from_sdk_error)?;
 
         match resp.database() {
-            Some(db) => Ok(Namespace::new(NamespaceIdent::new(db.name().to_string()))),
+            Some(db) => {
+                let namespace = convert_to_namespace(&db);
+                Ok(namespace)
+            }
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Database with name: {} does not exist", db_name),
@@ -165,10 +170,23 @@ impl Catalog for GlueCatalog {
 
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<()> {
-        todo!()
+        let db_name = validate_namespace(&namespace)?;
+        let db_input = convert_to_database(&namespace, &properties)?;
+
+        let builder = self
+            .client
+            .0
+            .update_database()
+            .name(&db_name)
+            .database_input(db_input);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(from_sdk_error)?;
+
+        Ok(())
     }
 
     async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {

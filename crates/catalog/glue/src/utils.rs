@@ -20,8 +20,11 @@
 use std::collections::HashMap;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
-use aws_sdk_glue::{config::Credentials, types::DatabaseInput};
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result};
+use aws_sdk_glue::{
+    config::Credentials,
+    types::{Database, DatabaseInput},
+};
+use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 
 use crate::error::from_build_error;
 
@@ -39,6 +42,8 @@ pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
 pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 /// Parameter namespace description
 const DESCRIPTION: &str = "description";
+/// Parameter namespace description
+const LOCATION: &str = "location_uri";
 
 /// Creates an AWS SDK configuration (SdkConfig) based on
 /// provided properties and an optional endpoint URL.
@@ -82,20 +87,18 @@ pub(crate) async fn create_sdk_config(
 /// Create `DatabaseInput` from name, uri and properties
 pub(crate) fn convert_to_database(
     namespace: &NamespaceIdent,
-    location_uri: &Option<String>,
     properties: &HashMap<String, String>,
 ) -> Result<DatabaseInput> {
     let db_name = validate_namespace(namespace)?;
     let mut builder = DatabaseInput::builder().name(db_name);
 
-    if let Some(location_uri) = location_uri {
-        builder = builder.location_uri(location_uri);
-    }
-
     for (k, v) in properties.iter() {
         match k.as_ref() {
             DESCRIPTION => {
                 builder = builder.description(v);
+            }
+            LOCATION => {
+                builder = builder.location_uri(v);
             }
             _ => {
                 builder = builder.parameters(k, v);
@@ -104,6 +107,24 @@ pub(crate) fn convert_to_database(
     }
 
     builder.build().map_err(from_build_error)
+}
+
+/// Create `Namespace` from aws sdk glue `Database`
+pub(crate) fn convert_to_namespace(database: &Database) -> Namespace {
+    let db_name = database.name().to_string();
+    let mut properties = database
+        .parameters()
+        .map_or_else(HashMap::new, |p| p.clone());
+
+    if let Some(location_uri) = database.location_uri() {
+        properties.insert(LOCATION.to_string(), location_uri.to_string());
+    };
+
+    if let Some(description) = database.description() {
+        properties.insert(DESCRIPTION.to_string(), description.to_string());
+    }
+
+    Namespace::with_properties(NamespaceIdent::new(db_name), properties)
 }
 
 /// Checks if provided `NamespaceIdent` is valid.
@@ -152,15 +173,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_convert_to_namespace() -> Result<()> {
+        let db = Database::builder()
+            .name("my_db")
+            .location_uri("my_location")
+            .description("my_description")
+            .build()
+            .map_err(from_build_error)?;
+
+        let properties = HashMap::from([
+            (DESCRIPTION.to_string(), "my_description".to_string()),
+            (LOCATION.to_string(), "my_location".to_string()),
+        ]);
+
+        let expected =
+            Namespace::with_properties(NamespaceIdent::new("my_db".to_string()), properties);
+        let result = convert_to_namespace(&db);
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_convert_to_database() -> Result<()> {
         let namespace = NamespaceIdent::new("my_database".to_string());
-        let location_uri = Some("my_location".to_string());
-        let properties = HashMap::new();
+        let properties = HashMap::from([(LOCATION.to_string(), "my_location".to_string())]);
 
-        let result = convert_to_database(&namespace, &location_uri, &properties)?;
+        let result = convert_to_database(&namespace, &properties)?;
 
         assert_eq!("my_database", result.name());
-        assert_eq!(location_uri, result.location_uri);
+        assert_eq!(Some("my_location".to_string()), result.location_uri);
 
         Ok(())
     }
