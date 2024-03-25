@@ -135,7 +135,7 @@ impl Catalog for GlueCatalog {
 
         match resp.database() {
             Some(db) => {
-                let namespace = convert_to_namespace(&db);
+                let namespace = convert_to_namespace(db);
                 Ok(namespace)
             }
             None => Err(Error::new(
@@ -173,8 +173,8 @@ impl Catalog for GlueCatalog {
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<()> {
-        let db_name = validate_namespace(&namespace)?;
-        let db_input = convert_to_database(&namespace, &properties)?;
+        let db_name = validate_namespace(namespace)?;
+        let db_input = convert_to_database(namespace, &properties)?;
 
         let builder = self
             .client
@@ -193,8 +193,38 @@ impl Catalog for GlueCatalog {
         todo!()
     }
 
-    async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        todo!()
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        let db_name = validate_namespace(namespace)?;
+        let mut table_list: Vec<TableIdent> = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let resp = match &next_token {
+                Some(token) => self
+                    .client
+                    .0
+                    .get_tables()
+                    .database_name(&db_name)
+                    .next_token(token),
+                None => self.client.0.get_tables().database_name(&db_name),
+            };
+            let resp = resp.send().await.map_err(from_sdk_error)?;
+
+            let names: Vec<_> = resp
+                .table_list()
+                .iter()
+                .map(|tbl| TableIdent::new(namespace.clone(), tbl.name().to_string()))
+                .collect();
+
+            table_list.extend(names);
+
+            next_token = resp.next_token().map(ToOwned::to_owned);
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(table_list)
     }
 
     async fn create_table(
