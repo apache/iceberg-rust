@@ -81,6 +81,29 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 }
 
 #[tokio::test]
+async fn test_get_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_get_namespace").await;
+
+    let properties = HashMap::new();
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    let does_not_exist = fixture.glue_catalog.get_namespace(&namespace).await;
+    assert!(does_not_exist.is_err());
+
+    fixture
+        .glue_catalog
+        .create_namespace(&namespace, properties)
+        .await?;
+
+    let result = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let expected = Namespace::new(namespace);
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_create_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_create_namespace").await;
 

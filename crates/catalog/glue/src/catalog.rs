@@ -19,19 +19,24 @@
 
 use async_trait::async_trait;
 use iceberg::table::Table;
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
+use iceberg::{
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
+};
 use std::{collections::HashMap, fmt::Debug};
 
 use typed_builder::TypedBuilder;
 
 use crate::error::from_sdk_error;
-use crate::utils::{convert_to_database, create_sdk_config, GLUE_ID};
+use crate::utils::{convert_to_database, create_sdk_config, validate_namespace};
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
 pub struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
     uri: Option<String>,
+    #[builder(default, setter(strip_option))]
+    glue_id: Option<String>,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -111,8 +116,8 @@ impl Catalog for GlueCatalog {
 
         let mut builder = self.client.0.create_database().database_input(db_input);
 
-        if let Some(catalog_id) = properties.get(GLUE_ID) {
-            builder = builder.catalog_id(catalog_id);
+        if let Some(glue_id) = &self.config.glue_id {
+            builder = builder.catalog_id(glue_id);
         }
 
         builder.send().await.map_err(from_sdk_error)?;
@@ -120,8 +125,24 @@ impl Catalog for GlueCatalog {
         Ok(Namespace::new(namespace.clone()))
     }
 
-    async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
-        todo!()
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        let db_name = validate_namespace(namespace)?;
+
+        let mut builder = self.client.0.get_database().name(&db_name);
+
+        if let Some(glue_id) = &self.config.glue_id {
+            builder = builder.catalog_id(glue_id);
+        };
+
+        let resp = builder.send().await.map_err(from_sdk_error)?;
+
+        match resp.database() {
+            Some(db) => Ok(Namespace::new(NamespaceIdent::new(db.name().to_string()))),
+            None => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Database with name: {} does not exist", db_name),
+            )),
+        }
     }
 
     async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {

@@ -25,8 +25,6 @@ use iceberg::{Error, ErrorKind, NamespaceIdent, Result};
 
 use crate::error::from_build_error;
 
-/// Property glue catalog id
-pub const GLUE_ID: &str = "glue.id";
 const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
 const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
 /// Property aws profile name
