@@ -88,17 +88,19 @@ impl Catalog for GlueCatalog {
         let mut next_token: Option<String> = None;
 
         loop {
-            let resp = match &next_token {
+            let builder = match &next_token {
                 Some(token) => self.client.0.get_databases().next_token(token),
                 None => self.client.0.get_databases(),
             };
-            let resp = resp.send().await.map_err(from_sdk_error)?;
+            let builder = with_catalog_id!(builder, self.config);
+            let resp = builder.send().await.map_err(from_sdk_error)?;
 
             let dbs: Vec<NamespaceIdent> = resp
                 .database_list()
                 .iter()
                 .map(|db| NamespaceIdent::new(db.name().to_string()))
                 .collect();
+
             database_list.extend(dbs);
 
             next_token = resp.next_token().map(ToOwned::to_owned);
@@ -189,8 +191,23 @@ impl Catalog for GlueCatalog {
         Ok(())
     }
 
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        let db_name = validate_namespace(namespace)?;
+        let table_list = self.list_tables(namespace).await?;
+
+        if table_list.len() > 0 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Database with name: {} is not empty", &db_name),
+            ));
+        }
+
+        let builder = self.client.0.delete_database().name(db_name);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(from_sdk_error)?;
+
+        Ok(())
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -199,7 +216,7 @@ impl Catalog for GlueCatalog {
         let mut next_token: Option<String> = None;
 
         loop {
-            let resp = match &next_token {
+            let builder = match &next_token {
                 Some(token) => self
                     .client
                     .0
@@ -208,15 +225,16 @@ impl Catalog for GlueCatalog {
                     .next_token(token),
                 None => self.client.0.get_tables().database_name(&db_name),
             };
-            let resp = resp.send().await.map_err(from_sdk_error)?;
+            let builder = with_catalog_id!(builder, self.config);
+            let resp = builder.send().await.map_err(from_sdk_error)?;
 
-            let names: Vec<_> = resp
+            let tables: Vec<_> = resp
                 .table_list()
                 .iter()
                 .map(|tbl| TableIdent::new(namespace.clone(), tbl.name().to_string()))
                 .collect();
 
-            table_list.extend(names);
+            table_list.extend(tables);
 
             next_token = resp.next_token().map(ToOwned::to_owned);
             if next_token.is_none() {

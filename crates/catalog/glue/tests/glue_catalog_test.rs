@@ -106,6 +106,23 @@ async fn test_list_tables() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_drop_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_namespace").await;
+    let namespace = NamespaceIdent::new("my_database".to_string());
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(exists);
+
+    fixture.glue_catalog.drop_namespace(&namespace).await?;
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(!exists);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_update_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_update_namespace").await;
     let namespace = NamespaceIdent::new("my_database".into());
