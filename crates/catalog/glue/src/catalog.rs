@@ -195,7 +195,7 @@ impl Catalog for GlueCatalog {
         let db_name = validate_namespace(namespace)?;
         let table_list = self.list_tables(namespace).await?;
 
-        if table_list.len() > 0 {
+        if !table_list.is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Database with name: {} is not empty", &db_name),
