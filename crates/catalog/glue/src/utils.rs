@@ -132,6 +132,18 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     Ok(name)
 }
 
+#[macro_export]
+/// Extends aws sdk builder with catalog id if present
+macro_rules! with_catalog_id {
+    ($builder:expr, $config:expr) => {{
+        if let Some(catalog_id) = &$config.catalog_id {
+            $builder.catalog_id(catalog_id)
+        } else {
+            $builder
+        }
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use aws_sdk_glue::config::ProvideCredentials;

@@ -29,6 +29,7 @@ use typed_builder::TypedBuilder;
 
 use crate::error::from_sdk_error;
 use crate::utils::{convert_to_database, create_sdk_config, validate_namespace};
+use crate::with_catalog_id;
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
@@ -36,7 +37,7 @@ pub struct GlueCatalogConfig {
     #[builder(default, setter(strip_option))]
     uri: Option<String>,
     #[builder(default, setter(strip_option))]
-    glue_id: Option<String>,
+    catalog_id: Option<String>,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -114,11 +115,8 @@ impl Catalog for GlueCatalog {
     ) -> Result<Namespace> {
         let db_input = convert_to_database(namespace, &self.config.uri, &properties)?;
 
-        let mut builder = self.client.0.create_database().database_input(db_input);
-
-        if let Some(glue_id) = &self.config.glue_id {
-            builder = builder.catalog_id(glue_id);
-        }
+        let builder = self.client.0.create_database().database_input(db_input);
+        let builder = with_catalog_id!(builder, self.config);
 
         builder.send().await.map_err(from_sdk_error)?;
 
@@ -128,11 +126,8 @@ impl Catalog for GlueCatalog {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
         let db_name = validate_namespace(namespace)?;
 
-        let mut builder = self.client.0.get_database().name(&db_name);
-
-        if let Some(glue_id) = &self.config.glue_id {
-            builder = builder.catalog_id(glue_id);
-        };
+        let builder = self.client.0.get_database().name(&db_name);
+        let builder = with_catalog_id!(builder, self.config);
 
         let resp = builder.send().await.map_err(from_sdk_error)?;
 
