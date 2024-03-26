@@ -40,8 +40,16 @@ pub struct Year;
 
 impl Year {
     #[inline]
-    fn timestamp_to_year(timestamp: i64) -> i32 {
-        DateTime::from_timestamp_micros(timestamp).unwrap().year() - UNIX_EPOCH_YEAR
+    fn timestamp_to_year(timestamp: i64) -> Result<i32> {
+        Ok(DateTime::from_timestamp_micros(timestamp)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Fail to convert timestamp to date in year transform",
+                )
+            })?
+            .year()
+            - UNIX_EPOCH_YEAR)
     }
 }
 
@@ -61,8 +69,8 @@ impl TransformFunction for Year {
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         let val = match input.literal() {
             PrimitiveLiteral::Date(v) => Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR,
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year(*v),
-            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_year(*v),
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year(*v)?,
+            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_year(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -83,18 +91,24 @@ pub struct Month;
 
 impl Month {
     #[inline]
-    fn timestamp_to_month(timestamp: i64) -> i32 {
+    fn timestamp_to_month(timestamp: i64) -> Result<i32> {
         // date: aaaa-aa-aa
         // unix epoch date: 1970-01-01
         // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
         // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
-        let date = DateTime::from_timestamp_micros(timestamp).unwrap();
-        let unix_epoch_date = DateTime::from_timestamp_micros(0).unwrap();
+        let date = DateTime::from_timestamp_micros(timestamp).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Fail to convert timestamp to date in month transform",
+            )
+        })?;
+        let unix_epoch_date = DateTime::from_timestamp_micros(0)
+            .expect("0 timestamp from unix epoch should be valid");
         if date > unix_epoch_date {
-            (date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR)
+            Ok((date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR))
         } else {
             let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-            -delta
+            Ok(-delta)
         }
     }
 }
@@ -127,8 +141,8 @@ impl TransformFunction for Month {
                 (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
                     + Date32Type::to_naive_date(*v).month0() as i32
             }
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month(*v),
-            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_month(*v),
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month(*v)?,
+            PrimitiveLiteral::TimestampTZ(v) => Self::timestamp_to_month(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
