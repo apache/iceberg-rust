@@ -131,22 +131,25 @@ impl RestCatalogConfig {
 
         for (key, value) in self.props.iter() {
             if let Some(stripped_key) = key.strip_prefix("header.") {
-                headers.insert(
-                    HeaderName::from_str(stripped_key).map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Invalid header name: {stripped_key}!"),
-                        )
-                        .with_source(e)
-                    })?,
-                    HeaderValue::from_str(value).map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Invalid header value: {value}!"),
-                        )
-                        .with_source(e)
-                    })?,
-                );
+                // Avoid overwriting default headers
+                if !headers.contains_key(stripped_key) {
+                    headers.insert(
+                        HeaderName::from_str(stripped_key).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header name: {stripped_key}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                        HeaderValue::from_str(value).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header value: {value}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                    );
+                }
             }
         }
         Ok(headers)
@@ -1020,6 +1023,10 @@ mod tests {
             "header.content-type".to_string(),
             "application/yaml".to_string(),
         );
+        props.insert(
+            "header.customized-header".to_string(),
+            "some/value".to_string(),
+        );
 
         let config = RestCatalogConfig::builder()
             .uri(server.url())
@@ -1030,7 +1037,7 @@ mod tests {
         let expected_headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
-                HeaderValue::from_static("application/yaml"),
+                HeaderValue::from_static("application/json"),
             ),
             (
                 HeaderName::from_static("x-client-version"),
@@ -1039,6 +1046,10 @@ mod tests {
             (
                 header::USER_AGENT,
                 HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+            (
+                HeaderName::from_static("customized-header"),
+                HeaderValue::from_static("some/value"),
             ),
         ]);
         assert_eq!(headers, expected_headers);
