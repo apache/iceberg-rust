@@ -72,7 +72,10 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Specifies a predicate to use as a filter
     pub fn with_filter(mut self, predicate: Predicate) -> Self {
-        self.filter = Some(predicate);
+
+        // calls rewrite_not to remove Not nodes, which must be absent
+        // when applying the manifest evaluator
+        self.filter = Some(predicate.rewrite_not());
         self
     }
 
@@ -341,7 +344,7 @@ impl ManifestEvalVisitor {
 
         let inclusive_projection =
             InclusiveProjection::new(table_schema.clone(), partition_spec.clone());
-        let unbound_partition_filter = inclusive_projection.project(&partition_filter);
+        let unbound_partition_filter = inclusive_projection.project(&partition_filter)?;
 
         Self::new(
             partition_schema_ref.clone(),
@@ -456,29 +459,28 @@ impl InclusiveProjection {
         }
     }
 
-    pub(crate) fn project(&self, predicate: &BoundPredicate) -> Predicate {
-        //  TODO: apply rewrite_not() as projection assumes that there are no NOT nodes
+    pub(crate) fn project(&self, predicate: &BoundPredicate) -> crate::Result<Predicate> {
         self.visit(predicate)
     }
 
-    fn visit(&self, bound_predicate: &BoundPredicate) -> Predicate {
-        match bound_predicate {
+    fn visit(&self, bound_predicate: &BoundPredicate) -> crate::Result<Predicate> {
+        Ok(match bound_predicate {
             BoundPredicate::AlwaysTrue => Predicate::AlwaysTrue,
             BoundPredicate::AlwaysFalse => Predicate::AlwaysFalse,
             BoundPredicate::And(expr) => Predicate::And(LogicalExpression::new(
-                expr.inputs().map(|expr| Box::new(self.visit(expr))),
+                expr.inputs().map(|expr| Box::new(self.visit(expr)?)),
             )),
             BoundPredicate::Or(expr) => Predicate::Or(LogicalExpression::new(
-                expr.inputs().map(|expr| Box::new(self.visit(expr))),
+                expr.inputs().map(|expr| Box::new(self.visit(expr)?)),
             )),
             BoundPredicate::Not(_) => {
                 panic!("should not get here as NOT-rewriting should have removed NOT nodes")
             }
-            bp => self.visit_bound_predicate(bp),
-        }
+            bp => self.visit_bound_predicate(bp)?,
+        })
     }
 
-    fn visit_bound_predicate(&self, predicate: &BoundPredicate) -> Predicate {
+    fn visit_bound_predicate(&self, predicate: &BoundPredicate) -> crate::Result<Predicate> {
         let field_id = match predicate {
             BoundPredicate::Unary(expr) => expr.field_id(),
             BoundPredicate::Binary(expr) => expr.field_id(),
@@ -496,15 +498,13 @@ impl InclusiveProjection {
             }
         }
 
-        parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
-            // should this use ? instead of destructuring Ok() so that the whole call fails
-            // if the transform project() call errors? This would require changing the signature of `visit`.
-            if let Ok(Some(pred_for_part)) = part.transform.project(&part.name, predicate) {
+        Ok(parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
+            if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
                 res.and(pred_for_part)
             } else {
                 res
             }
-        })
+        }))
     }
 }
 

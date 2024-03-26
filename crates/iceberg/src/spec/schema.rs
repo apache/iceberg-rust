@@ -314,8 +314,8 @@ impl Schema {
     }
 
     /// Get an accessor for retrieving data in a struct
-    pub fn accessor_for_field_id(&self, field_id: i32) -> &StructAccessor {
-        &self.field_id_to_accessor[&field_id]
+    pub fn accessor_for_field_id(&self, field_id: i32) -> Option<&StructAccessor> {
+        self.field_id_to_accessor.get(&field_id)
     }
 }
 

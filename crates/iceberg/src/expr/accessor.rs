@@ -43,9 +43,7 @@ impl StructAccessor {
         match &self.inner_or_type {
             InnerOrType::Inner(inner) => match container.get(self.position) {
                 Literal::Struct(wrapped) => inner.get(wrapped),
-                _ => {
-                    unreachable!()
-                }
+                _ => { panic!("Should only be wrapping a Struct") }
             },
             InnerOrType::Type(_) => container.get(self.position),
         }

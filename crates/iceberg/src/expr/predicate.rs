@@ -668,14 +668,6 @@ impl Display for BoundPredicate {
     }
 }
 
-pub(crate) trait PredicateVisitor<T> {
-    fn visit(predicate: Predicate) -> T;
-}
-
-pub(crate) trait BoundPredicateVisitor<T> {
-    fn visit(predicate: BoundPredicate) -> T;
-}
-
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
