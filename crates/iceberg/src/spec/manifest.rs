@@ -1060,7 +1060,7 @@ pub struct DataFile {
 
 impl DataFile {
     /// Get the content type of the data file (data, equality deletes, or position deletes)
-    pub fn content(&self) -> DataContentType {
+    pub fn content_type(&self) -> DataContentType {
         self.content
     }
     /// Get the file path as full URI with FS scheme
