@@ -209,7 +209,7 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub fn data_manifest_entry(&self) -> ManifestEntryRef {
+    pub fn data(&self) -> ManifestEntryRef {
         self.data_manifest_entry.clone()
     }
 }
@@ -504,17 +504,17 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_manifest_entry().data_file().file_path().to_string());
+        tasks.sort_by_key(|t| t.data().data_file().file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_manifest_entry().data_file().file_path(),
+            tasks[0].data().data_file().file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_manifest_entry().data_file().file_path(),
+            tasks[1].data().data_file().file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
