@@ -209,7 +209,7 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub(crate) fn data_file(&self) -> ManifestEntryRef {
+    pub fn data_file(&self) -> ManifestEntryRef {
         self.data_file.clone()
     }
 }
@@ -384,7 +384,7 @@ mod tests {
                 current_snapshot.sequence_number(),
             );
             manifest_list_write
-                .add_manifest_entries(vec![data_file_manifest].into_iter())
+                .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
 

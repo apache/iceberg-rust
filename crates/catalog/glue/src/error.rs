@@ -15,13 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Hive Metastore Catalog implementation.
+//! Iceberg Glue Catalog implementation.
 
-#![deny(missing_docs)]
+use anyhow::anyhow;
+use std::fmt::Debug;
 
-mod catalog;
-pub use catalog::*;
+use iceberg::{Error, ErrorKind};
 
-mod error;
-mod schema;
-mod utils;
+/// Format AWS SDK error into iceberg error
+pub fn from_aws_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> Error
+where
+    T: Debug,
+{
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting aws skd error".to_string(),
+    )
+    .with_source(anyhow!("aws sdk error: {:?}", error))
+}

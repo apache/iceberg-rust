@@ -16,32 +16,28 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-hms"
+name = "iceberg-catalog-glue"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Hive Metastore Catalog Support"
+description = "Apache Iceberg Glue Catalog Support"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "hive", "catalog"]
+keywords = ["iceberg", "glue", "catalog"]
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
-hive_metastore = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-glue = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
-pilota = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
 typed-builder = { workspace = true }
-uuid = { workspace = true }
-volo-thrift = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
+tokio = { workspace = true }

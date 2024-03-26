@@ -15,59 +15,52 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use anyhow::anyhow;
-use hive_metastore::{Database, PrincipalType};
-use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
+use chrono::Utc;
+use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
+use iceberg::{spec::Schema, Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::io;
+use uuid::Uuid;
+
+use crate::schema::HiveSchemaBuilder;
 
 /// hive.metastore.database.owner setting
-pub const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
+const HMS_DB_OWNER: &str = "hive.metastore.database.owner";
 /// hive.metastore.database.owner default setting
-pub const HMS_DEFAULT_DB_OWNER: &str = "user.name";
+const HMS_DEFAULT_DB_OWNER: &str = "user.name";
 /// hive.metastore.database.owner-type setting
-pub const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
+const HMS_DB_OWNER_TYPE: &str = "hive.metastore.database.owner-type";
+/// hive metatore `owner` property
+const OWNER: &str = "owner";
 /// hive metatore `description` property
-pub const COMMENT: &str = "comment";
+const COMMENT: &str = "comment";
 /// hive metatore `location` property
-pub const LOCATION: &str = "location";
-
-/// Format a thrift error into iceberg error.
-pub fn from_thrift_error<T>(error: volo_thrift::error::ResponseError<T>) -> Error
-where
-    T: Debug,
-{
-    Error::new(
-        ErrorKind::Unexpected,
-        "operation failed for hitting thrift error".to_string(),
-    )
-    .with_source(anyhow!("thrift error: {:?}", error))
-}
-
-/// Format an io error into iceberg error.
-pub fn from_io_error(error: io::Error) -> Error {
-    Error::new(
-        ErrorKind::Unexpected,
-        "operation failed for hitting io error".to_string(),
-    )
-    .with_source(error)
-}
+const LOCATION: &str = "location";
+/// hive metatore `metadat_location` property
+const METADATA_LOCATION: &str = "metadata_location";
+/// hive metatore `external` property
+const EXTERNAL: &str = "EXTERNAL";
+/// hive metatore `external_table` property
+const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
+/// hive metatore `table_type` property
+const TABLE_TYPE: &str = "table_type";
+/// hive metatore `SerDeInfo` serialization_lib parameter
+const SERIALIZATION_LIB: &str = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
+/// hive metatore input format
+const INPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileInputFormat";
+/// hive metatore output format
+const OUTPUT_FORMAT: &str = "org.apache.hadoop.mapred.FileOutputFormat";
 
 /// Returns a `Namespace` by extracting database name and properties
 /// from `hive_metastore::hms::Database`
 pub(crate) fn convert_to_namespace(database: &Database) -> Result<Namespace> {
     let mut properties = HashMap::new();
 
-    let name = if let Some(name) = &database.name {
-        name.to_string()
-    } else {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Database name must be specified",
-        ));
-    };
+    let name = database
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Database name must be specified"))?
+        .to_string();
 
     if let Some(description) = &database.description {
         properties.insert(COMMENT.to_string(), description.to_string());
@@ -157,6 +150,57 @@ pub(crate) fn convert_to_database(
     Ok(db)
 }
 
+pub(crate) fn convert_to_hive_table(
+    db_name: String,
+    schema: &Schema,
+    table_name: String,
+    location: String,
+    metadata_location: String,
+    properties: &HashMap<String, String>,
+) -> Result<hive_metastore::Table> {
+    let serde_info = SerDeInfo {
+        serialization_lib: Some(SERIALIZATION_LIB.into()),
+        ..Default::default()
+    };
+
+    let hive_schema = HiveSchemaBuilder::from_iceberg(schema)?.build();
+
+    let storage_descriptor = StorageDescriptor {
+        location: Some(location.into()),
+        cols: Some(hive_schema),
+        input_format: Some(INPUT_FORMAT.into()),
+        output_format: Some(OUTPUT_FORMAT.into()),
+        serde_info: Some(serde_info),
+        ..Default::default()
+    };
+
+    let parameters = AHashMap::from([
+        (FastStr::from(EXTERNAL), FastStr::from("TRUE")),
+        (FastStr::from(TABLE_TYPE), FastStr::from("ICEBERG")),
+        (
+            FastStr::from(METADATA_LOCATION),
+            FastStr::from(metadata_location),
+        ),
+    ]);
+
+    let current_time_ms = get_current_time()?;
+    let owner = properties
+        .get(OWNER)
+        .map_or(HMS_DEFAULT_DB_OWNER.to_string(), |v| v.into());
+
+    Ok(hive_metastore::Table {
+        table_name: Some(table_name.into()),
+        db_name: Some(db_name.into()),
+        table_type: Some(EXTERNAL_TABLE.into()),
+        owner: Some(owner.into()),
+        create_time: Some(current_time_ms),
+        last_access_time: Some(current_time_ms),
+        sd: Some(storage_descriptor),
+        parameters: Some(parameters),
+        ..Default::default()
+    })
+}
+
 /// Checks if provided `NamespaceIdent` is valid.
 pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
@@ -181,6 +225,65 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     }
 
     Ok(name)
+}
+
+/// Get default table location from `Namespace` properties
+pub(crate) fn get_default_table_location(
+    namespace: &Namespace,
+    table_name: impl AsRef<str>,
+    warehouse: impl AsRef<str>,
+) -> String {
+    let properties = namespace.properties();
+
+    let location = match properties.get(LOCATION) {
+        Some(location) => location,
+        None => warehouse.as_ref(),
+    };
+
+    format!("{}/{}", location, table_name.as_ref())
+}
+
+/// Create metadata location from `location` and `version`
+pub(crate) fn create_metadata_location(location: impl AsRef<str>, version: i32) -> Result<String> {
+    if version < 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata version: '{}' must be a non-negative integer",
+                version
+            ),
+        ));
+    };
+
+    let version = format!("{:0>5}", version);
+    let id = Uuid::new_v4();
+    let metadata_location = format!(
+        "{}/metadata/{}-{}.metadata.json",
+        location.as_ref(),
+        version,
+        id
+    );
+
+    Ok(metadata_location)
+}
+
+/// Get metadata location from `HiveTable` parameters
+pub(crate) fn get_metadata_location(
+    parameters: &Option<AHashMap<FastStr, FastStr>>,
+) -> Result<String> {
+    match parameters {
+        Some(properties) => match properties.get(METADATA_LOCATION) {
+            Some(location) => Ok(location.to_string()),
+            None => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("No '{}' set on table", METADATA_LOCATION),
+            )),
+        },
+        None => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "No 'parameters' set on table. Location of metadata is undefined",
+        )),
+    }
 }
 
 /// Formats location_uri by e.g. removing trailing slashes.
@@ -217,11 +320,140 @@ fn validate_owner_settings(properties: &HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+fn get_current_time() -> Result<i32> {
+    let now = Utc::now();
+    now.timestamp().try_into().map_err(|_| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Current time is out of range for i32",
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use iceberg::{Namespace, NamespaceIdent};
+    use iceberg::{
+        spec::{NestedField, PrimitiveType, Type},
+        Namespace, NamespaceIdent,
+    };
 
     use super::*;
+
+    #[test]
+    fn test_get_metadata_location() -> Result<()> {
+        let params_valid = Some(AHashMap::from([(
+            FastStr::new(METADATA_LOCATION),
+            FastStr::new("my_location"),
+        )]));
+        let params_missing_key = Some(AHashMap::from([(
+            FastStr::new("not_here"),
+            FastStr::new("my_location"),
+        )]));
+
+        let result_valid = get_metadata_location(&params_valid)?;
+        let result_missing_key = get_metadata_location(&params_missing_key);
+        let result_no_params = get_metadata_location(&None);
+
+        assert_eq!(result_valid, "my_location");
+        assert!(result_missing_key.is_err());
+        assert!(result_no_params.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_to_hive_table() -> Result<()> {
+        let db_name = "my_db".to_string();
+        let table_name = "my_table".to_string();
+        let location = "s3a://warehouse/hms".to_string();
+        let metadata_location = create_metadata_location(location.clone(), 0)?;
+        let properties = HashMap::new();
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()?;
+
+        let result = convert_to_hive_table(
+            db_name.clone(),
+            &schema,
+            table_name.clone(),
+            location.clone(),
+            metadata_location,
+            &properties,
+        )?;
+
+        let serde_info = SerDeInfo {
+            serialization_lib: Some(SERIALIZATION_LIB.into()),
+            ..Default::default()
+        };
+
+        let hive_schema = HiveSchemaBuilder::from_iceberg(&schema)?.build();
+
+        let sd = StorageDescriptor {
+            location: Some(location.into()),
+            cols: Some(hive_schema),
+            input_format: Some(INPUT_FORMAT.into()),
+            output_format: Some(OUTPUT_FORMAT.into()),
+            serde_info: Some(serde_info),
+            ..Default::default()
+        };
+
+        assert_eq!(result.db_name, Some(db_name.into()));
+        assert_eq!(result.table_name, Some(table_name.into()));
+        assert_eq!(result.table_type, Some(EXTERNAL_TABLE.into()));
+        assert_eq!(result.owner, Some(HMS_DEFAULT_DB_OWNER.into()));
+        assert_eq!(result.sd, Some(sd));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_metadata_location() -> Result<()> {
+        let location = "my_base_location";
+        let valid_version = 0;
+        let invalid_version = -1;
+
+        let valid_result = create_metadata_location(location, valid_version)?;
+        let invalid_result = create_metadata_location(location, invalid_version);
+
+        assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
+        assert!(valid_result.ends_with(".metadata.json"));
+        assert!(invalid_result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location() -> Result<()> {
+        let properties = HashMap::from([(LOCATION.to_string(), "db_location".to_string())]);
+
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let table_name = "my_table";
+
+        let expected = "db_location/my_table";
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_warehouse() -> Result<()> {
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let table_name = "my_table";
+
+        let expected = "warehouse_location/my_table";
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
 
     #[test]
     fn test_convert_to_namespace() -> Result<()> {

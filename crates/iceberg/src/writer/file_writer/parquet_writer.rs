@@ -18,7 +18,6 @@
 //! The module contains the file writer for parquet file format.
 
 use std::{
-    cmp::max,
     collections::HashMap,
     sync::{atomic::AtomicI64, Arc},
 };
@@ -43,9 +42,6 @@ use super::{
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone)]
 pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
-    /// `buffer_size` determines the initial size of the intermediate buffer.
-    /// The intermediate buffer will automatically be resized if necessary
-    init_buffer_size: usize,
     props: WriterProperties,
     schema: ArrowSchemaRef,
 
@@ -55,13 +51,9 @@ pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
 }
 
 impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
-    /// To avoid EntiryTooSmall error, we set the minimum buffer size to 8MB if the given buffer size is smaller than it.
-    const MIN_BUFFER_SIZE: usize = 8 * 1024 * 1024;
-
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
     pub fn new(
-        init_buffer_size: usize,
         props: WriterProperties,
         schema: ArrowSchemaRef,
         file_io: FileIO,
@@ -69,7 +61,6 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
         file_name_generator: F,
     ) -> Self {
         Self {
-            init_buffer_size,
             props,
             schema,
             file_io,
@@ -112,20 +103,14 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
                 .generate_location(&self.file_name_generator.generate_file_name()),
         )?;
         let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
-        let init_buffer_size = max(Self::MIN_BUFFER_SIZE, self.init_buffer_size);
-        let writer = AsyncArrowWriter::try_new(
-            inner_writer,
-            self.schema.clone(),
-            init_buffer_size,
-            Some(self.props),
-        )
-        .map_err(|err| {
-            Error::new(
-                crate::ErrorKind::Unexpected,
-                "Failed to build parquet writer.",
-            )
-            .with_source(err)
-        })?;
+        let writer = AsyncArrowWriter::try_new(inner_writer, self.schema.clone(), Some(self.props))
+            .map_err(|err| {
+                Error::new(
+                    crate::ErrorKind::Unexpected,
+                    "Failed to build parquet writer.",
+                )
+                .with_source(err)
+            })?;
 
         Ok(ParquetWriter {
             writer,
@@ -311,7 +296,6 @@ mod tests {
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
-            0,
             WriterProperties::builder().build(),
             to_write.schema(),
             file_io.clone(),
@@ -551,7 +535,6 @@ mod tests {
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
-            0,
             WriterProperties::builder().build(),
             to_write.schema(),
             file_io.clone(),

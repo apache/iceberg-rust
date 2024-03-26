@@ -38,7 +38,7 @@ use iceberg::{
 
 use self::_serde::{
     CatalogConfig, ErrorResponse, ListNamespaceResponse, ListTableResponse, NamespaceSerde,
-    RenameTableRequest, NO_CONTENT, OK,
+    RenameTableRequest, TokenResponse, NO_CONTENT, OK,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -96,9 +96,13 @@ impl RestCatalogConfig {
         .join("/")
     }
 
+    fn get_token_endpoint(&self) -> String {
+        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+    }
+
     fn try_create_rest_client(&self) -> Result<HttpClient> {
-        //TODO: We will add oauth, ssl config, sigv4 later
-        let headers = HeaderMap::from_iter([
+        // TODO: We will add ssl config, sigv4 later
+        let mut headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/json"),
@@ -113,9 +117,38 @@ impl RestCatalogConfig {
             ),
         ]);
 
+        if let Some(token) = self.props.get("token") {
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Invalid token received from catalog server!",
+                    )
+                    .with_source(e)
+                })?,
+            );
+        }
+
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
         ))
+    }
+
+    fn optional_oauth_params(&self) -> HashMap<&str, &str> {
+        let mut optional_oauth_param = HashMap::new();
+        if let Some(scope) = self.props.get("scope") {
+            optional_oauth_param.insert("scope", scope.as_str());
+        } else {
+            optional_oauth_param.insert("scope", "catalog");
+        }
+        let set_of_optional_params = ["audience", "resource"];
+        for param_name in set_of_optional_params.iter() {
+            if let Some(value) = self.props.get(*param_name) {
+                optional_oauth_param.insert(param_name.to_owned(), value);
+            }
+        }
+        optional_oauth_param
     }
 }
 
@@ -144,6 +177,7 @@ impl HttpClient {
                 .with_source(e)
             })?)
         } else {
+            let code = resp.status();
             let text = resp.bytes().await?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
@@ -151,6 +185,7 @@ impl HttpClient {
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("json", String::from_utf8_lossy(&text))
+                .with_context("code", code.to_string())
                 .with_source(e)
             })?;
             Err(e.into())
@@ -429,7 +464,7 @@ impl Catalog for RestCatalog {
     }
 
     /// Check if a table exists in the catalog.
-    async fn stat_table(&self, table: &TableIdent) -> Result<bool> {
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         let request = self
             .client
             .0
@@ -497,11 +532,55 @@ impl RestCatalog {
             client: config.try_create_rest_client()?,
             config,
         };
-
+        catalog.fetch_access_token().await?;
+        catalog.client = catalog.config.try_create_rest_client()?;
         catalog.update_config().await?;
         catalog.client = catalog.config.try_create_rest_client()?;
 
         Ok(catalog)
+    }
+
+    async fn fetch_access_token(&mut self) -> Result<()> {
+        if self.config.props.contains_key("token") {
+            return Ok(());
+        }
+        if let Some(credential) = self.config.props.get("credential") {
+            let (client_id, client_secret) = if credential.contains(':') {
+                let (client_id, client_secret) = credential.split_once(':').unwrap();
+                (Some(client_id), client_secret)
+            } else {
+                (None, credential.as_str())
+            };
+            let mut params = HashMap::with_capacity(4);
+            params.insert("grant_type", "client_credentials");
+            if let Some(client_id) = client_id {
+                params.insert("client_id", client_id);
+            }
+            params.insert("client_secret", client_secret);
+            let optional_oauth_params = self.config.optional_oauth_params();
+            params.extend(optional_oauth_params);
+            let req = self
+                .client
+                .0
+                .post(self.config.get_token_endpoint())
+                .form(&params)
+                .build()?;
+            let res = self
+                .client
+                .query::<TokenResponse, ErrorResponse, OK>(req)
+                .await
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to fetch access token from catalog server!",
+                    )
+                    .with_source(e)
+                })?;
+            let token = res.access_token;
+            self.config.props.insert("token".to_string(), token);
+        }
+
+        Ok(())
     }
 
     async fn update_config(&mut self) -> Result<()> {
@@ -624,6 +703,14 @@ mod _serde {
 
             error
         }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct TokenResponse {
+        pub(super) access_token: String,
+        pub(super) token_type: String,
+        pub(super) expires_in: Option<u64>,
+        pub(super) issued_token_type: Option<String>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -776,6 +863,97 @@ mod tests {
             )
             .create_async()
             .await
+    }
+
+    async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_oauth() {
+        let mut server = Server::new_async().await;
+        let oauth_mock = create_oauth_mock(&mut server).await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(
+            catalog.config.props.get("token"),
+            Some(&"ey000000000000".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_oauth_with_optional_param() {
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert("scope".to_string(), "custom_scope".to_string());
+        props.insert("audience".to_string(), "custom_audience".to_string());
+        props.insert("resource".to_string(), "custom_resource".to_string());
+
+        let mut server = Server::new_async().await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .match_body(mockito::Matcher::Regex("scope=custom_scope".to_string()))
+            .match_body(mockito::Matcher::Regex(
+                "audience=custom_audience".to_string(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "resource=custom_resource".to_string(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(
+            catalog.config.props.get("token"),
+            Some(&"ey000000000000".to_string())
+        );
     }
 
     #[tokio::test]
@@ -1036,7 +1214,7 @@ mod tests {
             .unwrap();
 
         assert!(catalog
-            .stat_table(&TableIdent::new(
+            .table_exists(&TableIdent::new(
                 NamespaceIdent::new("ns1".to_string()),
                 "table1".to_string(),
             ))
@@ -1557,7 +1735,7 @@ mod tests {
         "type": "NoSuchTableException",
         "code": 404
     }
-}      
+}
             "#,
             )
             .create_async()

@@ -17,10 +17,8 @@
 
 use super::TransformFunction;
 use crate::{Error, ErrorKind, Result};
-use arrow_arith::{
-    arity::binary,
-    temporal::{month_dyn, year_dyn},
-};
+use arrow_arith::temporal::DatePart;
+use arrow_arith::{arity::binary, temporal::date_part};
 use arrow_array::{
     types::Date32Type, Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray,
 };
@@ -43,8 +41,8 @@ pub struct Year;
 
 impl TransformFunction for Year {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let array =
-            year_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
+        let array = date_part(&input, DatePart::Year)
+            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             array
                 .as_any()
@@ -61,15 +59,15 @@ pub struct Month;
 
 impl TransformFunction for Month {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let year_array =
-            year_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
+        let year_array = date_part(&input, DatePart::Year)
+            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         let year_array: Int32Array = year_array
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap()
             .unary(|v| 12 * (v - UNIX_EPOCH_YEAR));
-        let month_array =
-            month_dyn(&input).map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
+        let month_array = date_part(&input, DatePart::Month)
+            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             binary(
                 month_array.as_any().downcast_ref::<Int32Array>().unwrap(),
