@@ -40,18 +40,18 @@ pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
 pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 /// Parameter namespace description
 const DESCRIPTION: &str = "description";
-/// Parameter namespace description
+/// Parameter namespace location uri
 const LOCATION: &str = "location_uri";
 
-/// Creates an AWS SDK configuration (SdkConfig) based on
+/// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
 pub(crate) async fn create_sdk_config(
     properties: &HashMap<String, String>,
-    endpoint_url: Option<&String>,
+    endpoint_uri: Option<&String>,
 ) -> SdkConfig {
     let mut config = aws_config::defaults(BehaviorVersion::latest());
 
-    if let Some(endpoint) = endpoint_url {
+    if let Some(endpoint) = endpoint_uri {
         config = config.endpoint_url(endpoint)
     };
 
@@ -82,7 +82,7 @@ pub(crate) async fn create_sdk_config(
     config.load().await
 }
 
-/// Create `DatabaseInput` from name, uri and properties
+/// Create `DatabaseInput` from `NamespaceIdent` and properties
 pub(crate) fn convert_to_database(
     namespace: &NamespaceIdent,
     properties: &HashMap<String, String>,
@@ -125,7 +125,7 @@ pub(crate) fn convert_to_namespace(database: &Database) -> Namespace {
     Namespace::with_properties(NamespaceIdent::new(db_name), properties)
 }
 
-/// Checks if provided `NamespaceIdent` is valid.
+/// Checks if provided `NamespaceIdent` is valid
 pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
 
@@ -152,7 +152,7 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
 }
 
 #[macro_export]
-/// Extends aws sdk builder with catalog id if present
+/// Extends aws sdk builder with `catalog_id` if present
 macro_rules! with_catalog_id {
     ($builder:expr, $config:expr) => {{
         if let Some(catalog_id) = &$config.catalog_id {
