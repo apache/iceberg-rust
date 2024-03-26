@@ -290,18 +290,15 @@ impl Bind for Predicate {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
-                    &PredicateOperator::IsNan => {
-                        if bound_expr.term.field().field_type.is_floating_type()
-                            | bound_expr.term.field().required
-                        {
-                            return Ok(BoundPredicate::AlwaysFalse);
-                        }
-                    }
-                    &PredicateOperator::NotNan => {
-                        if bound_expr.term.field().field_type.is_floating_type()
-                            | bound_expr.term.field().required
-                        {
-                            return Ok(BoundPredicate::AlwaysTrue);
+                    &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
+                        if !bound_expr.term.field().field_type.is_floating_type() {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Expecting floating point type, but found {}",
+                                    bound_expr.term.field().field_type
+                                ),
+                            ));
                         }
                     }
                     op => {
@@ -772,6 +769,7 @@ mod tests {
                     NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
                     NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
                     NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -813,33 +811,38 @@ mod tests {
     #[test]
     fn test_bind_is_nan() {
         let schema = table_schema_simple();
-        let expr = Reference::new("foo").is_nan();
+        let expr = Reference::new("qux").is_nan();
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "foo IS NAN");
+        assert_eq!(&format!("{bound_expr}"), "qux IS NAN");
+
+        let schema_string = table_schema_simple();
+        let expr_string = Reference::new("foo").is_nan();
+        let bound_expr_string = expr_string.bind(schema_string, true);
+        assert!(bound_expr_string.is_err());
     }
 
     #[test]
-    fn test_bind_is_nan_required() {
+    fn test_bind_is_nan_wrong_type() {
         let schema = table_schema_simple();
-        let expr = Reference::new("bar").is_nan();
-        let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "False");
+        let expr = Reference::new("foo").is_nan();
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
     }
 
     #[test]
     fn test_bind_is_not_nan() {
         let schema = table_schema_simple();
-        let expr = Reference::new("foo").is_not_nan();
+        let expr = Reference::new("qux").is_not_nan();
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "foo IS NOT NAN");
+        assert_eq!(&format!("{bound_expr}"), "qux IS NOT NAN");
     }
 
     #[test]
-    fn test_bind_is_not_nan_required() {
+    fn test_bind_is_not_nan_wrong_type() {
         let schema = table_schema_simple();
-        let expr = Reference::new("bar").is_not_nan();
-        let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "True");
+        let expr = Reference::new("foo").is_not_nan();
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
     }
 
     #[test]
