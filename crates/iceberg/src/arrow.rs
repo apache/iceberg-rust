@@ -87,7 +87,7 @@ impl ArrowReader {
                 let projection_mask = self.get_arrow_projection_mask(&task);
 
                 let parquet_reader = file_io
-                    .new_input(task.data_file().file_path())?
+                    .new_input(task.data().data_file().file_path())?
                     .reader()
                     .await?;
 

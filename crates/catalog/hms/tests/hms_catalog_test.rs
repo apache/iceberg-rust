@@ -264,7 +264,6 @@ async fn test_list_namespace() -> Result<()> {
 async fn test_create_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_create_namespace").await;
 
-    let ns = Namespace::new(NamespaceIdent::new("my_namespace".into()));
     let properties = HashMap::from([
         ("comment".to_string(), "my_description".to_string()),
         ("location".to_string(), "my_location".to_string()),
@@ -278,6 +277,11 @@ async fn test_create_namespace() -> Result<()> {
         ),
         ("key1".to_string(), "value1".to_string()),
     ]);
+
+    let ns = Namespace::with_properties(
+        NamespaceIdent::new("my_namespace".into()),
+        properties.clone(),
+    );
 
     let result = fixture
         .hms_catalog
