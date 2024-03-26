@@ -18,6 +18,7 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
@@ -32,6 +33,7 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Empty column names means to select all columns
     column_names: Vec<String>,
+    predicates: Vec<Predicate>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
 }
@@ -41,6 +43,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: vec![],
+            predicates: vec![],
             snapshot_id: None,
             batch_size: None,
         }
@@ -56,6 +59,12 @@ impl<'a> TableScanBuilder<'a> {
     /// Select all columns.
     pub fn select_all(mut self) -> Self {
         self.column_names.clear();
+        self
+    }
+
+    /// Add a predicate to the scan. The scan will only return rows that match the predicate.
+    pub fn filter(mut self, predicate: Predicate) -> Self {
+        self.predicates.push(predicate);
         self
     }
 
@@ -115,11 +124,17 @@ impl<'a> TableScanBuilder<'a> {
             }
         }
 
+        let mut bound_predicates = Vec::new();
+        for predicate in self.predicates {
+            bound_predicates.push(predicate.bind(schema.clone(), true)?);
+        }
+
         Ok(TableScan {
             snapshot,
             file_io: self.table.file_io().clone(),
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
+            bound_predicates,
             schema,
             batch_size: self.batch_size,
         })
@@ -134,6 +149,7 @@ pub struct TableScan {
     table_metadata: TableMetadataRef,
     file_io: FileIO,
     column_names: Vec<String>,
+    bound_predicates: Vec<BoundPredicate>,
     schema: SchemaRef,
     batch_size: Option<usize>,
 }
@@ -191,6 +207,8 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
+        arrow_reader_builder = arrow_reader_builder.with_predicates(self.bound_predicates.clone());
+
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
 }
@@ -216,9 +234,10 @@ impl FileScanTask {
 
 #[cfg(test)]
 mod tests {
+    use crate::expr::Reference;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
     };
@@ -390,18 +409,39 @@ mod tests {
 
             // prepare data
             let schema = {
-                let fields =
-                    vec![
-                        arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true)
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "0".to_string(),
-                            )])),
-                    ];
+                let fields = vec![
+                    arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "1".to_string(),
+                        )])),
+                    arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "2".to_string(),
+                        )])),
+                    arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "3".to_string(),
+                        )])),
+                ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
-            let col = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
-            let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+
+            let mut values = vec![2; 512];
+            values.append(vec![3; 200].as_mut());
+            values.append(vec![4; 300].as_mut());
+            values.append(vec![5; 12].as_mut());
+
+            let col2 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+
+            let mut values = vec![3; 512];
+            values.append(vec![4; 512].as_mut());
+
+            let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+            let to_write = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
 
             // Write the Parquet files
             let props = WriterProperties::builder()
@@ -531,9 +571,95 @@ mod tests {
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let col = batches[0].column_by_name("col").unwrap();
+        let col = batches[0].column_by_name("x").unwrap();
 
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 1);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_lt() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y < 3
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").less_than(Datum::long(3));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 2);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_gt_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y >= 5
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 12);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 5);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_is_null() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y is null
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").is_null();
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_is_not_null() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y is not null
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").is_not_null();
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches[0].num_rows(), 1024);
     }
 }

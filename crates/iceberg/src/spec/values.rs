@@ -673,6 +673,11 @@ impl Datum {
             )),
         }
     }
+
+    /// Returns the literal of the datum.
+    pub fn literal(&self) -> &PrimitiveLiteral {
+        &self.literal
+    }
 }
 
 /// Values present in iceberg type
