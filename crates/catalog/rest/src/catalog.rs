@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -57,47 +58,45 @@ pub struct RestCatalogConfig {
 }
 
 impl RestCatalogConfig {
+    fn url_prefixed(&self, parts: &[&str]) -> String {
+        [&self.uri, PATH_V1]
+            .into_iter()
+            .chain(self.props.get("prefix").map(|s| &**s))
+            .chain(parts.iter().cloned())
+            .join("/")
+    }
+
     fn config_endpoint(&self) -> String {
         [&self.uri, PATH_V1, "config"].join("/")
     }
 
+    fn get_token_endpoint(&self) -> String {
+        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+    }
+
     fn namespaces_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "namespaces"].join("/")
+        self.url_prefixed(&["namespaces"])
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [&self.uri, PATH_V1, "namespaces", &ns.encode_in_url()].join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url()])
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            "namespaces",
-            &ns.encode_in_url(),
-            "tables",
-        ]
-        .join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url(), "tables"])
     }
 
     fn rename_table_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "tables", "rename"].join("/")
+        self.url_prefixed(&["tables", "rename"])
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
+        self.url_prefixed(&[
             "namespaces",
             &table.namespace.encode_in_url(),
             "tables",
             encode(&table.name).as_ref(),
-        ]
-        .join("/")
-    }
-
-    fn get_token_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+        ])
     }
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
@@ -954,6 +953,45 @@ mod tests {
             catalog.config.props.get("token"),
             Some(&"ey000000000000".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_config_override_prefix() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": {
+                    "warehouse": "s3://iceberg-catalog",
+                    "prefix": "ice/warehouses/my"
+                },
+                "defaults": {}
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let list_ns_mock = server
+            .mock("GET", "/v1/ice/warehouses/my/namespaces")
+            .with_body(
+                r#"{
+                    "namespaces": []
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let _namespaces = catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
     }
 
     #[tokio::test]
