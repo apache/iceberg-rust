@@ -25,7 +25,7 @@ use std::{collections::HashMap, fmt::Debug};
 
 use typed_builder::TypedBuilder;
 
-use crate::error::from_sdk_error;
+use crate::error::from_aws_sdk_error;
 use crate::utils::{
     convert_to_database, convert_to_namespace, create_sdk_config, validate_namespace,
 };
@@ -95,7 +95,7 @@ impl Catalog for GlueCatalog {
                 None => self.client.0.get_databases(),
             };
             let builder = with_catalog_id!(builder, self.config);
-            let resp = builder.send().await.map_err(from_sdk_error)?;
+            let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
             let dbs: Vec<NamespaceIdent> = resp
                 .database_list()
@@ -137,7 +137,7 @@ impl Catalog for GlueCatalog {
         let builder = self.client.0.create_database().database_input(db_input);
         let builder = with_catalog_id!(builder, self.config);
 
-        builder.send().await.map_err(from_sdk_error)?;
+        builder.send().await.map_err(from_aws_sdk_error)?;
 
         Ok(Namespace::with_properties(namespace.clone(), properties))
     }
@@ -158,7 +158,7 @@ impl Catalog for GlueCatalog {
         let builder = self.client.0.get_database().name(&db_name);
         let builder = with_catalog_id!(builder, self.config);
 
-        let resp = builder.send().await.map_err(from_sdk_error)?;
+        let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
         match resp.database() {
             Some(db) => {
@@ -202,7 +202,7 @@ impl Catalog for GlueCatalog {
                 {
                     return Ok(false);
                 }
-                Err(from_sdk_error(err))
+                Err(from_aws_sdk_error(err))
             }
         }
     }
@@ -233,7 +233,7 @@ impl Catalog for GlueCatalog {
             .database_input(db_input);
         let builder = with_catalog_id!(builder, self.config);
 
-        builder.send().await.map_err(from_sdk_error)?;
+        builder.send().await.map_err(from_aws_sdk_error)?;
 
         Ok(())
     }
@@ -262,7 +262,7 @@ impl Catalog for GlueCatalog {
         let builder = self.client.0.delete_database().name(db_name);
         let builder = with_catalog_id!(builder, self.config);
 
-        builder.send().await.map_err(from_sdk_error)?;
+        builder.send().await.map_err(from_aws_sdk_error)?;
 
         Ok(())
     }
@@ -291,7 +291,7 @@ impl Catalog for GlueCatalog {
                 None => self.client.0.get_tables().database_name(&db_name),
             };
             let builder = with_catalog_id!(builder, self.config);
-            let resp = builder.send().await.map_err(from_sdk_error)?;
+            let resp = builder.send().await.map_err(from_aws_sdk_error)?;
 
             let tables: Vec<_> = resp
                 .table_list()

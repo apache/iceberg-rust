@@ -21,7 +21,7 @@ use std::fmt::Debug;
 use iceberg::{Error, ErrorKind};
 
 /// Format AWS SDK error into iceberg error
-pub fn from_sdk_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> Error
+pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> Error
 where
     T: Debug,
 {
@@ -33,7 +33,7 @@ where
 }
 
 /// Format AWS Build error into iceberg error
-pub fn from_build_error(error: aws_sdk_glue::error::BuildError) -> Error {
+pub(crate) fn from_aws_build_error(error: aws_sdk_glue::error::BuildError) -> Error {
     Error::new(
         ErrorKind::Unexpected,
         "Operation failed for hitting aws build error".to_string(),

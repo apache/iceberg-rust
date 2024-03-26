@@ -24,7 +24,7 @@ use aws_sdk_glue::{
 };
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 
-use crate::error::from_build_error;
+use crate::error::from_aws_build_error;
 
 const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
 const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
@@ -104,7 +104,7 @@ pub(crate) fn convert_to_database(
         }
     }
 
-    builder.build().map_err(from_build_error)
+    builder.build().map_err(from_aws_build_error)
 }
 
 /// Create `Namespace` from aws sdk glue `Database`
@@ -177,7 +177,7 @@ mod tests {
             .location_uri("my_location")
             .description("my_description")
             .build()
-            .map_err(from_build_error)?;
+            .map_err(from_aws_build_error)?;
 
         let properties = HashMap::from([
             (DESCRIPTION.to_string(), "my_description".to_string()),
