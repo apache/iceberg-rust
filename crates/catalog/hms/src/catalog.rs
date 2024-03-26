@@ -176,7 +176,7 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        Ok(Namespace::new(namespace.clone()))
+        Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
     /// Retrieves a namespace by its identifier.
