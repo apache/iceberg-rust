@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Glue Catalog implementation.
-
 use anyhow::anyhow;
 use std::fmt::Debug;
 

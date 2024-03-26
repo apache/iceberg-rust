@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Glue Catalog implementation.
-
 use std::collections::HashMap;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
