@@ -372,7 +372,7 @@ impl Transform {
                 _ => None,
             },
             Transform::Void => None,
-            Transform::Unknown => todo!(),
+            Transform::Unknown => None,
         };
 
         Ok(projection)
