@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use iceberg::{Catalog, Result};
+use iceberg::{Catalog, Namespace, NamespaceIdent, Result};
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
@@ -80,13 +80,142 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     }
 }
 
+async fn set_test_namespace(fixture: &TestFixture, namespace: &NamespaceIdent) -> Result<()> {
+    let properties = HashMap::new();
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace, properties)
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_list_tables() -> Result<()> {
+    let fixture = set_test_fixture("test_list_tables").await;
+    let namespace = NamespaceIdent::new("my_database".to_string());
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let expected = vec![];
+    let result = fixture.glue_catalog.list_tables(&namespace).await?;
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_namespace").await;
+    let namespace = NamespaceIdent::new("my_database".to_string());
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(exists);
+
+    fixture.glue_catalog.drop_namespace(&namespace).await?;
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(!exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_update_namespace").await;
+    let namespace = NamespaceIdent::new("my_database".into());
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let before_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let before_update = before_update.properties().get("description");
+
+    assert_eq!(before_update, None);
+
+    let properties = HashMap::from([("description".to_string(), "my_update".to_string())]);
+
+    fixture
+        .glue_catalog
+        .update_namespace(&namespace, properties)
+        .await?;
+
+    let after_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let after_update = after_update.properties().get("description");
+
+    assert_eq!(after_update, Some("my_update".to_string()).as_ref());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_namespace_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_namespace_exists").await;
+
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(!exists);
+
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    assert!(exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_get_namespace").await;
+
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    let does_not_exist = fixture.glue_catalog.get_namespace(&namespace).await;
+    assert!(does_not_exist.is_err());
+
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let result = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let expected = Namespace::new(namespace);
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_namespace() -> Result<()> {
+    let fixture = set_test_fixture("test_create_namespace").await;
+
+    let properties = HashMap::new();
+    let namespace = NamespaceIdent::new("my_database".into());
+
+    let expected = Namespace::new(namespace.clone());
+
+    let result = fixture
+        .glue_catalog
+        .create_namespace(&namespace, properties)
+        .await?;
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_list_namespace() -> Result<()> {
     let fixture = set_test_fixture("test_list_namespace").await;
 
     let expected = vec![];
     let result = fixture.glue_catalog.list_namespaces(None).await?;
+    assert_eq!(result, expected);
 
+    let namespace = NamespaceIdent::new("my_database".to_string());
+    set_test_namespace(&fixture, &namespace).await?;
+
+    let expected = vec![namespace];
+    let result = fixture.glue_catalog.list_namespaces(None).await?;
     assert_eq!(result, expected);
 
     Ok(())
