@@ -273,9 +273,16 @@ impl Transform {
 
     /// Projects a given predicate according to the transformation
     /// specified by the `Transform` instance.
+    ///
     /// This allows predicates to be effectively applied to data
     /// that has undergone transformation, enabling efficient querying
     /// and filtering based on the original, untransformed data.
+    ///
+    /// # Example
+    /// Suppose, we have row filter `a = 10`, and a partition spec
+    /// `bucket(a, 37) as bs`, if one row matches `a = 10`, then its partition
+    /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
+    /// `bs = bucket(10, 37)`
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
