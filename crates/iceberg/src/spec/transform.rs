@@ -371,7 +371,7 @@ impl Transform {
                 }
                 _ => None,
             },
-            Transform::Void => todo!(),
+            Transform::Void => None,
             Transform::Unknown => todo!(),
         };
 
@@ -656,6 +656,24 @@ mod tests {
         ));
 
         (predicate_unary, predicate_binary, predicate_set)
+    }
+
+    #[test]
+    fn test_void_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let (unary, binary, set) = create_predicates();
+
+        let transform = Transform::Void;
+
+        let result_unary = transform.project(name.clone(), &unary)?;
+        let result_binary = transform.project(name.clone(), &binary)?;
+        let result_set = transform.project(name.clone(), &set)?;
+
+        assert!(result_unary.is_none());
+        assert!(result_binary.is_none());
+        assert!(result_set.is_none());
+
+        Ok(())
     }
 
     #[test]
