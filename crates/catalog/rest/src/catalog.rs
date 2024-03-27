@@ -18,6 +18,7 @@
 //! This module contains rest catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -103,8 +104,7 @@ impl RestCatalogConfig {
         ])
     }
 
-    fn try_create_rest_client(&self) -> Result<HttpClient> {
-        // TODO: We will add ssl config, sigv4 later
+    fn http_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
@@ -132,6 +132,36 @@ impl RestCatalogConfig {
                 })?,
             );
         }
+
+        for (key, value) in self.props.iter() {
+            if let Some(stripped_key) = key.strip_prefix("header.") {
+                // Avoid overwriting default headers
+                if !headers.contains_key(stripped_key) {
+                    headers.insert(
+                        HeaderName::from_str(stripped_key).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header name: {stripped_key}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                        HeaderValue::from_str(value).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header value: {value}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                    );
+                }
+            }
+        }
+        Ok(headers)
+    }
+
+    fn try_create_rest_client(&self) -> Result<HttpClient> {
+        // TODO: We will add ssl config, sigv4 later
+        let headers = self.http_headers()?;
 
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
@@ -961,6 +991,76 @@ mod tests {
             catalog.config.props.get("token"),
             Some(&"ey000000000000".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_http_headers() {
+        let server = Server::new_async().await;
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(props)
+            .build();
+        let headers: HeaderMap = config.http_headers().unwrap();
+
+        let expected_headers = HeaderMap::from_iter([
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                HeaderName::from_static("x-client-version"),
+                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+            ),
+            (
+                header::USER_AGENT,
+                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+        ]);
+        assert_eq!(headers, expected_headers);
+    }
+
+    #[tokio::test]
+    async fn test_http_headers_with_custom_headers() {
+        let server = Server::new_async().await;
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert(
+            "header.content-type".to_string(),
+            "application/yaml".to_string(),
+        );
+        props.insert(
+            "header.customized-header".to_string(),
+            "some/value".to_string(),
+        );
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(props)
+            .build();
+        let headers: HeaderMap = config.http_headers().unwrap();
+
+        let expected_headers = HeaderMap::from_iter([
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                HeaderName::from_static("x-client-version"),
+                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+            ),
+            (
+                header::USER_AGENT,
+                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+            (
+                HeaderName::from_static("customized-header"),
+                HeaderValue::from_static("some/value"),
+            ),
+        ]);
+        assert_eq!(headers, expected_headers);
     }
 
     #[tokio::test]
