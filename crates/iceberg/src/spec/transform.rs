@@ -329,10 +329,6 @@ impl Transform {
                 ))),
                 _ => None,
             },
-            Transform::Year => todo!(),
-            Transform::Month => todo!(),
-            Transform::Day => todo!(),
-            Transform::Hour => todo!(),
             Transform::Truncate(_) => match predicate {
                 BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
                     expr.op(),
@@ -371,8 +367,7 @@ impl Transform {
                 }
                 _ => None,
             },
-            Transform::Void => None,
-            Transform::Unknown => None,
+            _ => None,
         };
 
         Ok(projection)
@@ -527,6 +522,13 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
+/// `TransformBoundary` is a trait designed to provide boundary values
+/// based on a given predicate operator.
+///
+/// Implementations of this trait return a modified version
+/// of the implementing value that represents a boundary condition.
+/// This is useful for operations that need to adjust values
+/// based on comparison predicates like `<`, `>`, `<=`, `>=`, and `==`.
 trait TransformBoundary {
     fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>>;
 }
@@ -610,6 +612,39 @@ mod tests {
         trans_types: Vec<(Type, Option<Type>)>,
     }
 
+    struct TestPredicates {
+        unary: BoundPredicate,
+        binary: BoundPredicate,
+        set: BoundPredicate,
+    }
+
+    impl TestPredicates {
+        fn new() -> Self {
+            let field = Arc::new(NestedField::required(
+                1,
+                "a",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+            let unary = BoundPredicate::Unary(UnaryExpression::new(
+                PredicateOperator::IsNull,
+                BoundReference::new("original_name", field.clone()),
+            ));
+            let binary = BoundPredicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                BoundReference::new("original_name", field.clone()),
+                Datum::int(5),
+            ));
+            let set = BoundPredicate::Set(SetExpression::new(
+                PredicateOperator::In,
+                BoundReference::new("original_name", field.clone()),
+                FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
+            ));
+
+            TestPredicates { unary, binary, set }
+        }
+    }
+
     fn check_transform(trans: Transform, param: TestParameter) {
         assert_eq!(param.display, format!("{trans}"));
         assert_eq!(param.json, serde_json::to_string(&trans).unwrap());
@@ -633,44 +668,21 @@ mod tests {
         }
     }
 
-    fn create_predicates() -> (BoundPredicate, BoundPredicate, BoundPredicate) {
-        let field = Arc::new(NestedField::required(
-            1,
-            "a",
-            Type::Primitive(PrimitiveType::Int),
-        ));
-
-        let predicate_unary = BoundPredicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNull,
-            BoundReference::new("original_name", field.clone()),
-        ));
-        let predicate_binary = BoundPredicate::Binary(BinaryExpression::new(
-            PredicateOperator::Eq,
-            BoundReference::new("original_name", field.clone()),
-            Datum::int(5),
-        ));
-        let predicate_set = BoundPredicate::Set(SetExpression::new(
-            PredicateOperator::In,
-            BoundReference::new("original_name", field.clone()),
-            FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
-        ));
-
-        (predicate_unary, predicate_binary, predicate_set)
-    }
-
     #[test]
-    fn test_void_project() -> Result<()> {
+    fn test_none_projection() -> Result<()> {
         let name = "projected_name".to_string();
-        let (unary, binary, set) = create_predicates();
+        let preds = TestPredicates::new();
 
         let transform = Transform::Void;
-
-        let result_unary = transform.project(name.clone(), &unary)?;
-        let result_binary = transform.project(name.clone(), &binary)?;
-        let result_set = transform.project(name.clone(), &set)?;
-
+        let result_unary = transform.project(name.clone(), &preds.unary)?;
         assert!(result_unary.is_none());
+
+        let transform = Transform::Year;
+        let result_binary = transform.project(name.clone(), &preds.binary)?;
         assert!(result_binary.is_none());
+
+        let transform = Transform::Month;
+        let result_set = transform.project(name.clone(), &preds.set)?;
         assert!(result_set.is_none());
 
         Ok(())
@@ -679,13 +691,13 @@ mod tests {
     #[test]
     fn test_truncate_project() -> Result<()> {
         let name = "projected_name".to_string();
-        let (unary, binary, set) = create_predicates();
+        let preds = TestPredicates::new();
 
         let transform = Transform::Truncate(10);
 
-        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &set)?.unwrap();
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
 
         assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
         assert_eq!(format!("{}", result_binary), "projected_name = 0");
@@ -697,13 +709,13 @@ mod tests {
     #[test]
     fn test_identity_project() -> Result<()> {
         let name = "projected_name".to_string();
-        let (unary, binary, set) = create_predicates();
+        let preds = TestPredicates::new();
 
         let transform = Transform::Identity;
 
-        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &set)?.unwrap();
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
 
         assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
         assert_eq!(format!("{}", result_binary), "projected_name = 5");
@@ -715,13 +727,13 @@ mod tests {
     #[test]
     fn test_bucket_project() -> Result<()> {
         let name = "projected_name".to_string();
-        let (unary, binary, set) = create_predicates();
+        let preds = TestPredicates::new();
 
         let transform = Transform::Bucket(8);
 
-        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &set)?.unwrap();
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
 
         assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
         assert_eq!(format!("{}", result_binary), "projected_name = 7");
