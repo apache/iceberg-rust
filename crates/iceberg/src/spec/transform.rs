@@ -571,8 +571,16 @@ impl TransformBoundary for i128 {
 }
 
 impl TransformBoundary for Vec<u8> {
-    fn boundary(&self, _op: PredicateOperator) -> Result<Option<Datum>> {
-        Ok(Some(Datum::fixed(self.clone())))
+    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
+        match op {
+            PredicateOperator::LessThan
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThan
+            | PredicateOperator::GreaterThanOrEq
+            | PredicateOperator::Eq
+            | PredicateOperator::StartsWith => Ok(Some(Datum::fixed(self.clone()))),
+            _ => Ok(None),
+        }
     }
 }
 
