@@ -116,6 +116,9 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
 }
 
 /// Binary predicate, for example, `a > 10`.

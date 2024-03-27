@@ -18,7 +18,9 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
+use crate::expr::{BoundPredicate, Predicate, Reference, UnaryExpression};
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::create_transform_function;
 use crate::ErrorKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
@@ -261,6 +263,23 @@ impl Transform {
             _ => self == other,
         }
     }
+    /// Projects predicate based on transform
+    pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+        let _func = create_transform_function(self)?;
+
+        let projection = match self {
+            Transform::Bucket(_) => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                _ => unimplemented!(),
+            },
+            _ => unimplemented!(),
+        };
+
+        Ok(projection)
+    }
 }
 
 impl Display for Transform {
@@ -358,6 +377,10 @@ impl<'de> Deserialize<'de> for Transform {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::expr::{BoundPredicate, BoundReference, PredicateOperator, UnaryExpression};
     use crate::spec::datatypes::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
         Timestamptz, Uuid,
@@ -365,6 +388,7 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
+    use crate::spec::PrimitiveType;
 
     struct TestParameter {
         display: String,
@@ -396,6 +420,26 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_bucket_project_unary() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let predicate = BoundPredicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNull,
+            BoundReference::new("original_name", Arc::new(field)),
+        ));
+
+        let transform = Transform::Bucket(8);
+
+        let result = transform.project(name, &predicate)?.unwrap();
+
+        assert_eq!(format!("{}", result), "projected_name IS NULL");
+
+        Ok(())
     }
 
     #[test]
