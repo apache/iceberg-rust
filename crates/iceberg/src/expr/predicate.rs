@@ -200,6 +200,12 @@ impl<T> SetExpression<T> {
         debug_assert!(op.is_set());
         Self { op, term, literals }
     }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+    pub(crate) fn literals(&self) -> FnvHashSet<Datum> {
+        self.literals.clone()
+    }
 }
 
 impl<T: Bind> Bind for SetExpression<T> {

@@ -19,11 +19,14 @@
 
 use crate::error::{Error, Result};
 use crate::expr::{
-    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
+    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, SetExpression,
+    UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::spec::Datum;
 use crate::transform::create_transform_function;
 use crate::ErrorKind;
+use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -265,15 +268,16 @@ impl Transform {
             _ => self == other,
         }
     }
-    /// Projects predicate based on transform
+    /// Projects predicate based on `Transform`
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
         let projection = match self {
             Transform::Bucket(_) => match predicate {
-                BoundPredicate::Unary(expr) => {
-                    Predicate::Unary(UnaryExpression::new(expr.op(), Reference::new(name)))
-                }
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
                 BoundPredicate::Binary(expr) => {
                     if expr.op() != PredicateOperator::Eq {
                         return Ok(None);
@@ -286,18 +290,47 @@ impl Transform {
                         )
                     })?;
 
-                    Predicate::Binary(BinaryExpression::new(
+                    Some(Predicate::Binary(BinaryExpression::new(
                         expr.op(),
                         Reference::new(name),
                         new_datum,
-                    ))
+                    )))
                 }
-                _ => unimplemented!(),
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    let projected_set: Result<FnvHashSet<Datum>> = expr
+                        .literals()
+                        .iter()
+                        .map(|d| {
+                            func.transform_literal(d).and_then(|opt_datum| {
+                                opt_datum.ok_or_else(|| {
+                                    Error::new(
+                                        ErrorKind::DataInvalid,
+                                        "Transformed literal must not be 'None'",
+                                    )
+                                })
+                            })
+                        })
+                        .collect();
+
+                    match projected_set {
+                        Err(err) => return Err(err),
+                        Ok(set) => Some(Predicate::Set(SetExpression::new(
+                            expr.op(),
+                            Reference::new(name),
+                            set,
+                        ))),
+                    }
+                }
+                _ => None,
             },
             _ => unimplemented!(),
         };
 
-        Ok(Some(projection))
+        Ok(projection)
     }
 }
 
@@ -439,6 +472,33 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_bucket_project_set() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let predicate = BoundPredicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            BoundReference::new("original_name", Arc::new(field)),
+            FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
+        ));
+
+        let transform = Transform::Bucket(8);
+
+        let expected = Some(Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Reference::new(&name),
+            FnvHashSet::from_iter([Datum::int(7), Datum::int(1)]),
+        )));
+
+        let result = transform.project(name, &predicate)?;
+
+        assert_eq!(result, expected);
+
+        Ok(())
     }
 
     #[test]
