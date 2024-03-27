@@ -617,7 +617,13 @@ impl RestCatalog {
             props.extend(config);
         }
 
-        let file_io = match self.config.warehouse.as_deref().or(metadata_location) {
+        let warehouse_path = match self.config.warehouse.as_deref() {
+            Some(url) if url.contains("://") => Some(url),
+            Some(_) => None,
+            None => None,
+        };
+
+        let file_io = match warehouse_path.or(metadata_location) {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
             None => {
                 return Err(Error::new(
