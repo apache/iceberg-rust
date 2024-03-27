@@ -283,7 +283,7 @@ impl Transform {
                         return Ok(None);
                     }
 
-                    let new_datum = func.transform_literal(&expr.literal())?.ok_or_else(|| {
+                    let new_datum = func.transform_literal(expr.literal())?.ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,
                             "Transformed literal must not be 'None'",
@@ -327,7 +327,30 @@ impl Transform {
                 }
                 _ => None,
             },
-            _ => unimplemented!(),
+            Transform::Identity => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => Some(Predicate::Binary(BinaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literal().to_owned(),
+                ))),
+                BoundPredicate::Set(expr) => Some(Predicate::Set(SetExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literals().to_owned(),
+                ))),
+                _ => None,
+            },
+            Transform::Year => todo!(),
+            Transform::Month => todo!(),
+            Transform::Day => todo!(),
+            Transform::Hour => todo!(),
+            Transform::Truncate(_) => todo!(),
+            Transform::Void => todo!(),
+            Transform::Unknown => todo!(),
         };
 
         Ok(projection)
@@ -472,6 +495,44 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_identity_project() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = Arc::new(NestedField::required(
+            1,
+            "a",
+            Type::Primitive(PrimitiveType::Int),
+        ));
+
+        let predicate_unary = BoundPredicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNull,
+            BoundReference::new("original_name", field.clone()),
+        ));
+        let predicate_binary = BoundPredicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            BoundReference::new("original_name", field.clone()),
+            Datum::int(5),
+        ));
+        let predicate_set = BoundPredicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            BoundReference::new("original_name", field.clone()),
+            FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
+        ));
+
+        let transform = Transform::Identity;
+
+        let result_unary = transform.project(name.clone(), &predicate_unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &predicate_binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &predicate_set)?.unwrap();
+
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 5");
+        assert_eq!(format!("{}", result_set), "projected_name IN (5, 6)");
+
+        Ok(())
     }
 
     #[test]

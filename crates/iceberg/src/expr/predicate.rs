@@ -150,8 +150,8 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
-    pub(crate) fn literal(&self) -> Datum {
-        self.literal.clone()
+    pub(crate) fn literal(&self) -> &Datum {
+        &self.literal
     }
 }
 
@@ -203,8 +203,8 @@ impl<T> SetExpression<T> {
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
-    pub(crate) fn literals(&self) -> FnvHashSet<Datum> {
-        self.literals.clone()
+    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+        &self.literals
     }
 }
 
