@@ -271,7 +271,11 @@ impl Transform {
         }
     }
 
-    /// Projects predicate based on `Transform`
+    /// Projects a given predicate according to the transformation
+    /// specified by the `Transform` instance.
+    /// This allows predicates to be effectively applied to data
+    /// that has undergone transformation, enabling efficient querying
+    /// and filtering based on the original, untransformed data.
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
