@@ -69,6 +69,46 @@ impl Reference {
         ))
     }
 
+    /// Creates an less than or equal to expression. For example, `a <= 10`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").less_than_or_equal_to(Datum::long(10));
+    ///
+    /// assert_eq!(&format!("{expr}"), "a <= 10");
+    /// ```
+    pub fn less_than_or_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThanOrEq,
+            self,
+            datum,
+        ))
+    }
+
+    /// Creates an greater than expression. For example, `a > 10`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").greater_than(Datum::long(10));
+    ///
+    /// assert_eq!(&format!("{expr}"), "a > 10");
+    /// ```
+    pub fn greater_than(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThan,
+            self,
+            datum,
+        ))
+    }
+
     /// Creates a greater-than-or-equal-to than expression. For example, `a >= 10`.
     ///
     /// # Example
@@ -87,6 +127,111 @@ impl Reference {
             self,
             datum,
         ))
+    }
+
+    /// Creates an equal-to expression. For example, `a = 10`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").equal_to(Datum::long(10));
+    ///
+    /// assert_eq!(&format!("{expr}"), "a = 10");
+    /// ```
+    pub fn equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(PredicateOperator::Eq, self, datum))
+    }
+
+    /// Creates a not equal-to expression. For example, `a!= 10`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").not_equal_to(Datum::long(10));
+    ///
+    /// assert_eq!(&format!("{expr}"), "a != 10");
+    /// ```
+    pub fn not_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(PredicateOperator::NotEq, self, datum))
+    }
+
+    /// Creates a start-with expression. For example, `a STARTS WITH "foo"`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").starts_with(Datum::string("foo"));
+    ///
+    /// assert_eq!(&format!("{expr}"), r#"a STARTS WITH "foo""#);
+    /// ```
+    pub fn starts_with(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::StartsWith,
+            self,
+            datum,
+        ))
+    }
+
+    /// Creates a not start-with expression. For example, `a NOT STARTS WITH 'foo'`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    ///
+    /// let expr = Reference::new("a").not_starts_with(Datum::string("foo"));
+    ///
+    /// assert_eq!(&format!("{expr}"), r#"a NOT STARTS WITH "foo""#);
+    /// ```
+    pub fn not_starts_with(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::NotStartsWith,
+            self,
+            datum,
+        ))
+    }
+
+    /// Creates an is-nan expression. For example, `a IS NAN`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_nan();
+    ///
+    /// assert_eq!(&format!("{expr}"), "a IS NAN");
+    /// ```
+    pub fn is_nan(self) -> Predicate {
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNan, self))
+    }
+
+    /// Creates an is-not-nan expression. For example, `a IS NOT NAN`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// let expr = Reference::new("a").is_not_nan();
+    ///
+    /// assert_eq!(&format!("{expr}"), "a IS NOT NAN");
+    /// ```
+    pub fn is_not_nan(self) -> Predicate {
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNan, self))
     }
 
     /// Creates an is-null expression. For example, `a IS NULL`.
