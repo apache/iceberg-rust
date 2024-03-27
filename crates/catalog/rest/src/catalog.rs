@@ -104,7 +104,7 @@ impl RestCatalogConfig {
         ])
     }
 
-    fn get_default_headers(&self) -> Result<HeaderMap> {
+    fn http_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
@@ -161,7 +161,7 @@ impl RestCatalogConfig {
 
     fn try_create_rest_client(&self) -> Result<HttpClient> {
         // TODO: We will add ssl config, sigv4 later
-        let headers = self.get_default_headers()?;
+        let headers = self.http_headers()?;
 
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
@@ -994,7 +994,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_default_headers() {
+    async fn test_http_headers() {
         let server = Server::new_async().await;
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1003,7 +1003,7 @@ mod tests {
             .uri(server.url())
             .props(props)
             .build();
-        let headers: HeaderMap = config.get_default_headers().unwrap();
+        let headers: HeaderMap = config.http_headers().unwrap();
 
         let expected_headers = HeaderMap::from_iter([
             (
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_default_headers_with_custom_headers() {
+    async fn test_http_headers_with_custom_headers() {
         let server = Server::new_async().await;
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1040,7 +1040,7 @@ mod tests {
             .uri(server.url())
             .props(props)
             .build();
-        let headers: HeaderMap = config.get_default_headers().unwrap();
+        let headers: HeaderMap = config.http_headers().unwrap();
 
         let expected_headers = HeaderMap::from_iter([
             (
