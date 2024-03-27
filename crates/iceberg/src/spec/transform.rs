@@ -18,7 +18,9 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
-use crate::expr::{BoundPredicate, Predicate, Reference, UnaryExpression};
+use crate::expr::{
+    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
+};
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::transform::create_transform_function;
 use crate::ErrorKind;
@@ -265,20 +267,37 @@ impl Transform {
     }
     /// Projects predicate based on transform
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
-        let _func = create_transform_function(self)?;
+        let func = create_transform_function(self)?;
 
         let projection = match self {
             Transform::Bucket(_) => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
+                BoundPredicate::Unary(expr) => {
+                    Predicate::Unary(UnaryExpression::new(expr.op(), Reference::new(name)))
+                }
+                BoundPredicate::Binary(expr) => {
+                    if expr.op() != PredicateOperator::Eq {
+                        return Ok(None);
+                    }
+
+                    let new_datum = func.transform_literal(&expr.literal())?.ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Transformed literal must not be 'None'",
+                        )
+                    })?;
+
+                    Predicate::Binary(BinaryExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        new_datum,
+                    ))
+                }
                 _ => unimplemented!(),
             },
             _ => unimplemented!(),
         };
 
-        Ok(projection)
+        Ok(Some(projection))
     }
 }
 
@@ -388,7 +407,7 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
-    use crate::spec::PrimitiveType;
+    use crate::spec::{Datum, PrimitiveType};
 
     struct TestParameter {
         display: String,
@@ -420,6 +439,33 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_bucket_project_binary() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
+
+        let predicate = BoundPredicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            BoundReference::new("original_name", Arc::new(field)),
+            Datum::int(5),
+        ));
+
+        let transform = Transform::Bucket(8);
+
+        let expected = Some(Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            Reference::new(&name),
+            Datum::int(7),
+        )));
+
+        let result = transform.project(name, &predicate)?;
+
+        assert_eq!(result, expected);
+
+        Ok(())
     }
 
     #[test]

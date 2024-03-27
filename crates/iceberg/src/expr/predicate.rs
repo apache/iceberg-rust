@@ -147,6 +147,12 @@ impl<T> BinaryExpression<T> {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
     }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+    pub(crate) fn literal(&self) -> Datum {
+        self.literal.clone()
+    }
 }
 
 impl<T: Display> Display for BinaryExpression<T> {
