@@ -16,6 +16,7 @@
 // under the License.
 
 //! Transform function used to compute partition values.
+
 use crate::{
     spec::{Datum, Transform},
     Result,

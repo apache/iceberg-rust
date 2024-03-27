@@ -23,13 +23,15 @@ use crate::expr::{
     UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
-use crate::spec::Datum;
-use crate::transform::create_transform_function;
+use crate::spec::PrimitiveLiteral;
+use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
 use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+
+use super::Datum;
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -255,7 +257,7 @@ impl Transform {
     /// result.
     ///
     /// For example, sorting by day(ts) will produce an ordering that is also by month(ts) or
-    //  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
+    ///  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
     pub fn satisfies_order_of(&self, other: &Self) -> bool {
         match self {
             Transform::Identity => other.preserves_order(),
@@ -268,6 +270,7 @@ impl Transform {
             _ => self == other,
         }
     }
+
     /// Projects predicate based on `Transform`
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
@@ -286,7 +289,7 @@ impl Transform {
                     let new_datum = func.transform_literal(expr.literal())?.ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,
-                            "Transformed literal must not be 'None'",
+                            "Transformed datum must not be 'None'",
                         )
                     })?;
 
@@ -301,29 +304,11 @@ impl Transform {
                         return Ok(None);
                     }
 
-                    let projected_set: Result<FnvHashSet<Datum>> = expr
-                        .literals()
-                        .iter()
-                        .map(|d| {
-                            func.transform_literal(d).and_then(|opt_datum| {
-                                opt_datum.ok_or_else(|| {
-                                    Error::new(
-                                        ErrorKind::DataInvalid,
-                                        "Transformed literal must not be 'None'",
-                                    )
-                                })
-                            })
-                        })
-                        .collect();
-
-                    match projected_set {
-                        Err(err) => return Err(err),
-                        Ok(set) => Some(Predicate::Set(SetExpression::new(
-                            expr.op(),
-                            Reference::new(name),
-                            set,
-                        ))),
-                    }
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
                 }
                 _ => None,
             },
@@ -348,12 +333,104 @@ impl Transform {
             Transform::Month => todo!(),
             Transform::Day => todo!(),
             Transform::Hour => todo!(),
-            Transform::Truncate(_) => todo!(),
+            Transform::Truncate(_) => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    let op = expr.op();
+                    let primitive = expr.literal().literal();
+
+                    match primitive {
+                        PrimitiveLiteral::Int(v) => {
+                            self.apply_transform_boundary(name, v, op, &func)?
+                        }
+                        PrimitiveLiteral::Long(v) => {
+                            self.apply_transform_boundary(name, v, op, &func)?
+                        }
+                        PrimitiveLiteral::Decimal(v) => {
+                            self.apply_transform_boundary(name, v, op, &func)?
+                        }
+                        PrimitiveLiteral::Fixed(v) => {
+                            self.apply_transform_boundary(name, v, op, &func)?
+                        }
+                        _ => return Ok(None),
+                    }
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
             Transform::Void => todo!(),
             Transform::Unknown => todo!(),
         };
 
         Ok(projection)
+    }
+
+    /// Transform each literal value of `FnvHashSet<Datum>`
+    fn apply_transform_on_set(
+        &self,
+        literals: &FnvHashSet<Datum>,
+        func: &BoxedTransformFunction,
+    ) -> Result<FnvHashSet<Datum>> {
+        literals
+            .iter()
+            .map(|lit| {
+                func.transform_literal(lit).and_then(|d| {
+                    d.ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Transformed datum must not be 'None'",
+                        )
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// Apply truncate transform on `Datum` with new boundaries
+    /// and adjusted `PredicateOperator`
+    fn apply_transform_boundary<T: TransformBoundary>(
+        &self,
+        name: String,
+        value: &T,
+        op: PredicateOperator,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        match value.boundary(op)? {
+            None => Ok(None),
+            Some(boundary) => {
+                let literal = func.transform_literal(&boundary)?.ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Transformed datum must not be 'None'",
+                    )
+                })?;
+
+                let new_op = match op {
+                    PredicateOperator::LessThan => PredicateOperator::LessThanOrEq,
+                    PredicateOperator::GreaterThan => PredicateOperator::GreaterThanOrEq,
+                    _ => op,
+                };
+
+                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    new_op,
+                    Reference::new(name),
+                    literal,
+                ))))
+            }
+        }
     }
 }
 
@@ -450,8 +527,59 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
+trait TransformBoundary {
+    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>>;
+}
+
+impl TransformBoundary for i32 {
+    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
+        match op {
+            PredicateOperator::LessThan => Ok(Some(Datum::int(self - 1))),
+            PredicateOperator::GreaterThan => Ok(Some(Datum::int(self + 1))),
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::int(*self))),
+            _ => Ok(None),
+        }
+    }
+}
+
+impl TransformBoundary for i64 {
+    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
+        match op {
+            PredicateOperator::LessThan => Ok(Some(Datum::long(self - 1))),
+            PredicateOperator::GreaterThan => Ok(Some(Datum::long(self + 1))),
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::long(*self))),
+            _ => Ok(None),
+        }
+    }
+}
+
+impl TransformBoundary for i128 {
+    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
+        match op {
+            PredicateOperator::LessThan => Ok(Some(Datum::decimal(self - 1)?)),
+            PredicateOperator::GreaterThan => Ok(Some(Datum::decimal(self + 1)?)),
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::decimal(*self)?)),
+            _ => Ok(None),
+        }
+    }
+}
+
+impl TransformBoundary for Vec<u8> {
+    fn boundary(&self, _op: PredicateOperator) -> Result<Option<Datum>> {
+        Ok(Some(Datum::fixed(self.clone())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use fnv::FnvHashSet;
+
     use super::*;
     use std::sync::Arc;
 
@@ -497,10 +625,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_identity_project() -> Result<()> {
-        let name = "projected_name".to_string();
-
+    fn create_predicates() -> (BoundPredicate, BoundPredicate, BoundPredicate) {
         let field = Arc::new(NestedField::required(
             1,
             "a",
@@ -522,11 +647,37 @@ mod tests {
             FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
         ));
 
+        (predicate_unary, predicate_binary, predicate_set)
+    }
+
+    #[test]
+    fn test_truncate_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let (unary, binary, set) = create_predicates();
+
+        let transform = Transform::Truncate(10);
+
+        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &set)?.unwrap();
+
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 0");
+        assert_eq!(format!("{}", result_set), "projected_name IN (0)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_identity_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let (unary, binary, set) = create_predicates();
+
         let transform = Transform::Identity;
 
-        let result_unary = transform.project(name.clone(), &predicate_unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &predicate_binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &predicate_set)?.unwrap();
+        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &set)?.unwrap();
 
         assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
         assert_eq!(format!("{}", result_binary), "projected_name = 5");
@@ -536,75 +687,19 @@ mod tests {
     }
 
     #[test]
-    fn test_bucket_project_set() -> Result<()> {
+    fn test_bucket_project() -> Result<()> {
         let name = "projected_name".to_string();
-
-        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
-
-        let predicate = BoundPredicate::Set(SetExpression::new(
-            PredicateOperator::In,
-            BoundReference::new("original_name", Arc::new(field)),
-            FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
-        ));
+        let (unary, binary, set) = create_predicates();
 
         let transform = Transform::Bucket(8);
 
-        let expected = Some(Predicate::Set(SetExpression::new(
-            PredicateOperator::In,
-            Reference::new(&name),
-            FnvHashSet::from_iter([Datum::int(7), Datum::int(1)]),
-        )));
+        let result_unary = transform.project(name.clone(), &unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &set)?.unwrap();
 
-        let result = transform.project(name, &predicate)?;
-
-        assert_eq!(result, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_bucket_project_binary() -> Result<()> {
-        let name = "projected_name".to_string();
-
-        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
-
-        let predicate = BoundPredicate::Binary(BinaryExpression::new(
-            PredicateOperator::Eq,
-            BoundReference::new("original_name", Arc::new(field)),
-            Datum::int(5),
-        ));
-
-        let transform = Transform::Bucket(8);
-
-        let expected = Some(Predicate::Binary(BinaryExpression::new(
-            PredicateOperator::Eq,
-            Reference::new(&name),
-            Datum::int(7),
-        )));
-
-        let result = transform.project(name, &predicate)?;
-
-        assert_eq!(result, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_bucket_project_unary() -> Result<()> {
-        let name = "projected_name".to_string();
-
-        let field = NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int));
-
-        let predicate = BoundPredicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNull,
-            BoundReference::new("original_name", Arc::new(field)),
-        ));
-
-        let transform = Transform::Bucket(8);
-
-        let result = transform.project(name, &predicate)?.unwrap();
-
-        assert_eq!(format!("{}", result), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 7");
+        assert_eq!(format!("{}", result_set), "projected_name IN (1, 7)");
 
         Ok(())
     }
