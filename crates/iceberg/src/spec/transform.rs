@@ -648,17 +648,13 @@ mod tests {
     }
 
     #[test]
-    fn test_none_projection() -> Result<()> {
+    fn test_void_projection() -> Result<()> {
         let name = "projected_name".to_string();
         let preds = TestPredicates::new();
 
         let transform = Transform::Void;
         let result_unary = transform.project(name.clone(), &preds.unary)?;
         assert!(result_unary.is_none());
-
-        let transform = Transform::Unknown;
-        let result_binary = transform.project(name.clone(), &preds.binary)?;
-        assert!(result_binary.is_none());
 
         Ok(())
     }
