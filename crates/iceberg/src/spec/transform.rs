@@ -18,11 +18,19 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
+use crate::expr::{
+    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, SetExpression,
+    UnaryExpression,
+};
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
+use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+
+use super::{Datum, PrimitiveLiteral};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -248,7 +256,7 @@ impl Transform {
     /// result.
     ///
     /// For example, sorting by day(ts) will produce an ordering that is also by month(ts) or
-    //  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
+    ///  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
     pub fn satisfies_order_of(&self, other: &Self) -> bool {
         match self {
             Transform::Identity => other.preserves_order(),
@@ -260,6 +268,223 @@ impl Transform {
             Transform::Month => matches!(other, Transform::Month | Transform::Year),
             _ => self == other,
         }
+    }
+
+    /// Projects a given predicate according to the transformation
+    /// specified by the `Transform` instance.
+    ///
+    /// This allows predicates to be effectively applied to data
+    /// that has undergone transformation, enabling efficient querying
+    /// and filtering based on the original, untransformed data.
+    ///
+    /// # Example
+    /// Suppose, we have row filter `a = 10`, and a partition spec
+    /// `bucket(a, 37) as bs`, if one row matches `a = 10`, then its partition
+    /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
+    /// `bs = bucket(10, 37)`
+    pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+        let func = create_transform_function(self)?;
+
+        let projection = match self {
+            Transform::Bucket(_) => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    if expr.op() != PredicateOperator::Eq
+                        || self.can_transform(expr.literal()).is_err()
+                    {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Binary(BinaryExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        func.transform_literal_result(expr.literal())?,
+                    )))
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
+            Transform::Identity => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => Some(Predicate::Binary(BinaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literal().to_owned(),
+                ))),
+                BoundPredicate::Set(expr) => Some(Predicate::Set(SetExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literals().to_owned(),
+                ))),
+                _ => None,
+            },
+            Transform::Truncate(_) => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    if self.can_transform(expr.literal()).is_err() {
+                        return Ok(None);
+                    }
+
+                    let op = expr.op();
+                    let datum = expr.literal();
+                    self.apply_transform_boundary(name, datum, &op, &func)?
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
+            Transform::Year | Transform::Month | Transform::Day => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    if self.can_transform(expr.literal()).is_err() {
+                        return Ok(None);
+                    }
+
+                    let op = expr.op();
+                    let datum = expr.literal();
+                    self.apply_transform_boundary(name, datum, &op, &func)?
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Ok(projection)
+    }
+
+    /// Check if `Transform` is applicable on datum's `PrimitiveType`
+    fn can_transform(&self, datum: &Datum) -> Result<()> {
+        let input_type = datum.data_type().clone();
+        self.result_type(&Type::Primitive(input_type))?;
+
+        Ok(())
+    }
+
+    /// Transform each literal value of `FnvHashSet<Datum>`
+    fn apply_transform_on_set(
+        &self,
+        literals: &FnvHashSet<Datum>,
+        func: &BoxedTransformFunction,
+    ) -> Result<FnvHashSet<Datum>> {
+        literals
+            .iter()
+            .try_fold(FnvHashSet::default(), |mut acc, d| {
+                self.can_transform(d)?;
+                acc.insert(func.transform_literal_result(d)?);
+                Ok(acc)
+            })
+    }
+
+    /// Apply truncate transform on `Datum` with new boundaries
+    /// and adjusted `PredicateOperator`
+    fn apply_transform_boundary(
+        &self,
+        name: String,
+        datum: &Datum,
+        op: &PredicateOperator,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        let boundary = self.datum_with_boundary(op, datum)?;
+
+        match boundary {
+            None => Ok(None),
+            Some(boundary) => {
+                let new_op = match op {
+                    PredicateOperator::LessThan => PredicateOperator::LessThanOrEq,
+                    PredicateOperator::GreaterThan => PredicateOperator::GreaterThanOrEq,
+                    _ => *op,
+                };
+
+                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    new_op,
+                    Reference::new(name),
+                    func.transform_literal_result(&boundary)?,
+                ))))
+            }
+        }
+    }
+
+    /// Create a new `Datum` with adjusted boundary for projection
+    fn datum_with_boundary(&self, op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
+        let literal = datum.literal();
+
+        let adj_datum = match op {
+            PredicateOperator::LessThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
+                _ => None,
+            },
+            PredicateOperator::GreaterThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v + 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
+                _ => None,
+            },
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(*v)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(*v)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(*v)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(*v)),
+                _ => None,
+            },
+            PredicateOperator::StartsWith => match literal {
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Ok(adj_datum)
     }
 }
 
@@ -356,8 +581,16 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
+impl Datum {}
+
 #[cfg(test)]
 mod tests {
+    use fnv::FnvHashSet;
+
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::expr::{BoundPredicate, BoundReference, PredicateOperator, UnaryExpression};
     use crate::spec::datatypes::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
         Timestamptz, Uuid,
@@ -365,6 +598,7 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
+    use crate::spec::{Datum, PrimitiveType};
 
     struct TestParameter {
         display: String,
@@ -373,6 +607,39 @@ mod tests {
         preserves_order: bool,
         satisfies_order_of: Vec<(Transform, bool)>,
         trans_types: Vec<(Type, Option<Type>)>,
+    }
+
+    struct TestPredicates {
+        unary: BoundPredicate,
+        binary: BoundPredicate,
+        set: BoundPredicate,
+    }
+
+    impl TestPredicates {
+        fn new() -> Self {
+            let field = Arc::new(NestedField::required(
+                1,
+                "a",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+            let unary = BoundPredicate::Unary(UnaryExpression::new(
+                PredicateOperator::IsNull,
+                BoundReference::new("original_name", field.clone()),
+            ));
+            let binary = BoundPredicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                BoundReference::new("original_name", field.clone()),
+                Datum::int(5),
+            ));
+            let set = BoundPredicate::Set(SetExpression::new(
+                PredicateOperator::In,
+                BoundReference::new("original_name", field.clone()),
+                FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
+            ));
+
+            TestPredicates { unary, binary, set }
+        }
     }
 
     fn check_transform(trans: Transform, param: TestParameter) {
@@ -396,6 +663,97 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_projection_dates_year() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = Arc::new(NestedField::required(
+            1,
+            "date",
+            Type::Primitive(PrimitiveType::Date),
+        ));
+
+        let predicate = BoundPredicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            BoundReference::new("date", field),
+            Datum::date_from_str("1971-01-01")?,
+        ));
+
+        let transform = Transform::Year;
+
+        let result = transform.project(name.clone(), &predicate)?.unwrap();
+
+        assert_eq!(format!("{}", result), "projected_name <= 0");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_void_projection() -> Result<()> {
+        let name = "projected_name".to_string();
+        let preds = TestPredicates::new();
+
+        let transform = Transform::Void;
+        let result_unary = transform.project(name.clone(), &preds.unary)?;
+        assert!(result_unary.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_truncate_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let preds = TestPredicates::new();
+
+        let transform = Transform::Truncate(10);
+
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 0");
+        assert_eq!(format!("{}", result_set), "projected_name IN (0)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_identity_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let preds = TestPredicates::new();
+
+        let transform = Transform::Identity;
+
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 5");
+        assert_eq!(format!("{}", result_set), "projected_name IN (5, 6)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bucket_project() -> Result<()> {
+        let name = "projected_name".to_string();
+        let preds = TestPredicates::new();
+
+        let transform = Transform::Bucket(8);
+
+        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
+        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
+        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+
+        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
+        assert_eq!(format!("{}", result_binary), "projected_name = 7");
+        assert_eq!(format!("{}", result_set), "projected_name IN (1, 7)");
+
+        Ok(())
     }
 
     #[test]

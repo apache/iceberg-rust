@@ -116,6 +116,9 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
 }
 
 /// Binary predicate, for example, `a > 10`.
@@ -143,6 +146,12 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
+    }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+    pub(crate) fn literal(&self) -> &Datum {
+        &self.literal
     }
 }
 
@@ -190,6 +199,12 @@ impl<T> SetExpression<T> {
     pub(crate) fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
         Self { op, term, literals }
+    }
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+        &self.literals
     }
 }
 
