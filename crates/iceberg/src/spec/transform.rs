@@ -700,40 +700,37 @@ mod tests {
         );
 
         assert_projection(
-            &fixture.binary_predicate(PredicateOperator::Eq, Datum::uuid(value.clone())),
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::uuid(value)),
             &fixture,
             Some("name = 4"),
         )?;
 
         assert_projection(
-            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::uuid(value.clone())),
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::uuid(value)),
             &fixture,
             None,
         )?;
 
         assert_projection(
-            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::uuid(value.clone())),
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::uuid(value)),
             &fixture,
             None,
         )?;
 
         assert_projection(
-            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::uuid(value.clone())),
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::uuid(value)),
             &fixture,
             None,
         )?;
 
         assert_projection(
-            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::uuid(value.clone())),
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::uuid(value)),
             &fixture,
             None,
         )?;
 
         assert_projection(
-            &fixture.binary_predicate(
-                PredicateOperator::GreaterThanOrEq,
-                Datum::uuid(value.clone()),
-            ),
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::uuid(value)),
             &fixture,
             None,
         )?;
@@ -741,10 +738,7 @@ mod tests {
         assert_projection(
             &fixture.set_predicate(
                 PredicateOperator::In,
-                vec![
-                    Datum::uuid(value.clone()),
-                    Datum::uuid(another_value.clone()),
-                ],
+                vec![Datum::uuid(value), Datum::uuid(another_value)],
             ),
             &fixture,
             Some("name IN (4, 6)"),
@@ -753,10 +747,7 @@ mod tests {
         assert_projection(
             &fixture.set_predicate(
                 PredicateOperator::NotIn,
-                vec![
-                    Datum::uuid(value.clone()),
-                    Datum::uuid(another_value.clone()),
-                ],
+                vec![Datum::uuid(value), Datum::uuid(another_value)],
             ),
             &fixture,
             None,
