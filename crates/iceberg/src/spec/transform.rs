@@ -292,7 +292,9 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
-                    if expr.op() != PredicateOperator::Eq {
+                    if expr.op() != PredicateOperator::Eq
+                        || self.can_transform(expr.literal()).is_err()
+                    {
                         return Ok(None);
                     }
 
@@ -338,6 +340,10 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
+                    if self.can_transform(expr.literal()).is_err() {
+                        return Ok(None);
+                    }
+
                     let op = expr.op();
                     let datum = expr.literal();
                     self.apply_transform_boundary(name, datum, &op, &func)?
@@ -384,6 +390,14 @@ impl Transform {
         Ok(projection)
     }
 
+    /// Check if `Transform` is applicable on datum's `PrimitiveType`
+    fn can_transform(&self, datum: &Datum) -> Result<()> {
+        let input_type = datum.data_type().clone();
+        self.result_type(&Type::Primitive(input_type))?;
+
+        Ok(())
+    }
+
     /// Transform each literal value of `FnvHashSet<Datum>`
     fn apply_transform_on_set(
         &self,
@@ -392,8 +406,11 @@ impl Transform {
     ) -> Result<FnvHashSet<Datum>> {
         literals
             .iter()
-            .map(|d| func.transform_literal_result(d))
-            .collect()
+            .try_fold(FnvHashSet::default(), |mut acc, d| {
+                self.can_transform(d)?;
+                acc.insert(func.transform_literal_result(d)?);
+                Ok(acc)
+            })
     }
 
     /// Apply truncate transform on `Datum` with new boundaries
