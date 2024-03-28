@@ -19,7 +19,7 @@
 
 use crate::{
     spec::{Datum, Transform},
-    Result,
+    Error, ErrorKind, Result,
 };
 use arrow_array::ArrayRef;
 
@@ -37,6 +37,15 @@ pub trait TransformFunction: Send {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef>;
     /// transform_literal will take an input literal and transform it into a new literal.
     fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>>;
+    /// wrapper
+    fn transform_literal_result(&self, input: &Datum) -> Result<Datum> {
+        self.transform_literal(input)?.ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Error. Returns 'None' for literal {}", input),
+            )
+        })
+    }
 }
 
 /// BoxedTransformFunction is a boxed trait object of TransformFunction.

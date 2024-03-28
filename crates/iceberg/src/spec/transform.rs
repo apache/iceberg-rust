@@ -296,17 +296,10 @@ impl Transform {
                         return Ok(None);
                     }
 
-                    let new_datum = func.transform_literal(expr.literal())?.ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Transformed datum must not be 'None'",
-                        )
-                    })?;
-
                     Some(Predicate::Binary(BinaryExpression::new(
                         expr.op(),
                         Reference::new(name),
-                        new_datum,
+                        func.transform_literal_result(expr.literal())?,
                     )))
                 }
                 BoundPredicate::Set(expr) => {
@@ -399,16 +392,7 @@ impl Transform {
     ) -> Result<FnvHashSet<Datum>> {
         literals
             .iter()
-            .map(|lit| {
-                func.transform_literal(lit).and_then(|d| {
-                    d.ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Transformed datum must not be 'None'",
-                        )
-                    })
-                })
-            })
+            .map(|d| func.transform_literal_result(d))
             .collect()
     }
 
@@ -424,13 +408,6 @@ impl Transform {
         match datum.boundary(op)? {
             None => Ok(None),
             Some(boundary) => {
-                let literal = func.transform_literal(&boundary)?.ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Transformed datum must not be 'None'",
-                    )
-                })?;
-
                 let new_op = match op {
                     PredicateOperator::LessThan => PredicateOperator::LessThanOrEq,
                     PredicateOperator::GreaterThan => PredicateOperator::GreaterThanOrEq,
@@ -440,7 +417,7 @@ impl Transform {
                 Ok(Some(Predicate::Binary(BinaryExpression::new(
                     new_op,
                     Reference::new(name),
-                    literal,
+                    func.transform_literal_result(&boundary)?,
                 ))))
             }
         }
