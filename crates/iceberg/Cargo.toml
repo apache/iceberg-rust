@@ -35,6 +35,7 @@ array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 bimap = { workspace = true }
