@@ -635,7 +635,7 @@ mod tests {
         let predicate = BoundPredicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
             BoundReference::new("date", field),
-            Datum::date_from_str("1971-01-01".to_string())?,
+            Datum::date_from_str("1971-01-01")?,
         ));
 
         let transform = Transform::Year;
