@@ -23,7 +23,6 @@ use crate::expr::{
     UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
-use crate::spec::PrimitiveLiteral;
 use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
 use fnv::FnvHashSet;
@@ -347,23 +346,31 @@ impl Transform {
                 ))),
                 BoundPredicate::Binary(expr) => {
                     let op = expr.op();
-                    let primitive = expr.literal().literal();
-
-                    match primitive {
-                        PrimitiveLiteral::Int(v) => {
-                            self.apply_transform_boundary(name, v, op, &func)?
-                        }
-                        PrimitiveLiteral::Long(v) => {
-                            self.apply_transform_boundary(name, v, op, &func)?
-                        }
-                        PrimitiveLiteral::Decimal(v) => {
-                            self.apply_transform_boundary(name, v, op, &func)?
-                        }
-                        PrimitiveLiteral::Fixed(v) => {
-                            self.apply_transform_boundary(name, v, op, &func)?
-                        }
-                        _ => return Ok(None),
+                    let datum = expr.literal();
+                    self.apply_transform_boundary(name, datum, &op, &func)?
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
                     }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
+            Transform::Year | Transform::Month | Transform::Day => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    let op = expr.op();
+                    let datum = expr.literal();
+                    self.apply_transform_boundary(name, datum, &op, &func)?
                 }
                 BoundPredicate::Set(expr) => {
                     if expr.op() != PredicateOperator::In {
@@ -407,14 +414,14 @@ impl Transform {
 
     /// Apply truncate transform on `Datum` with new boundaries
     /// and adjusted `PredicateOperator`
-    fn apply_transform_boundary<T: TransformBoundary>(
+    fn apply_transform_boundary(
         &self,
         name: String,
-        value: &T,
-        op: PredicateOperator,
+        datum: &Datum,
+        op: &PredicateOperator,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
-        match value.boundary(op)? {
+        match datum.boundary(op)? {
             None => Ok(None),
             Some(boundary) => {
                 let literal = func.transform_literal(&boundary)?.ok_or_else(|| {
@@ -427,7 +434,7 @@ impl Transform {
                 let new_op = match op {
                     PredicateOperator::LessThan => PredicateOperator::LessThanOrEq,
                     PredicateOperator::GreaterThan => PredicateOperator::GreaterThanOrEq,
-                    _ => op,
+                    _ => *op,
                 };
 
                 Ok(Some(Predicate::Binary(BinaryExpression::new(
@@ -533,70 +540,6 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
-/// `TransformBoundary` is a trait designed to provide boundary values
-/// based on a given predicate operator.
-///
-/// Implementations of this trait return a modified version
-/// of the implementing value that represents a boundary condition.
-/// This is useful for operations that need to adjust values
-/// based on comparison predicates like `<`, `>`, `<=`, `>=`, and `==`.
-trait TransformBoundary {
-    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>>;
-}
-
-impl TransformBoundary for i32 {
-    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
-        match op {
-            PredicateOperator::LessThan => Ok(Some(Datum::int(self - 1))),
-            PredicateOperator::GreaterThan => Ok(Some(Datum::int(self + 1))),
-            PredicateOperator::Eq
-            | PredicateOperator::LessThanOrEq
-            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::int(*self))),
-            _ => Ok(None),
-        }
-    }
-}
-
-impl TransformBoundary for i64 {
-    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
-        match op {
-            PredicateOperator::LessThan => Ok(Some(Datum::long(self - 1))),
-            PredicateOperator::GreaterThan => Ok(Some(Datum::long(self + 1))),
-            PredicateOperator::Eq
-            | PredicateOperator::LessThanOrEq
-            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::long(*self))),
-            _ => Ok(None),
-        }
-    }
-}
-
-impl TransformBoundary for i128 {
-    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
-        match op {
-            PredicateOperator::LessThan => Ok(Some(Datum::decimal(self - 1)?)),
-            PredicateOperator::GreaterThan => Ok(Some(Datum::decimal(self + 1)?)),
-            PredicateOperator::Eq
-            | PredicateOperator::LessThanOrEq
-            | PredicateOperator::GreaterThanOrEq => Ok(Some(Datum::decimal(*self)?)),
-            _ => Ok(None),
-        }
-    }
-}
-
-impl TransformBoundary for Vec<u8> {
-    fn boundary(&self, op: PredicateOperator) -> Result<Option<Datum>> {
-        match op {
-            PredicateOperator::LessThan
-            | PredicateOperator::LessThanOrEq
-            | PredicateOperator::GreaterThan
-            | PredicateOperator::GreaterThanOrEq
-            | PredicateOperator::Eq
-            | PredicateOperator::StartsWith => Ok(Some(Datum::fixed(self.clone()))),
-            _ => Ok(None),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use fnv::FnvHashSet;
@@ -680,6 +623,31 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_dates_year() -> Result<()> {
+        let name = "projected_name".to_string();
+
+        let field = Arc::new(NestedField::required(
+            1,
+            "date",
+            Type::Primitive(PrimitiveType::Date),
+        ));
+
+        let predicate = BoundPredicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            BoundReference::new("date", field),
+            Datum::date_from_str("1971-01-01".to_string())?,
+        ));
+
+        let transform = Transform::Year;
+
+        let result = transform.project(name.clone(), &predicate)?.unwrap();
+
+        assert_eq!(format!("{}", result), "projected_name <= 0");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_none_projection() -> Result<()> {
         let name = "projected_name".to_string();
         let preds = TestPredicates::new();
@@ -688,13 +656,9 @@ mod tests {
         let result_unary = transform.project(name.clone(), &preds.unary)?;
         assert!(result_unary.is_none());
 
-        let transform = Transform::Year;
+        let transform = Transform::Unknown;
         let result_binary = transform.project(name.clone(), &preds.binary)?;
         assert!(result_binary.is_none());
-
-        let transform = Transform::Month;
-        let result_set = transform.project(name.clone(), &preds.set)?;
-        assert!(result_set.is_none());
 
         Ok(())
     }

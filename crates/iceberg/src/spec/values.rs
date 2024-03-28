@@ -34,6 +34,7 @@ use uuid::Uuid;
 pub use _serde::RawLiteral;
 
 use crate::error::Result;
+use crate::expr::PredicateOperator;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
 use crate::spec::values::timestamp::microseconds_to_datetime;
@@ -682,6 +683,47 @@ impl Datum {
     /// Get the primitive type from datum.
     pub fn data_type(&self) -> &PrimitiveType {
         &self.r#type
+    }
+
+    /// Create a new `Datum` with adjusted boundary for projection
+    pub fn boundary(&self, op: &PredicateOperator) -> Result<Option<Datum>> {
+        let literal = self.literal();
+
+        let adj_datum = match op {
+            PredicateOperator::LessThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
+                _ => None,
+            },
+            PredicateOperator::GreaterThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v + 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
+                _ => None,
+            },
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(*v)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(*v)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(*v)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(*v)),
+                _ => None,
+            },
+            PredicateOperator::StartsWith => match literal {
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Ok(adj_datum)
     }
 }
 
