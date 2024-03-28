@@ -585,12 +585,11 @@ impl Datum {}
 
 #[cfg(test)]
 mod tests {
-    use fnv::FnvHashSet;
-
     use super::*;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
-    use crate::expr::{BoundPredicate, BoundReference, PredicateOperator, UnaryExpression};
+    use crate::expr::{BoundPredicate, BoundReference, PredicateOperator};
     use crate::spec::datatypes::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
         Timestamptz, Uuid,
@@ -598,7 +597,7 @@ mod tests {
     use crate::spec::datatypes::Type::{Primitive, Struct};
     use crate::spec::datatypes::{NestedField, StructType, Type};
     use crate::spec::transform::Transform;
-    use crate::spec::{Datum, PrimitiveType};
+    use crate::spec::{Datum, NestedFieldRef, PrimitiveType};
 
     struct TestParameter {
         display: String,
@@ -609,37 +608,62 @@ mod tests {
         trans_types: Vec<(Type, Option<Type>)>,
     }
 
-    struct TestPredicates {
-        unary: BoundPredicate,
-        binary: BoundPredicate,
-        set: BoundPredicate,
+    struct TestProjectionParameter {
+        transform: Transform,
+        name: String,
+        field: NestedFieldRef,
     }
 
-    impl TestPredicates {
-        fn new() -> Self {
-            let field = Arc::new(NestedField::required(
-                1,
-                "a",
-                Type::Primitive(PrimitiveType::Int),
-            ));
-
-            let unary = BoundPredicate::Unary(UnaryExpression::new(
-                PredicateOperator::IsNull,
-                BoundReference::new("original_name", field.clone()),
-            ));
-            let binary = BoundPredicate::Binary(BinaryExpression::new(
-                PredicateOperator::Eq,
-                BoundReference::new("original_name", field.clone()),
-                Datum::int(5),
-            ));
-            let set = BoundPredicate::Set(SetExpression::new(
-                PredicateOperator::In,
-                BoundReference::new("original_name", field.clone()),
-                FnvHashSet::from_iter([Datum::int(5), Datum::int(6)]),
-            ));
-
-            TestPredicates { unary, binary, set }
+    impl TestProjectionParameter {
+        fn new(transform: Transform, name: impl Into<String>, field: NestedField) -> Self {
+            TestProjectionParameter {
+                transform,
+                name: name.into(),
+                field: Arc::new(field),
+            }
         }
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+        fn field(&self) -> NestedFieldRef {
+            self.field.clone()
+        }
+        fn project(&self, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+            self.transform.project(self.name(), predicate)
+        }
+        fn _unary_predicate(&self, op: PredicateOperator) -> BoundPredicate {
+            BoundPredicate::Unary(UnaryExpression::new(
+                op,
+                BoundReference::new(self.name(), self.field()),
+            ))
+        }
+        fn binary_predicate(&self, op: PredicateOperator, literal: Datum) -> BoundPredicate {
+            BoundPredicate::Binary(BinaryExpression::new(
+                op,
+                BoundReference::new(self.name(), self.field()),
+                literal,
+            ))
+        }
+        fn set_predicate(&self, op: PredicateOperator, literals: Vec<Datum>) -> BoundPredicate {
+            BoundPredicate::Set(SetExpression::new(
+                op,
+                BoundReference::new(self.name(), self.field()),
+                HashSet::from_iter(literals),
+            ))
+        }
+    }
+
+    fn assert_projection(
+        predicate: &BoundPredicate,
+        parameter: &TestProjectionParameter,
+        expected: Option<&str>,
+    ) -> Result<()> {
+        let result = parameter.project(predicate)?;
+        match expected {
+            Some(exp) => assert_eq!(format!("{}", result.unwrap()), exp),
+            None => assert!(result.is_none()),
+        }
+        Ok(())
     }
 
     fn check_transform(trans: Transform, param: TestParameter) {
@@ -666,92 +690,443 @@ mod tests {
     }
 
     #[test]
-    fn test_projection_dates_year() -> Result<()> {
-        let name = "projected_name".to_string();
+    fn test_projection_bucket_uuid() -> Result<()> {
+        let value = uuid::Uuid::from_u64_pair(123, 456);
+        let another_value = uuid::Uuid::from_u64_pair(456, 123);
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Uuid)),
+        );
 
-        let field = Arc::new(NestedField::required(
-            1,
-            "date",
-            Type::Primitive(PrimitiveType::Date),
-        ));
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::uuid(value.clone())),
+            &fixture,
+            Some("name = 4"),
+        )?;
 
-        let predicate = BoundPredicate::Binary(BinaryExpression::new(
-            PredicateOperator::LessThan,
-            BoundReference::new("date", field),
-            Datum::date_from_str("1971-01-01")?,
-        ));
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::uuid(value.clone())),
+            &fixture,
+            None,
+        )?;
 
-        let transform = Transform::Year;
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::uuid(value.clone())),
+            &fixture,
+            None,
+        )?;
 
-        let result = transform.project(name.clone(), &predicate)?.unwrap();
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::uuid(value.clone())),
+            &fixture,
+            None,
+        )?;
 
-        assert_eq!(format!("{}", result), "projected_name <= 0");
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::uuid(value.clone())),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::uuid(value.clone()),
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::uuid(value.clone()),
+                    Datum::uuid(another_value.clone()),
+                ],
+            ),
+            &fixture,
+            Some("name IN (4, 6)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::uuid(value.clone()),
+                    Datum::uuid(another_value.clone()),
+                ],
+            ),
+            &fixture,
+            None,
+        )?;
 
         Ok(())
     }
 
     #[test]
-    fn test_void_projection() -> Result<()> {
-        let name = "projected_name".to_string();
-        let preds = TestPredicates::new();
+    fn test_projection_bucket_fixed() -> Result<()> {
+        let value = "abcdefg".as_bytes().to_vec();
+        let another_value = "abcdehij".as_bytes().to_vec();
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Fixed(value.len() as u64)),
+            ),
+        );
 
-        let transform = Transform::Void;
-        let result_unary = transform.project(name.clone(), &preds.unary)?;
-        assert!(result_unary.is_none());
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::fixed(value.clone())),
+            &fixture,
+            Some("name = 4"),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::fixed(value.clone())),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::fixed(value.clone())),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::fixed(value.clone())),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::fixed(value.clone())),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::fixed(value.clone()),
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::fixed(value.clone()),
+                    Datum::fixed(another_value.clone()),
+                ],
+            ),
+            &fixture,
+            Some("name IN (4, 6)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::fixed(value.clone()),
+                    Datum::fixed(another_value.clone()),
+                ],
+            ),
+            &fixture,
+            None,
+        )?;
 
         Ok(())
     }
 
     #[test]
-    fn test_truncate_project() -> Result<()> {
-        let name = "projected_name".to_string();
-        let preds = TestPredicates::new();
+    fn test_projection_bucket_string() -> Result<()> {
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
 
-        let transform = Transform::Truncate(10);
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::string("abcdefg")),
+            &fixture,
+            Some("name = 4"),
+        )?;
 
-        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::string("abcdefg")),
+            &fixture,
+            None,
+        )?;
 
-        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
-        assert_eq!(format!("{}", result_binary), "projected_name = 0");
-        assert_eq!(format!("{}", result_set), "projected_name IN (0)");
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::string("abcdefg")),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::string("abcdefg")),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::string("abcdefg")),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::string("abcdefg")),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::string("abcdefg"), Datum::string("abcdefgabc")],
+            ),
+            &fixture,
+            Some("name IN (9, 4)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::string("abcdefg"), Datum::string("abcdefgabc")],
+            ),
+            &fixture,
+            None,
+        )?;
 
         Ok(())
     }
 
     #[test]
-    fn test_identity_project() -> Result<()> {
-        let name = "projected_name".to_string();
-        let preds = TestPredicates::new();
+    fn test_projection_bucket_decimal() -> Result<()> {
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+        );
 
-        let transform = Transform::Identity;
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str("100.00")?),
+            &fixture,
+            Some("name = 2"),
+        )?;
 
-        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::decimal_from_str("100.00")?),
+            &fixture,
+            None,
+        )?;
 
-        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
-        assert_eq!(format!("{}", result_binary), "projected_name = 5");
-        assert_eq!(format!("{}", result_set), "projected_name IN (5, 6)");
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::decimal_from_str("100.00")?,
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::decimal_from_str("100.00")?,
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::decimal_from_str("100.00")?,
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::decimal_from_str("100.00")?,
+            ),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::decimal_from_str("101.00")?,
+                    Datum::decimal_from_str("100.00")?,
+                    Datum::decimal_from_str("99.00")?,
+                ],
+            ),
+            &fixture,
+            Some("name IN (6, 2)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::decimal_from_str("100.00")?,
+                    Datum::decimal_from_str("101.00")?,
+                ],
+            ),
+            &fixture,
+            None,
+        )?;
 
         Ok(())
     }
 
     #[test]
-    fn test_bucket_project() -> Result<()> {
-        let name = "projected_name".to_string();
-        let preds = TestPredicates::new();
+    fn test_projection_bucket_long() -> Result<()> {
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Long)),
+        );
 
-        let transform = Transform::Bucket(8);
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::long(100)),
+            &fixture,
+            Some("name = 6"),
+        )?;
 
-        let result_unary = transform.project(name.clone(), &preds.unary)?.unwrap();
-        let result_binary = transform.project(name.clone(), &preds.binary)?.unwrap();
-        let result_set = transform.project(name.clone(), &preds.set)?.unwrap();
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::long(100)),
+            &fixture,
+            None,
+        )?;
 
-        assert_eq!(format!("{}", result_unary), "projected_name IS NULL");
-        assert_eq!(format!("{}", result_binary), "projected_name = 7");
-        assert_eq!(format!("{}", result_set), "projected_name IN (1, 7)");
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::long(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::long(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::long(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::long(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::long(99), Datum::long(100), Datum::long(101)],
+            ),
+            &fixture,
+            Some("name IN (8, 7, 6)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::long(100), Datum::long(101)],
+            ),
+            &fixture,
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_integer() -> Result<()> {
+        let fixture = TestProjectionParameter::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int)),
+        );
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(100)),
+            &fixture,
+            Some("name = 6"),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::int(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::int(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::int(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::int(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::int(100)),
+            &fixture,
+            None,
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::int(99), Datum::int(100), Datum::int(101)],
+            ),
+            &fixture,
+            Some("name IN (8, 7, 6)"),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::int(100), Datum::int(101)],
+            ),
+            &fixture,
+            None,
+        )?;
 
         Ok(())
     }
