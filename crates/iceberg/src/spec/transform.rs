@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use super::Datum;
+use super::{Datum, PrimitiveLiteral};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -405,7 +405,9 @@ impl Transform {
         op: &PredicateOperator,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
-        match datum.boundary(op)? {
+        let boundary = self.datum_with_boundary(op, datum)?;
+
+        match boundary {
             None => Ok(None),
             Some(boundary) => {
                 let new_op = match op {
@@ -421,6 +423,47 @@ impl Transform {
                 ))))
             }
         }
+    }
+
+    /// Create a new `Datum` with adjusted boundary for projection
+    fn datum_with_boundary(&self, op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
+        let literal = datum.literal();
+
+        let adj_datum = match op {
+            PredicateOperator::LessThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
+                _ => None,
+            },
+            PredicateOperator::GreaterThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v + 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
+                _ => None,
+            },
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(*v)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(*v)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(*v)?),
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(*v)),
+                _ => None,
+            },
+            PredicateOperator::StartsWith => match literal {
+                PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Ok(adj_datum)
     }
 }
 
@@ -516,6 +559,8 @@ impl<'de> Deserialize<'de> for Transform {
         s.parse().map_err(<D::Error as serde::de::Error>::custom)
     }
 }
+
+impl Datum {}
 
 #[cfg(test)]
 mod tests {
