@@ -42,7 +42,7 @@ pub trait TransformFunction: Send {
         self.transform_literal(input)?.ok_or_else(|| {
             Error::new(
                 ErrorKind::Unexpected,
-                format!("Error. Returns 'None' for literal {}", input),
+                format!("Returns 'None' for literal {}", input),
             )
         })
     }
