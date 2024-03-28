@@ -367,6 +367,10 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
+                    if self.can_transform(expr.literal()).is_err() {
+                        return Ok(None);
+                    }
+
                     let op = expr.op();
                     let datum = expr.literal();
                     self.apply_transform_boundary(name, datum, &op, &func)?
