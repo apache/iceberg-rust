@@ -457,6 +457,9 @@ impl Transform {
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
+                PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v - 1)?),
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - 1)),
+                PrimitiveLiteral::TimestampTZ(v) => Some(Datum::timestamptz_micros(v - 1)),
                 _ => None,
             },
             PredicateOperator::GreaterThan => match literal {
@@ -465,6 +468,9 @@ impl Transform {
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
+                PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v + 1)?),
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + 1)),
+                PrimitiveLiteral::TimestampTZ(v) => Some(Datum::timestamptz_micros(v + 1)),
                 _ => None,
             },
             PredicateOperator::Eq
@@ -475,6 +481,9 @@ impl Transform {
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(*v)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(*v)),
+                PrimitiveLiteral::Time(v) => Some(Datum::time_micros(*v)?),
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(*v)),
+                PrimitiveLiteral::TimestampTZ(v) => Some(Datum::timestamptz_micros(*v)),
                 _ => None,
             },
             PredicateOperator::StartsWith => match literal {
