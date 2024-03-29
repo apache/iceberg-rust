@@ -316,16 +316,25 @@ impl Transform {
                         func.transform_literal_result(expr.literal())?,
                     )))
                 }
-                Transform::Truncate(_)
-                | Transform::Year
-                | Transform::Month
-                | Transform::Day
-                | Transform::Hour => {
+                Transform::Truncate(width) => {
                     if !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
 
-                    self.apply_transform_boundary(name, expr.literal(), &expr.op(), &func)?
+                    self.apply_transform_boundary(
+                        name,
+                        expr.literal(),
+                        &expr.op(),
+                        &func,
+                        Some(*width),
+                    )?
+                }
+                Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                    if !self.can_transform(expr.literal()) {
+                        return Ok(None);
+                    }
+
+                    self.apply_transform_boundary(name, expr.literal(), &expr.op(), &func, None)?
                 }
                 _ => None,
             },
@@ -387,15 +396,47 @@ impl Transform {
         datum: &Datum,
         op: &PredicateOperator,
         func: &BoxedTransformFunction,
+        width: Option<u32>,
     ) -> Result<Option<Predicate>> {
         let boundary = self.datum_with_boundary(op, datum)?;
 
         match boundary {
             None => Ok(None),
             Some(boundary) => {
+                // TODO: extract into rewrite operator for projection
                 let new_op = match op {
                     PredicateOperator::LessThan => PredicateOperator::LessThanOrEq,
                     PredicateOperator::GreaterThan => PredicateOperator::GreaterThanOrEq,
+                    PredicateOperator::StartsWith => match datum.literal() {
+                        PrimitiveLiteral::String(v) => match width {
+                            Some(w) => {
+                                if v.len() == w as usize {
+                                    PredicateOperator::Eq
+                                } else {
+                                    *op
+                                }
+                            }
+                            None => *op,
+                        },
+                        _ => *op,
+                    },
+                    PredicateOperator::NotStartsWith => match datum.literal() {
+                        PrimitiveLiteral::String(v) => match width {
+                            Some(w) => {
+                                let w = w as usize;
+                                if v.len() == w {
+                                    PredicateOperator::NotEq
+                                } else if v.len() < w {
+                                    *op
+                                } else {
+                                    // cannot be projected
+                                    return Ok(None);
+                                }
+                            }
+                            None => *op,
+                        },
+                        _ => *op,
+                    },
                     _ => *op,
                 };
 
@@ -412,12 +453,15 @@ impl Transform {
     fn datum_with_boundary(&self, op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
         let literal = datum.literal();
 
+        // TODO: check if all Literals are handled
         let adj_datum = match op {
             PredicateOperator::LessThan => match literal {
                 PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
                 PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Binary(v) => Some(Datum::binary(v.clone())),
+                PrimitiveLiteral::String(v) => Some(Datum::string(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
                 PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v - 1)?),
                 PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - 1)),
@@ -429,6 +473,8 @@ impl Transform {
                 PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Binary(v) => Some(Datum::binary(v.clone())),
+                PrimitiveLiteral::String(v) => Some(Datum::string(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
                 PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v + 1)?),
                 PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + 1)),
@@ -442,6 +488,8 @@ impl Transform {
                 PrimitiveLiteral::Long(v) => Some(Datum::long(*v)),
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(*v)?),
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::Binary(v) => Some(Datum::binary(v.clone())),
+                PrimitiveLiteral::String(v) => Some(Datum::string(v.clone())),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(*v)),
                 PrimitiveLiteral::Time(v) => Some(Datum::time_micros(*v)?),
                 PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(*v)),
@@ -450,6 +498,12 @@ impl Transform {
             },
             PredicateOperator::StartsWith => match literal {
                 PrimitiveLiteral::Fixed(v) => Some(Datum::fixed(v.clone())),
+                PrimitiveLiteral::String(v) => Some(Datum::string(v.clone())),
+                PrimitiveLiteral::Binary(v) => Some(Datum::binary(v.clone())),
+                _ => None,
+            },
+            PredicateOperator::NotStartsWith => match literal {
+                PrimitiveLiteral::String(v) => Some(Datum::string(v.clone())),
                 _ => None,
             },
             _ => None,
@@ -626,10 +680,10 @@ mod tests {
 
     fn assert_projection(
         predicate: &BoundPredicate,
-        parameter: &TestProjectionParameter,
+        fixture: &TestProjectionParameter,
         expected: Option<&str>,
     ) -> Result<()> {
-        let result = parameter.project(predicate)?;
+        let result = fixture.project(predicate)?;
         match expected {
             Some(exp) => assert_eq!(format!("{}", result.unwrap()), exp),
             None => assert!(result.is_none()),
@@ -658,6 +712,337 @@ mod tests {
         for (input_type, result_type) in param.trans_types {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
+    }
+
+    #[test]
+    fn test_projection_truncate_string_rewrite_op() -> Result<()> {
+        let fixture = TestProjectionParameter::new(
+            Transform::Truncate(5),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
+
+        let value = "abcde";
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string(value)),
+            &fixture,
+            Some(r#"name = "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotStartsWith, Datum::string(value)),
+            &fixture,
+            Some(r#"name != "abcde""#),
+        )?;
+
+        let value = "abcdefg";
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string(value)),
+            &fixture,
+            Some(r#"name STARTS WITH "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotStartsWith, Datum::string(value)),
+            &fixture,
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_string() -> Result<()> {
+        let value = "abcdefg";
+        let fixture = TestProjectionParameter::new(
+            Transform::Truncate(5),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::string(value)),
+            &fixture,
+            Some(r#"name <= "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::string(value)),
+            &fixture,
+            Some(r#"name <= "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::string(value)),
+            &fixture,
+            Some(r#"name >= "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::string(value)),
+            &fixture,
+            Some(r#"name >= "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::string(value)),
+            &fixture,
+            Some(r#"name = "abcde""#),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::string(value), Datum::string(format!("{}abc", value))],
+            ),
+            &fixture,
+            Some(r#"name IN ("abcde")"#),
+        )?;
+
+        assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::string(value), Datum::string(format!("{}abc", value))],
+            ),
+            &fixture,
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_decimal() -> Result<()> {
+        // test lower and upper bound
+        for &value in [100.00, 99.99].iter() {
+            // format as i128 unscaled
+            let result = if value == 100.00 { "10000" } else { "9990" };
+            let value_str = format!("{:.2}", value);
+
+            let fixture = TestProjectionParameter::new(
+                Transform::Truncate(10),
+                "name",
+                NestedField::required(
+                    1,
+                    "value",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                ),
+            );
+
+            assert_projection(
+                &fixture.binary_predicate(
+                    PredicateOperator::LessThan,
+                    Datum::decimal_from_str(&value_str)?,
+                ),
+                &fixture,
+                Some("name <= 9990"),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(
+                    PredicateOperator::LessThanOrEq,
+                    Datum::decimal_from_str(&value_str)?,
+                ),
+                &fixture,
+                Some(format!("name <= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(
+                    PredicateOperator::GreaterThanOrEq,
+                    Datum::decimal_from_str(&value_str)?,
+                ),
+                &fixture,
+                Some(format!("name >= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture
+                    .binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(&value_str)?),
+                &fixture,
+                Some(format!("name = {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(
+                    PredicateOperator::NotEq,
+                    Datum::decimal_from_str(&value_str)?,
+                ),
+                &fixture,
+                None,
+            )?;
+
+            let set_result = if value == 100.00 {
+                "name IN (9900, 10000, 10100)"
+            } else {
+                "name IN (10090, 9990, 9890)"
+            };
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::In,
+                    vec![
+                        Datum::decimal_from_str(format!("{:.2}", value - 1.0))?,
+                        Datum::decimal_from_str(&value_str)?,
+                        Datum::decimal_from_str(format!("{:.2}", value + 1.0))?,
+                    ],
+                ),
+                &fixture,
+                Some(set_result),
+            )?;
+
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::NotIn,
+                    vec![
+                        Datum::decimal_from_str(&value_str)?,
+                        Datum::decimal_from_str(format!("{:.2}", value + 1.0))?,
+                    ],
+                ),
+                &fixture,
+                None,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_long() -> Result<()> {
+        // test lower and upper bound
+        for &value in [100i64, 99i64].iter() {
+            let result = if value == 100 { "100" } else { "90" };
+
+            let fixture = TestProjectionParameter::new(
+                Transform::Truncate(10),
+                "name",
+                NestedField::required(1, "value", Type::Primitive(PrimitiveType::Long)),
+            );
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThan, Datum::long(value)),
+                &fixture,
+                Some("name <= 90"),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::long(value)),
+                &fixture,
+                Some(format!("name <= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::long(value)),
+                &fixture,
+                Some(format!("name >= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::Eq, Datum::long(value)),
+                &fixture,
+                Some(format!("name = {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::NotEq, Datum::long(value)),
+                &fixture,
+                None,
+            )?;
+
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::In,
+                    vec![
+                        Datum::long(value - 1),
+                        Datum::long(value),
+                        Datum::long(value + 1),
+                    ],
+                ),
+                &fixture,
+                Some("name IN (100, 90)"),
+            )?;
+
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::NotIn,
+                    vec![Datum::long(value), Datum::long(value + 1)],
+                ),
+                &fixture,
+                None,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_integer() -> Result<()> {
+        // test lower and upper bound
+        for &value in [100, 99].iter() {
+            let result = if value == 100 { "100" } else { "90" };
+
+            let fixture = TestProjectionParameter::new(
+                Transform::Truncate(10),
+                "name",
+                NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int)),
+            );
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThan, Datum::int(value)),
+                &fixture,
+                Some("name <= 90"),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::int(value)),
+                &fixture,
+                Some(format!("name <= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::int(value)),
+                &fixture,
+                Some(format!("name >= {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(value)),
+                &fixture,
+                Some(format!("name = {}", result).as_str()),
+            )?;
+
+            assert_projection(
+                &fixture.binary_predicate(PredicateOperator::NotEq, Datum::int(value)),
+                &fixture,
+                None,
+            )?;
+
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::In,
+                    vec![
+                        Datum::int(value - 1),
+                        Datum::int(value),
+                        Datum::int(value + 1),
+                    ],
+                ),
+                &fixture,
+                Some("name IN (100, 90)"),
+            )?;
+
+            assert_projection(
+                &fixture.set_predicate(
+                    PredicateOperator::NotIn,
+                    vec![Datum::int(value), Datum::int(value + 1)],
+                ),
+                &fixture,
+                None,
+            )?;
+        }
+
+        Ok(())
     }
 
     #[test]
