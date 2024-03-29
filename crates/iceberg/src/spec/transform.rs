@@ -423,11 +423,7 @@ impl Transform {
     /// Check if `Transform` is applicable on datum's `PrimitiveType`
     fn can_transform(&self, datum: &Datum) -> bool {
         let input_type = datum.data_type().clone();
-        if self.result_type(&Type::Primitive(input_type)).is_err() {
-            false
-        } else {
-            true
-        }
+        self.result_type(&Type::Primitive(input_type)).is_err()
     }
 
     /// Transform each literal value of `FnvHashSet<Datum>`
