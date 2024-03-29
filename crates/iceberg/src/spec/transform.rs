@@ -285,6 +285,7 @@ impl Transform {
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
+        // TODO: Refactor / flip match order / first predicate then self
         let projection = match self {
             Transform::Bucket(_) => match predicate {
                 BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
@@ -292,9 +293,7 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
-                    if expr.op() != PredicateOperator::Eq
-                        || self.can_transform(expr.literal()).is_err()
-                    {
+                    if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
 
@@ -340,7 +339,7 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
-                    if self.can_transform(expr.literal()).is_err() {
+                    if !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
 
@@ -367,7 +366,34 @@ impl Transform {
                     Reference::new(name),
                 ))),
                 BoundPredicate::Binary(expr) => {
-                    if self.can_transform(expr.literal()).is_err() {
+                    if !self.can_transform(expr.literal()) {
+                        return Ok(None);
+                    }
+
+                    let op = expr.op();
+                    let datum = expr.literal();
+                    self.apply_transform_boundary(name, datum, &op, &func)?
+                }
+                BoundPredicate::Set(expr) => {
+                    if expr.op() != PredicateOperator::In {
+                        return Ok(None);
+                    }
+
+                    Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name),
+                        self.apply_transform_on_set(expr.literals(), &func)?,
+                    )))
+                }
+                _ => None,
+            },
+            Transform::Hour => match predicate {
+                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                ))),
+                BoundPredicate::Binary(expr) => {
+                    if !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
 
@@ -395,11 +421,13 @@ impl Transform {
     }
 
     /// Check if `Transform` is applicable on datum's `PrimitiveType`
-    fn can_transform(&self, datum: &Datum) -> Result<()> {
+    fn can_transform(&self, datum: &Datum) -> bool {
         let input_type = datum.data_type().clone();
-        self.result_type(&Type::Primitive(input_type))?;
-
-        Ok(())
+        if self.result_type(&Type::Primitive(input_type)).is_err() {
+            false
+        } else {
+            true
+        }
     }
 
     /// Transform each literal value of `FnvHashSet<Datum>`
@@ -408,13 +436,13 @@ impl Transform {
         literals: &FnvHashSet<Datum>,
         func: &BoxedTransformFunction,
     ) -> Result<FnvHashSet<Datum>> {
-        literals
-            .iter()
-            .try_fold(FnvHashSet::default(), |mut acc, d| {
-                self.can_transform(d)?;
+        literals.iter().filter(|d| self.can_transform(d)).try_fold(
+            FnvHashSet::default(),
+            |mut acc, d| {
                 acc.insert(func.transform_literal_result(d)?);
                 Ok(acc)
-            })
+            },
+        )
     }
 
     /// Apply truncate transform on `Datum` with new boundaries
