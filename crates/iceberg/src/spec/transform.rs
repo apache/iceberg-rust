@@ -285,14 +285,27 @@ impl Transform {
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
-        // TODO: Refactor / flip match order / first predicate then self
-        let projection = match self {
-            Transform::Bucket(_) => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
+        let projection = match predicate {
+            BoundPredicate::Unary(expr) => match self {
+                Transform::Identity
+                | Transform::Bucket(_)
+                | Transform::Truncate(_)
+                | Transform::Year
+                | Transform::Month
+                | Transform::Day
+                | Transform::Hour => Some(Predicate::Unary(UnaryExpression::new(
                     expr.op(),
                     Reference::new(name),
                 ))),
-                BoundPredicate::Binary(expr) => {
+                _ => None,
+            },
+            BoundPredicate::Binary(expr) => match self {
+                Transform::Identity => Some(Predicate::Binary(BinaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literal().to_owned(),
+                ))),
+                Transform::Bucket(_) => {
                     if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
@@ -303,106 +316,34 @@ impl Transform {
                         func.transform_literal_result(expr.literal())?,
                     )))
                 }
-                BoundPredicate::Set(expr) => {
-                    if expr.op() != PredicateOperator::In {
+                Transform::Truncate(_)
+                | Transform::Year
+                | Transform::Month
+                | Transform::Day
+                | Transform::Hour => {
+                    if !self.can_transform(expr.literal()) {
                         return Ok(None);
                     }
 
-                    Some(Predicate::Set(SetExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        self.apply_transform_on_set(expr.literals(), &func)?,
-                    )))
+                    self.apply_transform_boundary(name, expr.literal(), &expr.op(), &func)?
                 }
                 _ => None,
             },
-            Transform::Identity => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
-                BoundPredicate::Binary(expr) => Some(Predicate::Binary(BinaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                    expr.literal().to_owned(),
-                ))),
-                BoundPredicate::Set(expr) => Some(Predicate::Set(SetExpression::new(
+            BoundPredicate::Set(expr) => match self {
+                Transform::Identity => Some(Predicate::Set(SetExpression::new(
                     expr.op(),
                     Reference::new(name),
                     expr.literals().to_owned(),
                 ))),
-                _ => None,
-            },
-            Transform::Truncate(_) => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
-                BoundPredicate::Binary(expr) => {
-                    if !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    let op = expr.op();
-                    let datum = expr.literal();
-                    self.apply_transform_boundary(name, datum, &op, &func)?
-                }
-                BoundPredicate::Set(expr) => {
-                    if expr.op() != PredicateOperator::In {
-                        return Ok(None);
-                    }
-
-                    Some(Predicate::Set(SetExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        self.apply_transform_on_set(expr.literals(), &func)?,
-                    )))
-                }
-                _ => None,
-            },
-            Transform::Year | Transform::Month | Transform::Day => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
-                BoundPredicate::Binary(expr) => {
-                    if !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    let op = expr.op();
-                    let datum = expr.literal();
-                    self.apply_transform_boundary(name, datum, &op, &func)?
-                }
-                BoundPredicate::Set(expr) => {
-                    if expr.op() != PredicateOperator::In {
-                        return Ok(None);
-                    }
-
-                    Some(Predicate::Set(SetExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        self.apply_transform_on_set(expr.literals(), &func)?,
-                    )))
-                }
-                _ => None,
-            },
-            Transform::Hour => match predicate {
-                BoundPredicate::Unary(expr) => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
-                BoundPredicate::Binary(expr) => {
-                    if !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    let op = expr.op();
-                    let datum = expr.literal();
-                    self.apply_transform_boundary(name, datum, &op, &func)?
-                }
-                BoundPredicate::Set(expr) => {
-                    if expr.op() != PredicateOperator::In {
+                Transform::Bucket(_)
+                | Transform::Truncate(_)
+                | Transform::Year
+                | Transform::Month
+                | Transform::Day
+                | Transform::Hour => {
+                    if expr.op() != PredicateOperator::In
+                        || expr.literals().iter().any(|d| !self.can_transform(d))
+                    {
                         return Ok(None);
                     }
 
@@ -423,7 +364,7 @@ impl Transform {
     /// Check if `Transform` is applicable on datum's `PrimitiveType`
     fn can_transform(&self, datum: &Datum) -> bool {
         let input_type = datum.data_type().clone();
-        self.result_type(&Type::Primitive(input_type)).is_err()
+        self.result_type(&Type::Primitive(input_type)).is_ok()
     }
 
     /// Transform each literal value of `FnvHashSet<Datum>`
@@ -432,13 +373,10 @@ impl Transform {
         literals: &FnvHashSet<Datum>,
         func: &BoxedTransformFunction,
     ) -> Result<FnvHashSet<Datum>> {
-        literals.iter().filter(|d| self.can_transform(d)).try_fold(
-            FnvHashSet::default(),
-            |mut acc, d| {
-                acc.insert(func.transform_literal_result(d)?);
-                Ok(acc)
-            },
-        )
+        literals
+            .iter()
+            .map(|d| func.transform_literal_result(d))
+            .collect()
     }
 
     /// Apply truncate transform on `Datum` with new boundaries
