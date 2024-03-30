@@ -17,12 +17,11 @@
 
 //! Parquet file data reader
 
-use crate::{Error, ErrorKind};
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use async_stream::try_stream;
 use futures::stream::StreamExt;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use parquet::schema::types::{SchemaDescriptor, Type};
+use parquet::schema::types::SchemaDescriptor;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -137,52 +136,46 @@ impl ArrowReader {
             let mut column_map = HashMap::new();
 
             let fields = arrow_schema.fields();
-            let filtered = fields.filter_leaves(|idx, field| {
-                let field_id =
-                    field
-                        .metadata()
-                        .get(PARQUET_FIELD_ID_META_KEY)
-                        .ok_or(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Parquet field {} does not contain field id", field),
-                        ))?;
-                let field_id = i32::from_str(field_id)?;
-                let iceberg_field = self.schema.field_by_id(field_id).ok_or(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Field {} is not found in Iceberg schema", field),
-                ))?;
+            let iceberg_schema = arrow_schema_to_schema(arrow_schema)?;
+            fields.filter_leaves(|idx, field| {
+                let field_id = field.metadata().get(PARQUET_FIELD_ID_META_KEY);
+                if field_id.is_none() {
+                    return false;
+                }
 
+                let field_id = i32::from_str(field_id.unwrap());
+                if field_id.is_err() {
+                    return false;
+                }
+                let field_id = field_id.unwrap();
 
-                iceberg_field.field_type.is_primitive()
+                if !self.field_ids.contains(&(field_id as usize)) {
+                    return false;
+                }
+
+                let iceberg_field = self.schema.field_by_id(field_id);
+                let parquet_iceberg_field = iceberg_schema.field_by_id(field_id);
+
+                if iceberg_field.is_none() || parquet_iceberg_field.is_none() {
+                    return false;
+                }
+
+                if iceberg_field.unwrap().field_type != parquet_iceberg_field.unwrap().field_type {
+                    return false;
+                }
+
                 column_map.insert(field_id, idx);
                 true
             });
 
-            for (idx, field) in parquet_schema.columns().iter().enumerate() {
-                let field_type = field.self_type();
-                match field_type {
-                    Type::PrimitiveType { basic_info, .. } => {
-                        if !basic_info.has_id() {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Leave column {:?} in schema doesn't have field id",
-                                    field_type
-                                ),
-                            ));
-                        }
-                        column_map.insert(basic_info.id(), idx);
-                    }
-                    Type::GroupType { .. } => {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Leave column in schema should be primitive type but got {:?}",
-                                field_type
-                            ),
-                        ));
-                    }
-                };
+            if column_map.len() != self.field_ids.len() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Parquet schema {} and Iceberg schema {} do not match.",
+                        iceberg_schema, self.schema
+                    ),
+                ));
             }
 
             let mut indices = vec![];

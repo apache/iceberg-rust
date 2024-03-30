@@ -201,6 +201,30 @@ impl TableScan {
                     ),
                 )
             })?;
+
+            let field = self.schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Column {} is not a direct child of schema but a nested field. Schema: {}",
+                            column_name, self.schema
+                        ),
+                    )
+                })?;
+
+            if !field.field_type.is_primitive() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Column {} is not a primitive type. Schema: {}",
+                        column_name, self.schema
+                    ),
+                ));
+            }
+
             field_ids.push(field_id as usize);
         }
 
