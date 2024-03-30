@@ -18,11 +18,13 @@
 //! Parquet file data reader
 
 use crate::{Error, ErrorKind};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use async_stream::try_stream;
 use futures::stream::StreamExt;
-use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::schema::types::{SchemaDescriptor, Type};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
@@ -63,8 +65,8 @@ impl ArrowReaderBuilder {
     }
 
     /// Sets the desired column projection with a list of field ids.
-    pub fn with_field_ids(mut self, field_ids: Vec<usize>) -> Self {
-        self.field_ids = field_ids;
+    pub fn with_field_ids(mut self, field_ids: impl IntoIterator<Item = usize>) -> Self {
+        self.field_ids = field_ids.into_iter().collect();
         self
     }
 
@@ -105,7 +107,8 @@ impl ArrowReader {
                     .await?;
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
-                let projection_mask = self.get_arrow_projection_mask(parquet_schema)?;
+                let arrow_schema = batch_stream_builder.schema();
+                let projection_mask = self.get_arrow_projection_mask(parquet_schema, arrow_schema)?;
                 batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 if let Some(batch_size) = self.batch_size {
@@ -125,11 +128,36 @@ impl ArrowReader {
     fn get_arrow_projection_mask(
         &self,
         parquet_schema: &SchemaDescriptor,
+        arrow_schema: &ArrowSchemaRef,
     ) -> crate::Result<ProjectionMask> {
         if self.field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
+            // Build the map between field id and column index in Parquet schema.
             let mut column_map = HashMap::new();
+
+            let fields = arrow_schema.fields();
+            let filtered = fields.filter_leaves(|idx, field| {
+                let field_id =
+                    field
+                        .metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .ok_or(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Parquet field {} does not contain field id", field),
+                        ))?;
+                let field_id = i32::from_str(field_id)?;
+                let iceberg_field = self.schema.field_by_id(field_id).ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Field {} is not found in Iceberg schema", field),
+                ))?;
+
+
+                iceberg_field.field_type.is_primitive()
+                column_map.insert(field_id, idx);
+                true
+            });
+
             for (idx, field) in parquet_schema.columns().iter().enumerate() {
                 let field_type = field.self_type();
                 match field_type {
