@@ -36,7 +36,8 @@ pub trait TransformFunction: Send {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef>;
     /// transform_literal will take an input literal and transform it into a new literal.
     fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>>;
-    /// wrapper
+    /// A thin wrapper around `transform_literal`
+    /// to return an error even when it's `None`.
     fn transform_literal_result(&self, input: &Datum) -> Result<Datum> {
         self.transform_literal(input)?.ok_or_else(|| {
             Error::new(
