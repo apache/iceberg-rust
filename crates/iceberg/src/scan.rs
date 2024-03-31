@@ -207,9 +207,9 @@ impl TableScan {
                 .field_by_id(field_id)
                 .ok_or_else(|| {
                     Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::FeatureUnsupported,
                         format!(
-                            "Column {} is not a direct child of schema but a nested field. Schema: {}",
+                            "Column {} is not a direct child of schema but a nested field, which is not supported now. Schema: {}",
                             column_name, self.schema
                         ),
                     )
@@ -217,7 +217,7 @@ impl TableScan {
 
             if !field.field_type.is_primitive() {
                 return Err(Error::new(
-                    ErrorKind::DataInvalid,
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Column {} is not a primitive type. Schema: {}",
                         column_name, self.schema
