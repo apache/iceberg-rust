@@ -32,9 +32,6 @@ use std::str::FromStr;
 
 use super::{Datum, PrimitiveLiteral};
 
-/// A `Day` in microseconds
-const DAY_IN_MICROS: i64 = 86_400_000_000;
-
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
 ///
@@ -459,11 +456,7 @@ impl Transform {
                 PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
-                PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v - DAY_IN_MICROS)?),
-                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - DAY_IN_MICROS)),
-                PrimitiveLiteral::TimestampTZ(v) => {
-                    Some(Datum::timestamptz_micros(v - DAY_IN_MICROS))
-                }
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - 1)),
                 _ => Some(datum.to_owned()),
             },
             PredicateOperator::GreaterThan => match literal {
@@ -471,11 +464,7 @@ impl Transform {
                 PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
                 PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
                 PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
-                PrimitiveLiteral::Time(v) => Some(Datum::time_micros(v + DAY_IN_MICROS)?),
-                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + DAY_IN_MICROS)),
-                PrimitiveLiteral::TimestampTZ(v) => {
-                    Some(Datum::timestamptz_micros(v + DAY_IN_MICROS))
-                }
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + 1)),
                 _ => Some(datum.to_owned()),
             },
             PredicateOperator::Eq
@@ -780,6 +769,30 @@ mod tests {
             assert_eq!(result_type, trans.result_type(&input_type).ok());
         }
     }
+    #[test]
+    fn test_projection_timestamp_hour_lower_bound() -> Result<()> {
+        // 420034 //420010
+        let value = "2017-12-01T10:00:00.000000";
+        // 411288
+        let _another = "2016-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionParameter::new(
+            Transform::Hour,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            &fixture,
+            Some("name <= 420033"),
+        )?;
+
+        Ok(())
+    }
 
     #[test]
     fn test_projection_timestamp_year_upper_bound() -> Result<()> {
@@ -1049,14 +1062,13 @@ mod tests {
             NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
         );
 
-        // TODO: Differs from Java 575
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name <= 574"),
+            Some("name <= 575"),
         )?;
 
         assert_projection(
@@ -1336,25 +1348,19 @@ mod tests {
             Some("name >= 0"),
         )?;
 
-        // TODO: Differs from Java Test due to
-        // Timestamp conversion as i32?
-        // According to Java should be `name >= -1`
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name >= 0"),
+            Some("name >= -1"),
         )?;
 
-        // TODO: Differs from Java Test due to
-        // Timestamp conversion as i32?
-        // According to Java should be `name IN (0, -1)`
         assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
             &fixture,
-            Some("name = 0"),
+            Some("name IN (-1, 0)"),
         )?;
 
         assert_projection(
@@ -1363,9 +1369,6 @@ mod tests {
             None,
         )?;
 
-        // TODO: Differs from Java Test due to
-        // Timestamp conversion as i32?
-        // According to Java should be `name IN (0, -1)`
         assert_projection(
             &fixture.set_predicate(
                 PredicateOperator::In,
@@ -1375,7 +1378,7 @@ mod tests {
                 ],
             ),
             &fixture,
-            Some("name IN (0)"),
+            Some("name IN (0, -1)"),
         )?;
 
         assert_projection(
@@ -1406,14 +1409,13 @@ mod tests {
             NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
         );
 
-        // TODO: Differs from Java 17501
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name <= 17500"),
+            Some("name <= 17501"),
         )?;
 
         assert_projection(
@@ -1513,14 +1515,13 @@ mod tests {
             Some("name <= -364"),
         )?;
 
-        // TODO: Differs from java -365
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name >= -364"),
+            Some("name >= -365"),
         )?;
 
         assert_projection(
@@ -1602,14 +1603,13 @@ mod tests {
             Some("name <= 17501"),
         )?;
 
-        //TODO: Differs from Java 17501
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name >= 17502"),
+            Some("name >= 17501"),
         )?;
 
         assert_projection(
@@ -1691,14 +1691,13 @@ mod tests {
             Some("name <= 0"),
         )?;
 
-        // TODO: Differs from Java 0
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
             &fixture,
-            Some("name >= 1"),
+            Some("name >= 0"),
         )?;
 
         assert_projection(
@@ -1990,7 +1989,6 @@ mod tests {
             NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
         );
 
-        // 574 = number of months -> "2017-11-01"
         assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
             &fixture,
@@ -2149,7 +2147,6 @@ mod tests {
             Some("name <= 574"),
         )?;
 
-        // 575 = number of months -> "2017-12-01"
         assert_projection(
             &fixture.binary_predicate(
                 PredicateOperator::LessThanOrEq,
@@ -2186,7 +2183,6 @@ mod tests {
             None,
         )?;
 
-        // 564 = number of months -> "2017-01-01"
         assert_projection(
             &fixture.set_predicate(
                 PredicateOperator::In,
