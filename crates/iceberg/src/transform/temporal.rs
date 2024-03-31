@@ -613,7 +613,7 @@ mod test {
 
         // Test TimestampMicrosecond
         test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17501));
-        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-1));
+        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-2));
         test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
     }
 
