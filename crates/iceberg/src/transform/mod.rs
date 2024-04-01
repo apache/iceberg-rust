@@ -76,14 +76,13 @@ mod test {
         expr::{
             BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
         },
-        spec::{Datum, NestedField, NestedFieldRef, Transform},
+        spec::{Datum, NestedField, NestedFieldRef, Transform, Type},
         Result,
     };
     use std::{collections::HashSet, sync::Arc};
 
     /// A utitily struct, test fixture
     /// used for testing the projection on `Transform`
-    #[derive(Debug)]
     pub(crate) struct TestProjectionFixture {
         transform: Transform,
         name: String,
@@ -135,6 +134,42 @@ mod test {
                 None => assert!(result.is_none()),
             }
             Ok(())
+        }
+    }
+
+    /// A utitily struct, test fixture
+    /// used for testing the transform on `Transform`
+    pub(crate) struct TestTransformFixture {
+        pub display: String,
+        pub json: String,
+        pub dedup_name: String,
+        pub preserves_order: bool,
+        pub satisfies_order_of: Vec<(Transform, bool)>,
+        pub trans_types: Vec<(Type, Option<Type>)>,
+    }
+
+    impl TestTransformFixture {
+        pub(crate) fn assert_transform(&self, trans: Transform) {
+            assert_eq!(self.display, format!("{trans}"));
+            assert_eq!(self.json, serde_json::to_string(&trans).unwrap());
+            assert_eq!(trans, serde_json::from_str(self.json.as_str()).unwrap());
+            assert_eq!(self.dedup_name, trans.dedup_name());
+            assert_eq!(self.preserves_order, trans.preserves_order());
+
+            for (other_trans, satisfies_order_of) in &self.satisfies_order_of {
+                assert_eq!(
+                    satisfies_order_of,
+                    &trans.satisfies_order_of(other_trans),
+                    "Failed to check satisfies order {}, {}, {}",
+                    trans,
+                    other_trans,
+                    satisfies_order_of
+                );
+            }
+
+            for (input_type, result_type) in &self.trans_types {
+                assert_eq!(result_type, &trans.result_type(input_type).ok());
+            }
         }
     }
 }

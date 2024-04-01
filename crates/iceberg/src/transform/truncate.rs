@@ -170,6 +170,13 @@ impl TransformFunction for Truncate {
 mod test {
     use std::sync::Arc;
 
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
+    };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
+    use crate::transform::test::TestTransformFixture;
     use arrow_array::{
         builder::PrimitiveBuilder, types::Decimal128Type, Decimal128Array, Int32Array, Int64Array,
     };
@@ -180,6 +187,58 @@ mod test {
         transform::{test::TestProjectionFixture, TransformFunction},
         Result,
     };
+
+    #[test]
+    fn test_truncate_transform() {
+        let trans = Transform::Truncate(4);
+
+        let fixture = TestTransformFixture {
+            display: "truncate[4]".to_string(),
+            json: r#""truncate[4]""#.to_string(),
+            dedup_name: "truncate[4]".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Truncate(4), true),
+                (Transform::Truncate(2), false),
+                (Transform::Bucket(4), false),
+                (Transform::Void, false),
+                (Transform::Day, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), Some(Primitive(Binary))),
+                (Primitive(Date), None),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    Some(Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    })),
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), Some(Primitive(Int))),
+                (Primitive(Long), Some(Primitive(Long))),
+                (Primitive(StringType), Some(Primitive(StringType))),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), None),
+                (Primitive(Timestamptz), None),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
 
     #[test]
     fn test_projection_truncate_string_rewrite_op() -> Result<()> {

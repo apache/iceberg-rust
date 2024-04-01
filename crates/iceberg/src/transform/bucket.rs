@@ -251,14 +251,71 @@ impl TransformFunction for Bucket {
 mod test {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
+    };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
     use crate::{
         expr::PredicateOperator,
         spec::{Datum, NestedField, PrimitiveType, Transform, Type},
-        transform::{test::TestProjectionFixture, TransformFunction},
+        transform::{
+            test::{TestProjectionFixture, TestTransformFixture},
+            TransformFunction,
+        },
         Result,
     };
 
     use super::Bucket;
+
+    #[test]
+    fn test_bucket_transform() {
+        let trans = Transform::Bucket(8);
+
+        let fixture = TestTransformFixture {
+            display: "bucket[8]".to_string(),
+            json: r#""bucket[8]""#.to_string(),
+            dedup_name: "bucket[8]".to_string(),
+            preserves_order: false,
+            satisfies_order_of: vec![
+                (Transform::Bucket(8), true),
+                (Transform::Bucket(4), false),
+                (Transform::Void, false),
+                (Transform::Day, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), Some(Primitive(Int))),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    Some(Primitive(Int)),
+                ),
+                (Primitive(Fixed(8)), Some(Primitive(Int))),
+                (Primitive(Int), Some(Primitive(Int))),
+                (Primitive(Long), Some(Primitive(Int))),
+                (Primitive(StringType), Some(Primitive(Int))),
+                (Primitive(Uuid), Some(Primitive(Int))),
+                (Primitive(Time), Some(Primitive(Int))),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
 
     #[test]
     fn test_projection_bucket_uuid() -> Result<()> {

@@ -294,12 +294,220 @@ mod test {
     use chrono::{NaiveDate, NaiveDateTime};
     use std::sync::Arc;
 
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
+    };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
+
+    use crate::transform::test::TestTransformFixture;
     use crate::{
         expr::PredicateOperator,
         spec::{Datum, NestedField, PrimitiveType, Transform, Type},
         transform::{test::TestProjectionFixture, BoxedTransformFunction, TransformFunction},
         Result,
     };
+
+    #[test]
+    fn test_year_transform() {
+        let trans = Transform::Year;
+
+        let fixture = TestTransformFixture {
+            display: "year".to_string(),
+            json: r#""year""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, false),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_month_transform() {
+        let trans = Transform::Month;
+
+        let fixture = TestTransformFixture {
+            display: "month".to_string(),
+            json: r#""month""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_day_transform() {
+        let trans = Transform::Day;
+
+        let fixture = TestTransformFixture {
+            display: "day".to_string(),
+            json: r#""day""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, true),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_hour_transform() {
+        let trans = Transform::Hour;
+
+        let fixture = TestTransformFixture {
+            display: "hour".to_string(),
+            json: r#""hour""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, true),
+                (Transform::Hour, true),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), None),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
 
     #[test]
     fn test_projection_timestamp_hour_upper_bound() -> Result<()> {
