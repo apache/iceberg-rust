@@ -163,7 +163,7 @@ pub struct Day;
 
 impl Day {
     #[inline]
-    fn day_timestamp_micro(v: i64) -> i32 {
+    fn day_timestamp_micro(v: i64) -> Result<i32> {
         let secs = v / MICROS_PER_SECOND;
 
         let (nanos, offset) = if v >= 0 {
@@ -177,20 +177,19 @@ impl Day {
             (nanos, offset)
         };
 
-        // TODO: Handle unwrap, return Result<i32>
-        let delta = Duration::new(secs, nanos)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Failed to create 'TimeDelta' from seconds {} and nanos {}",
-                        secs, nanos
-                    ),
-                )
-            })
-            .unwrap();
+        let delta = Duration::new(secs, nanos).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Failed to create 'TimeDelta' from seconds {} and nanos {}",
+                    secs, nanos
+                ),
+            )
+        })?;
 
-        (delta.num_days() - offset) as i32
+        let days = (delta.num_days() - offset) as i32;
+
+        Ok(days)
     }
 }
 
@@ -201,7 +200,7 @@ impl TransformFunction for Day {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
-                .unary(|v| -> i32 { Self::day_timestamp_micro(v) }),
+                .unary(|v| -> i32 { Self::day_timestamp_micro(v).unwrap() }),
             DataType::Date32 => input
                 .as_any()
                 .downcast_ref::<Date32Array>()
@@ -223,8 +222,8 @@ impl TransformFunction for Day {
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         let val = match input.literal() {
             PrimitiveLiteral::Date(v) => *v,
-            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v),
-            PrimitiveLiteral::TimestampTZ(v) => Self::day_timestamp_micro(*v),
+            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v)?,
+            PrimitiveLiteral::TimestampTZ(v) => Self::day_timestamp_micro(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
