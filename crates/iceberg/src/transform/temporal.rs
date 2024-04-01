@@ -29,8 +29,6 @@ use std::sync::Arc;
 
 /// Hour in one second.
 const HOUR_PER_SECOND: f64 = 1.0_f64 / 3600.0_f64;
-/// Day in one second.
-const _DAY_PER_SECOND: f64 = 1.0_f64 / 24.0_f64 / 3600.0_f64;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
 /// One second in micros.
@@ -165,8 +163,7 @@ pub struct Day;
 
 impl Day {
     #[inline]
-    fn day_timestamp_micro(v: i64) -> i32 {
-        // (v as f64 / 1000.0 / 1000.0 * DAY_PER_SECOND) as i32
+    fn day_timestamp_micro(v: i64) -> Result<i32> {
         let secs = v / MICROS_PER_SECOND;
 
         let (nanos, offset) = if v >= 0 {
@@ -180,20 +177,19 @@ impl Day {
             (nanos, offset)
         };
 
-        // TODO: Handle unwrap, return Result<i32>
-        let delta = Duration::new(secs, nanos)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Failed to create 'TimeDelta' from seconds {} and nanos {}",
-                        secs, nanos
-                    ),
-                )
-            })
-            .unwrap();
+        let delta = Duration::new(secs, nanos).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Failed to create 'TimeDelta' from seconds {} and nanos {}",
+                    secs, nanos
+                ),
+            )
+        })?;
 
-        (delta.num_days() - offset) as i32
+        let days = (delta.num_days() - offset) as i32;
+
+        Ok(days)
     }
 }
 
@@ -204,7 +200,7 @@ impl TransformFunction for Day {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
-                .unary(|v| -> i32 { Self::day_timestamp_micro(v) }),
+                .try_unary(|v| -> Result<i32> { Self::day_timestamp_micro(v) })?,
             DataType::Date32 => input
                 .as_any()
                 .downcast_ref::<Date32Array>()
@@ -226,8 +222,8 @@ impl TransformFunction for Day {
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         let val = match input.literal() {
             PrimitiveLiteral::Date(v) => *v,
-            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v),
-            PrimitiveLiteral::TimestampTZ(v) => Self::day_timestamp_micro(*v),
+            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v)?,
+            PrimitiveLiteral::TimestampTZ(v) => Self::day_timestamp_micro(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
