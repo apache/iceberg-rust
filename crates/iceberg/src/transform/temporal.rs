@@ -24,15 +24,15 @@ use arrow_array::{
     types::Date32Type, Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Datelike};
+use chrono::{DateTime, Datelike, Duration};
 use std::sync::Arc;
 
 /// Hour in one second.
 const HOUR_PER_SECOND: f64 = 1.0_f64 / 3600.0_f64;
-/// Day in one second.
-const DAY_PER_SECOND: f64 = 1.0_f64 / 24.0_f64 / 3600.0_f64;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
+/// One second in micros.
+const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
@@ -164,7 +164,33 @@ pub struct Day;
 impl Day {
     #[inline]
     fn day_timestamp_micro(v: i64) -> i32 {
-        (v as f64 / 1000.0 / 1000.0 * DAY_PER_SECOND) as i32
+        let secs = v / MICROS_PER_SECOND;
+
+        let (nanos, offset) = if v >= 0 {
+            let nanos = (v.rem_euclid(MICROS_PER_SECOND) * 1_000) as u32;
+            let offset = 0i64;
+            (nanos, offset)
+        } else {
+            let v = v + 1;
+            let nanos = (v.rem_euclid(MICROS_PER_SECOND) * 1_000) as u32;
+            let offset = 1i64;
+            (nanos, offset)
+        };
+
+        // TODO: Handle unwrap, return Result<i32>
+        let delta = Duration::new(secs, nanos)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Failed to create 'TimeDelta' from seconds {} and nanos {}",
+                        secs, nanos
+                    ),
+                )
+            })
+            .unwrap();
+
+        (delta.num_days() - offset) as i32
     }
 }
 
@@ -584,7 +610,7 @@ mod test {
 
         // Test TimestampMicrosecond
         test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17501));
-        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-1));
+        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-2));
         test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
     }
 
