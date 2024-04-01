@@ -16,6 +16,7 @@
 // under the License.
 
 //! Transform function used to compute partition values.
+
 use crate::{
     spec::{Datum, Transform},
     Error, ErrorKind, Result,
@@ -66,5 +67,74 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
             crate::ErrorKind::FeatureUnsupported,
             "Transform Unknown is not implemented",
         )),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        expr::{
+            BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
+        },
+        spec::{Datum, NestedField, NestedFieldRef, Transform},
+        Result,
+    };
+    use std::{collections::HashSet, sync::Arc};
+
+    /// A utitily struct, test fixture
+    /// used for testing the projection on `Transform`
+    #[derive(Debug)]
+    pub(crate) struct TestProjectionFixture {
+        transform: Transform,
+        name: String,
+        field: NestedFieldRef,
+    }
+
+    impl TestProjectionFixture {
+        pub(crate) fn new(
+            transform: Transform,
+            name: impl Into<String>,
+            field: NestedField,
+        ) -> Self {
+            TestProjectionFixture {
+                transform,
+                name: name.into(),
+                field: Arc::new(field),
+            }
+        }
+        pub(crate) fn binary_predicate(
+            &self,
+            op: PredicateOperator,
+            literal: Datum,
+        ) -> BoundPredicate {
+            BoundPredicate::Binary(BinaryExpression::new(
+                op,
+                BoundReference::new(self.name.clone(), self.field.clone()),
+                literal,
+            ))
+        }
+        pub(crate) fn set_predicate(
+            &self,
+            op: PredicateOperator,
+            literals: Vec<Datum>,
+        ) -> BoundPredicate {
+            BoundPredicate::Set(SetExpression::new(
+                op,
+                BoundReference::new(self.name.clone(), self.field.clone()),
+                HashSet::from_iter(literals),
+            ))
+        }
+        pub(crate) fn assert_projection(
+            &self,
+            predicate: &BoundPredicate,
+            expected: Option<&str>,
+        ) -> Result<()> {
+            let result = self.transform.project(self.name.clone(), predicate)?;
+            match expected {
+                Some(exp) => assert_eq!(format!("{}", result.unwrap()), exp),
+                None => assert!(result.is_none()),
+            }
+            Ok(())
+        }
     }
 }

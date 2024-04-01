@@ -251,9 +251,411 @@ impl TransformFunction for Bucket {
 mod test {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
-    use crate::{spec::Datum, transform::TransformFunction};
+    use crate::{
+        expr::PredicateOperator,
+        spec::{Datum, NestedField, PrimitiveType, Transform, Type},
+        transform::{test::TestProjectionFixture, TransformFunction},
+        Result,
+    };
 
     use super::Bucket;
+
+    #[test]
+    fn test_projection_bucket_uuid() -> Result<()> {
+        let value = uuid::Uuid::from_u64_pair(123, 456);
+        let another = uuid::Uuid::from_u64_pair(456, 123);
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Uuid)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::uuid(value)),
+            Some("name = 4"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::uuid(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::uuid(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::uuid(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::uuid(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::uuid(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::uuid(value), Datum::uuid(another)],
+            ),
+            Some("name IN (4, 6)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::uuid(value), Datum::uuid(another)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_fixed() -> Result<()> {
+        let value = "abcdefg".as_bytes().to_vec();
+        let another = "abcdehij".as_bytes().to_vec();
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Fixed(value.len() as u64)),
+            ),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::fixed(value.clone())),
+            Some("name = 4"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::fixed(value.clone())),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::fixed(value.clone())),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::fixed(value.clone())),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::fixed(value.clone())),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::fixed(value.clone()),
+            ),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::fixed(value.clone()), Datum::fixed(another.clone())],
+            ),
+            Some("name IN (4, 6)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::fixed(value.clone()), Datum::fixed(another.clone())],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_string() -> Result<()> {
+        let value = "abcdefg";
+        let another = "abcdefgabc";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::string(value)),
+            Some("name = 4"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::string(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::string(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::string(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::string(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::string(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::string(value), Datum::string(another)],
+            ),
+            Some("name IN (9, 4)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::string(value), Datum::string(another)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_decimal() -> Result<()> {
+        let prev = "99.00";
+        let curr = "100.00";
+        let next = "101.00";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
+            Some("name = 2"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::decimal_from_str(curr)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::decimal_from_str(curr)?,
+            ),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::decimal_from_str(next)?,
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(prev)?,
+                ],
+            ),
+            Some("name IN (6, 2)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(next)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_long() -> Result<()> {
+        let value = 100;
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Long)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::long(value)),
+            Some("name = 6"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::long(value - 1),
+                    Datum::long(value),
+                    Datum::long(value + 1),
+                ],
+            ),
+            Some("name IN (8, 7, 6)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::long(value), Datum::long(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_bucket_integer() -> Result<()> {
+        let value = 100;
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Bucket(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(value)),
+            Some("name = 6"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::int(value - 1),
+                    Datum::int(value),
+                    Datum::int(value + 1),
+                ],
+            ),
+            Some("name IN (8, 7, 6)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::int(value), Datum::int(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
     #[test]
     fn test_hash() {
         // test int
