@@ -200,7 +200,7 @@ impl TransformFunction for Day {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
-                .unary(|v| -> i32 { Self::day_timestamp_micro(v).unwrap() }),
+                .try_unary(|v| -> Result<i32> { Self::day_timestamp_micro(v) })?,
             DataType::Date32 => input
                 .as_any()
                 .downcast_ref::<Date32Array>()
