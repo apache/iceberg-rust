@@ -285,95 +285,47 @@ impl Transform {
     pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
-        let projection = match predicate {
-            BoundPredicate::Unary(expr) => match self {
-                Transform::Identity
-                | Transform::Bucket(_)
-                | Transform::Truncate(_)
-                | Transform::Year
-                | Transform::Month
-                | Transform::Day
-                | Transform::Hour => Some(Predicate::Unary(UnaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                ))),
-                _ => None,
-            },
-            BoundPredicate::Binary(expr) => match self {
-                Transform::Identity => Some(Predicate::Binary(BinaryExpression::new(
+        match self {
+            Transform::Identity => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => Ok(Some(Predicate::Binary(BinaryExpression::new(
                     expr.op(),
                     Reference::new(name),
                     expr.literal().to_owned(),
-                ))),
-                Transform::Bucket(_) => {
-                    if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    Some(Predicate::Binary(BinaryExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        func.transform_literal_result(expr.literal())?,
-                    )))
-                }
-                Transform::Truncate(width) => {
-                    if !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    self.transform_projected_boundary(
-                        name,
-                        expr.literal(),
-                        &expr.op(),
-                        &func,
-                        Some(*width),
-                    )?
-                }
-                Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
-                    if !self.can_transform(expr.literal()) {
-                        return Ok(None);
-                    }
-
-                    self.transform_projected_boundary(
-                        name,
-                        expr.literal(),
-                        &expr.op(),
-                        &func,
-                        None,
-                    )?
-                }
-                _ => None,
-            },
-            BoundPredicate::Set(expr) => match self {
-                Transform::Identity => Some(Predicate::Set(SetExpression::new(
+                )))),
+                BoundPredicate::Set(expr) => Ok(Some(Predicate::Set(SetExpression::new(
                     expr.op(),
                     Reference::new(name),
                     expr.literals().to_owned(),
-                ))),
-                Transform::Bucket(_)
-                | Transform::Truncate(_)
-                | Transform::Year
-                | Transform::Month
-                | Transform::Day
-                | Transform::Hour => {
-                    if expr.op() != PredicateOperator::In
-                        || expr.literals().iter().any(|d| !self.can_transform(d))
-                    {
-                        return Ok(None);
-                    }
-
-                    Some(Predicate::Set(SetExpression::new(
-                        expr.op(),
-                        Reference::new(name),
-                        self.transform_set(expr.literals(), &func)?,
-                    )))
-                }
-                _ => None,
+                )))),
+                _ => Ok(None),
             },
-            _ => None,
-        };
-
-        Ok(projection)
+            Transform::Bucket(_) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => self.project_binary(name, expr, &func),
+                BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                _ => Ok(None),
+            },
+            Transform::Truncate(width) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => {
+                    self.project_binary_with_adjusted_boundary(name, &expr, &func, Some(*width))
+                }
+                BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                _ => Ok(None),
+            },
+            Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                match predicate {
+                    BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                    BoundPredicate::Binary(expr) => {
+                        self.project_binary_with_adjusted_boundary(name, &expr, &func, None)
+                    }
+                    BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Check if `Transform` is applicable on datum's `PrimitiveType`
@@ -382,51 +334,73 @@ impl Transform {
         self.result_type(&Type::Primitive(input_type)).is_ok()
     }
 
-    /// Transform each literal value of `FnvHashSet<Datum>`
-    fn transform_set(
-        &self,
-        literals: &FnvHashSet<Datum>,
-        func: &BoxedTransformFunction,
-    ) -> Result<FnvHashSet<Datum>> {
-        let mut new_set = FnvHashSet::default();
-
-        for lit in literals {
-            let datum = func.transform_literal_result(lit)?;
-
-            if let Some(AdjustedProjection::Single(d)) =
-                self.adjust_projection(&PredicateOperator::In, lit, &datum)
-            {
-                new_set.insert(d);
-            };
-
-            new_set.insert(datum);
-        }
-
-        Ok(new_set)
+    /// Creates a unary predicate from a given operator and a reference name.
+    fn project_unary(op: PredicateOperator, name: String) -> Result<Option<Predicate>> {
+        Ok(Some(Predicate::Unary(UnaryExpression::new(
+            op,
+            Reference::new(name),
+        ))))
     }
 
-    /// Apply transform on `Datum` with adjusted boundaries.
-    /// Returns Predicate with projection and possibly
-    /// rewritten `PredicateOperator`
-    fn transform_projected_boundary(
+    /// Attempts to create a binary predicate based on a binary expression,
+    /// if applicable.
+    ///
+    /// This method evaluates a given binary expression and, if the operation
+    /// is equality (`Eq`) and the literal can be transformed, constructs a
+    /// `Predicate::Binary`variant representing the binary operation.
+    fn project_binary<T>(
         &self,
         name: String,
-        datum: &Datum,
-        op: &PredicateOperator,
+        expr: &BinaryExpression<T>,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
+            return Ok(None);
+        }
+
+        Ok(Some(Predicate::Binary(BinaryExpression::new(
+            expr.op(),
+            Reference::new(name),
+            func.transform_literal_result(expr.literal())?,
+        ))))
+    }
+
+    /// Projects a binary expression to a predicate with an adjusted boundary.
+    ///
+    /// Checks if the literal within the given binary expression is
+    /// transformable. If transformable, it proceeds to potentially adjust
+    /// the boundary of the expression based on the comparison operator (`op`).
+    /// The potential adjustements involve incrementing or decrementing the
+    /// literal value and changing the `PredicateOperator` itself to its
+    /// inclusive variant.
+    fn project_binary_with_adjusted_boundary<T>(
+        &self,
+        name: String,
+        expr: &BinaryExpression<T>,
         func: &BoxedTransformFunction,
         width: Option<u32>,
     ) -> Result<Option<Predicate>> {
-        if let Some(boundary) = Self::projected_boundary(op, datum)? {
-            let transformed = func.transform_literal_result(&boundary)?;
-            let adjusted = self.adjust_projection(op, datum, &transformed);
-            let op = Self::projected_operator(op, datum, width);
+        if !self.can_transform(expr.literal()) {
+            return Ok(None);
+        }
 
-            if let Some(op) = op {
-                let predicate = match adjusted {
+        let op = &expr.op();
+        let datum = &expr.literal();
+
+        if let Some(boundary) = Self::adjust_boundary(op, datum)? {
+            let transformed_projection = func.transform_literal_result(&boundary)?;
+
+            let adjusted_projection =
+                self.adjust_time_projection(op, datum, &transformed_projection);
+
+            let adjusted_operator = Self::adjust_operator(op, datum, width);
+
+            if let Some(op) = adjusted_operator {
+                let predicate = match adjusted_projection {
                     None => Predicate::Binary(BinaryExpression::new(
                         op,
                         Reference::new(name),
-                        transformed,
+                        transformed_projection,
                     )),
                     Some(AdjustedProjection::Single(d)) => {
                         Predicate::Binary(BinaryExpression::new(op, Reference::new(name), d))
@@ -444,13 +418,54 @@ impl Transform {
         Ok(None)
     }
 
-    /// Create a new `Datum` with adjusted projection boundary.
-    /// Returns `None` if `PredicateOperator` and `PrimitiveLiteral`
-    /// can not be projected
-    fn projected_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
+    /// Projects a set expression to a predicate,
+    /// applying a transformation to each literal in the set.
+    fn project_set<T>(
+        &self,
+        expr: &SetExpression<T>,
+        name: String,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        if expr.op() != PredicateOperator::In
+            || expr.literals().iter().any(|d| !self.can_transform(d))
+        {
+            return Ok(None);
+        }
+
+        let mut new_set = FnvHashSet::default();
+
+        for lit in expr.literals() {
+            let datum = func.transform_literal_result(lit)?;
+
+            if let Some(AdjustedProjection::Single(d)) =
+                self.adjust_time_projection(&PredicateOperator::In, lit, &datum)
+            {
+                new_set.insert(d);
+            };
+
+            new_set.insert(datum);
+        }
+
+        Ok(Some(Predicate::Set(SetExpression::new(
+            expr.op(),
+            Reference::new(name),
+            new_set,
+        ))))
+    }
+
+    /// Adjusts the boundary value for comparison operations
+    /// based on the specified `PredicateOperator` and `Datum`.
+    ///
+    /// This function modifies the boundary value for certain comparison
+    /// operators (`LessThan`, `GreaterThan`) by incrementing or decrementing
+    /// the literal value within the given `Datum`. For operators that do not
+    /// imply a boundary shift (`Eq`, `LessThanOrEq`, `GreaterThanOrEq`,
+    /// `StartsWith`, `NotStartsWith`), the original datum is returned
+    /// unmodified.
+    fn adjust_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
         let literal = datum.literal();
 
-        let projected_boundary = match op {
+        let adjusted_boundary = match op {
             PredicateOperator::LessThan => match literal {
                 PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
                 PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
@@ -475,11 +490,20 @@ impl Transform {
             _ => None,
         };
 
-        Ok(projected_boundary)
+        Ok(adjusted_boundary)
     }
 
-    /// Create a new `PredicateOperator`, rewritten for projection
-    fn projected_operator(
+    /// Adjusts the comparison operator based on the specified datum and an
+    /// optional width constraint.
+    ///
+    /// This function modifies the comparison operator for `LessThan` and
+    /// `GreaterThan` cases to their inclusive counterparts (`LessThanOrEq`,
+    /// `GreaterThanOrEq`) unconditionally. For `StartsWith` and
+    /// `NotStartsWith` operators acting on string literals, the operator may
+    /// be adjusted to `Eq` or `NotEq` if the string length matches the
+    /// specified width, indicating a precise match rather than a prefix
+    /// condition.
+    fn adjust_operator(
         op: &PredicateOperator,
         datum: &Datum,
         width: Option<u32>,
@@ -523,7 +547,7 @@ impl Transform {
 
     /// Adjust projection for temporal transforms, align with Java
     /// implementation: https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/transforms/ProjectionUtil.java#L275
-    fn adjust_projection(
+    fn adjust_time_projection(
         &self,
         op: &PredicateOperator,
         original: &Datum,
