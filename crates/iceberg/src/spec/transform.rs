@@ -416,10 +416,10 @@ impl Transform {
         func: &BoxedTransformFunction,
         width: Option<u32>,
     ) -> Result<Option<Predicate>> {
-        if let Some(boundary) = self.projected_boundary(op, datum)? {
+        if let Some(boundary) = Self::projected_boundary(op, datum)? {
             let transformed = func.transform_literal_result(&boundary)?;
             let adjusted = self.adjust_projection(op, datum, &transformed);
-            let op = self.projected_operator(op, datum, width);
+            let op = Self::projected_operator(op, datum, width);
 
             if let Some(op) = op {
                 let predicate = match adjusted {
@@ -447,7 +447,7 @@ impl Transform {
     /// Create a new `Datum` with adjusted projection boundary.
     /// Returns `None` if `PredicateOperator` and `PrimitiveLiteral`
     /// can not be projected
-    fn projected_boundary(&self, op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
+    fn projected_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
         let literal = datum.literal();
 
         let projected_boundary = match op {
@@ -480,7 +480,6 @@ impl Transform {
 
     /// Create a new `PredicateOperator`, rewritten for projection
     fn projected_operator(
-        &self,
         op: &PredicateOperator,
         datum: &Datum,
         width: Option<u32>,
