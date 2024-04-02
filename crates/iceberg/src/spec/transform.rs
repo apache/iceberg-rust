@@ -370,7 +370,7 @@ impl Transform {
     /// Checks if the literal within the given binary expression is
     /// transformable. If transformable, it proceeds to potentially adjust
     /// the boundary of the expression based on the comparison operator (`op`).
-    /// The potential adjustements involve incrementing or decrementing the
+    /// The potential adjustments involve incrementing or decrementing the
     /// literal value and changing the `PredicateOperator` itself to its
     /// inclusive variant.
     fn project_binary_with_adjusted_boundary<T>(
