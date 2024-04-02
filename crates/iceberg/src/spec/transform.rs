@@ -309,7 +309,7 @@ impl Transform {
             Transform::Truncate(width) => match predicate {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                 BoundPredicate::Binary(expr) => {
-                    self.project_binary_with_adjusted_boundary(name, &expr, &func, Some(*width))
+                    self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
                 }
                 BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
                 _ => Ok(None),
@@ -318,7 +318,7 @@ impl Transform {
                 match predicate {
                     BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                     BoundPredicate::Binary(expr) => {
-                        self.project_binary_with_adjusted_boundary(name, &expr, &func, None)
+                        self.project_binary_with_adjusted_boundary(name, expr, &func, None)
                     }
                     BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
                     _ => Ok(None),
