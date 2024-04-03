@@ -19,7 +19,7 @@
 
 use crate::arrow::ArrowReaderBuilder;
 use crate::expr::BoundPredicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, LogicalExpression, Predicate, PredicateOperator};
+use crate::expr::{Bind, BoundPredicate, Predicate, PredicateOperator};
 use crate::io::FileIO;
 use crate::spec::{
     DataContentType, FieldSummary, ManifestEntryRef, ManifestFile, PartitionField,
@@ -72,7 +72,6 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Specifies a predicate to use as a filter
     pub fn with_filter(mut self, predicate: Predicate) -> Self {
-
         // calls rewrite_not to remove Not nodes, which must be absent
         // when applying the manifest evaluator
         self.filter = Some(predicate.rewrite_not());
@@ -467,12 +466,14 @@ impl InclusiveProjection {
         Ok(match bound_predicate {
             BoundPredicate::AlwaysTrue => Predicate::AlwaysTrue,
             BoundPredicate::AlwaysFalse => Predicate::AlwaysFalse,
-            BoundPredicate::And(expr) => Predicate::And(LogicalExpression::new(
-                expr.inputs().map(|expr| Box::new(self.visit(expr)?)),
-            )),
-            BoundPredicate::Or(expr) => Predicate::Or(LogicalExpression::new(
-                expr.inputs().map(|expr| Box::new(self.visit(expr)?)),
-            )),
+            BoundPredicate::And(expr) => {
+                let [left_pred, right_pred] = expr.inputs();
+                self.visit(left_pred)?.and(self.visit(right_pred)?)
+            },
+            BoundPredicate::Or(expr) => {
+                let [left_pred, right_pred] = expr.inputs();
+                self.visit(left_pred)?.or(self.visit(right_pred)?)
+            },
             BoundPredicate::Not(_) => {
                 panic!("should not get here as NOT-rewriting should have removed NOT nodes")
             }
@@ -498,13 +499,13 @@ impl InclusiveProjection {
             }
         }
 
-        Ok(parts.iter().fold(Predicate::AlwaysTrue, |res, &part| {
-            if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
-                res.and(pred_for_part)
+        parts.iter().fold(Ok(Predicate::AlwaysTrue), |res, &part| {
+            Ok(if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
+                res?.and(pred_for_part)
             } else {
-                res
-            }
-        }))
+                res?
+            })
+        })
     }
 }
 
