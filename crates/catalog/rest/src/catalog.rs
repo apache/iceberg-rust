@@ -623,13 +623,16 @@ impl RestCatalog {
             request = request.query(&[("warehouse", warehouse_location)]);
         }
 
-        let config = self
+        let mut config = self
             .client
             .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
 
         let mut props = config.defaults;
         props.extend(self.config.props.clone());
+        if let Some(uri) = config.overrides.remove("uri") {
+            self.config.uri = uri;
+        }
         props.extend(config.overrides);
 
         self.config.props = props;
@@ -845,6 +848,7 @@ mod tests {
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
+    use serde_json::json;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
@@ -1097,25 +1101,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_config_override_prefix() {
+    async fn test_config_override() {
         let mut server = Server::new_async().await;
+        let mut redirect_server = Server::new_async().await;
+        let new_uri = redirect_server.url();
 
         let config_mock = server
             .mock("GET", "/v1/config")
             .with_status(200)
             .with_body(
-                r#"{
-                "overrides": {
-                    "warehouse": "s3://iceberg-catalog",
-                    "prefix": "ice/warehouses/my"
-                },
-                "defaults": {}
-            }"#,
+                json!(
+                    {
+                        "overrides": {
+                            "uri": new_uri,
+                            "warehouse": "s3://iceberg-catalog",
+                            "prefix": "ice/warehouses/my"
+                        },
+                        "defaults": {},
+                    }
+                )
+                .to_string(),
             )
             .create_async()
             .await;
 
-        let list_ns_mock = server
+        let list_ns_mock = redirect_server
             .mock("GET", "/v1/ice/warehouses/my/namespaces")
             .with_body(
                 r#"{
