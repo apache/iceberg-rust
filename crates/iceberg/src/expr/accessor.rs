@@ -1,9 +1,10 @@
+use std::sync::Arc;
 use crate::spec::{Literal, Struct, Type};
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 enum InnerOrType {
-    Inner(Box<StructAccessor>),
+    Inner(Arc<StructAccessor>),
     Type(Type),
 }
 
@@ -13,6 +14,8 @@ pub struct StructAccessor {
     inner_or_type: InnerOrType,
 }
 
+pub(crate) type StructAccessorRef = Arc<StructAccessor>;
+
 impl StructAccessor {
     pub(crate) fn new(position: i32, r#type: Type) -> Self {
         StructAccessor {
@@ -21,10 +24,10 @@ impl StructAccessor {
         }
     }
 
-    pub(crate) fn wrap(position: i32, inner: StructAccessor) -> Self {
+    pub(crate) fn wrap(position: i32, inner: StructAccessorRef) -> Self {
         StructAccessor {
             position,
-            inner_or_type: InnerOrType::Inner(Box::from(inner)),
+            inner_or_type: InnerOrType::Inner(inner),
         }
     }
 
@@ -43,7 +46,9 @@ impl StructAccessor {
         match &self.inner_or_type {
             InnerOrType::Inner(inner) => match container.get(self.position) {
                 Literal::Struct(wrapped) => inner.get(wrapped),
-                _ => { panic!("Should only be wrapping a Struct") }
+                _ => {
+                    panic!("Nested accessor should only be wrapping a Struct")
+                }
             },
             InnerOrType::Type(_) => container.get(self.position),
         }

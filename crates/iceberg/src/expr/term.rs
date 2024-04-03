@@ -21,7 +21,7 @@ use std::fmt::{Display, Formatter};
 
 use fnv::FnvHashSet;
 
-use crate::expr::accessor::StructAccessor;
+use crate::expr::accessor::{StructAccessor, StructAccessorRef};
 use crate::expr::Bind;
 use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
@@ -190,7 +190,12 @@ impl Bind for Reference {
             )
         })?;
 
-        let accessor = schema.accessor_for_field_id(field.id);
+        let accessor = schema.accessor_for_field_id(field.id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Accessor for Field {} not found", self.name),
+            )
+        })?;
 
         Ok(BoundReference::new(
             self.name.clone(),
@@ -207,12 +212,12 @@ pub struct BoundReference {
     // For example, if the field is `a.b.c`, then `field.name` is `c`, but `original_name` is `a.b.c`.
     column_name: String,
     field: NestedFieldRef,
-    accessor: StructAccessor,
+    accessor: StructAccessorRef,
 }
 
 impl BoundReference {
     /// Creates a new bound reference.
-    pub fn new(name: impl Into<String>, field: NestedFieldRef, accessor: StructAccessor) -> Self {
+    pub fn new(name: impl Into<String>, field: NestedFieldRef, accessor: StructAccessorRef) -> Self {
         Self {
             column_name: name.into(),
             field,
@@ -244,7 +249,7 @@ pub type BoundTerm = BoundReference;
 mod tests {
     use std::sync::Arc;
 
-    use crate::expr::accessor::{StructAccessor, StructAccessor};
+    use crate::expr::accessor::StructAccessor;
     use crate::expr::{Bind, BoundReference, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
@@ -268,10 +273,11 @@ mod tests {
         let schema = table_schema_simple();
         let reference = Reference::new("bar").bind(schema, true).unwrap();
 
+        let accessor_ref = Arc::new(StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)));
         let expected_ref = BoundReference::new(
             "bar",
             NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)),
+            accessor_ref.clone(),
         );
 
         assert_eq!(expected_ref, reference);
@@ -282,10 +288,11 @@ mod tests {
         let schema = table_schema_simple();
         let reference = Reference::new("BAR").bind(schema, false).unwrap();
 
+        let accessor_ref = Arc::new(StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)));
         let expected_ref = BoundReference::new(
             "BAR",
             NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            StructAccessor::new(1, Type::Primitive(PrimitiveType::Int)),
+            accessor_ref.clone(),
         );
 
         assert_eq!(expected_ref, reference);

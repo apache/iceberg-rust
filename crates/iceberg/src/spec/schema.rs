@@ -55,7 +55,7 @@ pub struct Schema {
     lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
 
-    field_id_to_accessor: HashMap<i32, StructAccessor>,
+    field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
 }
 
 impl PartialEq for Schema {
@@ -145,20 +145,23 @@ impl SchemaBuilder {
         })
     }
 
-    fn build_accessors(&self) -> HashMap<i32, StructAccessor> {
+    fn build_accessors(&self) -> HashMap<i32, Arc<StructAccessor>> {
         let mut map = HashMap::new();
 
         for (pos, field) in self.fields.iter().enumerate() {
             // add an accessor for this field
+
+            let accessor = Arc::new(StructAccessor::new(pos as i32, *field.field_type.clone()));
             map.insert(
                 field.id,
-                StructAccessor::new(pos as i32, *field.field_type.clone()),
+                accessor.clone(),
             );
 
             if let Type::Struct(nested) = field.field_type.as_ref() {
                 // add accessors for nested fields
                 for (field_id, accessor) in Self::build_accessors_nested(nested.fields()) {
-                    map.insert(field_id, StructAccessor::wrap(pos as i32, accessor));
+                    let new_accessor = Arc::new(StructAccessor::wrap(pos as i32, accessor));
+                    map.insert(field_id, new_accessor.clone());
                 }
             }
         }
@@ -166,7 +169,7 @@ impl SchemaBuilder {
         map
     }
 
-    fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, StructAccessor)> {
+    fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, Arc<StructAccessor>)> {
         let mut results = vec![];
         for (pos, field) in fields.iter().enumerate() {
             if let Type::Struct(nested) = field.field_type.as_ref() {
@@ -174,14 +177,19 @@ impl SchemaBuilder {
 
                 let wrapped_nested_accessors = nested_accessors
                     .into_iter()
-                    .map(|(id, accessor)| (id, StructAccessor::wrap(pos as i32, accessor)));
+                    .map(|(id, accessor)| {
+                        let new_accessor = Arc::new(StructAccessor::wrap(pos as i32, accessor));
+                        (id, new_accessor.clone())
+                    });
 
                 results.extend(wrapped_nested_accessors);
             }
 
+            let accessor = Arc::new(StructAccessor::new(pos as i32, *field.field_type.clone()));
+
             results.push((
                 field.id,
-                StructAccessor::new(pos as i32, *field.field_type.clone()),
+                accessor.clone(),
             ));
         }
 
@@ -314,8 +322,8 @@ impl Schema {
     }
 
     /// Get an accessor for retrieving data in a struct
-    pub fn accessor_for_field_id(&self, field_id: i32) -> Option<&StructAccessor> {
-        self.field_id_to_accessor.get(&field_id)
+    pub fn accessor_for_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
+        self.field_id_to_accessor.get(&field_id).map(|acc|acc.clone())
     }
 }
 
