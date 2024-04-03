@@ -16,11 +16,11 @@
 // under the License.
 
 /// Property `iceberg.field.id` for `Column`
-const ICEBERG_FIELD_ID: &str = "iceberg.field.id";
+pub(crate) const ICEBERG_FIELD_ID: &str = "iceberg.field.id";
 /// Property `iceberg.field.optional` for `Column`
-const ICEBERG_FIELD_OPTIONAL: &str = "iceberg.field.optional";
+pub(crate) const ICEBERG_FIELD_OPTIONAL: &str = "iceberg.field.optional";
 /// Property `iceberg.field.current` for `Column`
-const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
+pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 
 use std::collections::HashMap;
 

@@ -261,10 +261,118 @@ macro_rules! with_catalog_id {
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_glue::config::ProvideCredentials;
-    use iceberg::{Namespace, Result};
+    use aws_sdk_glue::{config::ProvideCredentials, types::Column};
+    use iceberg::{
+        spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type},
+        Namespace, Result, TableCreation,
+    };
+
+    use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
 
     use super::*;
+
+    fn create_metadata(schema: Schema) -> Result<TableMetadata> {
+        let table_creation = TableCreation::builder()
+            .name("my_table".to_string())
+            .location("my_location".to_string())
+            .schema(schema)
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+
+        Ok(metadata)
+    }
+
+    #[test]
+    fn test_convert_to_glue_table() -> Result<()> {
+        let table_name = "my_table".to_string();
+        let location = "s3a://warehouse/hive".to_string();
+        let metadata_location = create_metadata_location(location.clone(), 0)?;
+        let properties = HashMap::new();
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![NestedField::required(
+                1,
+                "foo",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .into()])
+            .build()?;
+
+        let metadata = create_metadata(schema)?;
+
+        let parameters = HashMap::from([
+            (ICEBERG_FIELD_ID.to_string(), format!("{}", "1")),
+            (ICEBERG_FIELD_OPTIONAL.to_string(), format!("{}", "true")),
+            (ICEBERG_FIELD_CURRENT.to_string(), format!("{}", "true")),
+        ]);
+
+        let column = Column::builder()
+            .name("foo")
+            .r#type("int")
+            .set_parameters(Some(parameters))
+            .set_comment(None)
+            .build()
+            .map_err(from_aws_build_error)?;
+
+        let storage_descriptor = StorageDescriptor::builder()
+            .set_columns(Some(vec![column]))
+            .location(&metadata_location)
+            .build();
+
+        let result =
+            convert_to_glue_table(&table_name, metadata_location, &metadata, &properties, None)?;
+
+        assert_eq!(result.name(), &table_name);
+        assert_eq!(result.description(), None);
+        assert_eq!(result.storage_descriptor, Some(storage_descriptor));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_metadata_location() -> Result<()> {
+        let location = "my_base_location";
+        let valid_version = 0;
+        let invalid_version = -1;
+
+        let valid_result = create_metadata_location(location, valid_version)?;
+        let invalid_result = create_metadata_location(location, invalid_version);
+
+        assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
+        assert!(valid_result.ends_with(".metadata.json"));
+        assert!(invalid_result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location() -> Result<()> {
+        let properties = HashMap::from([(LOCATION.to_string(), "db_location".to_string())]);
+
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let table_name = "my_table";
+
+        let expected = "db_location/my_table";
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_warehouse() -> Result<()> {
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let table_name = "my_table";
+
+        let expected = "warehouse_location/my_table";
+        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
 
     #[test]
     fn test_convert_to_namespace() -> Result<()> {
