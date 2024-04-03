@@ -93,7 +93,7 @@ impl Catalog for GlueCatalog {
     /// List namespaces from glue catalog.
     ///
     /// Glue doesn't support nested namespaces.
-    /// We will return an empty list if parent is some
+    /// We will return an empty list if parent is some.
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
@@ -293,6 +293,7 @@ impl Catalog for GlueCatalog {
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let db_name = validate_namespace(namespace)?;
+
         let mut table_list: Vec<TableIdent> = Vec::new();
         let mut next_token: Option<String> = None;
 
@@ -423,7 +424,7 @@ impl Catalog for GlueCatalog {
             None => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "Glue 'Table' for database: {} and table: {} does not exist",
+                    "'Table' object for database: {} and table: {} does not exist",
                     db_name, table_name
                 ),
             )),
@@ -540,7 +541,7 @@ impl Catalog for GlueCatalog {
             None => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "Glue 'Table' for database: {} and table: {} does not exist",
+                    "'Table' object for database: {} and table: {} does not exist",
                     src_db_name, src_table_name
                 ),
             )),
