@@ -35,8 +35,8 @@ use std::str::FromStr;
 
 use crate::arrow::arrow_schema_to_schema;
 use crate::expr::{
-    BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
-    UnaryExpression,
+    visit_predicate, BinaryExpression, BoundPredicate, BoundPredicateVisitor, BoundReference,
+    PredicateOperator, SetExpression, UnaryExpression,
 };
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
@@ -225,7 +225,7 @@ impl ArrowReader {
                 .iter()
                 .map(|predicate| {
                     let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
-                    collector.visit_predicate(predicate).unwrap();
+                    visit_predicate(&mut collector, predicate).unwrap();
                     collector
                         .field_ids
                         .iter()
@@ -247,7 +247,7 @@ impl ArrowReader {
                     parquet_schema,
                     column_map: &field_id_map,
                 };
-                let arrow_predicate = converter.visit_predicate(predicate)?;
+                let arrow_predicate = visit_predicate(&mut converter, predicate)?;
                 arrow_predicates.push(arrow_predicate);
             }
             Ok(Some(RowFilter::new(arrow_predicates)))
@@ -394,16 +394,11 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                     is_not_null(column)
                 },
             ))),
-            PredicateOperator::IsNan => {
-                todo!("IsNan is not supported yet")
-            }
-            PredicateOperator::NotNan => {
-                todo!("NotNan is not supported yet")
-            }
-            op => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported unary operator: {op}"),
-            )),
+            // Unsupported operators, return always true.
+            _ => Ok(Box::new(ArrowPredicateFn::new(
+                self.projection_mask.clone(),
+                |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+            ))),
         }
     }
 
@@ -460,25 +455,21 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                     neq(left, literal.as_ref())
                 },
             ))),
-            op => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported binary operator: {op}"),
-            )),
+            // Unsupported operators, return always true.
+            _ => Ok(Box::new(ArrowPredicateFn::new(
+                self.projection_mask.clone(),
+                |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+            ))),
         }
     }
 
     fn visit_set(&mut self, predicate: &SetExpression<BoundReference>) -> Result<Self::T> {
         match predicate.op() {
-            PredicateOperator::In => {
-                todo!("In is not supported yet")
-            }
-            PredicateOperator::NotIn => {
-                todo!("NotIn is not supported yet")
-            }
-            op => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Unsupported set operator: {op}"),
-            )),
+            // Unsupported operators, return always true.
+            _ => Ok(Box::new(ArrowPredicateFn::new(
+                self.projection_mask.clone(),
+                |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+            ))),
         }
     }
 
@@ -538,80 +529,4 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 
         Ok(column_idx)
     }
-}
-
-/// A visitor for bound predicates.
-pub trait BoundPredicateVisitor {
-    /// Return type of this visitor on bound predicate.
-    type T;
-
-    /// Return type of this visitor on bound reference.
-    type U;
-
-    /// Visit a bound predicate.
-    fn visit_predicate(&mut self, predicate: &BoundPredicate) -> Result<Self::T> {
-        match predicate {
-            BoundPredicate::And(predicates) => self.visit_and(predicates.inputs()),
-            BoundPredicate::Or(predicates) => self.visit_or(predicates.inputs()),
-            BoundPredicate::Not(predicate) => self.visit_not(predicate.inputs()),
-            BoundPredicate::AlwaysTrue => self.visit_always_true(),
-            BoundPredicate::AlwaysFalse => self.visit_always_false(),
-            BoundPredicate::Unary(unary) => self.visit_unary(unary),
-            BoundPredicate::Binary(binary) => self.visit_binary(binary),
-            BoundPredicate::Set(set) => self.visit_set(set),
-        }
-    }
-
-    /// Visit an AND predicate.
-    fn visit_and(&mut self, predicates: [&BoundPredicate; 2]) -> Result<Self::T> {
-        let mut results = Vec::with_capacity(predicates.len());
-        for predicate in predicates {
-            let result = self.visit_predicate(predicate)?;
-            results.push(result);
-        }
-        self.and(results)
-    }
-
-    /// Visit an OR predicate.
-    fn visit_or(&mut self, predicates: [&BoundPredicate; 2]) -> Result<Self::T> {
-        let mut results = Vec::with_capacity(predicates.len());
-        for predicate in predicates {
-            let result = self.visit_predicate(predicate)?;
-            results.push(result);
-        }
-        self.or(results)
-    }
-
-    /// Visit a NOT predicate.
-    fn visit_not(&mut self, predicate: [&BoundPredicate; 1]) -> Result<Self::T> {
-        let result = self.visit_predicate(predicate.first().unwrap())?;
-        self.not(result)
-    }
-
-    /// Visit an always true predicate.
-    fn visit_always_true(&mut self) -> Result<Self::T>;
-
-    /// Visit an always false predicate.
-    fn visit_always_false(&mut self) -> Result<Self::T>;
-
-    /// Visit a unary predicate.
-    fn visit_unary(&mut self, predicate: &UnaryExpression<BoundReference>) -> Result<Self::T>;
-
-    /// Visit a binary predicate.
-    fn visit_binary(&mut self, predicate: &BinaryExpression<BoundReference>) -> Result<Self::T>;
-
-    /// Visit a set predicate.
-    fn visit_set(&mut self, predicate: &SetExpression<BoundReference>) -> Result<Self::T>;
-
-    /// Called after visiting predicates of AND.
-    fn and(&mut self, predicates: Vec<Self::T>) -> Result<Self::T>;
-
-    /// Called after visiting predicates of OR.
-    fn or(&mut self, predicates: Vec<Self::T>) -> Result<Self::T>;
-
-    /// Called after visiting predicates of NOT.
-    fn not(&mut self, predicate: Self::T) -> Result<Self::T>;
-
-    /// Visit a bound reference.
-    fn bound_reference(&mut self, reference: &BoundReference) -> Result<Self::U>;
 }
