@@ -69,10 +69,11 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
     let config = GlueCatalogConfig::builder()
         .uri(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
+        .warehouse("s3:://warehouse/hive".to_string())
         .props(props)
         .build();
 
-    let glue_catalog = GlueCatalog::new(config).await;
+    let glue_catalog = GlueCatalog::new(config).await.unwrap();
 
     TestFixture {
         _docker_compose: docker_compose,
