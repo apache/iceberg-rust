@@ -17,5 +17,7 @@
 
 //! Conversion between Iceberg and Arrow schema
 
-mod from;
-pub use from::*;
+mod schema;
+pub use schema::*;
+mod reader;
+pub use reader::*;

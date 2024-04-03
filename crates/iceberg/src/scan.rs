@@ -17,8 +17,8 @@
 
 //! Table scan api.
 
+use crate::arrow::ArrowReaderBuilder;
 use crate::io::FileIO;
-use crate::reader::ArrowReaderBuilder;
 use crate::spec::{DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
 use crate::{Error, ErrorKind};

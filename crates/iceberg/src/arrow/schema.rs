@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Convert Arrow schema to Iceberg schema.
+//! Conversion between Arrow schema and Iceberg schema.
 
 use crate::error::Result;
 use crate::spec::{

@@ -53,5 +53,4 @@ pub mod transaction;
 pub mod transform;
 
 pub mod arrow;
-pub mod reader;
 pub mod writer;
