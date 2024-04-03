@@ -15,21 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
-use arrow_array::ArrayRef;
+//! Iceberg Glue Catalog implementation.
 
-use super::TransformFunction;
+#![deny(missing_docs)]
 
-/// Return identity array.
-#[derive(Debug)]
-pub struct Identity {}
-
-impl TransformFunction for Identity {
-    fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        Ok(input)
-    }
-
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        Ok(Some(input.clone()))
-    }
-}
+mod catalog;
+mod error;
+mod utils;
+pub use catalog::*;
+pub use utils::{
+    AWS_ACCESS_KEY_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+};

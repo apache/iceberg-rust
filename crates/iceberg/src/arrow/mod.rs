@@ -15,21 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
-use arrow_array::ArrayRef;
+//! Conversion between Iceberg and Arrow schema
 
-use super::TransformFunction;
-
-/// Return identity array.
-#[derive(Debug)]
-pub struct Identity {}
-
-impl TransformFunction for Identity {
-    fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        Ok(input)
-    }
-
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        Ok(Some(input.clone()))
-    }
-}
+mod schema;
+pub use schema::*;
+mod reader;
+pub use reader::*;

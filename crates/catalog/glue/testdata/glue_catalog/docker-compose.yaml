@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[toolchain]
-channel = "1.77.1"
-components = ["rustfmt", "clippy"]
+version: '3.8'
+
+services:
+  moto:
+    image: motoserver/moto:5.0.3
+    expose:
+      - 5000

@@ -15,21 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
-use arrow_array::ArrayRef;
+use anyhow::anyhow;
+use std::fmt::Debug;
 
-use super::TransformFunction;
+use iceberg::{Error, ErrorKind};
 
-/// Return identity array.
-#[derive(Debug)]
-pub struct Identity {}
+/// Format AWS SDK error into iceberg error
+pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> Error
+where
+    T: Debug,
+{
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting aws skd error".to_string(),
+    )
+    .with_source(anyhow!("aws sdk error: {:?}", error))
+}
 
-impl TransformFunction for Identity {
-    fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        Ok(input)
-    }
-
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        Ok(Some(input.clone()))
-    }
+/// Format AWS Build error into iceberg error
+pub(crate) fn from_aws_build_error(error: aws_sdk_glue::error::BuildError) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting aws build error".to_string(),
+    )
+    .with_source(anyhow!("aws build error: {:?}", error))
 }

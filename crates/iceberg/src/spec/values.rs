@@ -674,9 +674,14 @@ impl Datum {
         }
     }
 
-    /// Returns the literal of the datum.
+    /// Get the primitive literal from datum.
     pub fn literal(&self) -> &PrimitiveLiteral {
         &self.literal
+    }
+
+    /// Get the primitive type from datum.
+    pub fn data_type(&self) -> &PrimitiveType {
+        &self.r#type
     }
 }
 

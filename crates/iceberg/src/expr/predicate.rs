@@ -804,6 +804,7 @@ mod tests {
                     NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
                     NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
                     NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -843,6 +844,43 @@ mod tests {
     }
 
     #[test]
+    fn test_bind_is_nan() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("qux").is_nan();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "qux IS NAN");
+
+        let schema_string = table_schema_simple();
+        let expr_string = Reference::new("foo").is_nan();
+        let bound_expr_string = expr_string.bind(schema_string, true);
+        assert!(bound_expr_string.is_err());
+    }
+
+    #[test]
+    fn test_bind_is_nan_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").is_nan();
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_is_not_nan() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("qux").is_not_nan();
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "qux IS NOT NAN");
+    }
+
+    #[test]
+    fn test_bind_is_not_nan_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").is_not_nan();
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
     fn test_bind_less_than() {
         let schema = table_schema_simple();
         let expr = Reference::new("bar").less_than(Datum::int(10));
@@ -859,6 +897,38 @@ mod tests {
     }
 
     #[test]
+    fn test_bind_less_than_or_eq() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").less_than_or_equal_to(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar <= 10");
+    }
+
+    #[test]
+    fn test_bind_less_than_or_eq_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").less_than_or_equal_to(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_greater_than() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").greater_than(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar > 10");
+    }
+
+    #[test]
+    fn test_bind_greater_than_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").greater_than(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
     fn test_bind_greater_than_or_eq() {
         let schema = table_schema_simple();
         let expr = Reference::new("bar").greater_than_or_equal_to(Datum::int(10));
@@ -870,6 +940,70 @@ mod tests {
     fn test_bind_greater_than_or_eq_wrong_type() {
         let schema = table_schema_simple();
         let expr = Reference::new("bar").greater_than_or_equal_to(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_equal_to() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").equal_to(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar = 10");
+    }
+
+    #[test]
+    fn test_bind_equal_to_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").equal_to(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_not_equal_to() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").not_equal_to(Datum::int(10));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar != 10");
+    }
+
+    #[test]
+    fn test_bind_not_equal_to_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").not_equal_to(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_starts_with() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").starts_with(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), r#"foo STARTS WITH "abcd""#);
+    }
+
+    #[test]
+    fn test_bind_starts_with_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").starts_with(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true);
+        assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_not_starts_with() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("foo").not_starts_with(Datum::string("abcd"));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), r#"foo NOT STARTS WITH "abcd""#);
+    }
+
+    #[test]
+    fn test_bind_not_starts_with_wrong_type() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").not_starts_with(Datum::string("abcd"));
         let bound_expr = expr.bind(schema, true);
         assert!(bound_expr.is_err());
     }

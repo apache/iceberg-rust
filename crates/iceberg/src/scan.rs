@@ -118,7 +118,10 @@ impl<'a> TableScanBuilder<'a> {
                 if schema.field_by_name(column_name).is_none() {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Column {} not found in table.", column_name),
+                        format!(
+                            "Column {} not found in table. Schema: {}",
+                            column_name, schema
+                        ),
                     ));
                 }
             }
@@ -186,7 +189,7 @@ impl TableScan {
                         }
                         DataContentType::Data => {
                             let scan_task: crate::Result<FileScanTask> = Ok(FileScanTask {
-                                data_file: manifest_entry.clone(),
+                                data_manifest_entry: manifest_entry.clone(),
                                 start: 0,
                                 length: manifest_entry.file_size_in_bytes(),
                             });
@@ -203,6 +206,46 @@ impl TableScan {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
 
+        let mut field_ids = vec![];
+        for column_name in &self.column_names {
+            let field_id = self.schema.field_id_by_name(column_name).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Column {} not found in table. Schema: {}",
+                        column_name, self.schema
+                    ),
+                )
+            })?;
+
+            let field = self.schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Column {} is not a direct child of schema but a nested field, which is not supported now. Schema: {}",
+                            column_name, self.schema
+                        ),
+                    )
+                })?;
+
+            if !field.field_type.is_primitive() {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Column {} is not a primitive type. Schema: {}",
+                        column_name, self.schema
+                    ),
+                ));
+            }
+
+            field_ids.push(field_id as usize);
+        }
+
+        arrow_reader_builder = arrow_reader_builder.with_field_ids(field_ids);
+
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
@@ -216,7 +259,7 @@ impl TableScan {
 /// A task to scan part of file.
 #[derive(Debug)]
 pub struct FileScanTask {
-    data_file: ManifestEntryRef,
+    data_manifest_entry: ManifestEntryRef,
     #[allow(dead_code)]
     start: u64,
     #[allow(dead_code)]
@@ -227,8 +270,8 @@ pub struct FileScanTask {
 pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
-    pub fn data_file(&self) -> ManifestEntryRef {
-        self.data_file.clone()
+    pub fn data(&self) -> ManifestEntryRef {
+        self.data_manifest_entry.clone()
     }
 }
 
@@ -544,17 +587,17 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file.file_path().to_string());
+        tasks.sort_by_key(|t| t.data().data_file().file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file.file_path(),
+            tasks[0].data().data_file().file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file.file_path(),
+            tasks[1].data().data_file().file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
@@ -575,6 +618,29 @@ mod tests {
 
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 1);
+    }
+
+    #[tokio::test]
+    async fn test_open_parquet_with_projection() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Create table scan for current snapshot and plan files
+        let table_scan = fixture.table.scan().select(["x", "z"]).build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_columns(), 2);
+
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col2 = batches[0].column_by_name("z").unwrap();
+        let int64_arr = col2.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 3);
     }
 
     #[tokio::test]

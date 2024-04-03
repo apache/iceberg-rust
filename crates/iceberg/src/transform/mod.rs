@@ -16,7 +16,10 @@
 // under the License.
 
 //! Transform function used to compute partition values.
-use crate::{spec::Transform, Result};
+use crate::{
+    spec::{Datum, Transform},
+    Result,
+};
 use arrow_array::ArrayRef;
 
 mod bucket;
@@ -31,6 +34,8 @@ pub trait TransformFunction: Send {
     /// The implementation of this function will need to check and downcast the input to specific
     /// type.
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef>;
+    /// transform_literal will take an input literal and transform it into a new literal.
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>>;
 }
 
 /// BoxedTransformFunction is a boxed trait object of TransformFunction.

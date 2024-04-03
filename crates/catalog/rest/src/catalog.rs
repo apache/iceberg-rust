@@ -18,8 +18,10 @@
 //! This module contains rest catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -57,51 +59,52 @@ pub struct RestCatalogConfig {
 }
 
 impl RestCatalogConfig {
+    fn url_prefixed(&self, parts: &[&str]) -> String {
+        [&self.uri, PATH_V1]
+            .into_iter()
+            .chain(self.props.get("prefix").map(|s| &**s))
+            .chain(parts.iter().cloned())
+            .join("/")
+    }
+
     fn config_endpoint(&self) -> String {
         [&self.uri, PATH_V1, "config"].join("/")
     }
 
+    fn get_token_endpoint(&self) -> String {
+        if let Some(auth_url) = self.props.get("rest.authorization-url") {
+            auth_url.to_string()
+        } else {
+            [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
+        }
+    }
+
     fn namespaces_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "namespaces"].join("/")
+        self.url_prefixed(&["namespaces"])
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [&self.uri, PATH_V1, "namespaces", &ns.encode_in_url()].join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url()])
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
-            "namespaces",
-            &ns.encode_in_url(),
-            "tables",
-        ]
-        .join("/")
+        self.url_prefixed(&["namespaces", &ns.encode_in_url(), "tables"])
     }
 
     fn rename_table_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "tables", "rename"].join("/")
+        self.url_prefixed(&["tables", "rename"])
     }
 
     fn table_endpoint(&self, table: &TableIdent) -> String {
-        [
-            &self.uri,
-            PATH_V1,
+        self.url_prefixed(&[
             "namespaces",
             &table.namespace.encode_in_url(),
             "tables",
             encode(&table.name).as_ref(),
-        ]
-        .join("/")
+        ])
     }
 
-    fn get_token_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
-    }
-
-    fn try_create_rest_client(&self) -> Result<HttpClient> {
-        // TODO: We will add ssl config, sigv4 later
+    fn http_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
@@ -129,6 +132,36 @@ impl RestCatalogConfig {
                 })?,
             );
         }
+
+        for (key, value) in self.props.iter() {
+            if let Some(stripped_key) = key.strip_prefix("header.") {
+                // Avoid overwriting default headers
+                if !headers.contains_key(stripped_key) {
+                    headers.insert(
+                        HeaderName::from_str(stripped_key).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header name: {stripped_key}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                        HeaderValue::from_str(value).map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Invalid header value: {value}!"),
+                            )
+                            .with_source(e)
+                        })?,
+                    );
+                }
+            }
+        }
+        Ok(headers)
+    }
+
+    fn try_create_rest_client(&self) -> Result<HttpClient> {
+        // TODO: We will add ssl config, sigv4 later
+        let headers = self.http_headers()?;
 
         Ok(HttpClient(
             Client::builder().default_headers(headers).build()?,
@@ -590,13 +623,16 @@ impl RestCatalog {
             request = request.query(&[("warehouse", warehouse_location)]);
         }
 
-        let config = self
+        let mut config = self
             .client
             .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
 
         let mut props = config.defaults;
         props.extend(self.config.props.clone());
+        if let Some(uri) = config.overrides.remove("uri") {
+            self.config.uri = uri;
+        }
         props.extend(config.overrides);
 
         self.config.props = props;
@@ -812,6 +848,7 @@ mod tests {
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
+    use serde_json::json;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
@@ -866,8 +903,12 @@ mod tests {
     }
 
     async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
+        create_oauth_mock_with_path(server, "/v1/oauth/tokens").await
+    }
+
+    async fn create_oauth_mock_with_path(server: &mut ServerGuard, path: &str) -> Mock {
         server
-            .mock("POST", "/v1/oauth/tokens")
+            .mock("POST", path)
             .with_status(200)
             .with_body(
                 r#"{
@@ -954,6 +995,154 @@ mod tests {
             catalog.config.props.get("token"),
             Some(&"ey000000000000".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_http_headers() {
+        let server = Server::new_async().await;
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(props)
+            .build();
+        let headers: HeaderMap = config.http_headers().unwrap();
+
+        let expected_headers = HeaderMap::from_iter([
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                HeaderName::from_static("x-client-version"),
+                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+            ),
+            (
+                header::USER_AGENT,
+                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+        ]);
+        assert_eq!(headers, expected_headers);
+    }
+
+    #[tokio::test]
+    async fn test_http_headers_with_custom_headers() {
+        let server = Server::new_async().await;
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert(
+            "header.content-type".to_string(),
+            "application/yaml".to_string(),
+        );
+        props.insert(
+            "header.customized-header".to_string(),
+            "some/value".to_string(),
+        );
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(props)
+            .build();
+        let headers: HeaderMap = config.http_headers().unwrap();
+
+        let expected_headers = HeaderMap::from_iter([
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                HeaderName::from_static("x-client-version"),
+                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+            ),
+            (
+                header::USER_AGENT,
+                HeaderValue::from_str(&format!("iceberg-rs/{}", CARGO_PKG_VERSION)).unwrap(),
+            ),
+            (
+                HeaderName::from_static("customized-header"),
+                HeaderValue::from_static("some/value"),
+            ),
+        ]);
+        assert_eq!(headers, expected_headers);
+    }
+
+    #[tokio::test]
+    async fn test_oauth_with_auth_url() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut auth_server = Server::new_async().await;
+        let auth_server_path = "/some/path";
+        let oauth_mock = create_oauth_mock_with_path(&mut auth_server, auth_server_path).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert(
+            "rest.authorization-url".to_string(),
+            format!("{}{}", auth_server.url(), auth_server_path).to_string(),
+        );
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(
+            catalog.config.props.get("token"),
+            Some(&"ey000000000000".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_config_override() {
+        let mut server = Server::new_async().await;
+        let mut redirect_server = Server::new_async().await;
+        let new_uri = redirect_server.url();
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                json!(
+                    {
+                        "overrides": {
+                            "uri": new_uri,
+                            "warehouse": "s3://iceberg-catalog",
+                            "prefix": "ice/warehouses/my"
+                        },
+                        "defaults": {},
+                    }
+                )
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let list_ns_mock = redirect_server
+            .mock("GET", "/v1/ice/warehouses/my/namespaces")
+            .with_body(
+                r#"{
+                    "namespaces": []
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build())
+            .await
+            .unwrap();
+
+        let _namespaces = catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
     }
 
     #[tokio::test]

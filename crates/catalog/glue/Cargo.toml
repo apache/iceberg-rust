@@ -15,6 +15,29 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[toolchain]
-channel = "1.77.1"
-components = ["rustfmt", "clippy"]
+[package]
+name = "iceberg-catalog-glue"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+rust-version = { workspace = true }
+
+categories = ["database"]
+description = "Apache Iceberg Glue Catalog Support"
+repository = { workspace = true }
+license = { workspace = true }
+keywords = ["iceberg", "glue", "catalog"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-glue = { workspace = true }
+iceberg = { workspace = true }
+log = { workspace = true }
+typed-builder = { workspace = true }
+
+[dev-dependencies]
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+port_scanner = { workspace = true }
+tokio = { workspace = true }
