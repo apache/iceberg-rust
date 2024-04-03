@@ -326,6 +326,18 @@ impl Catalog for GlueCatalog {
         Ok(table_list)
     }
 
+    /// Creates a new table within a specified namespace using the provided
+    /// table creation settings.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object representing the newly created
+    /// table.
+    ///
+    /// # Errors
+    /// This function may return an error in several cases, including invalid
+    /// namespace identifiers, failure to determine a default storage location,
+    /// issues generating or writing table metadata, and errors communicating
+    /// with the Glue Catalog.
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
@@ -381,6 +393,18 @@ impl Catalog for GlueCatalog {
         Ok(table)
     }
 
+    /// Loads a table from the Glue Catalog and constructs a `Table` object
+    /// based on its metadata.
+    ///
+    /// # Returns
+    /// A `Result` wrapping a `Table` object that represents the loaded table.
+    ///
+    /// # Errors
+    /// This function may return an error in several scenarios, including:
+    /// - Failure to validate the namespace.
+    /// - Failure to retrieve the table from the Glue Catalog.
+    /// - Absence of metadata location information in the table's properties.
+    /// - Issues reading or deserializing the table's metadata file.
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
         let db_name = validate_namespace(table.namespace())?;
         let table_name = table.name();
@@ -426,6 +450,16 @@ impl Catalog for GlueCatalog {
         }
     }
 
+    /// Asynchronously drops a table from the database.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The namespace provided in `table` cannot be validated
+    /// or does not exist.
+    /// - The underlying database client encounters an error while
+    /// attempting to drop the table. This includes scenarios where
+    /// the table does not exist.
+    /// - Any network or communication error occurs with the database backend.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
         let db_name = validate_namespace(table.namespace())?;
         let table_name = table.name();
@@ -443,6 +477,13 @@ impl Catalog for GlueCatalog {
         Ok(())
     }
 
+    /// Asynchronously checks the existence of a specified table
+    /// in the database.
+    ///
+    /// # Returns
+    /// - `Ok(true)` if the table exists in the database.
+    /// - `Ok(false)` if the table does not exist in the database.
+    /// - `Err(...)` if an error occurs during the process
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
         let db_name = validate_namespace(table.namespace())?;
         let table_name = table.name();
@@ -472,6 +513,12 @@ impl Catalog for GlueCatalog {
         }
     }
 
+    /// Asynchronously renames a table within the database
+    /// or moves it between namespaces (databases).
+    ///
+    /// # Returns
+    /// - `Ok(())` on successful rename or move of the table.
+    /// - `Err(...)` if an error occurs during the process.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
         let src_db_name = validate_namespace(src.namespace())?;
         let dest_db_name = validate_namespace(dest.namespace())?;
