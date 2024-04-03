@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation};
+use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
@@ -120,6 +120,37 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
         .build();
 
     Ok(creation)
+}
+
+#[tokio::test]
+async fn test_load_table() -> Result<()> {
+    let fixture = set_test_fixture("test_load_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let expected = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture
+        .glue_catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(result.identifier(), expected.identifier());
+    assert_eq!(result.metadata_location(), expected.metadata_location());
+    assert_eq!(result.metadata(), expected.metadata());
+
+    Ok(())
 }
 
 #[tokio::test]

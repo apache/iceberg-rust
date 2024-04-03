@@ -17,21 +17,21 @@
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
-use iceberg::spec::TableMetadataBuilder;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
 use std::{collections::HashMap, fmt::Debug};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use typed_builder::TypedBuilder;
 
 use crate::error::from_aws_sdk_error;
 use crate::utils::{
     convert_to_database, convert_to_glue_table, convert_to_namespace, create_metadata_location,
-    create_sdk_config, get_default_table_location, validate_namespace,
+    create_sdk_config, get_default_table_location, get_metadata_location, validate_namespace,
 };
 use crate::with_catalog_id;
 
@@ -380,8 +380,49 @@ impl Catalog for GlueCatalog {
         Ok(table)
     }
 
-    async fn load_table(&self, _table: &TableIdent) -> Result<Table> {
-        todo!()
+    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name();
+
+        let builder = self
+            .client
+            .0
+            .get_table()
+            .database_name(&db_name)
+            .name(table_name);
+        let builder = with_catalog_id!(builder, self.config);
+
+        let glue_table_output = builder.send().await.map_err(from_aws_sdk_error)?;
+
+        match glue_table_output.table() {
+            None => Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Glue 'Table' for database: {} and table: {} is 'None'",
+                    db_name, table_name
+                ),
+            )),
+            Some(table) => {
+                let metadata_location = get_metadata_location(&table.parameters)?;
+
+                let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
+                let mut metadata_str = String::new();
+                reader.read_to_string(&mut metadata_str).await?;
+                let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
+
+                let table = Table::builder()
+                    .file_io(self.file_io())
+                    .metadata_location(metadata_location)
+                    .metadata(metadata)
+                    .identifier(TableIdent::new(
+                        NamespaceIdent::new(db_name),
+                        table_name.to_owned(),
+                    ))
+                    .build();
+
+                Ok(table)
+            }
+        }
     }
 
     async fn drop_table(&self, _table: &TableIdent) -> Result<()> {

@@ -247,6 +247,25 @@ pub(crate) fn create_metadata_location(location: impl AsRef<str>, version: i32) 
     Ok(metadata_location)
 }
 
+/// Get metadata location from `GlueTable` parameters
+pub(crate) fn get_metadata_location(
+    parameters: &Option<HashMap<String, String>>,
+) -> Result<String> {
+    match parameters {
+        Some(properties) => match properties.get(METADATA_LOCATION) {
+            Some(location) => Ok(location.to_string()),
+            None => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("No '{}' set on table", METADATA_LOCATION),
+            )),
+        },
+        None => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "No 'parameters' set on table. Location of metadata is undefined",
+        )),
+    }
+}
+
 #[macro_export]
 /// Extends aws sdk builder with `catalog_id` if present
 macro_rules! with_catalog_id {
@@ -283,6 +302,28 @@ mod tests {
     }
 
     #[test]
+    fn test_get_metadata_location() -> Result<()> {
+        let params_valid = Some(HashMap::from([(
+            METADATA_LOCATION.to_string(),
+            "my_location".to_string(),
+        )]));
+        let params_missing_key = Some(HashMap::from([(
+            "not_here".to_string(),
+            "my_location".to_string(),
+        )]));
+
+        let result_valid = get_metadata_location(&params_valid)?;
+        let result_missing_key = get_metadata_location(&params_missing_key);
+        let result_no_params = get_metadata_location(&None);
+
+        assert_eq!(result_valid, "my_location");
+        assert!(result_missing_key.is_err());
+        assert!(result_no_params.is_err());
+
+        Ok(())
+    }
+
+    #[test]
     fn test_convert_to_glue_table() -> Result<()> {
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hive".to_string();
@@ -301,9 +342,9 @@ mod tests {
         let metadata = create_metadata(schema)?;
 
         let parameters = HashMap::from([
-            (ICEBERG_FIELD_ID.to_string(), format!("{}", "1")),
-            (ICEBERG_FIELD_OPTIONAL.to_string(), format!("{}", "true")),
-            (ICEBERG_FIELD_CURRENT.to_string(), format!("{}", "true")),
+            (ICEBERG_FIELD_ID.to_string(), "1".to_string()),
+            (ICEBERG_FIELD_OPTIONAL.to_string(), "true".to_string()),
+            (ICEBERG_FIELD_CURRENT.to_string(), "true".to_string()),
         ]);
 
         let column = Column::builder()
