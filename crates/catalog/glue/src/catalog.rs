@@ -425,12 +425,50 @@ impl Catalog for GlueCatalog {
         }
     }
 
-    async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
-        todo!()
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name();
+
+        let builder = self
+            .client
+            .0
+            .delete_table()
+            .database_name(&db_name)
+            .name(table_name);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(from_aws_sdk_error)?;
+
+        Ok(())
     }
 
-    async fn table_exists(&self, _table: &TableIdent) -> Result<bool> {
-        todo!()
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+        let db_name = validate_namespace(table.namespace())?;
+        let table_name = table.name();
+
+        let builder = self
+            .client
+            .0
+            .get_table()
+            .database_name(&db_name)
+            .name(table_name);
+        let builder = with_catalog_id!(builder, self.config);
+
+        let resp = builder.send().await;
+
+        match resp {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if err
+                    .as_service_error()
+                    .map(|e| e.is_entity_not_found_exception())
+                    == Some(true)
+                {
+                    return Ok(false);
+                }
+                Err(from_aws_sdk_error(err))
+            }
+        }
     }
 
     async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {

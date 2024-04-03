@@ -123,6 +123,60 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 }
 
 #[tokio::test]
+async fn test_table_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_table_exists").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture
+        .glue_catalog
+        .table_exists(table.identifier())
+        .await?;
+
+    assert!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_table() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    fixture.glue_catalog.drop_table(table.identifier()).await?;
+
+    let result = fixture
+        .glue_catalog
+        .table_exists(table.identifier())
+        .await?;
+
+    assert!(!result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_load_table() -> Result<()> {
     let fixture = set_test_fixture("test_load_table").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
