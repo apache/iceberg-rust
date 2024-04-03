@@ -123,6 +123,35 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 }
 
 #[tokio::test]
+async fn test_rename_table() -> Result<()> {
+    let fixture = set_test_fixture("test_rename_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
+
+    fixture
+        .glue_catalog
+        .rename_table(table.identifier(), &dest)
+        .await?;
+
+    let table = fixture.glue_catalog.load_table(&dest).await?;
+    assert_eq!(table.identifier(), &dest);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_table_exists() -> Result<()> {
     let fixture = set_test_fixture("test_table_exists").await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
