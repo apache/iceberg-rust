@@ -16,18 +16,22 @@
 // under the License.
 
 use async_trait::async_trait;
+use iceberg::io::FileIO;
+use iceberg::spec::TableMetadataBuilder;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
 use std::{collections::HashMap, fmt::Debug};
+use tokio::io::AsyncWriteExt;
 
 use typed_builder::TypedBuilder;
 
 use crate::error::from_aws_sdk_error;
 use crate::utils::{
-    convert_to_database, convert_to_namespace, create_sdk_config, validate_namespace,
+    convert_to_database, convert_to_glue_table, convert_to_namespace, create_metadata_location,
+    create_sdk_config, get_default_table_location, validate_namespace,
 };
 use crate::with_catalog_id;
 
@@ -38,6 +42,7 @@ pub struct GlueCatalogConfig {
     uri: Option<String>,
     #[builder(default, setter(strip_option))]
     catalog_id: Option<String>,
+    warehouse: String,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -48,6 +53,7 @@ struct GlueClient(aws_sdk_glue::Client);
 pub struct GlueCatalog {
     config: GlueCatalogConfig,
     client: GlueClient,
+    file_io: FileIO,
 }
 
 impl Debug for GlueCatalog {
@@ -60,15 +66,24 @@ impl Debug for GlueCatalog {
 
 impl GlueCatalog {
     /// Create a new glue catalog
-    pub async fn new(config: GlueCatalogConfig) -> Self {
+    pub async fn new(config: GlueCatalogConfig) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
-        GlueCatalog {
+        let file_io = FileIO::from_path(&config.warehouse)?
+            .with_props(&config.props)
+            .build()?;
+
+        Ok(GlueCatalog {
             config,
             client: GlueClient(client),
-        }
+            file_io,
+        })
+    }
+    /// Get the catalogs `FileIO`
+    pub fn file_io(&self) -> FileIO {
+        self.file_io.clone()
     }
 }
 
@@ -312,10 +327,57 @@ impl Catalog for GlueCatalog {
 
     async fn create_table(
         &self,
-        _namespace: &NamespaceIdent,
-        _creation: TableCreation,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
     ) -> Result<Table> {
-        todo!()
+        let db_name = validate_namespace(namespace)?;
+        let table_name = creation.name.clone();
+
+        let location = match &creation.location {
+            Some(location) => location.clone(),
+            None => {
+                let ns = self.get_namespace(namespace).await?;
+                get_default_table_location(&ns, &table_name, &self.config.warehouse)
+            }
+        };
+
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+        let metadata_location = create_metadata_location(&location, 0)?;
+
+        let mut file = self
+            .file_io
+            .new_output(&metadata_location)?
+            .writer()
+            .await?;
+        file.write_all(&serde_json::to_vec(&metadata)?).await?;
+        file.shutdown().await?;
+
+        let glue_table = convert_to_glue_table(
+            &table_name,
+            metadata_location.clone(),
+            &metadata,
+            metadata.properties(),
+            None,
+        )?;
+
+        let builder = self
+            .client
+            .0
+            .create_table()
+            .database_name(&db_name)
+            .table_input(glue_table);
+        let builder = with_catalog_id!(builder, self.config);
+
+        builder.send().await.map_err(from_aws_sdk_error)?;
+
+        let table = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .build();
+
+        Ok(table)
     }
 
     async fn load_table(&self, _table: &TableIdent) -> Result<Table> {
