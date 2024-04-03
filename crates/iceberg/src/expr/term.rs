@@ -217,7 +217,11 @@ pub struct BoundReference {
 
 impl BoundReference {
     /// Creates a new bound reference.
-    pub fn new(name: impl Into<String>, field: NestedFieldRef, accessor: StructAccessorRef) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        field: NestedFieldRef,
+        accessor: StructAccessorRef,
+    ) -> Self {
         Self {
             column_name: name.into(),
             field,

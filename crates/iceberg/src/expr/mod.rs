@@ -17,7 +17,6 @@
 
 //! This module contains expressions.
 
-
 use std::fmt::{Display, Formatter};
 
 pub use term::*;

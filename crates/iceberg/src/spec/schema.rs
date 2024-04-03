@@ -152,10 +152,7 @@ impl SchemaBuilder {
             // add an accessor for this field
 
             let accessor = Arc::new(StructAccessor::new(pos as i32, *field.field_type.clone()));
-            map.insert(
-                field.id,
-                accessor.clone(),
-            );
+            map.insert(field.id, accessor.clone());
 
             if let Type::Struct(nested) = field.field_type.as_ref() {
                 // add accessors for nested fields
@@ -175,9 +172,8 @@ impl SchemaBuilder {
             if let Type::Struct(nested) = field.field_type.as_ref() {
                 let nested_accessors = Self::build_accessors_nested(nested.fields());
 
-                let wrapped_nested_accessors = nested_accessors
-                    .into_iter()
-                    .map(|(id, accessor)| {
+                let wrapped_nested_accessors =
+                    nested_accessors.into_iter().map(|(id, accessor)| {
                         let new_accessor = Arc::new(StructAccessor::wrap(pos as i32, accessor));
                         (id, new_accessor.clone())
                     });
@@ -187,10 +183,7 @@ impl SchemaBuilder {
 
             let accessor = Arc::new(StructAccessor::new(pos as i32, *field.field_type.clone()));
 
-            results.push((
-                field.id,
-                accessor.clone(),
-            ));
+            results.push((field.id, accessor.clone()));
         }
 
         results
@@ -323,7 +316,7 @@ impl Schema {
 
     /// Get an accessor for retrieving data in a struct
     pub fn accessor_for_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
-        self.field_id_to_accessor.get(&field_id).map(|acc|acc.clone())
+        self.field_id_to_accessor.get(&field_id).cloned()
     }
 }
 

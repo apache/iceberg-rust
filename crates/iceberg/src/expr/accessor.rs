@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::spec::{Literal, Struct, Type};
 use serde_derive::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 enum InnerOrType {

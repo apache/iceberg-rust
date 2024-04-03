@@ -175,7 +175,7 @@ impl TableScan {
 
     pub async fn plan_files(&'static self) -> crate::Result<FileScanTaskStream> {
         // Cache `PartitionEvaluator`s created as part of this scan
-        let mut partition_evaluator_cache: HashMap<i32, PartitionEvaluator> = HashMap::new();
+        let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
 
         let snapshot = self.snapshot.clone();
         let table_metadata = self.table_metadata.clone();
@@ -194,12 +194,13 @@ impl TableScan {
                 // Use one from the cache if there is one. If not, create one, put it in
                 // the cache, and take a reference to it.
                 if let Some(filter) = self.filter.as_ref() {
-                    let partition_evaluator = partition_evaluator_cache
+                    let manifest_evaluator = manifest_evaluator_cache
                             .entry(entry.partition_spec_id())
-                            .or_insert_with_key(|key| self.create_partition_evaluator(key, filter));
+                            .or_insert_with_key(|key| self.create_manifest_evaluator(key, filter));
+
 
                     // reject any manifest files whose partition values don't match the filter.
-                    if !partition_evaluator.filter_manifest_file(entry) {
+                    if !manifest_evaluator.eval(entry) {
                         continue;
                     }
                 }
@@ -230,14 +231,20 @@ impl TableScan {
         .boxed())
     }
 
-    fn create_partition_evaluator(&self, id: &i32, filter: &Predicate) -> PartitionEvaluator {
+    fn create_manifest_evaluator(&self, id: &i32, filter: &Predicate) -> ManifestEvaluator {
         let bound_predicate = filter
             .bind(self.schema.clone(), self.case_sensitive)
             .unwrap();
 
         let partition_spec = self.table_metadata.partition_spec_by_id(*id).unwrap();
-        PartitionEvaluator::new(partition_spec.clone(), bound_predicate, self.schema.clone())
-            .unwrap()
+
+        ManifestEvaluator::new(
+            partition_spec.clone(),
+            self.schema.clone(),
+            bound_predicate,
+            self.case_sensitive,
+        )
+        .unwrap()
     }
 
     pub async fn to_arrow(&'static self) -> crate::Result<ArrowRecordBatchStream> {
@@ -271,35 +278,7 @@ impl FileScanTask {
     }
 }
 
-/// Evaluates manifest files to see if their partition values comply with a filter predicate
-pub struct PartitionEvaluator {
-    manifest_eval_visitor: ManifestEvalVisitor,
-}
-
-impl PartitionEvaluator {
-    pub(crate) fn new(
-        partition_spec: PartitionSpecRef,
-        partition_filter: BoundPredicate,
-        table_schema: SchemaRef,
-    ) -> crate::Result<Self> {
-        let manifest_eval_visitor = ManifestEvalVisitor::manifest_evaluator(
-            partition_spec,
-            table_schema,
-            partition_filter,
-            true,
-        )?;
-
-        Ok(PartitionEvaluator {
-            manifest_eval_visitor,
-        })
-    }
-
-    pub(crate) fn filter_manifest_file(&self, _manifest_file: &ManifestFile) -> bool {
-        self.manifest_eval_visitor.eval(_manifest_file)
-    }
-}
-
-struct ManifestEvalVisitor {
+struct ManifestEvaluator {
     #[allow(dead_code)]
     partition_schema: SchemaRef,
     partition_filter: BoundPredicate,
@@ -307,22 +286,8 @@ struct ManifestEvalVisitor {
     case_sensitive: bool,
 }
 
-impl ManifestEvalVisitor {
-    fn new(
-        partition_schema: SchemaRef,
-        partition_filter: Predicate,
-        case_sensitive: bool,
-    ) -> crate::Result<Self> {
-        let partition_filter = partition_filter.bind(partition_schema.clone(), case_sensitive)?;
-
-        Ok(Self {
-            partition_schema,
-            partition_filter,
-            case_sensitive,
-        })
-    }
-
-    pub(crate) fn manifest_evaluator(
+impl ManifestEvaluator {
+    pub(crate) fn new(
         partition_spec: PartitionSpecRef,
         table_schema: SchemaRef,
         partition_filter: BoundPredicate,
@@ -345,11 +310,14 @@ impl ManifestEvalVisitor {
             InclusiveProjection::new(table_schema.clone(), partition_spec.clone());
         let unbound_partition_filter = inclusive_projection.project(&partition_filter)?;
 
-        Self::new(
-            partition_schema_ref.clone(),
-            unbound_partition_filter,
+        let partition_filter =
+            unbound_partition_filter.bind(partition_schema_ref.clone(), case_sensitive)?;
+
+        Ok(Self {
+            partition_schema: partition_schema_ref,
+            partition_filter,
             case_sensitive,
-        )
+        })
     }
 
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> bool {
@@ -469,11 +437,11 @@ impl InclusiveProjection {
             BoundPredicate::And(expr) => {
                 let [left_pred, right_pred] = expr.inputs();
                 self.visit(left_pred)?.and(self.visit(right_pred)?)
-            },
+            }
             BoundPredicate::Or(expr) => {
                 let [left_pred, right_pred] = expr.inputs();
                 self.visit(left_pred)?.or(self.visit(right_pred)?)
-            },
+            }
             BoundPredicate::Not(_) => {
                 panic!("should not get here as NOT-rewriting should have removed NOT nodes")
             }
@@ -500,11 +468,13 @@ impl InclusiveProjection {
         }
 
         parts.iter().fold(Ok(Predicate::AlwaysTrue), |res, &part| {
-            Ok(if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
-                res?.and(pred_for_part)
-            } else {
-                res?
-            })
+            Ok(
+                if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
+                    res?.and(pred_for_part)
+                } else {
+                    res?
+                },
+            )
         })
     }
 }
