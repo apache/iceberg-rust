@@ -167,6 +167,10 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn op(&self) -> &PredicateOperator {
         &self.op
     }
+
+    pub(crate) fn literal(&self) -> &Datum {
+        &self.literal
+    }
 }
 
 impl BinaryExpression<BoundReference> {
@@ -228,6 +232,10 @@ impl<T> SetExpression<T> {
 
     pub(crate) fn op(&self) -> &PredicateOperator {
         &self.op
+    }
+
+    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+        &self.literals
     }
 }
 
