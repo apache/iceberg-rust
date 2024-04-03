@@ -464,6 +464,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     }
 
     fn visit_set(&mut self, predicate: &SetExpression<BoundReference>) -> Result<Self::T> {
+        #[allow(clippy::match_single_binding)]
         match predicate.op() {
             // Unsupported operators, return always true.
             _ => Ok(Box::new(ArrowPredicateFn::new(
