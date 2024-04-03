@@ -31,7 +31,7 @@ homepage = "https://rust.iceberg.apache.org/"
 
 repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
-rust-version = "1.75.0"
+rust-version = "1.77.1"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
@@ -47,7 +47,7 @@ aws-sdk-glue = "1.21.0"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.5"
-chrono = "0.4"
+chrono = "0.4.34"
 derive_builder = "0.20.0"
 either = "1"
 env_logger = "0.11.0"
