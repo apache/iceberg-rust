@@ -18,6 +18,7 @@
 //! This module defines schema in iceberg.
 
 use crate::error::Result;
+use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
@@ -55,6 +56,8 @@ pub struct Schema {
     name_to_id: HashMap<String, i32>,
     lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
+
+    field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
 }
 
 impl PartialEq for Schema {
@@ -105,6 +108,8 @@ impl SchemaBuilder {
     pub fn build(self) -> Result<Schema> {
         let highest_field_id = self.fields.iter().map(|f| f.id).max().unwrap_or(0);
 
+        let field_id_to_accessor = self.build_accessors();
+
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
 
@@ -137,7 +142,64 @@ impl SchemaBuilder {
             name_to_id,
             lowercase_name_to_id,
             id_to_name,
+
+            field_id_to_accessor,
         })
+    }
+
+    fn build_accessors(&self) -> HashMap<i32, Arc<StructAccessor>> {
+        let mut map = HashMap::new();
+
+        for (pos, field) in self.fields.iter().enumerate() {
+            match field.field_type.as_ref() {
+                Type::Primitive(prim_type) => {
+                    // add an accessor for this field
+                    let accessor = Arc::new(StructAccessor::new(pos, prim_type.clone()));
+                    map.insert(field.id, accessor.clone());
+                }
+
+                Type::Struct(nested) => {
+                    // add accessors for nested fields
+                    for (field_id, accessor) in Self::build_accessors_nested(nested.fields()) {
+                        let new_accessor = Arc::new(StructAccessor::wrap(pos, accessor));
+                        map.insert(field_id, new_accessor.clone());
+                    }
+                }
+                _ => {
+                    // Accessors don't get built for Map or List types
+                }
+            }
+        }
+
+        map
+    }
+
+    fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, Box<StructAccessor>)> {
+        let mut results = vec![];
+        for (pos, field) in fields.iter().enumerate() {
+            match field.field_type.as_ref() {
+                Type::Primitive(prim_type) => {
+                    let accessor = Box::new(StructAccessor::new(pos, prim_type.clone()));
+                    results.push((field.id, accessor));
+                }
+                Type::Struct(nested) => {
+                    let nested_accessors = Self::build_accessors_nested(nested.fields());
+
+                    let wrapped_nested_accessors =
+                        nested_accessors.into_iter().map(|(id, accessor)| {
+                            let new_accessor = Box::new(StructAccessor::wrap(pos, accessor));
+                            (id, new_accessor.clone())
+                        });
+
+                    results.extend(wrapped_nested_accessors);
+                }
+                _ => {
+                    // Accessors don't get built for Map or List types
+                }
+            }
+        }
+
+        results
     }
 
     fn validate_identifier_ids(
@@ -264,6 +326,11 @@ impl Schema {
     pub fn name_by_field_id(&self, field_id: i32) -> Option<&str> {
         self.id_to_name.get(&field_id).map(String::as_str)
     }
+
+    /// Get an accessor for retrieving data in a struct
+    pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
+        self.field_id_to_accessor.get(&field_id).cloned()
+    }
 }
 
 impl Display for Schema {
@@ -381,7 +448,7 @@ pub fn visit_schema<V: SchemaVisitor>(schema: &Schema, visitor: &mut V) -> Resul
     visitor.schema(schema, result)
 }
 
-/// Creates an field id to field map.
+/// Creates a field id to field map.
 pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>> {
     struct IndexById(HashMap<i32, NestedFieldRef>);
 
@@ -977,10 +1044,10 @@ mod tests {
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
-    use crate::spec::prune_columns;
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
-    use std::collections::{HashMap, HashSet};
+    use crate::spec::{prune_columns, Datum, Literal};
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     use super::DEFAULT_SCHEMA_ID;
 
@@ -1558,6 +1625,80 @@ table {
             );
         }
     }
+
+    #[test]
+    fn test_build_accessors() {
+        let schema = table_schema_nested();
+
+        let test_struct = crate::spec::Struct::from_iter(vec![
+            Some(Literal::string("foo value")),
+            Some(Literal::int(1002)),
+            Some(Literal::bool(true)),
+            Some(Literal::List(vec![
+                Some(Literal::string("qux item 1")),
+                Some(Literal::string("qux item 2")),
+            ])),
+            Some(Literal::Map(BTreeMap::from([(
+                Literal::string("quux key 1"),
+                Some(Literal::Map(BTreeMap::from([(
+                    Literal::string("quux nested key 1"),
+                    Some(Literal::int(1000)),
+                )]))),
+            )]))),
+            Some(Literal::List(vec![Some(Literal::Struct(
+                crate::spec::Struct::from_iter(vec![
+                    Some(Literal::float(52.509_09)),
+                    Some(Literal::float(-1.885_249)),
+                ]),
+            ))])),
+            Some(Literal::Struct(crate::spec::Struct::from_iter(vec![
+                Some(Literal::string("Testy McTest")),
+                Some(Literal::int(33)),
+            ]))),
+        ]);
+
+        assert_eq!(
+            schema
+                .accessor_by_field_id(1)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::string("foo value")
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(2)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::int(1002)
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(3)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::bool(true)
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(16)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::string("Testy McTest")
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(17)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::int(33)
+        );
+    }
+
     #[test]
     fn test_schema_prune_columns_string() {
         let expected_type = Type::from(

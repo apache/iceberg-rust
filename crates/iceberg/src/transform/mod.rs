@@ -72,6 +72,8 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
 
 #[cfg(test)]
 mod test {
+    use crate::expr::accessor::StructAccessor;
+    use crate::spec::PrimitiveType;
     use crate::{
         expr::{
             BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
@@ -108,7 +110,11 @@ mod test {
         ) -> BoundPredicate {
             BoundPredicate::Binary(BinaryExpression::new(
                 op,
-                BoundReference::new(self.name.clone(), self.field.clone()),
+                BoundReference::new(
+                    self.name.clone(),
+                    self.field.clone(),
+                    Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
+                ),
                 literal,
             ))
         }
@@ -119,7 +125,11 @@ mod test {
         ) -> BoundPredicate {
             BoundPredicate::Set(SetExpression::new(
                 op,
-                BoundReference::new(self.name.clone(), self.field.clone()),
+                BoundReference::new(
+                    self.name.clone(),
+                    self.field.clone(),
+                    Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
+                ),
                 HashSet::from_iter(literals),
             ))
         }
