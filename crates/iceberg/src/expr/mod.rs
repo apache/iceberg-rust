@@ -24,6 +24,7 @@ use std::fmt::{Display, Formatter};
 pub use term::*;
 pub(crate) mod accessor;
 mod predicate;
+mod visitors;
 
 use crate::spec::SchemaRef;
 pub use predicate::*;

@@ -121,6 +121,13 @@ impl<T> UnaryExpression<T> {
     }
 }
 
+impl UnaryExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
+    pub(crate) fn field_id(&self) -> i32 {
+        self.term.field().id
+    }
+}
+
 /// Binary predicate, for example, `a > 10`.
 #[derive(PartialEq)]
 pub struct BinaryExpression<T> {
@@ -171,6 +178,13 @@ impl<T: Bind> Bind for BinaryExpression<T> {
             bound_term,
             self.literal.clone(),
         ))
+    }
+}
+
+impl BinaryExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
+    pub(crate) fn field_id(&self) -> i32 {
+        self.term.field().id
     }
 }
 
@@ -226,6 +240,13 @@ impl<T: Display + Debug> Display for SetExpression<T> {
         let mut literal_strs = self.literals.iter().map(|l| format!("{}", l));
 
         write!(f, "{} {} ({})", self.term, self.op, literal_strs.join(", "))
+    }
+}
+
+impl SetExpression<BoundReference> {
+    /// get the field_id of this expression's term's field
+    pub(crate) fn field_id(&self) -> i32 {
+        self.term.field().id
     }
 }
 
