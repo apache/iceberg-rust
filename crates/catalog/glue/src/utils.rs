@@ -28,8 +28,6 @@ use uuid::Uuid;
 
 use crate::{error::from_aws_build_error, schema::GlueSchemaBuilder};
 
-const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
-const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";
 /// Property aws region
