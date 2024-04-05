@@ -32,3 +32,125 @@ impl TransformFunction for Void {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
+    };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
+    use crate::transform::test::TestTransformFixture;
+
+    use crate::spec::{NestedField, Transform};
+
+    #[test]
+    fn test_void_transform() {
+        let trans = Transform::Void;
+
+        let fixture = TestTransformFixture {
+            display: "void".to_string(),
+            json: r#""void""#.to_string(),
+            dedup_name: "void".to_string(),
+            preserves_order: false,
+            satisfies_order_of: vec![
+                (Transform::Year, false),
+                (Transform::Month, false),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, true),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), Some(Primitive(Binary))),
+                (Primitive(Date), Some(Primitive(Date))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    Some(Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    })),
+                ),
+                (Primitive(Fixed(8)), Some(Primitive(Fixed(8)))),
+                (Primitive(Int), Some(Primitive(Int))),
+                (Primitive(Long), Some(Primitive(Long))),
+                (Primitive(StringType), Some(Primitive(StringType))),
+                (Primitive(Uuid), Some(Primitive(Uuid))),
+                (Primitive(Time), Some(Primitive(Time))),
+                (Primitive(Timestamp), Some(Primitive(Timestamp))),
+                (Primitive(Timestamptz), Some(Primitive(Timestamptz))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    Some(Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()]))),
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_known_transform() {
+        let trans = Transform::Unknown;
+
+        let fixture = TestTransformFixture {
+            display: "unknown".to_string(),
+            json: r#""unknown""#.to_string(),
+            dedup_name: "unknown".to_string(),
+            preserves_order: false,
+            satisfies_order_of: vec![
+                (Transform::Year, false),
+                (Transform::Month, false),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+                (Transform::Unknown, true),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), Some(Primitive(StringType))),
+                (Primitive(Date), Some(Primitive(StringType))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    Some(Primitive(StringType)),
+                ),
+                (Primitive(Fixed(8)), Some(Primitive(StringType))),
+                (Primitive(Int), Some(Primitive(StringType))),
+                (Primitive(Long), Some(Primitive(StringType))),
+                (Primitive(StringType), Some(Primitive(StringType))),
+                (Primitive(Uuid), Some(Primitive(StringType))),
+                (Primitive(Time), Some(Primitive(StringType))),
+                (Primitive(Timestamp), Some(Primitive(StringType))),
+                (Primitive(Timestamptz), Some(Primitive(StringType))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    Some(Primitive(StringType)),
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+}
