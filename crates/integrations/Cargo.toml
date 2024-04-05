@@ -29,10 +29,13 @@ license = { workspace = true }
 keywords = ["iceberg", "integrations"]
 
 [dependencies]
+dashmap = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
+iceberg = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+iceberg-catalog-hms = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
