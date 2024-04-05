@@ -21,6 +21,7 @@ members = [
     "crates/catalog/*",
     "crates/examples",
     "crates/iceberg",
+    "crates/integrations",
     "crates/test_utils",
 ]
 
@@ -48,6 +49,7 @@ bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.5"
 chrono = "0.4.34"
+datafusion = "37.0.0"
 derive_builder = "0.20.0"
 either = "1"
 env_logger = "0.11.0"
@@ -55,6 +57,7 @@ fnv = "1"
 futures = "0.3"
 iceberg = { version = "0.2.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
+iceberg-catalog-hms = { version = "0.2.0", path = "./crates/catalog/hms" }
 itertools = "0.12"
 lazy_static = "1"
 log = "^0.4"
