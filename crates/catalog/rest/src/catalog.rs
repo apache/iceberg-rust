@@ -23,7 +23,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use itertools::Itertools;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, Request, Response, StatusCode};
+use reqwest::{Client, Request, Response, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use typed_builder::TypedBuilder;
 use urlencoding::encode;
@@ -650,7 +650,15 @@ impl RestCatalog {
             props.extend(config);
         }
 
-        let file_io = match self.config.warehouse.as_deref().or(metadata_location) {
+        // If the warehouse is a logical identifier instead of a URL we don't want
+        // to raise an exception
+        let warehouse_path = match self.config.warehouse.as_deref() {
+            Some(url) if Url::parse(url).is_ok() => Some(url),
+            Some(_) => None,
+            None => None,
+        };
+
+        let file_io = match warehouse_path.or(metadata_location) {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
             None => {
                 return Err(Error::new(
