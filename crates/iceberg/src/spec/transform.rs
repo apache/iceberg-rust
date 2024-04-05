@@ -19,8 +19,8 @@
 
 use crate::error::{Error, Result};
 use crate::expr::{
-    BinaryExpression, BoundPredicate, Predicate, PredicateOperator, Reference, SetExpression,
-    UnaryExpression,
+    BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
+    SetExpression, UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::transform::{create_transform_function, BoxedTransformFunction};
@@ -302,8 +302,8 @@ impl Transform {
             },
             Transform::Bucket(_) => match predicate {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                BoundPredicate::Binary(expr) => self.project_binary(name, expr, &func),
-                BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                BoundPredicate::Binary(expr) => self.project_eq_operator(name, expr, &func),
+                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
                 _ => Ok(None),
             },
             Transform::Truncate(width) => match predicate {
@@ -311,7 +311,7 @@ impl Transform {
                 BoundPredicate::Binary(expr) => {
                     self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
                 }
-                BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
                 _ => Ok(None),
             },
             Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
@@ -320,7 +320,7 @@ impl Transform {
                     BoundPredicate::Binary(expr) => {
                         self.project_binary_with_adjusted_boundary(name, expr, &func, None)
                     }
-                    BoundPredicate::Set(expr) => self.project_set(expr, name, &func),
+                    BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
                     _ => Ok(None),
                 }
             }
@@ -348,10 +348,10 @@ impl Transform {
     /// This method evaluates a given binary expression and, if the operation
     /// is equality (`Eq`) and the literal can be transformed, constructs a
     /// `Predicate::Binary`variant representing the binary operation.
-    fn project_binary<T>(
+    fn project_eq_operator(
         &self,
         name: String,
-        expr: &BinaryExpression<T>,
+        expr: &BinaryExpression<BoundReference>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
@@ -373,10 +373,10 @@ impl Transform {
     /// The potential adjustments involve incrementing or decrementing the
     /// literal value and changing the `PredicateOperator` itself to its
     /// inclusive variant.
-    fn project_binary_with_adjusted_boundary<T>(
+    fn project_binary_with_adjusted_boundary(
         &self,
         name: String,
-        expr: &BinaryExpression<T>,
+        expr: &BinaryExpression<BoundReference>,
         func: &BoxedTransformFunction,
         width: Option<u32>,
     ) -> Result<Option<Predicate>> {
@@ -420,9 +420,9 @@ impl Transform {
 
     /// Projects a set expression to a predicate,
     /// applying a transformation to each literal in the set.
-    fn project_set<T>(
+    fn project_in_operator(
         &self,
-        expr: &SetExpression<T>,
+        expr: &SetExpression<BoundReference>,
         name: String,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
