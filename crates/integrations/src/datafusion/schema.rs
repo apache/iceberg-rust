@@ -66,10 +66,7 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        match self.tables.get(name) {
-            None => false,
-            Some(_) => true,
-        }
+        self.tables.get(name).is_some()
     }
 
     fn table<'life0, 'life1, 'async_trait>(

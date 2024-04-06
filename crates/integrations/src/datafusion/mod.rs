@@ -16,5 +16,7 @@
 // under the License.
 
 mod catalog;
+pub use catalog::*;
+
 mod schema;
 mod table;

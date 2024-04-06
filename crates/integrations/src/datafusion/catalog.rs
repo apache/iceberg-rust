@@ -23,18 +23,17 @@ use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::datafusion::schema::IcebergSchemaProvider;
 
-struct IcebergCatalogProvider {
+pub struct IcebergCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
 
 impl IcebergCatalogProvider {
-    async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
+    pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
         let schema_names: Vec<String> = client
             .list_namespaces(None)
             .await?
             .iter()
-            .map(|ns| ns.as_ref().clone())
-            .flatten()
+            .flat_map(|ns| ns.as_ref().clone())
             .collect();
 
         let mut schemas = Vec::new();
