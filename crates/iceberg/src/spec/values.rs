@@ -20,6 +20,7 @@
  */
 
 use std::fmt::{Display, Formatter};
+use std::ops::Index;
 use std::str::FromStr;
 use std::{any::Any, collections::BTreeMap};
 
@@ -141,6 +142,11 @@ impl From<Datum> for Literal {
 }
 
 impl Datum {
+    /// Creates a `Datum` from a `PrimitiveType` and a `PrimitiveLiteral`
+    pub(crate) fn new(r#type: PrimitiveType, literal: PrimitiveLiteral) -> Self {
+        Datum { r#type, literal }
+    }
+
     /// Creates a boolean value.
     ///
     /// Example:
@@ -1140,6 +1146,14 @@ impl Struct {
                 }
             },
         )
+    }
+}
+
+impl Index<usize> for Struct {
+    type Output = Literal;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        &self.fields[idx]
     }
 }
 
