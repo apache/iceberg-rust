@@ -123,8 +123,8 @@ impl<T> UnaryExpression<T> {
     }
 
     /// Return the operator of this predicate.
-    pub fn op(&self) -> &PredicateOperator {
-        &self.op
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
     }
 }
 
@@ -161,12 +161,12 @@ impl<T> BinaryExpression<T> {
     }
 
     /// Return the operator of this predicate.
-    pub fn op(&self) -> &PredicateOperator {
-        &self.op
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
     }
 
     /// Return the literal of this predicate.
-    pub fn literal(&self) -> &Datum {
+    pub(crate) fn literal(&self) -> &Datum {
         &self.literal
     }
 }
@@ -223,8 +223,11 @@ impl<T> SetExpression<T> {
     }
 
     /// Return the operator of this predicate.
-    pub fn op(&self) -> &PredicateOperator {
-        &self.op
+    pub(crate) fn op(&self) -> PredicateOperator {
+        self.op
+    }
+    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+        &self.literals
     }
 }
 

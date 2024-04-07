@@ -18,11 +18,19 @@
 //! Transforms in iceberg.
 
 use crate::error::{Error, Result};
+use crate::expr::{
+    BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
+    SetExpression, UnaryExpression,
+};
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
+use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+
+use super::{Datum, PrimitiveLiteral};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -248,7 +256,7 @@ impl Transform {
     /// result.
     ///
     /// For example, sorting by day(ts) will produce an ordering that is also by month(ts) or
-    //  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
+    ///  year(ts). However, sorting by day(ts) will not satisfy the order of hour(ts) or identity(ts).
     pub fn satisfies_order_of(&self, other: &Self) -> bool {
         match self {
             Transform::Identity => other.preserves_order(),
@@ -260,6 +268,323 @@ impl Transform {
             Transform::Month => matches!(other, Transform::Month | Transform::Year),
             _ => self == other,
         }
+    }
+
+    /// Projects a given predicate according to the transformation
+    /// specified by the `Transform` instance.
+    ///
+    /// This allows predicates to be effectively applied to data
+    /// that has undergone transformation, enabling efficient querying
+    /// and filtering based on the original, untransformed data.
+    ///
+    /// # Example
+    /// Suppose, we have row filter `a = 10`, and a partition spec
+    /// `bucket(a, 37) as bs`, if one row matches `a = 10`, then its partition
+    /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
+    /// `bs = bucket(10, 37)`
+    pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+        let func = create_transform_function(self)?;
+
+        match self {
+            Transform::Identity => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literal().to_owned(),
+                )))),
+                BoundPredicate::Set(expr) => Ok(Some(Predicate::Set(SetExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literals().to_owned(),
+                )))),
+                _ => Ok(None),
+            },
+            Transform::Bucket(_) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => self.project_eq_operator(name, expr, &func),
+                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                _ => Ok(None),
+            },
+            Transform::Truncate(width) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => {
+                    self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
+                }
+                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                _ => Ok(None),
+            },
+            Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                match predicate {
+                    BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                    BoundPredicate::Binary(expr) => {
+                        self.project_binary_with_adjusted_boundary(name, expr, &func, None)
+                    }
+                    BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Check if `Transform` is applicable on datum's `PrimitiveType`
+    fn can_transform(&self, datum: &Datum) -> bool {
+        let input_type = datum.data_type().clone();
+        self.result_type(&Type::Primitive(input_type)).is_ok()
+    }
+
+    /// Creates a unary predicate from a given operator and a reference name.
+    fn project_unary(op: PredicateOperator, name: String) -> Result<Option<Predicate>> {
+        Ok(Some(Predicate::Unary(UnaryExpression::new(
+            op,
+            Reference::new(name),
+        ))))
+    }
+
+    /// Attempts to create a binary predicate based on a binary expression,
+    /// if applicable.
+    ///
+    /// This method evaluates a given binary expression and, if the operation
+    /// is equality (`Eq`) and the literal can be transformed, constructs a
+    /// `Predicate::Binary`variant representing the binary operation.
+    fn project_eq_operator(
+        &self,
+        name: String,
+        expr: &BinaryExpression<BoundReference>,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
+            return Ok(None);
+        }
+
+        Ok(Some(Predicate::Binary(BinaryExpression::new(
+            expr.op(),
+            Reference::new(name),
+            func.transform_literal_result(expr.literal())?,
+        ))))
+    }
+
+    /// Projects a binary expression to a predicate with an adjusted boundary.
+    ///
+    /// Checks if the literal within the given binary expression is
+    /// transformable. If transformable, it proceeds to potentially adjust
+    /// the boundary of the expression based on the comparison operator (`op`).
+    /// The potential adjustments involve incrementing or decrementing the
+    /// literal value and changing the `PredicateOperator` itself to its
+    /// inclusive variant.
+    fn project_binary_with_adjusted_boundary(
+        &self,
+        name: String,
+        expr: &BinaryExpression<BoundReference>,
+        func: &BoxedTransformFunction,
+        width: Option<u32>,
+    ) -> Result<Option<Predicate>> {
+        if !self.can_transform(expr.literal()) {
+            return Ok(None);
+        }
+
+        let op = &expr.op();
+        let datum = &expr.literal();
+
+        if let Some(boundary) = Self::adjust_boundary(op, datum)? {
+            let transformed_projection = func.transform_literal_result(&boundary)?;
+
+            let adjusted_projection =
+                self.adjust_time_projection(op, datum, &transformed_projection);
+
+            let adjusted_operator = Self::adjust_operator(op, datum, width);
+
+            if let Some(op) = adjusted_operator {
+                let predicate = match adjusted_projection {
+                    None => Predicate::Binary(BinaryExpression::new(
+                        op,
+                        Reference::new(name),
+                        transformed_projection,
+                    )),
+                    Some(AdjustedProjection::Single(d)) => {
+                        Predicate::Binary(BinaryExpression::new(op, Reference::new(name), d))
+                    }
+                    Some(AdjustedProjection::Set(d)) => Predicate::Set(SetExpression::new(
+                        PredicateOperator::In,
+                        Reference::new(name),
+                        d,
+                    )),
+                };
+                return Ok(Some(predicate));
+            }
+        };
+
+        Ok(None)
+    }
+
+    /// Projects a set expression to a predicate,
+    /// applying a transformation to each literal in the set.
+    fn project_in_operator(
+        &self,
+        expr: &SetExpression<BoundReference>,
+        name: String,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        if expr.op() != PredicateOperator::In
+            || expr.literals().iter().any(|d| !self.can_transform(d))
+        {
+            return Ok(None);
+        }
+
+        let mut new_set = FnvHashSet::default();
+
+        for lit in expr.literals() {
+            let datum = func.transform_literal_result(lit)?;
+
+            if let Some(AdjustedProjection::Single(d)) =
+                self.adjust_time_projection(&PredicateOperator::In, lit, &datum)
+            {
+                new_set.insert(d);
+            };
+
+            new_set.insert(datum);
+        }
+
+        Ok(Some(Predicate::Set(SetExpression::new(
+            expr.op(),
+            Reference::new(name),
+            new_set,
+        ))))
+    }
+
+    /// Adjusts the boundary value for comparison operations
+    /// based on the specified `PredicateOperator` and `Datum`.
+    ///
+    /// This function modifies the boundary value for certain comparison
+    /// operators (`LessThan`, `GreaterThan`) by incrementing or decrementing
+    /// the literal value within the given `Datum`. For operators that do not
+    /// imply a boundary shift (`Eq`, `LessThanOrEq`, `GreaterThanOrEq`,
+    /// `StartsWith`, `NotStartsWith`), the original datum is returned
+    /// unmodified.
+    fn adjust_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
+        let literal = datum.literal();
+
+        let adjusted_boundary = match op {
+            PredicateOperator::LessThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - 1)),
+                _ => Some(datum.to_owned()),
+            },
+            PredicateOperator::GreaterThan => match literal {
+                PrimitiveLiteral::Int(v) => Some(Datum::int(v + 1)),
+                PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
+                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
+                PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
+                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + 1)),
+                _ => Some(datum.to_owned()),
+            },
+            PredicateOperator::Eq
+            | PredicateOperator::LessThanOrEq
+            | PredicateOperator::GreaterThanOrEq
+            | PredicateOperator::StartsWith
+            | PredicateOperator::NotStartsWith => Some(datum.to_owned()),
+            _ => None,
+        };
+
+        Ok(adjusted_boundary)
+    }
+
+    /// Adjusts the comparison operator based on the specified datum and an
+    /// optional width constraint.
+    ///
+    /// This function modifies the comparison operator for `LessThan` and
+    /// `GreaterThan` cases to their inclusive counterparts (`LessThanOrEq`,
+    /// `GreaterThanOrEq`) unconditionally. For `StartsWith` and
+    /// `NotStartsWith` operators acting on string literals, the operator may
+    /// be adjusted to `Eq` or `NotEq` if the string length matches the
+    /// specified width, indicating a precise match rather than a prefix
+    /// condition.
+    fn adjust_operator(
+        op: &PredicateOperator,
+        datum: &Datum,
+        width: Option<u32>,
+    ) -> Option<PredicateOperator> {
+        match op {
+            PredicateOperator::LessThan => Some(PredicateOperator::LessThanOrEq),
+            PredicateOperator::GreaterThan => Some(PredicateOperator::GreaterThanOrEq),
+            PredicateOperator::StartsWith => match datum.literal() {
+                PrimitiveLiteral::String(s) => {
+                    if let Some(w) = width {
+                        if s.len() == w as usize {
+                            return Some(PredicateOperator::Eq);
+                        };
+                    };
+                    Some(*op)
+                }
+                _ => Some(*op),
+            },
+            PredicateOperator::NotStartsWith => match datum.literal() {
+                PrimitiveLiteral::String(s) => {
+                    if let Some(w) = width {
+                        let w = w as usize;
+
+                        if s.len() == w {
+                            return Some(PredicateOperator::NotEq);
+                        }
+
+                        if s.len() < w {
+                            return Some(*op);
+                        }
+
+                        return None;
+                    };
+                    Some(*op)
+                }
+                _ => Some(*op),
+            },
+            _ => Some(*op),
+        }
+    }
+
+    /// Adjust projection for temporal transforms, align with Java
+    /// implementation: https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/transforms/ProjectionUtil.java#L275
+    fn adjust_time_projection(
+        &self,
+        op: &PredicateOperator,
+        original: &Datum,
+        transformed: &Datum,
+    ) -> Option<AdjustedProjection> {
+        let should_adjust = match self {
+            Transform::Day => matches!(original.literal(), PrimitiveLiteral::Timestamp(_)),
+            Transform::Year | Transform::Month => true,
+            _ => false,
+        };
+
+        if should_adjust {
+            if let &PrimitiveLiteral::Int(v) = transformed.literal() {
+                match op {
+                    PredicateOperator::LessThan
+                    | PredicateOperator::LessThanOrEq
+                    | PredicateOperator::In => {
+                        if v < 0 {
+                            return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                        };
+                    }
+                    PredicateOperator::Eq => {
+                        if v < 0 {
+                            let new_set = FnvHashSet::from_iter(vec![
+                                transformed.to_owned(),
+                                Datum::int(v + 1),
+                            ]);
+                            return Some(AdjustedProjection::Set(new_set));
+                        }
+                    }
+                    _ => {
+                        return None;
+                    }
+                }
+            };
+        }
+        None
     }
 }
 
@@ -356,506 +681,10 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::spec::datatypes::PrimitiveType::{
-        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
-        Timestamptz, Uuid,
-    };
-    use crate::spec::datatypes::Type::{Primitive, Struct};
-    use crate::spec::datatypes::{NestedField, StructType, Type};
-    use crate::spec::transform::Transform;
-
-    struct TestParameter {
-        display: String,
-        json: String,
-        dedup_name: String,
-        preserves_order: bool,
-        satisfies_order_of: Vec<(Transform, bool)>,
-        trans_types: Vec<(Type, Option<Type>)>,
-    }
-
-    fn check_transform(trans: Transform, param: TestParameter) {
-        assert_eq!(param.display, format!("{trans}"));
-        assert_eq!(param.json, serde_json::to_string(&trans).unwrap());
-        assert_eq!(trans, serde_json::from_str(param.json.as_str()).unwrap());
-        assert_eq!(param.dedup_name, trans.dedup_name());
-        assert_eq!(param.preserves_order, trans.preserves_order());
-
-        for (other_trans, satisfies_order_of) in param.satisfies_order_of {
-            assert_eq!(
-                satisfies_order_of,
-                trans.satisfies_order_of(&other_trans),
-                "Failed to check satisfies order {}, {}, {}",
-                trans,
-                other_trans,
-                satisfies_order_of
-            );
-        }
-
-        for (input_type, result_type) in param.trans_types {
-            assert_eq!(result_type, trans.result_type(&input_type).ok());
-        }
-    }
-
-    #[test]
-    fn test_bucket_transform() {
-        let trans = Transform::Bucket(8);
-
-        let test_param = TestParameter {
-            display: "bucket[8]".to_string(),
-            json: r#""bucket[8]""#.to_string(),
-            dedup_name: "bucket[8]".to_string(),
-            preserves_order: false,
-            satisfies_order_of: vec![
-                (Transform::Bucket(8), true),
-                (Transform::Bucket(4), false),
-                (Transform::Void, false),
-                (Transform::Day, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), Some(Primitive(Int))),
-                (Primitive(Date), Some(Primitive(Int))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    Some(Primitive(Int)),
-                ),
-                (Primitive(Fixed(8)), Some(Primitive(Int))),
-                (Primitive(Int), Some(Primitive(Int))),
-                (Primitive(Long), Some(Primitive(Int))),
-                (Primitive(StringType), Some(Primitive(Int))),
-                (Primitive(Uuid), Some(Primitive(Int))),
-                (Primitive(Time), Some(Primitive(Int))),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_truncate_transform() {
-        let trans = Transform::Truncate(4);
-
-        let test_param = TestParameter {
-            display: "truncate[4]".to_string(),
-            json: r#""truncate[4]""#.to_string(),
-            dedup_name: "truncate[4]".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Truncate(4), true),
-                (Transform::Truncate(2), false),
-                (Transform::Bucket(4), false),
-                (Transform::Void, false),
-                (Transform::Day, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), Some(Primitive(Binary))),
-                (Primitive(Date), None),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    Some(Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    })),
-                ),
-                (Primitive(Fixed(8)), None),
-                (Primitive(Int), Some(Primitive(Int))),
-                (Primitive(Long), Some(Primitive(Long))),
-                (Primitive(StringType), Some(Primitive(StringType))),
-                (Primitive(Uuid), None),
-                (Primitive(Time), None),
-                (Primitive(Timestamp), None),
-                (Primitive(Timestamptz), None),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_identity_transform() {
-        let trans = Transform::Identity;
-
-        let test_param = TestParameter {
-            display: "identity".to_string(),
-            json: r#""identity""#.to_string(),
-            dedup_name: "identity".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Truncate(4), true),
-                (Transform::Truncate(2), true),
-                (Transform::Bucket(4), false),
-                (Transform::Void, false),
-                (Transform::Day, true),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), Some(Primitive(Binary))),
-                (Primitive(Date), Some(Primitive(Date))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    Some(Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    })),
-                ),
-                (Primitive(Fixed(8)), Some(Primitive(Fixed(8)))),
-                (Primitive(Int), Some(Primitive(Int))),
-                (Primitive(Long), Some(Primitive(Long))),
-                (Primitive(StringType), Some(Primitive(StringType))),
-                (Primitive(Uuid), Some(Primitive(Uuid))),
-                (Primitive(Time), Some(Primitive(Time))),
-                (Primitive(Timestamp), Some(Primitive(Timestamp))),
-                (Primitive(Timestamptz), Some(Primitive(Timestamptz))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_year_transform() {
-        let trans = Transform::Year;
-
-        let test_param = TestParameter {
-            display: "year".to_string(),
-            json: r#""year""#.to_string(),
-            dedup_name: "time".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Year, true),
-                (Transform::Month, false),
-                (Transform::Day, false),
-                (Transform::Hour, false),
-                (Transform::Void, false),
-                (Transform::Identity, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    None,
-                ),
-                (Primitive(Fixed(8)), None),
-                (Primitive(Int), None),
-                (Primitive(Long), None),
-                (Primitive(StringType), None),
-                (Primitive(Uuid), None),
-                (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_month_transform() {
-        let trans = Transform::Month;
-
-        let test_param = TestParameter {
-            display: "month".to_string(),
-            json: r#""month""#.to_string(),
-            dedup_name: "time".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Year, true),
-                (Transform::Month, true),
-                (Transform::Day, false),
-                (Transform::Hour, false),
-                (Transform::Void, false),
-                (Transform::Identity, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    None,
-                ),
-                (Primitive(Fixed(8)), None),
-                (Primitive(Int), None),
-                (Primitive(Long), None),
-                (Primitive(StringType), None),
-                (Primitive(Uuid), None),
-                (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_day_transform() {
-        let trans = Transform::Day;
-
-        let test_param = TestParameter {
-            display: "day".to_string(),
-            json: r#""day""#.to_string(),
-            dedup_name: "time".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Year, true),
-                (Transform::Month, true),
-                (Transform::Day, true),
-                (Transform::Hour, false),
-                (Transform::Void, false),
-                (Transform::Identity, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    None,
-                ),
-                (Primitive(Fixed(8)), None),
-                (Primitive(Int), None),
-                (Primitive(Long), None),
-                (Primitive(StringType), None),
-                (Primitive(Uuid), None),
-                (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_hour_transform() {
-        let trans = Transform::Hour;
-
-        let test_param = TestParameter {
-            display: "hour".to_string(),
-            json: r#""hour""#.to_string(),
-            dedup_name: "time".to_string(),
-            preserves_order: true,
-            satisfies_order_of: vec![
-                (Transform::Year, true),
-                (Transform::Month, true),
-                (Transform::Day, true),
-                (Transform::Hour, true),
-                (Transform::Void, false),
-                (Transform::Identity, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), None),
-                (Primitive(Date), None),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    None,
-                ),
-                (Primitive(Fixed(8)), None),
-                (Primitive(Int), None),
-                (Primitive(Long), None),
-                (Primitive(StringType), None),
-                (Primitive(Uuid), None),
-                (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    None,
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_void_transform() {
-        let trans = Transform::Void;
-
-        let test_param = TestParameter {
-            display: "void".to_string(),
-            json: r#""void""#.to_string(),
-            dedup_name: "void".to_string(),
-            preserves_order: false,
-            satisfies_order_of: vec![
-                (Transform::Year, false),
-                (Transform::Month, false),
-                (Transform::Day, false),
-                (Transform::Hour, false),
-                (Transform::Void, true),
-                (Transform::Identity, false),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), Some(Primitive(Binary))),
-                (Primitive(Date), Some(Primitive(Date))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    Some(Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    })),
-                ),
-                (Primitive(Fixed(8)), Some(Primitive(Fixed(8)))),
-                (Primitive(Int), Some(Primitive(Int))),
-                (Primitive(Long), Some(Primitive(Long))),
-                (Primitive(StringType), Some(Primitive(StringType))),
-                (Primitive(Uuid), Some(Primitive(Uuid))),
-                (Primitive(Time), Some(Primitive(Time))),
-                (Primitive(Timestamp), Some(Primitive(Timestamp))),
-                (Primitive(Timestamptz), Some(Primitive(Timestamptz))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    Some(Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()]))),
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
-
-    #[test]
-    fn test_known_transform() {
-        let trans = Transform::Unknown;
-
-        let test_param = TestParameter {
-            display: "unknown".to_string(),
-            json: r#""unknown""#.to_string(),
-            dedup_name: "unknown".to_string(),
-            preserves_order: false,
-            satisfies_order_of: vec![
-                (Transform::Year, false),
-                (Transform::Month, false),
-                (Transform::Day, false),
-                (Transform::Hour, false),
-                (Transform::Void, false),
-                (Transform::Identity, false),
-                (Transform::Unknown, true),
-            ],
-            trans_types: vec![
-                (Primitive(Binary), Some(Primitive(StringType))),
-                (Primitive(Date), Some(Primitive(StringType))),
-                (
-                    Primitive(Decimal {
-                        precision: 8,
-                        scale: 5,
-                    }),
-                    Some(Primitive(StringType)),
-                ),
-                (Primitive(Fixed(8)), Some(Primitive(StringType))),
-                (Primitive(Int), Some(Primitive(StringType))),
-                (Primitive(Long), Some(Primitive(StringType))),
-                (Primitive(StringType), Some(Primitive(StringType))),
-                (Primitive(Uuid), Some(Primitive(StringType))),
-                (Primitive(Time), Some(Primitive(StringType))),
-                (Primitive(Timestamp), Some(Primitive(StringType))),
-                (Primitive(Timestamptz), Some(Primitive(StringType))),
-                (
-                    Struct(StructType::new(vec![NestedField::optional(
-                        1,
-                        "a",
-                        Primitive(Timestamp),
-                    )
-                    .into()])),
-                    Some(Primitive(StringType)),
-                ),
-            ],
-        };
-
-        check_transform(trans, test_param);
-    }
+/// An enum representing the result of the adjusted projection.
+/// Either being a single adjusted datum or a set.
+#[derive(Debug)]
+enum AdjustedProjection {
+    Single(Datum),
+    Set(FnvHashSet<Datum>),
 }

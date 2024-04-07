@@ -294,10 +294,1994 @@ mod test {
     use chrono::{NaiveDate, NaiveDateTime};
     use std::sync::Arc;
 
-    use crate::{
-        spec::Datum,
-        transform::{BoxedTransformFunction, TransformFunction},
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
     };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
+
+    use crate::transform::test::TestTransformFixture;
+    use crate::{
+        expr::PredicateOperator,
+        spec::{Datum, NestedField, PrimitiveType, Transform, Type},
+        transform::{test::TestProjectionFixture, BoxedTransformFunction, TransformFunction},
+        Result,
+    };
+
+    #[test]
+    fn test_year_transform() {
+        let trans = Transform::Year;
+
+        let fixture = TestTransformFixture {
+            display: "year".to_string(),
+            json: r#""year""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, false),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_month_transform() {
+        let trans = Transform::Month;
+
+        let fixture = TestTransformFixture {
+            display: "month".to_string(),
+            json: r#""month""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, false),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_day_transform() {
+        let trans = Transform::Day;
+
+        let fixture = TestTransformFixture {
+            display: "day".to_string(),
+            json: r#""day""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, true),
+                (Transform::Hour, false),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), Some(Primitive(Int))),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_hour_transform() {
+        let trans = Transform::Hour;
+
+        let fixture = TestTransformFixture {
+            display: "hour".to_string(),
+            json: r#""hour""#.to_string(),
+            dedup_name: "time".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Year, true),
+                (Transform::Month, true),
+                (Transform::Day, true),
+                (Transform::Hour, true),
+                (Transform::Void, false),
+                (Transform::Identity, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), None),
+                (Primitive(Date), None),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    None,
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), None),
+                (Primitive(Long), None),
+                (Primitive(StringType), None),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), Some(Primitive(Int))),
+                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_projection_timestamp_hour_upper_bound() -> Result<()> {
+        // 420034
+        let value = "2017-12-01T10:59:59.999999";
+        // 412007
+        let another = "2016-12-31T23:59:59.999999";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Hour,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 420035"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (420034, 412007)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_hour_lower_bound() -> Result<()> {
+        // 420034
+        let value = "2017-12-01T10:00:00.000000";
+        // 411288
+        let another = "2016-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Hour,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 420033"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 420034"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (420034, 411288)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_year_upper_bound() -> Result<()> {
+        let value = "2017-12-31T23:59:59.999999";
+        let another = "2016-12-31T23:59:59.999999";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 48"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (47, 46)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_year_lower_bound() -> Result<()> {
+        let value = "2017-01-01T00:00:00.000000";
+        let another = "2016-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 46"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (47, 46)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_month_negative_upper_bound() -> Result<()> {
+        let value = "1969-12-31T23:59:59.999999";
+        let another = "1970-01-01T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -1"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name IN (-1, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (0, -1)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_month_upper_bound() -> Result<()> {
+        let value = "2017-12-01T23:59:59.999999";
+        let another = "2017-11-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (575, 574)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_month_negative_lower_bound() -> Result<()> {
+        let value = "1969-01-01T00:00:00.000000";
+        let another = "1969-03-01T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= -11"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name IN (-12, -11)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (-10, -9, -12, -11)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_month_lower_bound() -> Result<()> {
+        let value = "2017-12-01T00:00:00.000000";
+        let another = "2017-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 574"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (575)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_day_negative_upper_bound() -> Result<()> {
+        // -1
+        let value = "1969-12-31T23:59:59.999999";
+        // 0
+        let another = "1970-01-01T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -1"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name IN (-1, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (0, -1)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_day_upper_bound() -> Result<()> {
+        // 17501
+        let value = "2017-12-01T23:59:59.999999";
+        // 17502
+        let another = "2017-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 17502"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (17501, 17502)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_day_negative_lower_bound() -> Result<()> {
+        // -365
+        let value = "1969-01-01T00:00:00.000000";
+        // -364
+        let another = "1969-01-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= -365"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= -364"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -365"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= -365"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name IN (-364, -365)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (-363, -364, -365)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_day_lower_bound() -> Result<()> {
+        // 17501
+        let value = "2017-12-01T00:00:00.000000";
+        // 17502
+        let another = "2017-12-02T00:00:00.000000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 17500"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 17501"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (17501, 17502)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_timestamp_day_epoch() -> Result<()> {
+        // 0
+        let value = "1970-01-01T00:00:00.00000";
+        // 1
+        let another = "1970-01-02T00:00:00.00000";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::timestamp_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
+            Some("name = 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::timestamp_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            Some("name IN (1, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::timestamp_from_str(value)?,
+                    Datum::timestamp_from_str(another)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_day_negative() -> Result<()> {
+        // -2
+        let value = "1969-12-30";
+        // -4
+        let another = "1969-12-28";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= -3"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= -2"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= -1"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= -2"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = -2"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (-2, -4)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_day() -> Result<()> {
+        // 17167
+        let value = "2017-01-01";
+        // 17531
+        let another = "2017-12-31";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Day,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 17166"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 17167"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 17168"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 17167"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 17167"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (17531, 17167)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_month_negative_upper_bound() -> Result<()> {
+        // -1 => 1969-12
+        let value = "1969-12-31";
+        // -12 => 1969-01
+        let another = "1969-01-01";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= -1"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name IN (-1, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (-1, -12, -11, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_month_upper_bound() -> Result<()> {
+        // 575 => 2017-12
+        let value = "2017-12-31";
+        // 564 => 2017-01
+        let another = "2017-01-01";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 576"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (575, 564)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_month_negative_lower_bound() -> Result<()> {
+        // -12 => 1969-01
+        let value = "1969-01-01";
+        // -1 => 1969-12
+        let another = "1969-12-31";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= -11"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= -12"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name IN (-12, -11)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (-1, -12, -11, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_month_lower_bound() -> Result<()> {
+        // 575 => 2017-12
+        let value = "2017-12-01";
+        // 564 => 2017-01
+        let another = "2017-01-01";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 574"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 575"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (575, 564)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_month_epoch() -> Result<()> {
+        // 0 => 1970-01
+        let value = "1970-01-01";
+        // -1 => 1969-12
+        let another = "1969-12-31";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Month,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (0, -1)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_year_negative_upper_bound() -> Result<()> {
+        // -1 => 1969
+        let value = "1969-12-31";
+        let another = "1969-01-01";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= -1"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name IN (-1, 0)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (0, -1)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_year_upper_bound() -> Result<()> {
+        // 47 => 2017
+        let value = "2017-12-31";
+        // 46 => 2016
+        let another = "2016-01-01";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 48"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (47, 46)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_year_negative_lower_bound() -> Result<()> {
+        // 0 => 1970
+        let value = "1970-01-01";
+        // -1 => 1969
+        let another = "1969-12-31";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 0"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (0, -1)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_date_year_lower_bound() -> Result<()> {
+        // 47 => 2017
+        let value = "2017-01-01";
+        // 46 => 2016
+        let another = "2016-12-31";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Year,
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
+            Some("name <= 46"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name <= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::date_from_str(value)?,
+            ),
+            Some("name >= 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
+            Some("name = 47"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::date_from_str(value)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            Some("name IN (47, 46)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::date_from_str(value)?, Datum::date_from_str(another)?],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
 
     #[test]
     fn test_transform_years() {
