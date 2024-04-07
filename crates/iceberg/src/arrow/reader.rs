@@ -520,3 +520,67 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         Ok(column_idx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::arrow::reader::CollectFieldIdVisitor;
+    use crate::expr::{visit_predicate, Bind, Reference};
+    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use std::sync::Arc;
+
+    fn table_schema_simple() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![2])
+                .with_fields(vec![
+                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+                    NestedField::optional(4, "qux", Type::Primitive(PrimitiveType::Float)).into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_collect_field_id() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("qux").is_null();
+        let bound_expr = expr.bind(schema, true).unwrap();
+
+        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        visit_predicate(&mut visitor, &bound_expr).unwrap();
+
+        assert_eq!(visitor.field_ids, vec![4]);
+    }
+
+    #[test]
+    fn test_collect_field_id_with_and() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("qux")
+            .is_null()
+            .and(Reference::new("baz").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+
+        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        visit_predicate(&mut visitor, &bound_expr).unwrap();
+
+        assert_eq!(visitor.field_ids, vec![4, 3]);
+    }
+
+    #[test]
+    fn test_collect_field_id_with_or() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("qux")
+            .is_null()
+            .or(Reference::new("baz").is_null());
+        let bound_expr = expr.bind(schema, true).unwrap();
+
+        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        visit_predicate(&mut visitor, &bound_expr).unwrap();
+
+        assert_eq!(visitor.field_ids, vec![4, 3]);
+    }
+}
