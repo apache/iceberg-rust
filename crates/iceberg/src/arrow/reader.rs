@@ -49,7 +49,7 @@ pub struct ArrowReaderBuilder {
     field_ids: Vec<usize>,
     file_io: FileIO,
     schema: SchemaRef,
-    predicates: Option<Vec<BoundPredicate>>,
+    predicates: Option<BoundPredicate>,
 }
 
 impl ArrowReaderBuilder {
@@ -78,7 +78,7 @@ impl ArrowReaderBuilder {
     }
 
     /// Sets the predicates to apply to the scan.
-    pub fn with_predicates(mut self, predicates: Vec<BoundPredicate>) -> Self {
+    pub fn with_predicates(mut self, predicates: BoundPredicate) -> Self {
         self.predicates = Some(predicates);
         self
     }
@@ -102,7 +102,7 @@ pub struct ArrowReader {
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
-    predicates: Option<Vec<BoundPredicate>>,
+    predicates: Option<BoundPredicate>,
 }
 
 impl ArrowReader {
@@ -221,36 +221,27 @@ impl ArrowReader {
             let field_id_map = self.build_field_id_map(parquet_schema)?;
 
             // Collect Parquet column indices from field ids
-            let column_indices = predicates
+            let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
+            visit_predicate(&mut collector, predicates).unwrap();
+            let column_indices = collector
+                .field_ids
                 .iter()
-                .map(|predicate| {
-                    let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
-                    visit_predicate(&mut collector, predicate).unwrap();
-                    collector
-                        .field_ids
-                        .iter()
-                        .map(|field_id| {
-                            field_id_map.get(field_id).cloned().ok_or_else(|| {
-                                Error::new(ErrorKind::DataInvalid, "Field id not found in schema")
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()
+                .map(|field_id| {
+                    field_id_map.get(field_id).cloned().ok_or_else(|| {
+                        Error::new(ErrorKind::DataInvalid, "Field id not found in schema")
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?;
 
             // Convert BoundPredicates to ArrowPredicates
-            let mut arrow_predicates = vec![];
-            for (predicate, columns) in predicates.iter().zip(column_indices.iter()) {
-                let mut converter = PredicateConverter {
-                    columns,
-                    projection_mask: ProjectionMask::leaves(parquet_schema, columns.clone()),
-                    parquet_schema,
-                    column_map: &field_id_map,
-                };
-                let arrow_predicate = visit_predicate(&mut converter, predicate)?;
-                arrow_predicates.push(arrow_predicate);
-            }
-            Ok(Some(RowFilter::new(arrow_predicates)))
+            let mut converter = PredicateConverter {
+                columns: &column_indices,
+                projection_mask: ProjectionMask::leaves(parquet_schema, column_indices.clone()),
+                parquet_schema,
+                column_map: &field_id_map,
+            };
+            let arrow_predicate = visit_predicate(&mut converter, predicates)?;
+            Ok(Some(RowFilter::new(vec![arrow_predicate])))
         } else {
             Ok(None)
         }
@@ -347,14 +338,17 @@ struct PredicateConverter<'a> {
     pub column_map: &'a HashMap<i32, usize>,
 }
 
-fn get_arrow_datum(datum: &Datum) -> Box<dyn ArrowDatum> {
+fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
     match datum.literal() {
-        PrimitiveLiteral::Boolean(value) => Box::new(BooleanArray::new_scalar(*value)),
-        PrimitiveLiteral::Int(value) => Box::new(Int32Array::new_scalar(*value)),
-        PrimitiveLiteral::Long(value) => Box::new(Int64Array::new_scalar(*value)),
-        PrimitiveLiteral::Float(value) => Box::new(Float32Array::new_scalar(value.as_f32())),
-        PrimitiveLiteral::Double(value) => Box::new(Float64Array::new_scalar(value.as_f64())),
-        _ => todo!("Unsupported literal type"),
+        PrimitiveLiteral::Boolean(value) => Ok(Box::new(BooleanArray::new_scalar(*value))),
+        PrimitiveLiteral::Int(value) => Ok(Box::new(Int32Array::new_scalar(*value))),
+        PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
+        PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
+        PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
+        l => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Unsupported literal type: {:?}", l),
+        )),
     }
 }
 
@@ -405,13 +399,13 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     fn visit_binary(&mut self, predicate: &BinaryExpression<BoundReference>) -> Result<Self::T> {
         let term_index = self.bound_reference(predicate.term())?;
         let literal = predicate.literal().clone();
+        let literal = get_arrow_datum(&literal)?;
 
         match predicate.op() {
             PredicateOperator::LessThan => Ok(Box::new(ArrowPredicateFn::new(
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     lt(left, literal.as_ref())
                 },
             ))),
@@ -419,7 +413,6 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     lt_eq(left, literal.as_ref())
                 },
             ))),
@@ -427,7 +420,6 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     gt(left, literal.as_ref())
                 },
             ))),
@@ -435,7 +427,6 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     gt_eq(left, literal.as_ref())
                 },
             ))),
@@ -443,7 +434,6 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     eq(left, literal.as_ref())
                 },
             ))),
@@ -451,7 +441,6 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 self.projection_mask.clone(),
                 move |batch| {
                     let left = batch.column(term_index);
-                    let literal = get_arrow_datum(&literal);
                     neq(left, literal.as_ref())
                 },
             ))),

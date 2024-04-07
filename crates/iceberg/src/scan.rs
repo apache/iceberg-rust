@@ -33,7 +33,7 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Empty column names means to select all columns
     column_names: Vec<String>,
-    predicates: Vec<Predicate>,
+    predicates: Option<Predicate>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
 }
@@ -43,7 +43,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: vec![],
-            predicates: vec![],
+            predicates: None,
             snapshot_id: None,
             batch_size: None,
         }
@@ -64,7 +64,7 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Add a predicate to the scan. The scan will only return rows that match the predicate.
     pub fn filter(mut self, predicate: Predicate) -> Self {
-        self.predicates.push(predicate);
+        self.predicates = Some(predicate);
         self
     }
 
@@ -127,10 +127,11 @@ impl<'a> TableScanBuilder<'a> {
             }
         }
 
-        let mut bound_predicates = Vec::new();
-        for predicate in self.predicates {
-            bound_predicates.push(predicate.bind(schema.clone(), true)?);
-        }
+        let bound_predicates = if let Some(ref predicates) = self.predicates {
+            Some(predicates.bind(schema.clone(), true)?)
+        } else {
+            None
+        };
 
         Ok(TableScan {
             snapshot,
@@ -152,7 +153,7 @@ pub struct TableScan {
     table_metadata: TableMetadataRef,
     file_io: FileIO,
     column_names: Vec<String>,
-    bound_predicates: Vec<BoundPredicate>,
+    bound_predicates: Option<BoundPredicate>,
     schema: SchemaRef,
     batch_size: Option<usize>,
 }
@@ -250,7 +251,9 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder = arrow_reader_builder.with_predicates(self.bound_predicates.clone());
+        if let Some(ref bound_predicates) = self.bound_predicates {
+            arrow_reader_builder = arrow_reader_builder.with_predicates(bound_predicates.clone());
+        }
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
