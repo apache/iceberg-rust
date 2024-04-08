@@ -22,12 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use typed_builder::TypedBuilder;
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
 use super::{
@@ -52,27 +47,21 @@ pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
 /// Reference to [`TableMetadata`].
 pub type TableMetadataRef = Arc<TableMetadata>;
 
-#[derive(Debug, PartialEq, Deserialize, Eq, Clone, TypedBuilder)]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
 #[serde(try_from = "TableMetadataEnum")]
 /// Fields for the version 2 of the table metadata.
 ///
 /// We assume that this data structure is always valid, so we will panic when invalid error happens.
 /// We check the validity of this data structure when constructing.
 pub struct TableMetadata {
-    #[builder(default)]
     /// Integer Version for the format.
     pub(crate) format_version: FormatVersion,
-    #[builder(default_code = "Uuid::new_v4()")]
     /// A UUID that identifies the table
     pub(crate) table_uuid: Uuid,
     /// Location tables base location
     pub(crate) location: String,
-    #[builder(default)]
     /// The tables highest sequence number
     pub(crate) last_sequence_number: i64,
-    #[builder(
-        default_code = "SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as i64"
-    )]
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
     pub(crate) last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
@@ -83,27 +72,22 @@ pub struct TableMetadata {
     pub(crate) current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
     pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
-    #[builder(default = DEFAULT_SPEC_ID)]
     /// ID of the “current” spec that writers should use by default.
     pub(crate) default_spec_id: i32,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
     pub(crate) last_partition_id: i32,
-    #[builder(default)]
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
     pub(crate) properties: HashMap<String, String>,
-    #[builder(setter(strip_option))]
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
     pub(crate) current_snapshot_id: Option<i64>,
-    #[builder(default)]
     ///A list of valid snapshots. Valid snapshots are snapshots for which all
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
     pub(crate) snapshots: HashMap<i64, SnapshotRef>,
-    #[builder(default)]
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
     /// is changed, a new entry should be added with the last-updated-ms
@@ -111,7 +95,6 @@ pub struct TableMetadata {
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
     pub(crate) snapshot_log: Vec<SnapshotLog>,
-    #[builder(default)]
 
     /// A list (optional) of timestamp and metadata file location pairs
     /// that encodes changes to the previous metadata files for the table.
@@ -122,12 +105,10 @@ pub struct TableMetadata {
     pub(crate) metadata_log: Vec<MetadataLog>,
     /// A list of sort orders, stored as full sort order objects.
     pub(crate) sort_orders: HashMap<i64, SortOrderRef>,
-    #[builder(default = DEFAULT_SORT_ORDER_ID)]
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
     pub(crate) default_sort_order_id: i64,
-    #[builder(default)]
     ///A map of snapshot references. The map keys are the unique snapshot reference
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
