@@ -27,8 +27,11 @@ use sqlx::{
 use std::collections::HashMap;
 
 use iceberg::{
-    io::FileIO, spec::TableMetadata, table::Table, Catalog, Error, ErrorKind, Namespace,
-    NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
+    io::FileIO,
+    spec::{TableMetadata, TableMetadataBuilder},
+    table::Table,
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
 };
 use uuid::Uuid;
 
@@ -209,7 +212,7 @@ impl Catalog for SqlCatalog {
             .map_err(from_sqlx_error)?)
     }
 
-    async fn stat_table(&self, identifier: &TableIdent) -> Result<bool> {
+    async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
         let catalog_name = self.name.clone();
         let namespace = identifier.namespace().encode_in_url();
         let name = identifier.name().to_string();
@@ -257,29 +260,17 @@ impl Catalog for SqlCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        let location = creation.location.ok_or(Error::new(
+        let location = creation.location.as_ref().ok_or(Error::new(
             ErrorKind::DataInvalid,
             "Table creation with the Sql catalog requires a location.",
         ))?;
+        let name = creation.name.clone();
 
         let uuid = Uuid::new_v4();
         let metadata_location =
             location.clone() + "/metadata/" + "0-" + &uuid.to_string() + ".metadata.json";
 
-        let metadata = TableMetadata::builder()
-            .location(location)
-            .current_schema_id(creation.schema.schema_id())
-            .last_column_id(creation.schema.highest_field_id())
-            .schemas(HashMap::from_iter(vec![(
-                creation.schema.schema_id(),
-                creation.schema.into(),
-            )]))
-            .partition_specs(HashMap::new())
-            .last_partition_id(0)
-            .current_snapshot_id(-1)
-            .sort_orders(HashMap::new())
-            .default_sort_order_id(0)
-            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
 
         let file = self.storage.new_output(&metadata_location)?;
         file.writer()
@@ -289,14 +280,14 @@ impl Catalog for SqlCatalog {
         {
             let catalog_name = self.name.clone();
             let namespace = namespace.encode_in_url();
-            let name = creation.name.clone();
+            let name = name.clone();
             let metadata_location = metadata_location.to_string();
             sqlx::query("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values (?, ?, ?, ?);").bind(&catalog_name).bind(&namespace).bind(&name).bind(&metadata_location).execute(&self.connection).await.map_err(from_sqlx_error)?;
         }
         Ok(Table::builder()
             .file_io(self.storage.clone())
             .metadata_location(metadata_location)
-            .identifier(TableIdent::new(namespace.clone(), creation.name))
+            .identifier(TableIdent::new(namespace.clone(), name))
             .metadata(metadata)
             .build())
     }
@@ -315,7 +306,7 @@ pub mod tests {
 
     use iceberg::{
         io::FileIOBuilder,
-        spec::{NestedField, PrimitiveType, Schema, SortOrder, Type, UnboundPartitionSpec},
+        spec::{NestedField, PrimitiveType, Schema, Type},
         Catalog, NamespaceIdent, TableCreation, TableIdent,
     };
     use tempfile::TempDir;
@@ -348,14 +339,12 @@ pub mod tests {
             .name("table1".to_owned())
             .location(dir.path().to_str().unwrap().to_owned() + "/warehouse/table1")
             .schema(schema)
-            .partition_spec(UnboundPartitionSpec::default())
-            .sort_order(SortOrder::default())
             .build();
 
         catalog.create_table(&namespace, creation).await.unwrap();
 
         let exists = catalog
-            .stat_table(&identifier)
+            .table_exists(&identifier)
             .await
             .expect("Table doesn't exist");
         assert!(exists);
