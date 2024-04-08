@@ -20,10 +20,11 @@
 use crate::error::Result;
 use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
 use arrow_array::{
-    BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
+    ArrayRef, BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
+    Int64Array, StructArray,
 };
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-use arrow_schema::SchemaRef as ArrowSchemaRef;
+use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
 use async_stream::try_stream;
 use bitvec::macros::internal::funty::Fundamental;
 use futures::stream::StreamExt;
@@ -331,10 +332,15 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
     }
 }
 
+/// A visitor to convert Iceberg bound predicates to Arrow predicates.
 struct PredicateConverter<'a> {
+    /// The leaf column indices used in the predicates.
     pub columns: &'a Vec<usize>,
+    /// The projection mask for the Arrow predicates.
     pub projection_mask: ProjectionMask,
+    /// The Parquet schema descriptor.
     pub parquet_schema: &'a SchemaDescriptor,
+    /// The map between field id and leaf column index in Parquet schema.
     pub column_map: &'a HashMap<i32, usize>,
 }
 
@@ -352,9 +358,28 @@ fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
     }
 }
 
+/// Recursively get the leaf column from the record batch. Assume that the nested columns in
+/// struct is projected to a single column.
+fn get_leaf_column(column: &ArrayRef) -> std::result::Result<ArrayRef, ArrowError> {
+    match column.data_type() {
+        DataType::Struct(fields) => {
+            if fields.len() != 1 {
+                return Err(ArrowError::SchemaError(
+                    "Struct column should have only one field after projection"
+                        .parse()
+                        .unwrap(),
+                ));
+            }
+            let struct_array = column.as_any().downcast_ref::<StructArray>().unwrap();
+            get_leaf_column(struct_array.column(0))
+        }
+        _ => Ok(column.clone()),
+    }
+}
+
 impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     type T = Box<dyn ArrowPredicate>;
-    type U = usize;
+    type U = ProjectionMask;
 
     fn visit_always_true(&mut self) -> Result<Self::T> {
         Ok(Box::new(ArrowPredicateFn::new(
@@ -371,77 +396,76 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     }
 
     fn visit_unary(&mut self, predicate: &UnaryExpression<BoundReference>) -> Result<Self::T> {
-        let term_index = self.bound_reference(predicate.term())?;
+        let projected_mask = self.bound_reference(predicate.term())?;
 
         match predicate.op() {
             PredicateOperator::IsNull => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let column = batch.column(term_index);
-                    is_null(column)
+                    let column = get_leaf_column(batch.column(0))?;
+                    is_null(&column)
                 },
             ))),
             PredicateOperator::NotNull => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let column = batch.column(term_index);
-                    is_not_null(column)
+                    let column = get_leaf_column(batch.column(0))?;
+                    is_not_null(&column)
                 },
             ))),
             // Unsupported operators, return always true.
-            _ => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
-                |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-            ))),
+            _ => Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
+                Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            }))),
         }
     }
 
     fn visit_binary(&mut self, predicate: &BinaryExpression<BoundReference>) -> Result<Self::T> {
-        let term_index = self.bound_reference(predicate.term())?;
+        let projected_mask = self.bound_reference(predicate.term())?;
         let literal = predicate.literal().clone();
         let literal = get_arrow_datum(&literal)?;
 
         match predicate.op() {
             PredicateOperator::LessThan => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    lt(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    lt(&left, literal.as_ref())
                 },
             ))),
             PredicateOperator::LessThanOrEq => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    lt_eq(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    lt_eq(&left, literal.as_ref())
                 },
             ))),
             PredicateOperator::GreaterThan => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    gt(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    gt(&left, literal.as_ref())
                 },
             ))),
             PredicateOperator::GreaterThanOrEq => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    gt_eq(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    gt_eq(&left, literal.as_ref())
                 },
             ))),
             PredicateOperator::Eq => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    eq(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    eq(&left, literal.as_ref())
                 },
             ))),
             PredicateOperator::NotEq => Ok(Box::new(ArrowPredicateFn::new(
-                self.projection_mask.clone(),
+                projected_mask,
                 move |batch| {
-                    let left = batch.column(term_index);
-                    neq(left, literal.as_ref())
+                    let left = get_leaf_column(batch.column(0))?;
+                    neq(&left, literal.as_ref())
                 },
             ))),
             // Unsupported operators, return always true.
@@ -495,7 +519,10 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         )))
     }
 
+    /// When visiting a bound reference, we return the projection mask for the leaf column
+    /// which is used to project the column in the record batch.
     fn bound_reference(&mut self, reference: &BoundReference) -> Result<Self::U> {
+        // The leaf column's index in Parquet schema.
         let column_idx = self.column_map.get(&reference.field().id).ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
@@ -503,21 +530,22 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
             )
         })?;
 
-        let root_col_index = self.parquet_schema.get_column_root_idx(*column_idx);
-
         // Find the column index in projection mask.
         let column_idx = self
             .columns
             .iter()
-            .position(|&x| x == root_col_index)
+            .position(|&x| x == *column_idx)
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Column index {} not found in schema", root_col_index),
+                    format!("Column index {} not found in schema", *column_idx),
                 )
             })?;
 
-        Ok(column_idx)
+        Ok(ProjectionMask::leaves(
+            self.parquet_schema,
+            vec![self.columns[column_idx]],
+        ))
     }
 }
 
