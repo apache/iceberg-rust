@@ -23,7 +23,6 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 use sqlx::{any::{install_default_drivers, AnyRow}, AnyPool, Connection, Database, Row};
 use std::collections::HashMap;
 use sqlx::any::AnyPoolOptions;
-use sqlx::migrate::MigrateDatabase;
 
 use iceberg::{
     io::FileIO,
@@ -52,10 +51,6 @@ impl SqlCatalog {
     /// Create new sql catalog instance
     pub async fn new(url: &str, name: &str, storage: FileIO) -> Result<Self> {
         install_default_drivers();
-
-        if !sqlx::Sqlite::database_exists(&url).await.map_err(from_sqlx_error)? {
-            sqlx::Sqlite::create_database(&url).await.map_err(from_sqlx_error)?;
-        }
 
         let pool = AnyPoolOptions::new()
             .max_connections(20) //configurable?
@@ -315,15 +310,24 @@ pub mod tests {
     use tempfile::TempDir;
 
     use crate::SqlCatalog;
+    use sqlx::migrate::MigrateDatabase;
 
     #[tokio::test]
     async fn test_create_update_drop_table() {
         let dir = TempDir::new().unwrap();
         let storage = FileIOBuilder::new_fs_io().build().unwrap();
 
-        let catalog = SqlCatalog::new("sqlite://iceberg", "iceberg", storage)
+        //name of the database should be part of the url. usually for sqllite it creates or opens one if (.db found)
+        let sqlLiteUrl = "sqlite://iceberg";
+
+        if !sqlx::Sqlite::database_exists(&sqlLiteUrl).await.unwrap() {
+            sqlx::Sqlite::create_database(&sqlLiteUrl).await.unwrap();
+        }
+
+        let catalog = SqlCatalog::new(sqlLiteUrl, "iceberg", storage)
             .await
             .unwrap();
+
 
         let namespace = NamespaceIdent::new("test".to_owned());
 
@@ -370,6 +374,7 @@ pub mod tests {
 
         // assert!(table.metadata().location().ends_with("/warehouse/table1"))
 
-        //need to tear down the database and tables
+        //tear down the database and tables
+        sqlx::Sqlite::drop_database(&sqlLiteUrl).await.unwrap();
     }
 }
