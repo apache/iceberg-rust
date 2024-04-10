@@ -40,7 +40,7 @@ opendal = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { version = "0.7.2", features = ["tls-rustls", "any", "sqlite", "postgres", "mysql", "migrate"], default-features = false }
+sqlx = { version = "0.7.2", features = ["tls-rustls", "any", "sqlite", "postgres", "mysql"], default-features = false }
 typed-builder = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
