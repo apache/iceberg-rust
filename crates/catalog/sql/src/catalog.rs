@@ -20,9 +20,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::{AsyncReadExt, AsyncWriteExt};
-use sqlx::{any::{install_default_drivers, AnyRow}, AnyPool, Connection, Database, Row};
-use std::collections::HashMap;
 use sqlx::any::AnyPoolOptions;
+use sqlx::{
+    any::{install_default_drivers, AnyRow},
+    AnyPool, Row,
+};
+use std::collections::HashMap;
 
 use iceberg::{
     io::FileIO,
@@ -31,10 +34,8 @@ use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use uuid::Uuid;
 use std::time::Duration;
-use opendal::Scheme::Sqlite;
-use sqlx::Error::Migrate;
+use uuid::Uuid;
 
 use crate::error::from_sqlx_error;
 
@@ -62,28 +63,30 @@ impl SqlCatalog {
 
         sqlx::query(
             "create table if not exists iceberg_tables (
-                                catalog_name text not null,
-                                table_namespace text not null,
-                                table_name text not null,
-                                metadata_location text,
-                                previous_metadata_location text,
-                                primary key (catalog_name, table_namespace, table_name)
-                            );",
-            )
-            .execute(&pool)
-               .await.map_err(from_sqlx_error)?;
+                            catalog_name text not null,
+                            table_namespace text not null,
+                            table_name text not null,
+                            metadata_location text,
+                            previous_metadata_location text,
+                            primary key (catalog_name, table_namespace, table_name)
+                        );",
+        )
+        .execute(&pool)
+        .await
+        .map_err(from_sqlx_error)?;
 
-            sqlx::query(
+        sqlx::query(
             "create table if not exists iceberg_namespace_properties (
-                                catalog_name text not null,
-                                namespace text not null,
-                                property_key text,
-                                property_value text,
-                                primary key (catalog_name, namespace, property_key)
-                            );",
-            )
-            .execute(&pool)
-                .await.map_err(from_sqlx_error)?;
+                            catalog_name text not null,
+                            namespace text not null,
+                            property_key text,
+                            property_value text,
+                            primary key (catalog_name, namespace, property_key)
+                        );",
+        )
+        .execute(&pool)
+        .await
+        .map_err(from_sqlx_error)?;
 
         Ok(SqlCatalog {
             name: name.to_owned(),
@@ -205,7 +208,13 @@ impl Catalog for SqlCatalog {
         let catalog_name = self.name.clone();
         let namespace = identifier.namespace().encode_in_url();
         let name = identifier.name().to_string();
-        let rows = sqlx::query("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables")/* where catalog_name = ? and table_namespace = ? and table_name = ?;").bind(&catalog_name).bind(&namespace).bind(&name)*/.fetch_all(&self.connection).await.map_err(from_sqlx_error)?;
+        let rows = sqlx::query("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = ? and table_namespace = ? and table_name = ?;")
+            .bind(&catalog_name)
+            .bind(&namespace)
+            .bind(&name)
+            .fetch_all(&self.connection)
+            .await
+            .map_err(from_sqlx_error)?;
         let mut iter = rows.iter().map(query_map);
 
         Ok(iter.next().is_some())
@@ -271,15 +280,16 @@ impl Catalog for SqlCatalog {
             let namespace = namespace.encode_in_url();
             let name = name.clone();
             let metadata_location = metadata_location.to_string();
-            let identifier = TableIdent::new( NamespaceIdent::new(namespace.clone()), name.to_owned());
-            if !self.table_exists(&identifier).await? {
-                //check if table exists, may be update then, otherwise unique constraint violation
-                sqlx::query("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values (?, ?, ?, ?);").bind(&catalog_name).bind(&namespace).bind(&name).bind(&metadata_location).execute(&self.connection).await.map_err(from_sqlx_error)?;
-            }
-            else {
-                //update
-                println!("update is not implemented")
-            }
+
+            //TODO do we need to check if table exists,then update or delete and insert, otherwise unique constraint violation occurs
+            sqlx::query("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values (?, ?, ?, ?);")
+                .bind(&catalog_name)
+                .bind(&namespace)
+                .bind(&name)
+                .bind(&metadata_location)
+                .execute(&self.connection)
+                .await
+                .map_err(from_sqlx_error)?;
         }
 
         Ok(Table::builder()
@@ -301,7 +311,6 @@ impl Catalog for SqlCatalog {
 
 #[cfg(test)]
 pub mod tests {
-    use std::thread::sleep;
     use iceberg::{
         io::FileIOBuilder,
         spec::{NestedField, PrimitiveType, Schema, Type},
@@ -318,16 +327,15 @@ pub mod tests {
         let storage = FileIOBuilder::new_fs_io().build().unwrap();
 
         //name of the database should be part of the url. usually for sqllite it creates or opens one if (.db found)
-        let sqlLiteUrl = "sqlite://iceberg";
+        let sql_lite_url = "sqlite://iceberg";
 
-        if !sqlx::Sqlite::database_exists(&sqlLiteUrl).await.unwrap() {
-            sqlx::Sqlite::create_database(&sqlLiteUrl).await.unwrap();
+        if !sqlx::Sqlite::database_exists(sql_lite_url).await.unwrap() {
+            sqlx::Sqlite::create_database(sql_lite_url).await.unwrap();
         }
 
-        let catalog = SqlCatalog::new(sqlLiteUrl, "iceberg", storage)
+        let catalog = SqlCatalog::new(sql_lite_url, "iceberg", storage)
             .await
             .unwrap();
-
 
         let namespace = NamespaceIdent::new("test".to_owned());
 
@@ -375,6 +383,6 @@ pub mod tests {
         // assert!(table.metadata().location().ends_with("/warehouse/table1"))
 
         //tear down the database and tables
-        sqlx::Sqlite::drop_database(&sqlLiteUrl).await.unwrap();
+        sqlx::Sqlite::drop_database(sql_lite_url).await.unwrap();
     }
 }
