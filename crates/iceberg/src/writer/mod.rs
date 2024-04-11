@@ -72,8 +72,11 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Write data to iceberg table.
     async fn write(&mut self, input: I) -> Result<()>;
-    /// Flush the writer and return the write result.
-    async fn flush(&mut self) -> Result<O>;
+    /// Close the writer and return the written data files.
+    /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
+    /// # NOTE
+    /// After close, no matter successfully or fail,the writer should never be used again, otherwise the writer will panic.
+    async fn close(&mut self) -> Result<O>;
 }
 
 /// The current file status of iceberg writer. It implement for the writer which write a single
@@ -90,6 +93,7 @@ pub trait CurrentFileStatus {
 #[cfg(test)]
 mod tests {
     use arrow_array::RecordBatch;
+    use arrow_schema::Schema;
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use futures::AsyncReadExt;
@@ -102,7 +106,13 @@ mod tests {
 
     use super::IcebergWriter;
 
-    fn _guarantee_object_safe(_: &dyn IcebergWriter) {}
+    // This function is used to guarantee the trait can be used as a object safe trait.
+    async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
+        let _ = w
+            .write(RecordBatch::new_empty(Schema::empty().into()))
+            .await;
+        let _ = w.close().await;
+    }
 
     // This function check:
     // The data of the written parquet file is correct.

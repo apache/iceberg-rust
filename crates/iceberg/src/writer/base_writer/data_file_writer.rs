@@ -59,8 +59,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 
     async fn build(self, config: Self::C) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner_writer: self.inner.clone().build().await?,
-            builder: self.inner,
+            inner_writer: Some(self.inner.clone().build().await?),
             partition_value: config.partition_value,
         })
     }
@@ -68,20 +67,19 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 
 /// A writer write data is within one spec/partition.
 pub struct DataFileWriter<B: FileWriterBuilder> {
-    builder: B,
-    inner_writer: B::R,
+    inner_writer: Option<B::R>,
     partition_value: Struct,
 }
 
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        self.inner_writer.write(&batch).await
+        self.inner_writer.as_mut().unwrap().write(&batch).await
     }
 
-    async fn flush(&mut self) -> Result<Vec<DataFile>> {
-        let writer = std::mem::replace(&mut self.inner_writer, self.builder.clone().build().await?);
-        let res = writer
+    async fn close(&mut self) -> Result<Vec<DataFile>> {
+        let writer = self.inner_writer.take().unwrap();
+        Ok(writer
             .close()
             .await?
             .into_iter()
@@ -90,22 +88,21 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
                 res.partition(self.partition_value.clone());
                 res.build().expect("Guaranteed to be valid")
             })
-            .collect_vec();
-        Ok(res)
+            .collect_vec())
     }
 }
 
 impl<B: FileWriterBuilder> CurrentFileStatus for DataFileWriter<B> {
     fn current_file_path(&self) -> String {
-        self.inner_writer.current_file_path()
+        self.inner_writer.as_ref().unwrap().current_file_path()
     }
 
     fn current_row_num(&self) -> usize {
-        self.inner_writer.current_row_num()
+        self.inner_writer.as_ref().unwrap().current_row_num()
     }
 
     fn current_written_size(&self) -> usize {
-        self.inner_writer.current_written_size()
+        self.inner_writer.as_ref().unwrap().current_written_size()
     }
 }
 
@@ -307,16 +304,14 @@ mod test {
             .build(DataFileWriterConfig::new(None))
             .await?;
 
-        for _ in 0..3 {
-            // write
-            data_file_writer.write(to_write.clone()).await?;
-            let res = data_file_writer.flush().await?;
-            assert_eq!(res.len(), 1);
-            let data_file = res.into_iter().next().unwrap();
+        // write
+        data_file_writer.write(to_write.clone()).await?;
+        let res = data_file_writer.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res.into_iter().next().unwrap();
 
-            // check
-            check_parquet_data_file(&file_io, &data_file, &to_write).await;
-        }
+        // check
+        check_parquet_data_file(&file_io, &data_file, &to_write).await;
 
         Ok(())
     }
