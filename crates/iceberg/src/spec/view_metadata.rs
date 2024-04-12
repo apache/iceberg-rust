@@ -179,12 +179,7 @@ impl ViewMetadataBuilder {
         let version = ViewVersion::builder()
             .with_default_catalog(default_catalog)
             .with_default_namespace(default_namespace)
-            .with_representations(
-                representations
-                    .into_iter()
-                    .map(|x| x.into())
-                    .collect::<Vec<_>>(),
-            )
+            .with_representations(representations.into_iter().collect::<Vec<_>>())
             .with_schema_id(schema.schema_id())
             .with_summary(summary)
             .with_timestamp_ms(Utc::now().timestamp_millis())
@@ -518,18 +513,13 @@ mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(
-                vec![ViewRepresentation::SqlViewRepresentation(
-                    crate::spec::SqlViewRepresentation {
-                        sql:
-                            "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                                .to_string(),
-                        dialect: "spark".to_string(),
-                    },
-                )
-                .into()]
-                .into(),
-            )
+            .with_representations(vec![ViewRepresentation::SqlViewRepresentation(
+                crate::spec::SqlViewRepresentation {
+                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                        .to_string(),
+                    dialect: "spark".to_string(),
+                },
+            )])
             .build();
 
         let expected = ViewMetadata {
@@ -567,7 +557,7 @@ mod tests {
     #[test]
     fn test_view_builder_from_view_creation() {
         let representations = ViewRepresentationsBuilder::new()
-            .add_sql("Select 1".to_string(), "spark".to_string())
+            .add_sql_representation("Select 1".to_string(), "spark".to_string())
             .build();
         let creation = ViewCreation::builder()
             .location("s3://bucket/warehouse/default.db/event_agg".to_string())

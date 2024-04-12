@@ -438,7 +438,7 @@ impl TableUpdate {
     }
 }
 
-/// TableCreation represents the creation of a table in the catalog.
+/// ViewCreation represents the creation of a view in the catalog.
 #[derive(Debug, TypedBuilder)]
 pub struct ViewCreation {
     /// The name of the view.
