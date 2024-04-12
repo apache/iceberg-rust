@@ -21,7 +21,7 @@ use dashmap::DashMap;
 use datafusion::catalog::{schema::SchemaProvider, CatalogProvider};
 use iceberg::{Catalog, NamespaceIdent, Result};
 
-use crate::datafusion::schema::IcebergSchemaProvider;
+use crate::schema::IcebergSchemaProvider;
 
 pub struct IcebergCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,

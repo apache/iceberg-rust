@@ -24,7 +24,7 @@ use datafusion::{
 use futures::FutureExt;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
-use crate::datafusion::table::IcebergTableProvider;
+use crate::table::IcebergTableProvider;
 
 pub(crate) struct IcebergSchemaProvider {
     tables: DashMap<String, Arc<dyn TableProvider>>,

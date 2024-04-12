@@ -16,21 +16,25 @@
 # under the License.
 
 [package]
-name = "iceberg-integrations"
+name = "iceberg-integrations-datafusion"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Integrations"
+description = "Apache Iceberg Integrations Datafusion"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "integrations"]
+keywords = ["iceberg", "integrations", "datfusion"]
+
+[features]
+default = []
+datafusion = ["dep:datafusion"]
 
 [dependencies]
 dashmap = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, optional = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
@@ -38,5 +42,5 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 iceberg-catalog-hms = { workspace = true }
-iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }

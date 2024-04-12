@@ -21,7 +21,7 @@ members = [
     "crates/catalog/*",
     "crates/examples",
     "crates/iceberg",
-    "crates/integrations",
+    "crates/integrations/*",
     "crates/test_utils",
 ]
 

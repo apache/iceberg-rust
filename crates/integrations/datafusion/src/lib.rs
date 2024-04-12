@@ -15,5 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod datafusion;
-pub use datafusion::*;
+#![cfg(feature = "datafusion")]
+
+mod catalog;
+pub use catalog::*;
+
+mod schema;
+mod table;
