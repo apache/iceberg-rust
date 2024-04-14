@@ -48,7 +48,7 @@ jobs:
         run: cp .asf.yaml ./website/book/.asf.yaml
 
       - name: Deploy to gh-pages
-        uses: peaceiris/actions-gh-pages@v3.9.3
+        uses: peaceiris/actions-gh-pages@v4.0.0
         if: github.event_name == 'push' && github.ref_name == 'main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
