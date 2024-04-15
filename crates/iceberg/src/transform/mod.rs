@@ -138,7 +138,7 @@ mod test {
             predicate: &BoundPredicate,
             expected: Option<&str>,
         ) -> Result<()> {
-            let result = self.transform.project(self.name.clone(), predicate)?;
+            let result = self.transform.project(&self.name, predicate)?;
             match expected {
                 Some(exp) => assert_eq!(format!("{}", result.unwrap()), exp),
                 None => assert!(result.is_none()),
