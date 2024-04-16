@@ -18,15 +18,14 @@
 //! This module contains expressions.
 
 mod term;
-
-use std::fmt::{Display, Formatter};
-
 pub use term::*;
 pub(crate) mod accessor;
 mod predicate;
+pub(crate) mod visitors;
+pub use predicate::*;
 
 use crate::spec::SchemaRef;
-pub use predicate::*;
+use std::fmt::{Display, Formatter};
 
 /// Predicate operators used in expressions.
 ///
@@ -34,6 +33,7 @@ pub use predicate::*;
 /// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 #[repr(u16)]
 pub enum PredicateOperator {
     // Unary operators
