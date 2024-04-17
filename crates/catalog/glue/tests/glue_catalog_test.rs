@@ -167,17 +167,22 @@ async fn test_table_exists() -> Result<()> {
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
+    let ident = TableIdent::new(namespace.name().clone(), "my_table".to_string());
+
+    let exists = fixture.glue_catalog.table_exists(&ident).await?;
+    assert!(!exists);
+
     let table = fixture
         .glue_catalog
         .create_table(namespace.name(), creation)
         .await?;
 
-    let result = fixture
+    let exists = fixture
         .glue_catalog
         .table_exists(table.identifier())
         .await?;
 
-    assert!(result);
+    assert!(exists);
 
     Ok(())
 }
