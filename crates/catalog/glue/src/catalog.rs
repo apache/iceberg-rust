@@ -424,7 +424,7 @@ impl Catalog for GlueCatalog {
             None => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "'Table' object for database: {} and table: {} does not exist",
+                    "Table object for database: {} and table: {} does not exist",
                     db_name, table_name
                 ),
             )),
