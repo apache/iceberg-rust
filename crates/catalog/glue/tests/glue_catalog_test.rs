@@ -148,6 +148,11 @@ async fn test_rename_table() -> Result<()> {
     let table = fixture.glue_catalog.load_table(&dest).await?;
     assert_eq!(table.identifier(), &dest);
 
+    let src = TableIdent::new(namespace.name().clone(), "my_table".to_string());
+
+    let src_table_exists = fixture.glue_catalog.table_exists(&src).await?;
+    assert!(!src_table_exists);
+
     Ok(())
 }
 
