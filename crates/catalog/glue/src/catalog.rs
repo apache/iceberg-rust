@@ -351,7 +351,7 @@ impl Catalog for GlueCatalog {
             Some(location) => location.clone(),
             None => {
                 let ns = self.get_namespace(namespace).await?;
-                get_default_table_location(&ns, &table_name, &self.config.warehouse)
+                get_default_table_location(&ns, &db_name, &table_name, &self.config.warehouse)
             }
         };
 

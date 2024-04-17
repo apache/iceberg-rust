@@ -208,17 +208,25 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
 /// Get default table location from `Namespace` properties
 pub(crate) fn get_default_table_location(
     namespace: &Namespace,
+    db_name: impl AsRef<str>,
     table_name: impl AsRef<str>,
     warehouse: impl AsRef<str>,
 ) -> String {
     let properties = namespace.properties();
 
-    let location = match properties.get(LOCATION) {
-        Some(location) => location,
-        None => warehouse.as_ref(),
-    };
+    match properties.get(LOCATION) {
+        Some(location) => format!("{}/{}", location, table_name.as_ref()),
+        None => {
+            let warehouse_location = warehouse.as_ref().trim_end_matches('/');
 
-    format!("{}/{}", location, table_name.as_ref())
+            format!(
+                "{}/{}.db/{}",
+                warehouse_location,
+                db_name.as_ref(),
+                table_name.as_ref()
+            )
+        }
+    }
 }
 
 /// Create metadata location from `location` and `version`
@@ -390,10 +398,12 @@ mod tests {
 
         let namespace =
             Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let db_name = validate_namespace(namespace.name())?;
         let table_name = "my_table";
 
         let expected = "db_location/my_table";
-        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+        let result =
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
 
         assert_eq!(expected, result);
 
@@ -403,10 +413,12 @@ mod tests {
     #[test]
     fn test_get_default_table_location_warehouse() -> Result<()> {
         let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let db_name = validate_namespace(namespace.name())?;
         let table_name = "my_table";
 
-        let expected = "warehouse_location/my_table";
-        let result = get_default_table_location(&namespace, table_name, "warehouse_location");
+        let expected = "warehouse_location/default.db/my_table";
+        let result =
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
 
         assert_eq!(expected, result);
 
