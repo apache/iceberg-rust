@@ -456,7 +456,13 @@ impl Predicate {
     /// assert_eq!(&format!("{expr}"), "(a < 10) AND (b < 20)");
     /// ```
     pub fn and(self, other: Predicate) -> Predicate {
-        Predicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
+        match (self, other) {
+            (Predicate::AlwaysFalse, _) => Predicate::AlwaysFalse,
+            (_, Predicate::AlwaysFalse) => Predicate::AlwaysFalse,
+            (Predicate::AlwaysTrue, rhs) => rhs,
+            (lhs, Predicate::AlwaysTrue) => lhs,
+            (lhs, rhs) => Predicate::And(LogicalExpression::new([Box::new(lhs), Box::new(rhs)])),
+        }
     }
 
     /// Combines two predicates with `OR`.
@@ -477,7 +483,13 @@ impl Predicate {
     /// assert_eq!(&format!("{expr}"), "(a < 10) OR (b < 20)");
     /// ```
     pub fn or(self, other: Predicate) -> Predicate {
-        Predicate::Or(LogicalExpression::new([Box::new(self), Box::new(other)]))
+        match (self, other) {
+            (Predicate::AlwaysTrue, _) => Predicate::AlwaysTrue,
+            (_, Predicate::AlwaysTrue) => Predicate::AlwaysTrue,
+            (Predicate::AlwaysFalse, rhs) => rhs,
+            (lhs, Predicate::AlwaysFalse) => lhs,
+            (lhs, rhs) => Predicate::Or(LogicalExpression::new([Box::new(lhs), Box::new(rhs)])),
+        }
     }
 
     /// Returns a predicate representing the negation ('NOT') of this one,
@@ -658,6 +670,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::expr::Bind;
+    use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
     use crate::expr::Reference;
     use crate::spec::Datum;
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -727,6 +740,42 @@ mod tests {
         let result = expression.rewrite_not();
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_and_reduce_always_true_false() {
+        let true_or_expr = AlwaysTrue.and(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{true_or_expr}"), "b < 5");
+
+        let expr_or_true = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(AlwaysTrue);
+        assert_eq!(&format!("{expr_or_true}"), "b < 5");
+
+        let false_or_expr = AlwaysFalse.and(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{false_or_expr}"), "FALSE");
+
+        let expr_or_false = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(AlwaysFalse);
+        assert_eq!(&format!("{expr_or_false}"), "FALSE");
+    }
+
+    #[test]
+    fn test_predicate_or_reduce_always_true_false() {
+        let true_or_expr = AlwaysTrue.or(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{true_or_expr}"), "TRUE");
+
+        let expr_or_true = Reference::new("b").less_than(Datum::long(5)).or(AlwaysTrue);
+        assert_eq!(&format!("{expr_or_true}"), "TRUE");
+
+        let false_or_expr = AlwaysFalse.or(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{false_or_expr}"), "b < 5");
+
+        let expr_or_false = Reference::new("b")
+            .less_than(Datum::long(5))
+            .or(AlwaysFalse);
+        assert_eq!(&format!("{expr_or_false}"), "b < 5");
     }
 
     #[test]
