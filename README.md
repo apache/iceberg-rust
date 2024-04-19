@@ -55,7 +55,7 @@ expand to other service.
 | Size based task planning                                   | Not started |
 | Filter pushdown(manifest evaluation, partition prunning)   | In Progress |
 | Apply deletions, including equality and position deletions | Not started |
-| Read into arrow record batch                               | Done        |
+| Read into arrow record batch                               | In Progress |
 | Parquet file support                                       | Done        |
 | ORC file support                                           | Not started |
 
