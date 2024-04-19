@@ -423,11 +423,14 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             ArrowSchemaOrFieldOrType::Type(ty) => ty,
             _ => unreachable!(),
         };
-        let mut metadata = HashMap::new();
-        metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string());
-        if let Some(doc) = &field.doc {
-            metadata.insert(ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
-        }
+        let metadata = if let Some(doc) = &field.doc {
+            HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string()),
+                (ARROW_FIELD_DOC_KEY.to_string(), doc.clone()),
+            ])
+        } else {
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
+        };
         Ok(ArrowSchemaOrFieldOrType::Field(
             Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata),
         ))
@@ -457,14 +460,20 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             ArrowSchemaOrFieldOrType::Field(field) => field,
             _ => unreachable!(),
         };
-        let mut meta = HashMap::new();
-        meta.insert(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            list.element_field.id.to_string(),
-        );
-        if let Some(doc) = &list.element_field.doc {
-            meta.insert(ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
-        }
+        let meta = if let Some(doc) = &list.element_field.doc {
+            HashMap::from([
+                (
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    list.element_field.id.to_string(),
+                ),
+                (ARROW_FIELD_DOC_KEY.to_string(), doc.clone()),
+            ])
+        } else {
+            HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                list.element_field.id.to_string(),
+            )])
+        };
         let field = field.with_metadata(meta);
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::List(Arc::new(
             field,
