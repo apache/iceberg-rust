@@ -16,3 +16,4 @@
 // under the License.
 
 pub(crate) mod bound_predicate_visitor;
+pub(crate) mod inclusive_projection;

@@ -41,54 +41,108 @@ pub trait BoundPredicateVisitor {
     fn not(&mut self, inner: Self::T) -> Result<Self::T>;
 
     /// Called after a predicate with an `IsNull` operator is visited
-    fn is_null(&mut self, reference: &BoundReference) -> Result<Self::T>;
+    fn is_null(
+        &mut self,
+        reference: &BoundReference,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `NotNull` operator is visited
-    fn not_null(&mut self, reference: &BoundReference) -> Result<Self::T>;
+    fn not_null(
+        &mut self,
+        reference: &BoundReference,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with an `IsNan` operator is visited
-    fn is_nan(&mut self, reference: &BoundReference) -> Result<Self::T>;
+    fn is_nan(&mut self, reference: &BoundReference, predicate: &BoundPredicate)
+        -> Result<Self::T>;
 
     /// Called after a predicate with a `NotNan` operator is visited
-    fn not_nan(&mut self, reference: &BoundReference) -> Result<Self::T>;
+    fn not_nan(
+        &mut self,
+        reference: &BoundReference,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `LessThan` operator is visited
-    fn less_than(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn less_than(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `LessThanOrEq` operator is visited
-    fn less_than_or_eq(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn less_than_or_eq(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `GreaterThan` operator is visited
-    fn greater_than(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn greater_than(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `GreaterThanOrEq` operator is visited
     fn greater_than_or_eq(
         &mut self,
         reference: &BoundReference,
         literal: &Datum,
+        predicate: &BoundPredicate,
     ) -> Result<Self::T>;
 
     /// Called after a predicate with an `Eq` operator is visited
-    fn eq(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn eq(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `NotEq` operator is visited
-    fn not_eq(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn not_eq(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `StartsWith` operator is visited
-    fn starts_with(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn starts_with(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `NotStartsWith` operator is visited
-    fn not_starts_with(&mut self, reference: &BoundReference, literal: &Datum) -> Result<Self::T>;
+    fn not_starts_with(
+        &mut self,
+        reference: &BoundReference,
+        literal: &Datum,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with an `In` operator is visited
-    fn r#in(&mut self, reference: &BoundReference, literals: &FnvHashSet<Datum>)
-        -> Result<Self::T>;
+    fn r#in(
+        &mut self,
+        reference: &BoundReference,
+        literals: &FnvHashSet<Datum>,
+        predicate: &BoundPredicate,
+    ) -> Result<Self::T>;
 
     /// Called after a predicate with a `NotIn` operator is visited
     fn not_in(
         &mut self,
         reference: &BoundReference,
         literals: &FnvHashSet<Datum>,
+        predicate: &BoundPredicate,
     ) -> Result<Self::T>;
 }
 
@@ -125,10 +179,10 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
             visitor.not(inner_result)
         }
         BoundPredicate::Unary(expr) => match expr.op() {
-            PredicateOperator::IsNull => visitor.is_null(expr.term()),
-            PredicateOperator::NotNull => visitor.not_null(expr.term()),
-            PredicateOperator::IsNan => visitor.is_nan(expr.term()),
-            PredicateOperator::NotNan => visitor.not_nan(expr.term()),
+            PredicateOperator::IsNull => visitor.is_null(expr.term(), predicate),
+            PredicateOperator::NotNull => visitor.not_null(expr.term(), predicate),
+            PredicateOperator::IsNan => visitor.is_nan(expr.term(), predicate),
+            PredicateOperator::NotNan => visitor.not_nan(expr.term(), predicate),
             op => {
                 panic!("Unexpected op for unary predicate: {}", &op)
             }
@@ -137,16 +191,22 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
             let reference = expr.term();
             let literal = expr.literal();
             match expr.op() {
-                PredicateOperator::LessThan => visitor.less_than(reference, literal),
-                PredicateOperator::LessThanOrEq => visitor.less_than_or_eq(reference, literal),
-                PredicateOperator::GreaterThan => visitor.greater_than(reference, literal),
-                PredicateOperator::GreaterThanOrEq => {
-                    visitor.greater_than_or_eq(reference, literal)
+                PredicateOperator::LessThan => visitor.less_than(reference, literal, predicate),
+                PredicateOperator::LessThanOrEq => {
+                    visitor.less_than_or_eq(reference, literal, predicate)
                 }
-                PredicateOperator::Eq => visitor.eq(reference, literal),
-                PredicateOperator::NotEq => visitor.not_eq(reference, literal),
-                PredicateOperator::StartsWith => visitor.starts_with(reference, literal),
-                PredicateOperator::NotStartsWith => visitor.not_starts_with(reference, literal),
+                PredicateOperator::GreaterThan => {
+                    visitor.greater_than(reference, literal, predicate)
+                }
+                PredicateOperator::GreaterThanOrEq => {
+                    visitor.greater_than_or_eq(reference, literal, predicate)
+                }
+                PredicateOperator::Eq => visitor.eq(reference, literal, predicate),
+                PredicateOperator::NotEq => visitor.not_eq(reference, literal, predicate),
+                PredicateOperator::StartsWith => visitor.starts_with(reference, literal, predicate),
+                PredicateOperator::NotStartsWith => {
+                    visitor.not_starts_with(reference, literal, predicate)
+                }
                 op => {
                     panic!("Unexpected op for binary predicate: {}", &op)
                 }
@@ -156,8 +216,8 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
             let reference = expr.term();
             let literals = expr.literals();
             match expr.op() {
-                PredicateOperator::In => visitor.r#in(reference, literals),
-                PredicateOperator::NotIn => visitor.not_in(reference, literals),
+                PredicateOperator::In => visitor.r#in(reference, literals, predicate),
+                PredicateOperator::NotIn => visitor.not_in(reference, literals, predicate),
                 op => {
                     panic!("Unexpected op for set predicate: {}", &op)
                 }
@@ -170,8 +230,8 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
 mod tests {
     use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
     use crate::expr::{
-        BinaryExpression, Bind, BoundReference, Predicate, PredicateOperator, Reference,
-        SetExpression, UnaryExpression,
+        BinaryExpression, Bind, BoundPredicate, BoundReference, Predicate, PredicateOperator,
+        Reference, SetExpression, UnaryExpression,
     };
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
     use fnv::FnvHashSet;
@@ -202,19 +262,35 @@ mod tests {
             Ok(!inner)
         }
 
-        fn is_null(&mut self, _reference: &BoundReference) -> crate::Result<bool> {
+        fn is_null(
+            &mut self,
+            _reference: &BoundReference,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(true)
         }
 
-        fn not_null(&mut self, _reference: &BoundReference) -> crate::Result<bool> {
+        fn not_null(
+            &mut self,
+            _reference: &BoundReference,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(false)
         }
 
-        fn is_nan(&mut self, _reference: &BoundReference) -> crate::Result<bool> {
+        fn is_nan(
+            &mut self,
+            _reference: &BoundReference,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(true)
         }
 
-        fn not_nan(&mut self, _reference: &BoundReference) -> crate::Result<bool> {
+        fn not_nan(
+            &mut self,
+            _reference: &BoundReference,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(false)
         }
 
@@ -222,6 +298,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(true)
         }
@@ -230,6 +307,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(false)
         }
@@ -238,6 +316,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(true)
         }
@@ -246,15 +325,26 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(false)
         }
 
-        fn eq(&mut self, _reference: &BoundReference, _literal: &Datum) -> crate::Result<bool> {
+        fn eq(
+            &mut self,
+            _reference: &BoundReference,
+            _literal: &Datum,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(true)
         }
 
-        fn not_eq(&mut self, _reference: &BoundReference, _literal: &Datum) -> crate::Result<bool> {
+        fn not_eq(
+            &mut self,
+            _reference: &BoundReference,
+            _literal: &Datum,
+            _predicate: &BoundPredicate,
+        ) -> crate::Result<bool> {
             Ok(false)
         }
 
@@ -262,6 +352,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(true)
         }
@@ -270,6 +361,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literal: &Datum,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(false)
         }
@@ -278,6 +370,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literals: &FnvHashSet<Datum>,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(true)
         }
@@ -286,6 +379,7 @@ mod tests {
             &mut self,
             _reference: &BoundReference,
             _literals: &FnvHashSet<Datum>,
+            _predicate: &BoundPredicate,
         ) -> crate::Result<bool> {
             Ok(false)
         }
