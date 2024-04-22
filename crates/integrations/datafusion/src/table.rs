@@ -27,11 +27,11 @@ pub(crate) struct IcebergTableProvider {
 impl IcebergTableProvider {
     pub(crate) async fn try_new(
         client: Arc<dyn Catalog>,
-        namespace: &NamespaceIdent,
+        namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
         let name = name.into();
-        let ident = TableIdent::new(namespace.to_owned(), name);
+        let ident = TableIdent::new(namespace, name);
         let table = client.load_table(&ident).await?;
 
         Ok(IcebergTableProvider { _inner: table })

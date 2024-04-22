@@ -19,6 +19,7 @@ use std::{any::Any, sync::Arc};
 
 use dashmap::DashMap;
 use datafusion::catalog::{schema::SchemaProvider, CatalogProvider};
+use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::schema::IcebergSchemaProvider;
@@ -36,13 +37,18 @@ impl IcebergCatalogProvider {
             .flat_map(|ns| ns.as_ref().clone())
             .collect();
 
-        let mut schemas = Vec::new();
-        for name in schema_names {
-            let provider =
-                IcebergSchemaProvider::try_new(client.clone(), &NamespaceIdent::new(name.clone()))
-                    .await?;
-            let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
+        let futures: Vec<_> = schema_names
+            .iter()
+            .map(|name| {
+                IcebergSchemaProvider::try_new(client.clone(), NamespaceIdent::new(name.clone()))
+            })
+            .collect();
 
+        let providers = try_join_all(futures).await?;
+
+        let mut schemas = Vec::new();
+        for (name, provider) in schema_names.into_iter().zip(providers.into_iter()) {
+            let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
             schemas.push((name, provider))
         }
 

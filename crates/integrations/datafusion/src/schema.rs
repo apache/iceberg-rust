@@ -21,7 +21,7 @@ use dashmap::DashMap;
 use datafusion::{
     catalog::schema::SchemaProvider, datasource::TableProvider, error::DataFusionError,
 };
-use futures::FutureExt;
+use futures::{future::try_join_all, FutureExt};
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
@@ -33,20 +33,25 @@ pub(crate) struct IcebergSchemaProvider {
 impl IcebergSchemaProvider {
     pub(crate) async fn try_new(
         client: Arc<dyn Catalog>,
-        namespace: &NamespaceIdent,
+        namespace: NamespaceIdent,
     ) -> Result<Self> {
         let table_names: Vec<String> = client
-            .list_tables(namespace)
+            .list_tables(&namespace)
             .await?
             .iter()
             .map(|t| t.name().to_owned())
             .collect();
 
-        let mut tables = Vec::new();
-        for name in table_names {
-            let provider = IcebergTableProvider::try_new(client.clone(), namespace, &name).await?;
-            let provider = Arc::new(provider) as Arc<dyn TableProvider>;
+        let futures: Vec<_> = table_names
+            .iter()
+            .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+            .collect();
 
+        let providers = try_join_all(futures).await?;
+
+        let mut tables = Vec::new();
+        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
+            let provider = Arc::new(provider) as Arc<dyn TableProvider>;
             tables.push((name, provider));
         }
 
