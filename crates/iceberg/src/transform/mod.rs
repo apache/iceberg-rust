@@ -147,7 +147,7 @@ mod test {
         }
     }
 
-    /// A utitily struct, test fixture
+    /// A utility struct, test fixture
     /// used for testing the transform on `Transform`
     pub(crate) struct TestTransformFixture {
         pub display: String,
