@@ -34,7 +34,7 @@ datafusion = ["dep:datafusion"]
 
 [dependencies]
 dashmap = { workspace = true }
-datafusion = { workspace = true, optional = true }
+datafusion = { version = "37.0.0", optional = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
