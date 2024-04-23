@@ -18,6 +18,7 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -227,7 +228,17 @@ impl TableScan {
 
                 while let Some(manifest_entry) = manifest_entries_stream.next().await {
                     // TODO: Apply ExpressionEvaluator
-                    // TODO: Apply InclusiveMetricsEvaluator::eval()
+
+                    if let Some(bound_predicate) = context.bound_filter() {
+                        // reject any manifest entries whose data file's metrics don't match the filter.
+                        if !InclusiveMetricsEvaluator::eval(
+                            bound_predicate,
+                            manifest_entry.data_file(),
+                            false
+                        )? {
+                            continue;
+                        }
+                    }
 
                     match manifest_entry.content_type() {
                         DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
