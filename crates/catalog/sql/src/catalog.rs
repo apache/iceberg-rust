@@ -89,11 +89,11 @@ impl SqlCatalog {
 
         sqlx::query(
             "create table if not exists iceberg_tables (
-                            catalog_name text not null,
-                            table_namespace text not null,
-                            table_name text not null,
-                            metadata_location text,
-                            previous_metadata_location text,
+                            catalog_name varchar(255) not null,
+                            table_namespace varchar(255) not null,
+                            table_name varchar(255) not null,
+                            metadata_location varchar(255),
+                            previous_metadata_location varchar(255),
                             primary key (catalog_name, table_namespace, table_name)
                         );",
         )
@@ -103,10 +103,10 @@ impl SqlCatalog {
 
         sqlx::query(
             "create table if not exists iceberg_namespace_properties (
-                            catalog_name text not null,
-                            namespace text not null,
-                            property_key text,
-                            property_value text,
+                            catalog_name varchar(255) not null,
+                            namespace varchar(255) not null,
+                            property_key varchar(255),
+                            property_value varchar(255),
                             primary key (catalog_name, namespace, property_key)
                         );",
         )
