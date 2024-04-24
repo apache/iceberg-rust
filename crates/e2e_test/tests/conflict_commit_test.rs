@@ -169,7 +169,7 @@ async fn test_append_data_file_conflict() {
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
 
-    // start two transcation and commit one of them
+    // start two transaction and commit one of them
     let tx1 = Transaction::new(&table);
     let mut merge_action = tx1.merge_snapshot(None, vec![]).unwrap();
     merge_action.add_data_files(data_file.clone()).unwrap();
