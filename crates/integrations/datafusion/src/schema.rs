@@ -17,11 +17,10 @@
 
 use std::{any::Any, sync::Arc};
 
+use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion::{
-    catalog::schema::SchemaProvider, datasource::TableProvider, error::DataFusionError,
-};
-use futures::{future::try_join_all, FutureExt};
+use datafusion::{catalog::schema::SchemaProvider, datasource::TableProvider};
+use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
@@ -61,6 +60,7 @@ impl IcebergSchemaProvider {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for IcebergSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -74,29 +74,8 @@ impl SchemaProvider for IcebergSchemaProvider {
         self.tables.get(name).is_some()
     }
 
-    fn table<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        name: &'life1 str,
-    ) -> core::pin::Pin<
-        Box<
-            dyn core::future::Future<
-                    Output = datafusion::error::Result<
-                        Option<Arc<dyn TableProvider>>,
-                        DataFusionError,
-                    >,
-                > + core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        async move {
-            let table = self.tables.get(name).map(|c| c.value().clone());
-            Ok(table)
-        }
-        .boxed()
+    async fn table(&self, name: &str) -> datafusion::error::Result<Option<Arc<dyn TableProvider>>> {
+        let table = self.tables.get(name).map(|c| c.value().clone());
+        Ok(table)
     }
 }
