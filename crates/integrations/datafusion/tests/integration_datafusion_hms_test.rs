@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -104,6 +105,41 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
         .build();
 
     Ok(creation)
+}
+
+#[tokio::test]
+async fn test_provider_get_table_schema() -> Result<()> {
+    let fixture = set_test_fixture("test_provider_get_table_schema").await;
+
+    let namespace = NamespaceIdent::new("default".to_string());
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+
+    fixture
+        .hms_catalog
+        .create_table(&namespace, creation)
+        .await?;
+
+    let client = Arc::new(fixture.hms_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("hive", catalog);
+
+    let provider = ctx.catalog("hive").unwrap();
+    let schema = provider.schema("default").unwrap();
+
+    let table = schema.table("my_table").await.unwrap().unwrap();
+    let table_schema = table.schema();
+
+    let expected = [("foo", &DataType::Int32), ("bar", &DataType::Utf8)];
+
+    for (field, exp) in table_schema.fields().iter().zip(expected.iter()) {
+        assert_eq!(field.name(), exp.0);
+        assert_eq!(field.data_type(), exp.1);
+        assert!(!field.is_nullable())
+    }
+
+    Ok(())
 }
 
 #[tokio::test]

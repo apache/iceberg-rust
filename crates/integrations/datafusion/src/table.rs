@@ -25,13 +25,17 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::ExecutionPlan,
 };
-use iceberg::{table::Table, Catalog, NamespaceIdent, Result, TableIdent};
+use iceberg::{
+    arrow::schema_to_arrow_schema, table::Table, Catalog, NamespaceIdent, Result, TableIdent,
+};
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
 pub(crate) struct IcebergTableProvider {
     /// A table in the catalog.
     _inner: Table,
+    /// A reference-counted arrow `Schema`.
+    schema: SchemaRef,
 }
 
 impl IcebergTableProvider {
@@ -46,7 +50,12 @@ impl IcebergTableProvider {
         let ident = TableIdent::new(namespace, name.into());
         let table = client.load_table(&ident).await?;
 
-        Ok(IcebergTableProvider { _inner: table })
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+
+        Ok(IcebergTableProvider {
+            _inner: table,
+            schema,
+        })
     }
 }
 
@@ -57,7 +66,7 @@ impl TableProvider for IcebergTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        todo!()
+        self.schema.clone()
     }
 
     fn table_type(&self) -> TableType {
