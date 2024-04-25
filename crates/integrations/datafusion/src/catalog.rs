@@ -30,27 +30,34 @@ pub struct IcebergCatalogProvider {
 
 impl IcebergCatalogProvider {
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
-        let schema_names: Vec<String> = client
+        let schema_names: Vec<_> = client
             .list_namespaces(None)
             .await?
             .iter()
             .flat_map(|ns| ns.as_ref().clone())
             .collect();
 
-        let futures: Vec<_> = schema_names
-            .iter()
-            .map(|name| {
-                IcebergSchemaProvider::try_new(client.clone(), NamespaceIdent::new(name.clone()))
+        let providers = try_join_all(
+            schema_names
+                .iter()
+                .map(|name| {
+                    IcebergSchemaProvider::try_new(
+                        client.clone(),
+                        NamespaceIdent::new(name.clone()),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+
+        let schemas: Vec<_> = schema_names
+            .into_iter()
+            .zip(providers.into_iter())
+            .map(|(name, provider)| {
+                let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
+                (name, provider)
             })
             .collect();
-
-        let providers = try_join_all(futures).await?;
-
-        let mut schemas = Vec::new();
-        for (name, provider) in schema_names.into_iter().zip(providers.into_iter()) {
-            let provider = Arc::new(provider) as Arc<dyn SchemaProvider>;
-            schemas.push((name, provider))
-        }
 
         Ok(IcebergCatalogProvider {
             schemas: schemas.into_iter().collect(),
