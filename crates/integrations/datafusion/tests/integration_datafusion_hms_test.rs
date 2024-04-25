@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Integration tests for Datafusion with Hive Metastore.
+//! Integration tests for Iceberg Datafusion with Hive Metastore.
 
 use std::collections::HashMap;
 use std::sync::Arc;
