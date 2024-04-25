@@ -27,11 +27,17 @@ use datafusion::{
 };
 use iceberg::{table::Table, Catalog, NamespaceIdent, Result, TableIdent};
 
+/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
+/// managing access to a [`Table`].
 pub(crate) struct IcebergTableProvider {
+    /// A table in the catalog.
     _inner: Table,
 }
 
 impl IcebergTableProvider {
+    /// Asynchronously tries to construct a new [`IcebergTableProvider`]
+    /// using the given client and table name to fetch an actual [`Table`]
+    /// in the provided namespace.
     pub(crate) async fn try_new(
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,

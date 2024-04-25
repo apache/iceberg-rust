@@ -25,11 +25,23 @@ use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::table::IcebergTableProvider;
 
+/// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
+/// access to table providers within a specific namespace.
 pub(crate) struct IcebergSchemaProvider {
+    /// A concurrent `HashMap` where keys are table names
+    /// and values are dynamic references to objects implementing the
+    /// [`TableProvider`] trait.
     tables: DashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl IcebergSchemaProvider {
+    /// Asynchronously tries to construct a new [`IcebergSchemaProvider`]
+    /// using the given client to fetch and initialize table providers for
+    /// the provided namespace in the Iceberg [`Catalog`].
+    ///
+    /// This method retrieves a list of table names
+    /// attempts to create a table provider for each table name, and
+    /// collects these providers into a concurrent `HashMap`.
     pub(crate) async fn try_new(
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
