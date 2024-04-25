@@ -28,13 +28,10 @@ repository = { workspace = true }
 license = { workspace = true }
 keywords = ["iceberg", "integrations", "datfusion"]
 
-[features]
-default = []
-datafusion = ["dep:datafusion"]
 
 [dependencies]
 dashmap = { workspace = true }
-datafusion = { version = "37.0.0", optional = true }
+datafusion = { version = "37.0.0" }
 futures = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }

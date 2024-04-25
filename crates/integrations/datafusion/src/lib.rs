@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![cfg(feature = "datafusion")]
-
 mod catalog;
 pub use catalog::*;
 
