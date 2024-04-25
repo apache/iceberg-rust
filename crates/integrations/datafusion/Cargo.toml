@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-integrations-datafusion"
+name = "iceberg-datafusion"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Integrations Datafusion"
+description = "Apache Iceberg Datafusion Integration"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "integrations", "datfusion"]
+keywords = ["iceberg", "integrations", "datafusion"]
 
 
 [dependencies]
