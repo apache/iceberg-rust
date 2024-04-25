@@ -28,7 +28,6 @@ repository = { workspace = true }
 license = { workspace = true }
 keywords = ["iceberg", "integrations", "datafusion"]
 
-
 [dependencies]
 async-trait = { workspace = true }
 dashmap = { workspace = true }
