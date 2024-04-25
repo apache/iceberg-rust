@@ -40,6 +40,13 @@ use uuid::Uuid;
 
 use crate::error::from_sqlx_error;
 
+static CATALOG_TABLE_VIEW_NAME: &str = "iceberg_tables";
+static CATALOG_NAME: &str = "catalog_name";
+static TABLE_NAME: &str = "table_name";
+static TABLE_NAMESPACE: &str = "table_namespace";
+static METADATA_LOCATION_PROP: &str = "metadata_locaion";
+static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
+
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
 pub struct SqlCatalogConfig {
@@ -88,14 +95,26 @@ impl SqlCatalog {
             .map_err(from_sqlx_error)?;
 
         sqlx::query(
-            "create table if not exists iceberg_tables (
-                            catalog_name varchar(255) not null,
-                            table_namespace varchar(255) not null,
-                            table_name varchar(255) not null,
-                            metadata_location varchar(255),
-                            previous_metadata_location varchar(255),
-                            primary key (catalog_name, table_namespace, table_name)
-                        );",
+            &("create table if not exists ".to_string()
+                + CATALOG_TABLE_VIEW_NAME
+                + " ("
+                + CATALOG_NAME
+                + " varchar(255) not null,"
+                + TABLE_NAMESPACE
+                + " varchar(255) not null,"
+                + TABLE_NAME
+                + " varchar(255) not null,"
+                + METADATA_LOCATION_PROP
+                + " varchar(255),"
+                + PREVIOUS_METADATA_LOCATION_PROP
+                + " varchar(255), primary key ("
+                + CATALOG_NAME
+                + ", "
+                + TABLE_NAMESPACE
+                + ", "
+                + TABLE_NAME
+                + ")
+                        );"),
         )
         .execute(&pool)
         .await
@@ -214,7 +233,28 @@ impl Catalog for SqlCatalog {
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = self.name.clone();
         let namespace = namespace.encode_in_url();
-        let rows = sqlx::query("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = ? and table_namespace = ?;").bind(&name).bind(&namespace).fetch_all(&self.connection).await.map_err(from_sqlx_error)?;
+        let rows = sqlx::query(
+            &("select ".to_string()
+                + TABLE_NAMESPACE
+                + ", "
+                + TABLE_NAME
+                + ", "
+                + METADATA_LOCATION_PROP
+                + ", "
+                + PREVIOUS_METADATA_LOCATION_PROP
+                + " from "
+                + CATALOG_TABLE_VIEW_NAME
+                + " where "
+                + CATALOG_NAME
+                + " = ? and "
+                + TABLE_NAMESPACE
+                + "= ?;"),
+        )
+        .bind(&name)
+        .bind(&namespace)
+        .fetch_all(&self.connection)
+        .await
+        .map_err(from_sqlx_error)?;
         let iter = rows.iter().map(query_map);
 
         Ok(iter
@@ -238,13 +278,31 @@ impl Catalog for SqlCatalog {
         let catalog_name = self.name.clone();
         let namespace = identifier.namespace().encode_in_url();
         let name = identifier.name().to_string();
-        let rows = sqlx::query("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = ? and table_namespace = ? and table_name = ?;")
-            .bind(&catalog_name)
-            .bind(&namespace)
-            .bind(&name)
-            .fetch_all(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?;
+        let rows = sqlx::query(
+            &("select ".to_string()
+                + TABLE_NAMESPACE
+                + ", "
+                + TABLE_NAME
+                + ", "
+                + METADATA_LOCATION_PROP
+                + ", "
+                + PREVIOUS_METADATA_LOCATION_PROP
+                + " from "
+                + CATALOG_TABLE_VIEW_NAME
+                + " where "
+                + CATALOG_NAME
+                + " = ? and "
+                + TABLE_NAMESPACE
+                + " = ? and "
+                + TABLE_NAME
+                + " = ?;"),
+        )
+        .bind(&catalog_name)
+        .bind(&namespace)
+        .bind(&name)
+        .fetch_all(&self.connection)
+        .await
+        .map_err(from_sqlx_error)?;
         let mut iter = rows.iter().map(query_map);
 
         Ok(iter.next().is_some())
@@ -259,7 +317,31 @@ impl Catalog for SqlCatalog {
             let catalog_name = self.name.clone();
             let namespace = identifier.namespace().encode_in_url();
             let name = identifier.name().to_string();
-            let row = sqlx::query("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = ? and table_namespace = ? and table_name = ?;").bind(&catalog_name).bind(&namespace).bind(&name).fetch_one(&self.connection).await.map_err(from_sqlx_error)?;
+            let row = sqlx::query(
+                &("select ".to_string()
+                    + TABLE_NAMESPACE
+                    + ", "
+                    + TABLE_NAME
+                    + ", "
+                    + METADATA_LOCATION_PROP
+                    + ", "
+                    + PREVIOUS_METADATA_LOCATION_PROP
+                    + " from "
+                    + CATALOG_TABLE_VIEW_NAME
+                    + " where "
+                    + CATALOG_NAME
+                    + " = ? and "
+                    + TABLE_NAMESPACE
+                    + " = ? and "
+                    + TABLE_NAME
+                    + " = ?;"),
+            )
+            .bind(&catalog_name)
+            .bind(&namespace)
+            .bind(&name)
+            .fetch_one(&self.connection)
+            .await
+            .map_err(from_sqlx_error)?;
             let row = query_map(&row).map_err(from_sqlx_error)?;
 
             row.metadata_location
@@ -311,14 +393,26 @@ impl Catalog for SqlCatalog {
             let name = name.clone();
             let metadata_location = metadata_location.to_string();
 
-            sqlx::query("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values (?, ?, ?, ?);")
-                .bind(&catalog_name)
-                .bind(&namespace)
-                .bind(&name)
-                .bind(&metadata_location)
-                .execute(&self.connection)
-                .await
-                .map_err(from_sqlx_error)?;
+            sqlx::query(
+                &("insert into ".to_string()
+                    + CATALOG_TABLE_VIEW_NAME
+                    + " ("
+                    + CATALOG_NAME
+                    + ", "
+                    + TABLE_NAMESPACE
+                    + ", "
+                    + TABLE_NAME
+                    + ", "
+                    + METADATA_LOCATION_PROP
+                    + ") values (?, ?, ?, ?);"),
+            )
+            .bind(&catalog_name)
+            .bind(&namespace)
+            .bind(&name)
+            .bind(&metadata_location)
+            .execute(&self.connection)
+            .await
+            .map_err(from_sqlx_error)?;
         }
 
         Ok(Table::builder()
