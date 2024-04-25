@@ -34,25 +34,29 @@ impl IcebergSchemaProvider {
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
     ) -> Result<Self> {
-        let table_names: Vec<String> = client
+        let table_names: Vec<_> = client
             .list_tables(&namespace)
             .await?
             .iter()
-            .map(|t| t.name().to_owned())
+            .map(|tbl| tbl.name().to_string())
             .collect();
 
-        let futures: Vec<_> = table_names
-            .iter()
-            .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+        let providers = try_join_all(
+            table_names
+                .iter()
+                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+
+        let tables: Vec<_> = table_names
+            .into_iter()
+            .zip(providers.into_iter())
+            .map(|(name, provider)| {
+                let provider = Arc::new(provider) as Arc<dyn TableProvider>;
+                (name, provider)
+            })
             .collect();
-
-        let providers = try_join_all(futures).await?;
-
-        let mut tables = Vec::new();
-        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
-            let provider = Arc::new(provider) as Arc<dyn TableProvider>;
-            tables.push((name, provider));
-        }
 
         Ok(IcebergSchemaProvider {
             tables: tables.into_iter().collect(),
