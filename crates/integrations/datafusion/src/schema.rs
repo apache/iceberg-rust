@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use datafusion::{catalog::schema::SchemaProvider, datasource::TableProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
@@ -31,7 +30,7 @@ pub(crate) struct IcebergSchemaProvider {
     /// A concurrent `HashMap` where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
-    tables: DashMap<String, Arc<dyn TableProvider>>,
+    tables: HashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl IcebergSchemaProvider {
@@ -83,7 +82,7 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.iter().map(|c| c.key().clone()).collect()
+        self.tables.keys().cloned().collect()
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -91,7 +90,6 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     async fn table(&self, name: &str) -> datafusion::error::Result<Option<Arc<dyn TableProvider>>> {
-        let table = self.tables.get(name).map(|c| c.value().clone());
-        Ok(table)
+        Ok(self.tables.get(name).cloned())
     }
 }

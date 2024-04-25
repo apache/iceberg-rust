@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
-use dashmap::DashMap;
 use datafusion::catalog::{schema::SchemaProvider, CatalogProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
@@ -33,7 +32,7 @@ pub struct IcebergCatalogProvider {
     /// A concurrent `HashMap` where keys are namespace names
     /// and values are dynamic references to objects implementing the
     /// [`SchemaProvider`] trait.
-    schemas: DashMap<String, Arc<dyn SchemaProvider>>,
+    schemas: HashMap<String, Arc<dyn SchemaProvider>>,
 }
 
 impl IcebergCatalogProvider {
@@ -86,10 +85,10 @@ impl CatalogProvider for IcebergCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        self.schemas.iter().map(|c| c.key().clone()).collect()
+        self.schemas.keys().cloned().collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas.get(name).map(|c| c.value().clone())
+        self.schemas.get(name).cloned()
     }
 }
