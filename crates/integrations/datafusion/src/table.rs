@@ -37,8 +37,7 @@ impl IcebergTableProvider {
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
-        let name = name.into();
-        let ident = TableIdent::new(namespace, name);
+        let ident = TableIdent::new(namespace, name.into());
         let table = client.load_table(&ident).await?;
 
         Ok(IcebergTableProvider { _inner: table })

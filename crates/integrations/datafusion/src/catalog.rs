@@ -24,11 +24,26 @@ use iceberg::{Catalog, NamespaceIdent, Result};
 
 use crate::schema::IcebergSchemaProvider;
 
+/// Provides an interface to manage and access multiple schemas
+/// within an Iceberg [`Catalog`].
+///
+/// Acts as a centralized catalog provider that aggregates
+/// multiple [`SchemaProvider`], each associated with distinct namespaces.
 pub struct IcebergCatalogProvider {
+    /// A concurrent `HashMap` where keys are namespace names
+    /// and values are dynamic references to objects implementing the
+    /// [`SchemaProvider`] trait
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
 
 impl IcebergCatalogProvider {
+    /// Asynchronously constructs a new [`IcebergCatalogProvider`]
+    /// using the given client to fetch and initialize schema providers for
+    /// each namespace in the Iceberg catalog.
+    ///
+    /// This method retrieves the list of namespace names from the Iceberg
+    /// catalog, attempts to create a schema provider for each namespace, and
+    /// collects these providers into a concurrent `HashMap`.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
         let schema_names: Vec<_> = client
             .list_namespaces(None)
