@@ -15,9 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
-use datafusion::datasource::{TableProvider, TableType};
+use async_trait::async_trait;
+use datafusion::{
+    arrow::datatypes::SchemaRef,
+    datasource::{TableProvider, TableType},
+    execution::context,
+    logical_expr::Expr,
+    physical_plan::ExecutionPlan,
+};
 use iceberg::{table::Table, Catalog, NamespaceIdent, Result, TableIdent};
 
 pub(crate) struct IcebergTableProvider {
@@ -38,42 +45,27 @@ impl IcebergTableProvider {
     }
 }
 
+#[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         todo!()
     }
 
-    fn table_type(&self) -> datafusion::datasource::TableType {
+    fn table_type(&self) -> TableType {
         TableType::Base
     }
 
-    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
-        &'life0 self,
-        _state: &'life1 datafusion::execution::context::SessionState,
-        _projection: Option<&'life2 Vec<usize>>,
-        _filters: &'life3 [datafusion::prelude::Expr],
+    async fn scan(
+        &self,
+        _state: &context::SessionState,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
         _limit: Option<usize>,
-    ) -> core::pin::Pin<
-        Box<
-            dyn core::future::Future<
-                    Output = datafusion::error::Result<
-                        Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-                    >,
-                > + core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        'life3: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }
 }
