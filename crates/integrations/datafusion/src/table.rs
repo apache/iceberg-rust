@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{TableProvider, TableType};
 use iceberg::{table::Table, Catalog, NamespaceIdent, Result, TableIdent};
 
 pub(crate) struct IcebergTableProvider {
@@ -48,7 +48,7 @@ impl TableProvider for IcebergTableProvider {
     }
 
     fn table_type(&self) -> datafusion::datasource::TableType {
-        todo!()
+        TableType::Base
     }
 
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
