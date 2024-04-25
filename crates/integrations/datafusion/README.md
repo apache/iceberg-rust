@@ -17,6 +17,6 @@
   ~ under the License.
 -->
 
-# Apache Iceberg Integrations
+# Apache Iceberg Datafusion Integration
 
-This crate contains the official Native Rust implementation of Apache Iceberg Integrations.
+This crate contains the integration of Apache Datafusion and Apache Iceberg.
