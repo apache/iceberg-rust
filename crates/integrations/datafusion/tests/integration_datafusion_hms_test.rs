@@ -17,8 +17,6 @@
 
 //! Integration tests for Datafusion with Hive Metastore.
 
-#![cfg(feature = "datafusion")]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,7 +25,7 @@ use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
-use iceberg_integrations_datafusion::IcebergCatalogProvider;
+use iceberg_datafusion::IcebergCatalogProvider;
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
