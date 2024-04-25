@@ -19,7 +19,7 @@ use std::{any::Any, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::SchemaRef as ArrowSchemaRef,
     datasource::{TableProvider, TableType},
     execution::context,
     logical_expr::Expr,
@@ -35,7 +35,7 @@ pub(crate) struct IcebergTableProvider {
     /// A table in the catalog.
     _inner: Table,
     /// A reference-counted arrow `Schema`.
-    schema: SchemaRef,
+    schema: ArrowSchemaRef,
 }
 
 impl IcebergTableProvider {
@@ -65,7 +65,7 @@ impl TableProvider for IcebergTableProvider {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
+    fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
 
