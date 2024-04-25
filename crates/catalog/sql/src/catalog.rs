@@ -44,7 +44,7 @@ static CATALOG_TABLE_VIEW_NAME: &str = "iceberg_tables";
 static CATALOG_NAME: &str = "catalog_name";
 static TABLE_NAME: &str = "table_name";
 static TABLE_NAMESPACE: &str = "table_namespace";
-static METADATA_LOCATION_PROP: &str = "metadata_locaion";
+static METADATA_LOCATION_PROP: &str = "metadata_location";
 static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static RECORD_TYPE: &str = "iceberg_type";
 
