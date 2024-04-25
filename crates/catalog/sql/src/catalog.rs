@@ -46,6 +46,7 @@ static TABLE_NAME: &str = "table_name";
 static TABLE_NAMESPACE: &str = "table_namespace";
 static METADATA_LOCATION_PROP: &str = "metadata_locaion";
 static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
+static RECORD_TYPE: &str = "iceberg_type";
 
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
@@ -107,7 +108,9 @@ impl SqlCatalog {
                 + METADATA_LOCATION_PROP
                 + " varchar(255),"
                 + PREVIOUS_METADATA_LOCATION_PROP
-                + " varchar(255), primary key ("
+                + " varchar(255),"
+                + RECORD_TYPE
+                + " varchar(5), primary key ("
                 + CATALOG_NAME
                 + ", "
                 + TABLE_NAMESPACE
@@ -232,7 +235,7 @@ impl Catalog for SqlCatalog {
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = self.name.clone();
-        let namespace = namespace.encode_in_url();
+        let namespace = namespace.join(".");
         let rows = sqlx::query(
             &("select ".to_string()
                 + TABLE_NAMESPACE
