@@ -105,12 +105,12 @@ impl<'a> Transaction<'a> {
         Ok(self)
     }
 
-    /// Creates a merge snapshot action.
-    pub fn merge_snapshot(
+    /// Creates a fast append action.
+    pub fn fast_append(
         self,
         commit_uuid: Option<String>,
         key_metadata: Vec<u8>,
-    ) -> Result<MergeSnapshotAction<'a>> {
+    ) -> Result<FastAppendAction<'a>> {
         let parent_snapshot_id = self
             .table
             .metadata()
@@ -128,7 +128,7 @@ impl<'a> Transaction<'a> {
             .unwrap_or_default();
         let commit_uuid = commit_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        MergeSnapshotAction::new(
+        FastAppendAction::new(
             self,
             parent_snapshot_id,
             snapshot_id,
@@ -167,8 +167,8 @@ impl<'a> Transaction<'a> {
     }
 }
 
-/// Transaction action for merging snapshot.
-pub struct MergeSnapshotAction<'a> {
+/// FastAppendAction is a transaction action for fast append data files to the table.
+pub struct FastAppendAction<'a> {
     tx: Transaction<'a>,
 
     parent_snapshot_id: Option<i64>,
@@ -185,7 +185,7 @@ pub struct MergeSnapshotAction<'a> {
     appended_data_files: Vec<DataFile>,
 }
 
-impl<'a> MergeSnapshotAction<'a> {
+impl<'a> FastAppendAction<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         tx: Transaction<'a>,
@@ -235,21 +235,6 @@ impl<'a> MergeSnapshotAction<'a> {
         )
     }
 
-    fn generate_manifest_list_file_path(&self, next_seq_num: i64) -> String {
-        format!(
-            "{}/{}/snap-{}-{}-{}.{}",
-            self.tx.table.metadata().location(),
-            META_ROOT_PATH,
-            self.snapshot_id,
-            next_seq_num,
-            self.commit_uuid,
-            DataFileFormat::Avro
-        )
-    }
-
-    // # TODO:
-    // This method act like fast append now, because we don't support overwrite and partial overwrite.
-    // In the future, this method should be modify when we support them.
     async fn manifest_from_parent_snapshot(&self) -> Result<Vec<ManifestFile>> {
         if let Some(snapshot) = self.tx.table.metadata().current_snapshot() {
             let manifest_list = snapshot
@@ -316,31 +301,98 @@ impl<'a> MergeSnapshotAction<'a> {
 
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(mut self) -> Result<Transaction<'a>> {
+        let summary = self.summary();
+        let manifest = self.manifest_for_data_file().await?;
+        let existing_manifest_files = self.manifest_from_parent_snapshot().await?;
+
+        let snapshot_produce_action = SnapshotProduceAction::new(
+            self.tx,
+            self.snapshot_id,
+            self.parent_snapshot_id,
+            self.schema_id,
+            self.format_version,
+            self.commit_uuid,
+        )?;
+
+        snapshot_produce_action
+            .apply(
+                vec![manifest]
+                    .into_iter()
+                    .chain(existing_manifest_files.into_iter()),
+                summary,
+            )
+            .await
+    }
+}
+
+struct SnapshotProduceAction<'a> {
+    tx: Transaction<'a>,
+
+    parent_snapshot_id: Option<i64>,
+    snapshot_id: i64,
+    schema_id: i32,
+    format_version: FormatVersion,
+
+    commit_uuid: String,
+}
+
+impl<'a> SnapshotProduceAction<'a> {
+    pub(crate) fn new(
+        tx: Transaction<'a>,
+        snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
+        schema_id: i32,
+        format_version: FormatVersion,
+        commit_uuid: String,
+    ) -> Result<Self> {
+        Ok(Self {
+            tx,
+            parent_snapshot_id,
+            snapshot_id,
+            schema_id,
+            format_version,
+            commit_uuid,
+        })
+    }
+
+    fn generate_manifest_list_file_path(&self, next_seq_num: i64) -> String {
+        format!(
+            "{}/{}/snap-{}-{}-{}.{}",
+            self.tx.table.metadata().location(),
+            META_ROOT_PATH,
+            self.snapshot_id,
+            next_seq_num,
+            self.commit_uuid,
+            DataFileFormat::Avro
+        )
+    }
+
+    /// Finished building the action and apply it to the transaction.
+    pub async fn apply(
+        mut self,
+        manifest_files: impl IntoIterator<Item = ManifestFile>,
+        summary: Summary,
+    ) -> Result<Transaction<'a>> {
         let next_seq_num = if self.format_version as u8 > 1u8 {
             self.tx.table.metadata().last_sequence_number() + 1
         } else {
             INITIAL_SEQUENCE_NUMBER
         };
         let commit_ts = chrono::Utc::now().timestamp_millis();
-        let summary = self.summary();
-
-        let manifest = self.manifest_for_data_file().await?;
-
         let manifest_list_path = self.generate_manifest_list_file_path(next_seq_num);
+
         let mut manifest_list_writer = ManifestListWriter::v2(
             self.tx
                 .table
                 .file_io()
-                .new_output(self.generate_manifest_list_file_path(next_seq_num))?,
+                .new_output(manifest_list_path.clone())?,
             self.snapshot_id,
             // # TODO
             // Should we use `0` here for default parent snapshot id?
             self.parent_snapshot_id.unwrap_or_default(),
             next_seq_num,
         );
-        manifest_list_writer
-            .add_manifests(self.manifest_from_parent_snapshot().await?.into_iter())?;
-        manifest_list_writer.add_manifests(vec![manifest].into_iter())?;
+        manifest_list_writer.add_manifests(manifest_files.into_iter())?;
         manifest_list_writer.close().await?;
 
         let new_snapshot = Snapshot::builder()
@@ -636,7 +688,7 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap();
-        let mut action = tx.merge_snapshot(None, vec![]).unwrap();
+        let mut action = tx.fast_append(None, vec![]).unwrap();
         action.add_data_files(vec![data_file.clone()]).unwrap();
         let tx = action.apply().await.unwrap();
 
