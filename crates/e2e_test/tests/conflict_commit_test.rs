@@ -171,13 +171,13 @@ async fn test_append_data_file_conflict() {
 
     // start two transaction and commit one of them
     let tx1 = Transaction::new(&table);
-    let mut merge_action = tx1.merge_snapshot(None, vec![]).unwrap();
-    merge_action.add_data_files(data_file.clone()).unwrap();
-    let tx1 = merge_action.apply().await.unwrap();
+    let mut append_action = tx1.fast_append(None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx1 = append_action.apply().await.unwrap();
     let tx2 = Transaction::new(&table);
-    let mut merge_action = tx2.merge_snapshot(None, vec![]).unwrap();
-    merge_action.add_data_files(data_file.clone()).unwrap();
-    let tx2 = merge_action.apply().await.unwrap();
+    let mut append_action = tx2.fast_append(None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx2 = append_action.apply().await.unwrap();
     let table = tx2.commit(&fixture.rest_catalog).await.unwrap();
 
     // check result

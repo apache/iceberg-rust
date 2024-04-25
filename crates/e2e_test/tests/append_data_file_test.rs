@@ -171,9 +171,9 @@ async fn test_append_data_file() {
 
     // commit result
     let tx = Transaction::new(&table);
-    let mut merge_action = tx.merge_snapshot(None, vec![]).unwrap();
-    merge_action.add_data_files(data_file.clone()).unwrap();
-    let tx = merge_action.apply().await.unwrap();
+    let mut append_action = tx.fast_append(None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx = append_action.apply().await.unwrap();
     let table = tx.commit(&fixture.rest_catalog).await.unwrap();
 
     // check result
@@ -191,9 +191,9 @@ async fn test_append_data_file() {
 
     // commit result again
     let tx = Transaction::new(&table);
-    let mut merge_action = tx.merge_snapshot(None, vec![]).unwrap();
-    merge_action.add_data_files(data_file.clone()).unwrap();
-    let tx = merge_action.apply().await.unwrap();
+    let mut append_action = tx.fast_append(None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx = append_action.apply().await.unwrap();
     let table = tx.commit(&fixture.rest_catalog).await.unwrap();
 
     // check result again
