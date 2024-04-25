@@ -256,9 +256,7 @@ mod tests {
     use arrow_array::Int64Array;
     use arrow_array::RecordBatch;
     use arrow_array::StructArray;
-    use bytes::Bytes;
-    use futures::AsyncReadExt;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
 
@@ -267,6 +265,7 @@ mod tests {
     use crate::spec::Struct;
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::tests::check_parquet_data_file;
 
     #[derive(Clone)]
     struct TestLocationGen;
@@ -318,53 +317,9 @@ mod tests {
             .build()
             .unwrap();
 
-        // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
-        let metadata = reader_builder.metadata().clone();
-
-        // check data
-        let mut reader = reader_builder.build().unwrap();
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write, res);
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write_null, res);
-
-        // check metadata
-        assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.row_group(0).num_columns(), 1);
-        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
-        assert_eq!(
-            data_file.record_count,
-            metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64
-        );
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
-        assert_eq!(data_file.column_sizes.len(), 1);
-        assert_eq!(
-            *data_file.column_sizes.get(&0).unwrap(),
-            metadata.row_group(0).column(0).compressed_size() as u64
-        );
-        assert_eq!(data_file.value_counts.len(), 1);
-        assert_eq!(*data_file.value_counts.get(&0).unwrap(), 2048);
-        assert_eq!(data_file.null_value_counts.len(), 1);
-        assert_eq!(*data_file.null_value_counts.get(&0).unwrap(), 1024);
-        assert_eq!(data_file.key_metadata.len(), 0);
-        assert_eq!(data_file.split_offsets.len(), 1);
-        assert_eq!(
-            *data_file.split_offsets.first().unwrap(),
-            metadata.row_group(0).file_offset().unwrap()
-        );
+        // check the written file
+        let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
 
         Ok(())
     }
@@ -397,7 +352,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "5".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -416,7 +371,7 @@ mod tests {
                         arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
                             .with_metadata(HashMap::from([(
                                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "-1".to_string(),
+                                "6".to_string(),
                             )])),
                     )),
                     true,
@@ -438,7 +393,7 @@ mod tests {
                                 )
                                 .with_metadata(HashMap::from([(
                                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    "-1".to_string(),
+                                    "7".to_string(),
                                 )]))]
                                 .into(),
                             ),
@@ -446,7 +401,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "8".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -465,7 +420,7 @@ mod tests {
                 arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "5".to_string(),
                     )])),
             ]
             .into(),
@@ -487,7 +442,7 @@ mod tests {
             arrow_array::ListArray::new(
                 Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "-1".to_string(),
+                    "6".to_string(),
                 )]))),
                 list_parts.1,
                 list_parts.2,
@@ -505,7 +460,7 @@ mod tests {
                     )
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "7".to_string(),
                     )]))]
                     .into(),
                 ),
@@ -513,7 +468,7 @@ mod tests {
             )
             .with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                "-1".to_string(),
+                "8".to_string(),
             )]))]
             .into(),
             vec![Arc::new(StructArray::new(
@@ -521,7 +476,7 @@ mod tests {
                     arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "7".to_string(),
                         )])),
                 ]
                 .into(),
@@ -556,57 +511,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
-        let metadata = reader_builder.metadata().clone();
-
-        // check data
-        let mut reader = reader_builder.build().unwrap();
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write, res);
-
-        // check metadata
-        assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.row_group(0).num_columns(), 5);
-        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
-        assert_eq!(
-            data_file.record_count,
-            metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64
-        );
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
-        assert_eq!(data_file.column_sizes.len(), 5);
-        assert_eq!(
-            *data_file.column_sizes.get(&0).unwrap(),
-            metadata.row_group(0).column(0).compressed_size() as u64
-        );
-        assert_eq!(data_file.value_counts.len(), 5);
-        data_file
-            .value_counts
-            .iter()
-            .for_each(|(_, v)| assert_eq!(*v, 1024));
-        assert_eq!(data_file.null_value_counts.len(), 5);
-        data_file
-            .null_value_counts
-            .iter()
-            .for_each(|(_, v)| assert_eq!(*v, 0));
-        assert_eq!(data_file.key_metadata.len(), 0);
-        assert_eq!(data_file.split_offsets.len(), 1);
-        assert_eq!(
-            *data_file.split_offsets.first().unwrap(),
-            metadata.row_group(0).file_offset().unwrap()
-        );
+        // check the written file
+        check_parquet_data_file(&file_io, &data_file, &to_write).await;
 
         Ok(())
     }
