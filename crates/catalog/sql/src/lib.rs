@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg REST API implementation.
+//! Iceberg sql catalog implementation.
 
 #![deny(missing_docs)]
 
