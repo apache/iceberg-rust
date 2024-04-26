@@ -51,7 +51,7 @@ static RECORD_TYPE: &str = "iceberg_type";
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
 pub struct SqlCatalogConfig {
-    url: String,
+    uri: String,
     name: String,
     warehouse: String,
     #[builder(default)]
@@ -91,7 +91,7 @@ impl SqlCatalog {
             .max_connections(max_connections)
             .idle_timeout(Duration::from_secs(idle_timeout))
             .test_before_acquire(test_before_acquire)
-            .connect(&config.url)
+            .connect(&config.uri)
             .await
             .map_err(from_sqlx_error)?;
 
@@ -445,14 +445,14 @@ pub mod tests {
         let warehouse_root = dir.path().to_str().unwrap();
 
         //name of the database should be part of the url. usually for sqllite it creates or opens one if (.db found)
-        let sql_lite_url = "sqlite://iceberg";
+        let sql_lite_uri = "sqlite://iceberg";
 
-        if !sqlx::Sqlite::database_exists(sql_lite_url).await.unwrap() {
-            sqlx::Sqlite::create_database(sql_lite_url).await.unwrap();
+        if !sqlx::Sqlite::database_exists(sql_lite_uri).await.unwrap() {
+            sqlx::Sqlite::create_database(sql_lite_uri).await.unwrap();
         }
 
         let config = SqlCatalogConfig::builder()
-            .url(sql_lite_url.to_string())
+            .uri(sql_lite_uri.to_string())
             .name("iceberg".to_string())
             .warehouse(warehouse_root.to_owned())
             .build();
@@ -505,6 +505,6 @@ pub mod tests {
         assert!(table.metadata().location().ends_with("/warehouse/table1"));
 
         //tear down the database and tables
-        sqlx::Sqlite::drop_database(sql_lite_url).await.unwrap();
+        sqlx::Sqlite::drop_database(sql_lite_uri).await.unwrap();
     }
 }
