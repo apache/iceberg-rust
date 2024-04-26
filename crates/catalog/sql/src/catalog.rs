@@ -47,6 +47,7 @@ static TABLE_NAMESPACE: &str = "table_namespace";
 static METADATA_LOCATION_PROP: &str = "metadata_location";
 static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static RECORD_TYPE: &str = "iceberg_type";
+static TABLE_RECORD_TYPE: &str = "TABLE";
 
 static MAX_CONNECTIONS: u32 = 10;
 static IDLE_TIMEOUT: u64 = 10;
@@ -121,7 +122,7 @@ impl SqlCatalog {
                 + ", "
                 + TABLE_NAME
                 + ")
-                        );"),
+                );"),
         )
         .execute(&pool)
         .await
@@ -253,7 +254,13 @@ impl Catalog for SqlCatalog {
                 + CATALOG_NAME
                 + " = ? and "
                 + TABLE_NAMESPACE
-                + "= ?;"),
+                + " = ? and ("
+                + RECORD_TYPE
+                + " = '"
+                + TABLE_RECORD_TYPE
+                + "' or "
+                + RECORD_TYPE
+                + " is null);"),
         )
         .bind(&name)
         .bind(&namespace)
@@ -295,7 +302,13 @@ impl Catalog for SqlCatalog {
                 + TABLE_NAMESPACE
                 + " = ? and "
                 + TABLE_NAME
-                + " = ?;"),
+                + " = ? and ("
+                + RECORD_TYPE
+                + " = '"
+                + TABLE_RECORD_TYPE
+                + "' or "
+                + RECORD_TYPE
+                + " is null);"),
         )
         .bind(&catalog_name)
         .bind(&namespace)
@@ -334,7 +347,13 @@ impl Catalog for SqlCatalog {
                     + TABLE_NAMESPACE
                     + " = ? and "
                     + TABLE_NAME
-                    + " = ?;"),
+                    + " = ? and ("
+                    + RECORD_TYPE
+                    + " = '"
+                    + TABLE_RECORD_TYPE
+                    + "' or "
+                    + RECORD_TYPE
+                    + " is null);"),
             )
             .bind(&catalog_name)
             .bind(&namespace)
@@ -445,7 +464,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_create_update_drop_table() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::with_prefix("sql-test").unwrap();
         let warehouse_root = dir.path().to_str().unwrap();
 
         //name of the database should be part of the url. usually for sqllite it creates or opens one if (.db found)
