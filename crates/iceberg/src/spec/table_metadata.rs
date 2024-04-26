@@ -862,10 +862,9 @@ pub(super) mod _serde {
     }
 }
 
-#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy, Default)]
 #[repr(u8)]
 /// Iceberg format version
-#[derive(Default)]
 pub enum FormatVersion {
     /// Iceberg spec version 1
     V1 = 1u8,
