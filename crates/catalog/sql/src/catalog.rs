@@ -50,7 +50,7 @@ static RECORD_TYPE: &str = "iceberg_type";
 
 static MAX_CONNECTIONS: u32 = 10;
 static IDLE_TIMEOUT: u64 = 10;
-static TEST_BEFORE_AQUIRE = true;
+static TEST_BEFORE_AQUIRE: bool = true;
 
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
@@ -186,11 +186,11 @@ impl Catalog for SqlCatalog {
         &self,
         _parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let name = self.name.clone();
+        let name = &self.name;
         let rows = sqlx::query(
             "select distinct table_namespace from iceberg_tables where catalog_name = ?;",
         )
-        .bind(&name)
+        .bind(name)
         .fetch_all(&self.connection)
         .await
         .map_err(from_sqlx_error)?;
@@ -445,7 +445,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_create_update_drop_table() {
-        let dir = TempDir::with_prefix("sql-test").unwrap();
+        let dir = TempDir::new().unwrap();
         let warehouse_root = dir.path().to_str().unwrap();
 
         //name of the database should be part of the url. usually for sqllite it creates or opens one if (.db found)
