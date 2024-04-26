@@ -143,7 +143,7 @@ impl SqlCatalog {
         Ok(SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
-            storage: file_io,
+            fileio: file_io,
             cache: Arc::new(DashMap::new()),
         })
     }
@@ -349,7 +349,7 @@ impl Catalog for SqlCatalog {
 
             row.metadata_location
         };
-        let file = self.storage.new_input(&metadata_location)?;
+        let file = self.fileio.new_input(&metadata_location)?;
 
         let mut json = String::new();
         file.reader().await?.read_to_string(&mut json).await?;
@@ -360,7 +360,7 @@ impl Catalog for SqlCatalog {
             .insert(identifier.clone(), (metadata_location, metadata.clone()));
 
         let table = Table::builder()
-            .file_io(self.storage.clone())
+            .file_io(self.fileio.clone())
             .identifier(identifier.clone())
             .metadata(metadata)
             .build();
@@ -385,7 +385,7 @@ impl Catalog for SqlCatalog {
 
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
 
-        let file = self.storage.new_output(&metadata_location)?;
+        let file = self.fileio.new_output(&metadata_location)?;
         file.writer()
             .await?
             .write_all(&serde_json::to_vec(&metadata)?)
@@ -419,7 +419,7 @@ impl Catalog for SqlCatalog {
         }
 
         Ok(Table::builder()
-            .file_io(self.storage.clone())
+            .file_io(self.fileio.clone())
             .metadata_location(metadata_location)
             .identifier(TableIdent::new(namespace.clone(), name))
             .metadata(metadata)
