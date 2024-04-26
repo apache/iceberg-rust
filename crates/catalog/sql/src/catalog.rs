@@ -63,7 +63,7 @@ pub struct SqlCatalogConfig {
 pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
-    storage: FileIO,
+    fileio: FileIO,
     cache: Arc<DashMap<TableIdent, (String, TableMetadata)>>,
 }
 
