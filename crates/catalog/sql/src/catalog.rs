@@ -195,10 +195,8 @@ impl Catalog for SqlCatalog {
         Ok(iter
             .map(|x| {
                 x.and_then(|y| {
-                    NamespaceIdent::from_vec(
-                        y.split('.').map(ToString::to_string).collect::<Vec<_>>(),
-                    )
-                    .map_err(|err| sqlx::Error::Decode(Box::new(err)))
+                    NamespaceIdent::from_strs(y.split("."))
+                        .map_err(|err| sqlx::Error::Decode(Box::new(err)))
                 })
             })
             .collect::<std::result::Result<_, sqlx::Error>>()
@@ -263,13 +261,8 @@ impl Catalog for SqlCatalog {
         Ok(iter
             .map(|x| {
                 x.and_then(|y| {
-                    let namespace = NamespaceIdent::from_vec(
-                        y.table_namespace
-                            .split('.')
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+                    let namespace = NamespaceIdent::from_strs(y.table_namespace.split("."))
+                        .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
                     Ok(TableIdent::new(namespace, y.table_name))
                 })
             })
@@ -279,7 +272,7 @@ impl Catalog for SqlCatalog {
 
     async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
         let catalog_name = self.name.clone();
-        let namespace = identifier.namespace().encode_in_url();
+        let namespace = identifier.namespace().join(".");
         let name = identifier.name().to_string();
         let rows = sqlx::query(
             &("select ".to_string()
