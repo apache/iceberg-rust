@@ -48,6 +48,10 @@ static METADATA_LOCATION_PROP: &str = "metadata_location";
 static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static RECORD_TYPE: &str = "iceberg_type";
 
+static MAX_CONNECTIONS: u32 = 10;
+static IDLE_TIMEOUT: u64 = 10;
+static TEST_BEFORE_AQUIRE = true;
+
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
 pub struct SqlCatalogConfig {
@@ -75,17 +79,17 @@ impl SqlCatalog {
             .props
             .get("pool.max-connections")
             .map(|v| v.parse().unwrap())
-            .unwrap_or(10);
+            .unwrap_or(MAX_CONNECTIONS);
         let idle_timeout: u64 = config
             .props
             .get("pool.idle-timeout")
             .map(|v| v.parse().unwrap())
-            .unwrap_or(10);
+            .unwrap_or(IDLE_TIMEOUT);
         let test_before_acquire: bool = config
             .props
             .get("pool.test-before-acquire")
             .map(|v| v.parse().unwrap())
-            .unwrap_or(true);
+            .unwrap_or(TEST_BEFORE_AQUIRE);
 
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
