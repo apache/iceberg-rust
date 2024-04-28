@@ -15,12 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
-
-mod error;
-pub use error::*;
-
-mod physical_plan;
-mod schema;
-mod table;
+pub(crate) mod scan;

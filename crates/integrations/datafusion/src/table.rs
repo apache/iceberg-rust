@@ -29,11 +29,13 @@ use iceberg::{
     arrow::schema_to_arrow_schema, table::Table, Catalog, NamespaceIdent, Result, TableIdent,
 };
 
+use crate::physical_plan::scan::IcebergTableScan;
+
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
 pub(crate) struct IcebergTableProvider {
     /// A table in the catalog.
-    _inner: Table,
+    table: Table,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
 }
@@ -52,10 +54,7 @@ impl IcebergTableProvider {
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
-        Ok(IcebergTableProvider {
-            _inner: table,
-            schema,
-        })
+        Ok(IcebergTableProvider { table, schema })
     }
 }
 
@@ -80,6 +79,9 @@ impl TableProvider for IcebergTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        todo!()
+        Ok(Arc::new(IcebergTableScan::new(
+            self.table.clone(),
+            self.schema.clone(),
+        )))
     }
 }

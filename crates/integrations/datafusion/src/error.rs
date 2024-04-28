@@ -15,12 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+use anyhow::anyhow;
+use iceberg::{Error, ErrorKind};
 
-mod error;
-pub use error::*;
-
-mod physical_plan;
-mod schema;
-mod table;
+/// Convert a datafusion error into iceberg error.
+pub fn from_datafusion_error(error: datafusion::error::DataFusionError) -> Error {
+    match error {
+        other => Error::new(
+            ErrorKind::Unexpected,
+            "Operation failed for hitting datafusion error".to_string(),
+        )
+        .with_source(anyhow!("datafusion error: {:?}", other)),
+    }
+}
+/// Convert an iceberg error into datafusion error.
+pub fn to_datafusion_error(error: Error) -> datafusion::error::DataFusionError {
+    datafusion::error::DataFusionError::External(error.into())
+}
