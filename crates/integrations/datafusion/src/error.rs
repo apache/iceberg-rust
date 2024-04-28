@@ -18,7 +18,7 @@
 use anyhow::anyhow;
 use iceberg::{Error, ErrorKind};
 
-/// Convert a datafusion error into iceberg error.
+/// Converts a datafusion error into an iceberg error.
 pub fn from_datafusion_error(error: datafusion::error::DataFusionError) -> Error {
     match error {
         other => Error::new(
@@ -28,7 +28,7 @@ pub fn from_datafusion_error(error: datafusion::error::DataFusionError) -> Error
         .with_source(anyhow!("datafusion error: {:?}", other)),
     }
 }
-/// Convert an iceberg error into datafusion error.
+/// Converts an iceberg error into a datafusion error.
 pub fn to_datafusion_error(error: Error) -> datafusion::error::DataFusionError {
     datafusion::error::DataFusionError::External(error.into())
 }

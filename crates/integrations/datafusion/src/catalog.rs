@@ -29,7 +29,7 @@ use crate::schema::IcebergSchemaProvider;
 /// Acts as a centralized catalog provider that aggregates
 /// multiple [`SchemaProvider`], each associated with distinct namespaces.
 pub struct IcebergCatalogProvider {
-    /// A concurrent `HashMap` where keys are namespace names
+    /// A `HashMap` where keys are namespace names
     /// and values are dynamic references to objects implementing the
     /// [`SchemaProvider`] trait.
     schemas: HashMap<String, Arc<dyn SchemaProvider>>,
@@ -42,7 +42,7 @@ impl IcebergCatalogProvider {
     ///
     /// This method retrieves the list of namespace names
     /// attempts to create a schema provider for each namespace, and
-    /// collects these providers into a concurrent `HashMap`.
+    /// collects these providers into a `HashMap`.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
         let schema_names: Vec<_> = client
             .list_namespaces(None)
