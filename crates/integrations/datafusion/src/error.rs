@@ -20,13 +20,11 @@ use iceberg::{Error, ErrorKind};
 
 /// Converts a datafusion error into an iceberg error.
 pub fn from_datafusion_error(error: datafusion::error::DataFusionError) -> Error {
-    match error {
-        other => Error::new(
-            ErrorKind::Unexpected,
-            "Operation failed for hitting datafusion error".to_string(),
-        )
-        .with_source(anyhow!("datafusion error: {:?}", other)),
-    }
+    Error::new(
+        ErrorKind::Unexpected,
+        "Operation failed for hitting datafusion error".to_string(),
+    )
+    .with_source(anyhow!("datafusion error: {:?}", error))
 }
 /// Converts an iceberg error into a datafusion error.
 pub fn to_datafusion_error(error: Error) -> datafusion::error::DataFusionError {
