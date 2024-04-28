@@ -45,6 +45,10 @@ impl IcebergSchemaProvider {
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
     ) -> Result<Self> {
+        // TODO:
+        // Tables and providers should be cached based on table_name
+        // if we have a chache miss; we update our internal cache & check again
+        // As of right now; tables might become stale.
         let table_names: Vec<_> = client
             .list_tables(&namespace)
             .await?

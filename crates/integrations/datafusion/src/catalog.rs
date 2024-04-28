@@ -44,6 +44,9 @@ impl IcebergCatalogProvider {
     /// attempts to create a schema provider for each namespace, and
     /// collects these providers into a `HashMap`.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
+        // TODO:
+        // Schemas and providers should be cached and evicted based on time
+        // As of right now; schemas might become stale.
         let schema_names: Vec<_> = client
             .list_namespaces(None)
             .await?
