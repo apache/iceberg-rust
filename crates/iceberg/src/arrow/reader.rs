@@ -111,6 +111,12 @@ impl ArrowReader {
     pub fn read(self, mut tasks: FileScanTaskStream) -> crate::Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
 
+        // Collect Parquet column indices from field ids
+        let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
+        if let Some(predicates) = &self.predicates {
+            visit(&mut collector, predicates)?;
+        }
+
         Ok(try_stream! {
             while let Some(Ok(task)) = tasks.next().await {
                 let parquet_reader = file_io
@@ -127,7 +133,7 @@ impl ArrowReader {
                 batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
-                let row_filter = self.get_row_filter(parquet_schema)?;
+                let row_filter = self.get_row_filter(parquet_schema, &collector)?;
 
                 if let Some(row_filter) = row_filter {
                     batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
@@ -216,13 +222,14 @@ impl ArrowReader {
         }
     }
 
-    fn get_row_filter(&self, parquet_schema: &SchemaDescriptor) -> Result<Option<RowFilter>> {
+    fn get_row_filter(
+        &self,
+        parquet_schema: &SchemaDescriptor,
+        collector: &CollectFieldIdVisitor,
+    ) -> Result<Option<RowFilter>> {
         if let Some(predicates) = &self.predicates {
             let field_id_map = build_field_id_map(parquet_schema)?;
 
-            // Collect Parquet column indices from field ids
-            let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
-            visit(&mut collector, predicates).unwrap();
             let column_indices = collector
                 .field_ids
                 .iter()
