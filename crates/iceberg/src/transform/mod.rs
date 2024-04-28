@@ -138,7 +138,7 @@ mod test {
             predicate: &BoundPredicate,
             expected: Option<&str>,
         ) -> Result<()> {
-            let result = self.transform.project(self.name.clone(), predicate)?;
+            let result = self.transform.project(&self.name, predicate)?;
             match expected {
                 Some(exp) => assert_eq!(format!("{}", result.unwrap()), exp),
                 None => assert!(result.is_none()),
@@ -147,7 +147,7 @@ mod test {
         }
     }
 
-    /// A utitily struct, test fixture
+    /// A utility struct, test fixture
     /// used for testing the transform on `Transform`
     pub(crate) struct TestTransformFixture {
         pub display: String,

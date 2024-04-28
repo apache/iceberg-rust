@@ -15,15 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Glue Catalog implementation.
-
-#![deny(missing_docs)]
-
-mod catalog;
-mod error;
-mod schema;
-mod utils;
-pub use catalog::*;
-pub use utils::{
-    AWS_ACCESS_KEY_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
-};
+pub(crate) mod bound_predicate_visitor;
+pub(crate) mod inclusive_projection;
+pub(crate) mod manifest_evaluator;

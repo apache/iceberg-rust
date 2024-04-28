@@ -282,7 +282,7 @@ impl Transform {
     /// `bucket(a, 37) as bs`, if one row matches `a = 10`, then its partition
     /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
     /// `bs = bucket(10, 37)`
-    pub fn project(&self, name: String, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+    pub fn project(&self, name: &str, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
         let func = create_transform_function(self)?;
 
         match self {
@@ -335,7 +335,7 @@ impl Transform {
     }
 
     /// Creates a unary predicate from a given operator and a reference name.
-    fn project_unary(op: PredicateOperator, name: String) -> Result<Option<Predicate>> {
+    fn project_unary(op: PredicateOperator, name: &str) -> Result<Option<Predicate>> {
         Ok(Some(Predicate::Unary(UnaryExpression::new(
             op,
             Reference::new(name),
@@ -350,7 +350,7 @@ impl Transform {
     /// `Predicate::Binary`variant representing the binary operation.
     fn project_eq_operator(
         &self,
-        name: String,
+        name: &str,
         expr: &BinaryExpression<BoundReference>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
@@ -375,7 +375,7 @@ impl Transform {
     /// inclusive variant.
     fn project_binary_with_adjusted_boundary(
         &self,
-        name: String,
+        name: &str,
         expr: &BinaryExpression<BoundReference>,
         func: &BoxedTransformFunction,
         width: Option<u32>,
@@ -423,7 +423,7 @@ impl Transform {
     fn project_in_operator(
         &self,
         expr: &SetExpression<BoundReference>,
-        name: String,
+        name: &str,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         if expr.op() != PredicateOperator::In
