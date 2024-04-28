@@ -19,12 +19,16 @@
 
 use crate::error::Result;
 use crate::spec::{
-    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type,
+    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
+    SchemaVisitor, StructType, Type,
 };
 use crate::{Error, ErrorKind};
 use arrow_array::types::{validate_decimal_precision_and_scale, Decimal128Type};
+use arrow_array::{
+    BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
+};
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use bitvec::macros::internal::funty::Fundamental;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
@@ -590,6 +594,24 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
     match crate::spec::visit_schema(schema, &mut converter)? {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
         _ => unreachable!(),
+    }
+}
+
+/// Convert Iceberg Datum to Arrow Datum.
+pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
+    match datum.literal() {
+        PrimitiveLiteral::Boolean(value) => Ok(Box::new(BooleanArray::new_scalar(*value))),
+        PrimitiveLiteral::Int(value) => Ok(Box::new(Int32Array::new_scalar(*value))),
+        PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
+        PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
+        PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
+        l => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Converting datum from type {:?} to arrow not supported yet.",
+                l
+            ),
+        )),
     }
 }
 

@@ -19,28 +19,24 @@
 
 use crate::error::Result;
 use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
-use arrow_array::{
-    ArrayRef, BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
-    Int64Array, StructArray,
-};
+use arrow_array::{ArrayRef, BooleanArray, StructArray};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
 use async_stream::try_stream;
-use bitvec::macros::internal::funty::Fundamental;
 use fnv::FnvHashSet;
 use futures::stream::StreamExt;
 use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
-use crate::arrow::arrow_schema_to_schema;
+use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
-use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
+use crate::spec::{Datum, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Builder to create ArrowReader
@@ -112,7 +108,9 @@ impl ArrowReader {
         let file_io = self.file_io.clone();
 
         // Collect Parquet column indices from field ids
-        let mut collector = CollectFieldIdVisitor { field_ids: vec![] };
+        let mut collector = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
         if let Some(predicates) = &self.predicates {
             visit(&mut collector, predicates)?;
         }
@@ -266,7 +264,9 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<HashMap<i32, 
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Leave column {:?} in schema doesn't have field id",
+                            "Leave column idx: {}, name: {}, type {:?} in schema doesn't have field id",
+                            idx,
+                            basic_info.name(),
                             field_type
                         ),
                     ));
@@ -290,65 +290,49 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<HashMap<i32, 
 
 /// A visitor to collect field ids from bound predicates.
 struct CollectFieldIdVisitor {
-    field_ids: Vec<i32>,
+    field_ids: HashSet<i32>,
 }
 
 impl BoundPredicateVisitor for CollectFieldIdVisitor {
     type T = ();
 
-    fn always_true(&mut self) -> Result<Self::T> {
+    fn always_true(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn always_false(&mut self) -> Result<Self::T> {
+    fn always_false(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn and(&mut self, _lhs: Self::T, _rhs: Self::T) -> Result<Self::T> {
+    fn and(&mut self, _lhs: (), _rhs: ()) -> Result<()> {
         Ok(())
     }
 
-    fn or(&mut self, _lhs: Self::T, _rhs: Self::T) -> Result<Self::T> {
+    fn or(&mut self, _lhs: (), _rhs: ()) -> Result<()> {
         Ok(())
     }
 
-    fn not(&mut self, _inner: Self::T) -> Result<Self::T> {
+    fn not(&mut self, _inner: ()) -> Result<()> {
         Ok(())
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    fn not_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -357,8 +341,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -367,8 +351,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -377,8 +361,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -387,8 +371,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -397,8 +381,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -407,8 +391,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -417,8 +401,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -427,8 +411,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -437,8 +421,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
@@ -447,8 +431,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         reference: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
-        self.field_ids.push(reference.field().id);
+    ) -> Result<()> {
+        self.field_ids.insert(reference.field().id);
         Ok(())
     }
 }
@@ -496,20 +480,6 @@ impl PredicateConverter<'_> {
     }
 }
 
-fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
-    match datum.literal() {
-        PrimitiveLiteral::Boolean(value) => Ok(Box::new(BooleanArray::new_scalar(*value))),
-        PrimitiveLiteral::Int(value) => Ok(Box::new(Int32Array::new_scalar(*value))),
-        PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
-        PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
-        PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
-        l => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Unsupported literal type: {:?}", l),
-        )),
-    }
-}
-
 /// Recursively get the leaf column from the record batch. Assume that the nested columns in
 /// struct is projected to a single column.
 fn get_leaf_column(column: &ArrayRef) -> std::result::Result<ArrayRef, ArrowError> {
@@ -532,21 +502,25 @@ fn get_leaf_column(column: &ArrayRef) -> std::result::Result<ArrayRef, ArrowErro
 impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     type T = Box<dyn ArrowPredicate>;
 
-    fn always_true(&mut self) -> Result<Self::T> {
+    fn always_true(&mut self) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
         )))
     }
 
-    fn always_false(&mut self) -> Result<Self::T> {
+    fn always_false(&mut self) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![false; batch.num_rows()])),
         )))
     }
 
-    fn and(&mut self, mut lhs: Self::T, mut rhs: Self::T) -> Result<Self::T> {
+    fn and(
+        &mut self,
+        mut lhs: Box<dyn ArrowPredicate>,
+        mut rhs: Box<dyn ArrowPredicate>,
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             move |batch| {
@@ -557,7 +531,11 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         )))
     }
 
-    fn or(&mut self, mut lhs: Self::T, mut rhs: Self::T) -> Result<Self::T> {
+    fn or(
+        &mut self,
+        mut lhs: Box<dyn ArrowPredicate>,
+        mut rhs: Box<dyn ArrowPredicate>,
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             move |batch| {
@@ -568,7 +546,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         )))
     }
 
-    fn not(&mut self, mut inner: Self::T) -> Result<Self::T> {
+    fn not(&mut self, mut inner: Box<dyn ArrowPredicate>) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             move |batch| {
@@ -582,7 +560,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
 
         Ok(Box::new(ArrowPredicateFn::new(
@@ -598,7 +576,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
 
         Ok(Box::new(ArrowPredicateFn::new(
@@ -614,7 +592,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
 
         Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
@@ -626,7 +604,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
 
         Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
@@ -639,7 +617,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -657,7 +635,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -675,7 +653,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -693,7 +671,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -711,7 +689,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -729,7 +707,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         let projected_mask = self.bound_reference(reference)?;
         let literal = get_arrow_datum(literal)?;
 
@@ -747,7 +725,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
@@ -759,7 +737,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _reference: &BoundReference,
         _literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
@@ -771,7 +749,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _reference: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
@@ -783,7 +761,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _reference: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<Box<dyn ArrowPredicate>> {
         Ok(Box::new(ArrowPredicateFn::new(
             self.projection_mask.clone(),
             |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
@@ -797,6 +775,7 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     fn table_schema_simple() -> SchemaRef {
@@ -821,10 +800,15 @@ mod tests {
         let expr = Reference::new("qux").is_null();
         let bound_expr = expr.bind(schema, true).unwrap();
 
-        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        let mut visitor = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
         visit(&mut visitor, &bound_expr).unwrap();
 
-        assert_eq!(visitor.field_ids, vec![4]);
+        let mut expected = HashSet::default();
+        expected.insert(4_i32);
+
+        assert_eq!(visitor.field_ids, expected);
     }
 
     #[test]
@@ -835,10 +819,16 @@ mod tests {
             .and(Reference::new("baz").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
 
-        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        let mut visitor = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
         visit(&mut visitor, &bound_expr).unwrap();
 
-        assert_eq!(visitor.field_ids, vec![4, 3]);
+        let mut expected = HashSet::default();
+        expected.insert(4_i32);
+        expected.insert(3);
+
+        assert_eq!(visitor.field_ids, expected);
     }
 
     #[test]
@@ -849,9 +839,15 @@ mod tests {
             .or(Reference::new("baz").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
 
-        let mut visitor = CollectFieldIdVisitor { field_ids: vec![] };
+        let mut visitor = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
         visit(&mut visitor, &bound_expr).unwrap();
 
-        assert_eq!(visitor.field_ids, vec![4, 3]);
+        let mut expected = HashSet::default();
+        expected.insert(4_i32);
+        expected.insert(3);
+
+        assert_eq!(visitor.field_ids, expected);
     }
 }
