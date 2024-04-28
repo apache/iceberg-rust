@@ -228,20 +228,18 @@ impl ArrowReader {
         if let Some(predicates) = &self.predicates {
             let field_id_map = build_field_id_map(parquet_schema)?;
 
+            // Collect Parquet column indices from field ids.
+            // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
             let column_indices = collector
                 .field_ids
                 .iter()
-                .map(|field_id| {
-                    field_id_map.get(field_id).cloned().ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "Field id not found in schema")
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|field_id| field_id_map.get(field_id).cloned())
+                .flatten()
+                .collect::<Vec<_>>();
 
             // Convert BoundPredicates to ArrowPredicates
             let mut converter = PredicateConverter {
-                columns: &column_indices,
-                projection_mask: ProjectionMask::leaves(parquet_schema, column_indices.clone()),
+                projection_mask: ProjectionMask::leaves(parquet_schema, column_indices),
                 parquet_schema,
                 column_map: &field_id_map,
             };
@@ -439,8 +437,6 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
 /// A visitor to convert Iceberg bound predicates to Arrow predicates.
 struct PredicateConverter<'a> {
-    /// The leaf column indices used in the predicates.
-    pub columns: &'a Vec<usize>,
     /// The projection mask for the Arrow predicates.
     pub projection_mask: ProjectionMask,
     /// The Parquet schema descriptor.
@@ -451,32 +447,24 @@ struct PredicateConverter<'a> {
 
 impl PredicateConverter<'_> {
     /// When visiting a bound reference, we return the projection mask for the leaf column
-    /// which is used to project the column in the record batch.
-    fn bound_reference(&mut self, reference: &BoundReference) -> Result<ProjectionMask> {
+    /// which is used to project the column in the record batch. Return None if the field id
+    /// is not found in the column map, which is possible due to schema evolution.
+    fn bound_reference(&mut self, reference: &BoundReference) -> Option<ProjectionMask> {
         // The leaf column's index in Parquet schema.
-        let column_idx = self.column_map.get(&reference.field().id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Field id {} not found in schema", reference.field().id),
-            )
-        })?;
+        let column_idx = self.column_map.get(&reference.field().id)?;
 
-        // Find the column index in projection mask.
-        let column_idx = self
-            .columns
-            .iter()
-            .position(|&x| x == *column_idx)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column index {} not found in schema", *column_idx),
-                )
-            })?;
-
-        Ok(ProjectionMask::leaves(
+        Some(ProjectionMask::leaves(
             self.parquet_schema,
-            vec![self.columns[column_idx]],
+            vec![*column_idx],
         ))
+    }
+
+    /// Build an Arrow predicate that always returns true.
+    fn build_always_true(&self) -> Result<Box<dyn ArrowPredicate>> {
+        Ok(Box::new(ArrowPredicateFn::new(
+            self.projection_mask.clone(),
+            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
+        )))
     }
 }
 
@@ -503,10 +491,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
     type T = Box<dyn ArrowPredicate>;
 
     fn always_true(&mut self) -> Result<Box<dyn ArrowPredicate>> {
-        Ok(Box::new(ArrowPredicateFn::new(
-            self.projection_mask.clone(),
-            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-        )))
+        self.build_always_true()
     }
 
     fn always_false(&mut self) -> Result<Box<dyn ArrowPredicate>> {
@@ -561,15 +546,17 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let column = get_leaf_column(batch.column(0))?;
-                is_null(&column)
-            },
-        )))
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let column = get_leaf_column(batch.column(0))?;
+                    is_null(&column)
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn not_null(
@@ -577,15 +564,17 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let column = get_leaf_column(batch.column(0))?;
-                is_not_null(&column)
-            },
-        )))
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let column = get_leaf_column(batch.column(0))?;
+                    is_not_null(&column)
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn is_nan(
@@ -593,11 +582,13 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-
-        Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
-            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
-        })))
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
+                Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            })))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn not_nan(
@@ -605,11 +596,13 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-
-        Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
-            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
-        })))
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            Ok(Box::new(ArrowPredicateFn::new(projected_mask, |batch| {
+                Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+            })))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn less_than(
@@ -618,16 +611,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                lt(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    lt(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn less_than_or_eq(
@@ -636,16 +632,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                lt_eq(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    lt_eq(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn greater_than(
@@ -654,16 +653,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                gt(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    gt(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn greater_than_or_eq(
@@ -672,16 +674,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                gt_eq(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    gt_eq(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn eq(
@@ -690,16 +695,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                eq(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    eq(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn not_eq(
@@ -708,16 +716,19 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        let projected_mask = self.bound_reference(reference)?;
-        let literal = get_arrow_datum(literal)?;
+        if let Some(projected_mask) = self.bound_reference(reference) {
+            let literal = get_arrow_datum(literal)?;
 
-        Ok(Box::new(ArrowPredicateFn::new(
-            projected_mask,
-            move |batch| {
-                let left = get_leaf_column(batch.column(0))?;
-                neq(&left, literal.as_ref())
-            },
-        )))
+            Ok(Box::new(ArrowPredicateFn::new(
+                projected_mask,
+                move |batch| {
+                    let left = get_leaf_column(batch.column(0))?;
+                    neq(&left, literal.as_ref())
+                },
+            )))
+        } else {
+            self.build_always_true()
+        }
     }
 
     fn starts_with(
@@ -726,10 +737,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        Ok(Box::new(ArrowPredicateFn::new(
-            self.projection_mask.clone(),
-            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-        )))
+        self.build_always_true()
     }
 
     fn not_starts_with(
@@ -738,10 +746,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        Ok(Box::new(ArrowPredicateFn::new(
-            self.projection_mask.clone(),
-            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-        )))
+        self.build_always_true()
     }
 
     fn r#in(
@@ -750,10 +755,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        Ok(Box::new(ArrowPredicateFn::new(
-            self.projection_mask.clone(),
-            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-        )))
+        self.build_always_true()
     }
 
     fn not_in(
@@ -762,10 +764,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<dyn ArrowPredicate>> {
-        Ok(Box::new(ArrowPredicateFn::new(
-            self.projection_mask.clone(),
-            |batch| Ok(BooleanArray::from(vec![true; batch.num_rows()])),
-        )))
+        self.build_always_true()
     }
 }
 
