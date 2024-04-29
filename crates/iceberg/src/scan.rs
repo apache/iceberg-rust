@@ -189,6 +189,8 @@ impl TableScan {
             self.case_sensitive,
         );
 
+        let bound_filter = context.bound_filter()?;
+
         let mut partition_filter_cache = PartitionFilterCache::new();
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
@@ -199,9 +201,7 @@ impl TableScan {
                 .await?;
 
             for entry in manifest_list.entries() {
-                if let Some(filter) = context.filter.as_ref() {
-                    let filter = filter.bind(context.schema.clone(), context.case_sensitive)?;
-
+                if let Some(filter) = &bound_filter {
                     let partition_spec_id = entry.partition_spec_id;
 
                     let (partition_spec, partition_schema) =
@@ -211,7 +211,7 @@ impl TableScan {
                         partition_spec_id,
                         partition_spec.clone(),
                         partition_schema.clone(),
-                        &filter,
+                        filter,
                         context.case_sensitive,
                     )?;
 
@@ -227,7 +227,6 @@ impl TableScan {
                     }
 
                     // TODO: Create ExpressionEvaluator
-                    // TODO: Create InclusiveMetricsEvaluator
                 }
 
                 let manifest = entry.load_manifest(&context.file_io).await?;
@@ -235,6 +234,9 @@ impl TableScan {
                     futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
 
                 while let Some(manifest_entry) = manifest_entries_stream.next().await {
+                    // TODO: Apply ExpressionEvaluator
+                    // TODO: Apply InclusiveMetricsEvaluator::eval()
+
                     match manifest_entry.content_type() {
                         DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
                             yield Err(Error::new(
@@ -339,6 +341,14 @@ impl FileScanStreamContext {
             file_io,
             filter,
             case_sensitive,
+        }
+    }
+
+    /// Creates a [`BoundPredicate`] from row filter [`Predicate`].
+    fn bound_filter(&self) -> Result<Option<BoundPredicate>> {
+        match self.filter {
+            Some(ref filter) => Ok(Some(filter.bind(self.schema.clone(), self.case_sensitive)?)),
+            None => Ok(None),
         }
     }
 
