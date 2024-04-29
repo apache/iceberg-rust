@@ -185,16 +185,26 @@ fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
 impl Catalog for SqlCatalog {
     async fn list_namespaces(
         &self,
-        _parent: Option<&NamespaceIdent>,
+        parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let name = &self.name;
-        let rows = sqlx::query(
-            "select distinct table_namespace from iceberg_tables where catalog_name = ?;",
-        )
-        .bind(name)
-        .fetch_all(&self.connection)
-        .await
-        .map_err(from_sqlx_error)?;
+        let rows = match parent {
+            None => sqlx::query(
+                "select distinct table_namespace from iceberg_tables where catalog_name = ?;",
+            )
+            .bind(name)
+            .fetch_all(&self.connection)
+            .await
+            .map_err(from_sqlx_error)?,
+            Some(parent) => sqlx::query(
+                "select distinct table_namespace from iceberg_tables where catalog_name = ? and table_namespace like ?%;",
+            )
+            .bind(name)
+            .bind(parent.join("."))
+            .fetch_all(&self.connection)
+            .await
+            .map_err(from_sqlx_error)?,
+        };
         let iter = rows.iter().map(|row| row.try_get::<String, _>(0));
 
         Ok(iter
