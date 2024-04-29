@@ -188,9 +188,8 @@ impl TableScan {
             self.case_sensitive,
         );
 
-        let mut partition_filter_cache: HashMap<i32, BoundPredicate> = HashMap::new();
-
-        let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
+        let mut partition_filter_cache = PartitionFilterCache::new();
+        let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
         Ok(try_stream! {
 
@@ -200,29 +199,17 @@ impl TableScan {
 
             for entry in manifest_list.entries() {
                 if let Some(filter) = context.filter.as_ref() {
-                    let bound_filter = filter.bind(context.schema.clone(), context.case_sensitive)?;
+                    let filter = filter.bind(context.schema.clone(), context.case_sensitive)?;
 
                     let partition_spec_id = entry.partition_spec_id;
 
                     let (partition_spec, partition_schema) = context.create_partition_spec_and_schema(partition_spec_id)?;
 
+                    let partition_schema_id = partition_schema.schema_id();
 
-                    let partition_filter = partition_filter_cache.entry(partition_spec_id).or_insert(
-                        Self::create_partition_filter(
-                            partition_spec.clone(),
-                            partition_schema.clone(),
-                            &bound_filter,
-                            context.case_sensitive,
-                        )?,
-                    );
+                    let partition_filter = partition_filter_cache.get(partition_spec_id, partition_spec.clone(), partition_schema, &filter, context.case_sensitive)?;
 
-                    let manifest_evaluator = manifest_evaluator_cache
-                        .entry(partition_spec_id)
-                        .or_insert(ManifestEvaluator::new(
-                            partition_schema.schema_id(),
-                            partition_filter.clone(),
-                            context.case_sensitive,
-                        ));
+                    let manifest_evaluator = manifest_evaluator_cache.get(partition_spec_id, partition_schema_id, partition_filter.clone(), context.case_sensitive);
 
                     if !manifest_evaluator.eval(entry)? {
                         continue;
@@ -310,22 +297,6 @@ impl TableScan {
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
-
-    fn create_partition_filter(
-        partition_spec: PartitionSpecRef,
-        partition_schema: SchemaRef,
-        filter: &BoundPredicate,
-        case_sensitive: bool,
-    ) -> crate::Result<BoundPredicate> {
-        let mut inclusive_projection = InclusiveProjection::new(partition_spec);
-
-        let partition_filter = inclusive_projection
-            .project(filter)?
-            .rewrite_not()
-            .bind(partition_schema, case_sensitive)?;
-
-        Ok(partition_filter)
-    }
 }
 
 #[derive(Debug)]
@@ -379,6 +350,66 @@ impl FileScanStreamContext {
         );
 
         Ok((partition_spec, partition_schema))
+    }
+}
+
+struct PartitionFilterCache(HashMap<i32, BoundPredicate>);
+
+impl PartitionFilterCache {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_spec: PartitionSpecRef,
+        partition_schema: SchemaRef,
+        filter: &BoundPredicate,
+        case_sensitive: bool,
+    ) -> Result<&BoundPredicate> {
+        if !self.0.contains_key(&spec_id) {
+            let mut inclusive_projection = InclusiveProjection::new(partition_spec);
+
+            let partition_filter = inclusive_projection
+                .project(filter)?
+                .rewrite_not()
+                .bind(partition_schema, case_sensitive)?;
+
+            self.0.insert(spec_id, partition_filter);
+        }
+
+        self.0.get(&spec_id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Expected a partition filter for spec id {} and predicate {}",
+                    spec_id, filter
+                ),
+            )
+        })
+    }
+}
+
+struct ManifestEvaluatorCache(HashMap<i32, ManifestEvaluator>);
+
+impl ManifestEvaluatorCache {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_schema_id: i32,
+        partition_filter: BoundPredicate,
+        case_sensitive: bool,
+    ) -> &mut ManifestEvaluator {
+        self.0.entry(spec_id).or_insert(ManifestEvaluator::new(
+            partition_schema_id,
+            partition_filter,
+            case_sensitive,
+        ))
     }
 }
 
