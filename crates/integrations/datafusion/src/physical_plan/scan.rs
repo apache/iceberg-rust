@@ -32,13 +32,20 @@ use iceberg::table::Table;
 use crate::to_datafusion_error;
 
 #[derive(Debug)]
+/// Manages the scanning process of an Iceberg [`Table`], encapsulating the
+/// necessary details and computed properties required for execution planning.
 pub(crate) struct IcebergTableScan {
+    /// A table in the catalog.
     table: Table,
+    /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
+    /// Stores certain, often expensive to compute,
+    /// plan properties used in query optimization.
     plan_properties: PlanProperties,
 }
 
 impl IcebergTableScan {
+    /// Creates a new [`IcebergTableScan`] object.
     pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
         let plan_properties = Self::compute_properties(schema.clone());
 
@@ -49,6 +56,7 @@ impl IcebergTableScan {
         }
     }
 
+    /// Computes [`PlanProperties`] used in query optimization.
     fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
         // TODO:
         // This is more or less a placeholder, to be replaced
@@ -106,6 +114,11 @@ impl DisplayAs for IcebergTableScan {
     }
 }
 
+/// Asynchronously retrieves a stream of [`RecordBatch`] instances
+/// from a given table.
+///
+/// This function initializes a [`TableScan`], builds it,
+/// and then converts it into a stream of Arrow [`RecordBatch`]es.
 async fn get_batch_stream(
     table: Table,
 ) -> datafusion::error::Result<
