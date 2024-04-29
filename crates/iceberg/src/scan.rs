@@ -107,7 +107,7 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Build the table scan.
-    pub fn build(self) -> crate::Result<TableScan> {
+    pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -179,7 +179,7 @@ pub struct TableScan {
 
 impl TableScan {
     /// Returns a stream of file scan tasks.
-    pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
+    pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
         let context = FileScanStreamContext::new(
             self.schema.clone(),
             self.snapshot.clone(),
@@ -233,7 +233,7 @@ impl TableScan {
                             ))?;
                         }
                         DataContentType::Data => {
-                            let scan_task: crate::Result<FileScanTask> = Ok(FileScanTask {
+                            let scan_task: Result<FileScanTask> = Ok(FileScanTask {
                                 data_manifest_entry: manifest_entry.clone(),
                                 start: 0,
                                 length: manifest_entry.file_size_in_bytes(),
@@ -248,7 +248,7 @@ impl TableScan {
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
-    pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
+    pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
 
