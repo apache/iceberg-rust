@@ -178,7 +178,7 @@ pub struct TableScan {
 }
 
 impl TableScan {
-    /// Returns a stream of file scan tasks.
+    /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
         let context = FileScanStreamContext::new(
             self.schema.clone(),
@@ -193,8 +193,8 @@ impl TableScan {
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
         Ok(try_stream! {
-
-            let manifest_list = context.snapshot
+            let manifest_list = context
+                .snapshot
                 .load_manifest_list(&context.file_io, &context.table_metadata)
                 .await?;
 
@@ -204,13 +204,23 @@ impl TableScan {
 
                     let partition_spec_id = entry.partition_spec_id;
 
-                    let (partition_spec, partition_schema) = context.create_partition_spec_and_schema(partition_spec_id)?;
+                    let (partition_spec, partition_schema) =
+                        context.create_partition_spec_and_schema(partition_spec_id)?;
 
-                    let partition_schema_id = partition_schema.schema_id();
+                    let partition_filter = partition_filter_cache.get(
+                        partition_spec_id,
+                        partition_spec.clone(),
+                        partition_schema.clone(),
+                        &filter,
+                        context.case_sensitive,
+                    )?;
 
-                    let partition_filter = partition_filter_cache.get(partition_spec_id, partition_spec.clone(), partition_schema, &filter, context.case_sensitive)?;
-
-                    let manifest_evaluator = manifest_evaluator_cache.get(partition_spec_id, partition_schema_id, partition_filter.clone(), context.case_sensitive);
+                    let manifest_evaluator = manifest_evaluator_cache.get(
+                        partition_spec_id,
+                        partition_schema.schema_id(),
+                        partition_filter.clone(),
+                        context.case_sensitive,
+                    );
 
                     if !manifest_evaluator.eval(entry)? {
                         continue;
@@ -243,8 +253,8 @@ impl TableScan {
                     }
                 }
             }
-
-        }.boxed())
+        }
+        .boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -301,6 +311,8 @@ impl TableScan {
 }
 
 #[derive(Debug)]
+/// Holds the context necessary for file scanning operations
+/// in a streaming environment.
 struct FileScanStreamContext {
     schema: SchemaRef,
     snapshot: SnapshotRef,
@@ -311,6 +323,7 @@ struct FileScanStreamContext {
 }
 
 impl FileScanStreamContext {
+    /// Creates a new [`FileScanStreamContext`].
     fn new(
         schema: SchemaRef,
         snapshot: SnapshotRef,
@@ -329,6 +342,8 @@ impl FileScanStreamContext {
         }
     }
 
+    /// Creates a reference-counted [`PartitionSpec`] and a
+    /// corresponding schema based on the specified partition spec id.
     fn create_partition_spec_and_schema(
         &self,
         spec_id: i32,
@@ -354,13 +369,20 @@ impl FileScanStreamContext {
     }
 }
 
+#[derive(Debug)]
+/// Manages the caching of [`BoundPredicate`] objects
+/// for [`PartitionSpec`]s based on partition spec id.
 struct PartitionFilterCache(HashMap<i32, BoundPredicate>);
 
 impl PartitionFilterCache {
+    /// Creates a new [`PartitionFilterCache`]
+    /// with an empty internal HashMap.
     fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Retrieves a [`BoundPredicate`] from the cache
+    /// or computes it if not present.
     fn get(
         &mut self,
         spec_id: i32,
@@ -385,13 +407,20 @@ impl PartitionFilterCache {
     }
 }
 
+#[derive(Debug)]
+/// Manages the caching of [`ManifestEvaluator`] objects
+/// for [`PartitionSpec`]s based on partition spec id.
 struct ManifestEvaluatorCache(HashMap<i32, ManifestEvaluator>);
 
 impl ManifestEvaluatorCache {
+    /// Creates a new [`ManifestEvaluatorCache`]
+    /// with an empty internal HashMap.
     fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Retrieves a [`ManifestEvaluator`] from the cache
+    /// or computes it if not present.
     fn get(
         &mut self,
         spec_id: i32,
