@@ -210,7 +210,7 @@ impl Catalog for SqlCatalog {
         Ok(iter
             .map(|x| {
                 x.and_then(|y| {
-                    NamespaceIdent::from_strs(y.split("."))
+                    NamespaceIdent::from_strs(y.split('.'))
                         .map_err(|err| sqlx::Error::Decode(Box::new(err)))
                 })
             })
@@ -282,7 +282,7 @@ impl Catalog for SqlCatalog {
         Ok(iter
             .map(|x| {
                 x.and_then(|y| {
-                    let namespace = NamespaceIdent::from_strs(y.table_namespace.split("."))
+                    let namespace = NamespaceIdent::from_strs(y.table_namespace.split('.'))
                         .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
                     Ok(TableIdent::new(namespace, y.table_name))
                 })
