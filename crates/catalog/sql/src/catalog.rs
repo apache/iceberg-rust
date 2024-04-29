@@ -49,6 +49,11 @@ static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static RECORD_TYPE: &str = "iceberg_type";
 static TABLE_RECORD_TYPE: &str = "TABLE";
 
+static NAMESPACE_PROPERTIES_TABLE_NAME: &str = "iceberg_namespace_properties";
+static NAMESPACE_NAME: &str = "namespace";
+static NAMESPACE_PROPERTY_KEY: &str = "property_key";
+static NAMESPACE_PROPERTY_VALUE: &str = "property_value";
+
 static MAX_CONNECTIONS: u32 = 10;
 static IDLE_TIMEOUT: u64 = 10;
 static TEST_BEFORE_ACQUIRE: bool = true;
@@ -129,13 +134,23 @@ impl SqlCatalog {
         .map_err(from_sqlx_error)?;
 
         sqlx::query(
-            "create table if not exists iceberg_namespace_properties (
-                            catalog_name varchar(255) not null,
-                            namespace varchar(255) not null,
-                            property_key varchar(255),
-                            property_value varchar(255),
-                            primary key (catalog_name, namespace, property_key)
-                        );",
+            &("create table if not exists ".to_owned()
+                + NAMESPACE_PROPERTIES_TABLE_NAME
+                + " ( "
+                + CATALOG_NAME
+                + " varchar(255) not null, "
+                + NAMESPACE_NAME
+                + " varchar(255) not null, "
+                + NAMESPACE_PROPERTY_KEY
+                + " varchar(255),  "
+                + NAMESPACE_PROPERTY_VALUE
+                + " varchar(255), primary key ("
+                + CATALOG_NAME
+                + ", "
+                + NAMESPACE_NAME
+                + ", "
+                + NAMESPACE_PROPERTY_KEY
+                + ") );"),
         )
         .execute(&pool)
         .await
