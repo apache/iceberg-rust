@@ -51,7 +51,7 @@ static TABLE_RECORD_TYPE: &str = "TABLE";
 
 static MAX_CONNECTIONS: u32 = 10;
 static IDLE_TIMEOUT: u64 = 10;
-static TEST_BEFORE_AQUIRE: bool = true;
+static TEST_BEFORE_ACQUIRE: bool = true;
 
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
@@ -90,7 +90,7 @@ impl SqlCatalog {
             .props
             .get("pool.test-before-acquire")
             .map(|v| v.parse().unwrap())
-            .unwrap_or(TEST_BEFORE_AQUIRE);
+            .unwrap_or(TEST_BEFORE_ACQUIRE);
 
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
