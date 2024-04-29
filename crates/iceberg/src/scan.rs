@@ -27,13 +27,18 @@ use crate::spec::{
     TableMetadataRef,
 };
 use crate::table::Table;
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, Result};
 use arrow_array::RecordBatch;
 use async_stream::try_stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// A stream of [`FileScanTask`].
+pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
+/// A stream of arrow [`RecordBatch`]es.
+pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -171,54 +176,49 @@ pub struct TableScan {
     filter: Option<Arc<Predicate>>,
 }
 
-/// A stream of [`FileScanTask`].
-pub type FileScanTaskStream = BoxStream<'static, crate::Result<FileScanTask>>;
-
 impl TableScan {
     /// Returns a stream of file scan tasks.
-
     pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
-        let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
-        let mut partition_filter_cache: HashMap<i32, BoundPredicate> = HashMap::new();
-
-        let schema = self.schema.clone();
-        let snapshot = self.snapshot.clone();
-        let table_metadata = self.table_metadata.clone();
-        let file_io = self.file_io.clone();
-        let case_sensitive = self.case_sensitive;
-        let filter = self.filter.clone();
+        let mut context = FileScanStreamContext::new(
+            self.schema.clone(),
+            self.snapshot.clone(),
+            self.table_metadata.clone(),
+            self.file_io.clone(),
+            self.filter.clone(),
+            self.case_sensitive,
+        );
 
         Ok(try_stream! {
 
-            let manifest_list = snapshot
-                .load_manifest_list(&file_io, &table_metadata)
+            let manifest_list = context.snapshot
+                .load_manifest_list(&context.file_io, &context.table_metadata)
                 .await?;
 
             for entry in manifest_list.entries() {
-                if let Some(filter) = filter.as_ref() {
-                    let bound_filter = filter.bind(schema.clone(), case_sensitive)?;
+                if let Some(filter) = context.filter.as_ref() {
+                    let bound_filter = filter.bind(context.schema.clone(), context.case_sensitive)?;
 
                     let partition_spec_id = entry.partition_spec_id;
                     let partition_spec =
-                        Self::create_partition_spec(&table_metadata, partition_spec_id)?;
+                        Self::create_partition_spec(&context.table_metadata, partition_spec_id)?;
 
-                    let partition_schema = Self::create_partition_schema(partition_spec, &schema)?;
+                    let partition_schema = Self::create_partition_schema(partition_spec, &context.schema)?;
 
-                    let partition_filter = partition_filter_cache.entry(partition_spec_id).or_insert(
+                    let partition_filter = context.partition_filter_cache.entry(partition_spec_id).or_insert(
                         Self::create_partition_filter(
                             partition_spec.clone(),
                             partition_schema.clone(),
                             &bound_filter,
-                            case_sensitive,
+                            context.case_sensitive,
                         )?,
                     );
 
-                    let manifest_evaluator = manifest_evaluator_cache
+                    let manifest_evaluator = context.manifest_evaluator_cache
                         .entry(partition_spec_id)
                         .or_insert(ManifestEvaluator::new(
                             partition_schema.schema_id(),
                             partition_filter.clone(),
-                            case_sensitive,
+                            context.case_sensitive,
                         ));
 
                     if !manifest_evaluator.eval(entry)? {
@@ -229,7 +229,7 @@ impl TableScan {
                     // TODO: Create InclusiveMetricsEvaluator
                 }
 
-                let manifest = entry.load_manifest(&file_io).await?;
+                let manifest = entry.load_manifest(&context.file_io).await?;
                 let mut manifest_entries_stream =
                     futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
 
@@ -256,54 +256,7 @@ impl TableScan {
         }.boxed())
     }
 
-    fn create_partition_spec(
-        table_metadata: &TableMetadataRef,
-        partition_spec_id: i32,
-    ) -> crate::Result<&PartitionSpecRef> {
-        let partition_spec = table_metadata
-            .partition_spec_by_id(partition_spec_id)
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Could not find partition spec for id {}", partition_spec_id),
-            ))?;
-
-        Ok(partition_spec)
-    }
-
-    fn create_partition_schema(
-        partition_spec: &PartitionSpecRef,
-        schema: &SchemaRef,
-    ) -> crate::Result<SchemaRef> {
-        let partition_type = partition_spec.partition_type(schema)?;
-
-        let partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
-
-        let partition_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(partition_spec.spec_id)
-                .with_fields(partition_fields)
-                .build()?,
-        );
-
-        Ok(partition_schema)
-    }
-
-    fn create_partition_filter(
-        partition_spec: PartitionSpecRef,
-        partition_schema: SchemaRef,
-        filter: &BoundPredicate,
-        case_sensitive: bool,
-    ) -> crate::Result<BoundPredicate> {
-        let mut inclusive_projection = InclusiveProjection::new(partition_spec);
-
-        let partition_filter = inclusive_projection
-            .project(filter)?
-            .rewrite_not()
-            .bind(partition_schema, case_sensitive)?;
-
-        Ok(partition_filter)
-    }
-
+    /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
@@ -354,6 +307,88 @@ impl TableScan {
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
+
+    fn create_partition_spec(
+        table_metadata: &TableMetadataRef,
+        partition_spec_id: i32,
+    ) -> crate::Result<&PartitionSpecRef> {
+        let partition_spec = table_metadata
+            .partition_spec_by_id(partition_spec_id)
+            .ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("Could not find partition spec for id {}", partition_spec_id),
+            ))?;
+
+        Ok(partition_spec)
+    }
+
+    fn create_partition_schema(
+        partition_spec: &PartitionSpecRef,
+        schema: &SchemaRef,
+    ) -> crate::Result<SchemaRef> {
+        let partition_type = partition_spec.partition_type(schema)?;
+
+        let partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
+
+        let partition_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(partition_spec.spec_id)
+                .with_fields(partition_fields)
+                .build()?,
+        );
+
+        Ok(partition_schema)
+    }
+
+    fn create_partition_filter(
+        partition_spec: PartitionSpecRef,
+        partition_schema: SchemaRef,
+        filter: &BoundPredicate,
+        case_sensitive: bool,
+    ) -> crate::Result<BoundPredicate> {
+        let mut inclusive_projection = InclusiveProjection::new(partition_spec);
+
+        let partition_filter = inclusive_projection
+            .project(filter)?
+            .rewrite_not()
+            .bind(partition_schema, case_sensitive)?;
+
+        Ok(partition_filter)
+    }
+}
+
+#[derive(Debug)]
+struct FileScanStreamContext {
+    schema: SchemaRef,
+    snapshot: SnapshotRef,
+    table_metadata: TableMetadataRef,
+    file_io: FileIO,
+    filter: Option<Arc<Predicate>>,
+    case_sensitive: bool,
+    partition_filter_cache: HashMap<i32, BoundPredicate>,
+    manifest_evaluator_cache: HashMap<i32, ManifestEvaluator>,
+}
+
+impl FileScanStreamContext {
+    fn new(
+        schema: SchemaRef,
+        snapshot: SnapshotRef,
+        table_metadata: TableMetadataRef,
+        file_io: FileIO,
+        filter: Option<Arc<Predicate>>,
+        case_sensitive: bool,
+    ) -> Self {
+        Self {
+            schema,
+            snapshot,
+            table_metadata,
+            file_io,
+            filter,
+            case_sensitive,
+            partition_filter_cache: HashMap::new(),
+            manifest_evaluator_cache: HashMap::new(),
+        }
+    }
 }
 
 /// A task to scan part of file.
@@ -365,9 +400,6 @@ pub struct FileScanTask {
     #[allow(dead_code)]
     length: u64,
 }
-
-/// A stream of arrow record batches.
-pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
     pub fn data(&self) -> ManifestEntryRef {

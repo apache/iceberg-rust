@@ -21,6 +21,7 @@ use crate::spec::{Datum, FieldSummary, ManifestFile};
 use crate::{Error, ErrorKind, Result};
 use fnv::FnvHashSet;
 
+#[derive(Debug)]
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
 ///
