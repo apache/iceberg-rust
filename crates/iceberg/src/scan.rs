@@ -32,6 +32,7 @@ use arrow_array::RecordBatch;
 use async_stream::try_stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -368,26 +369,19 @@ impl PartitionFilterCache {
         filter: &BoundPredicate,
         case_sensitive: bool,
     ) -> Result<&BoundPredicate> {
-        if !self.0.contains_key(&spec_id) {
-            let mut inclusive_projection = InclusiveProjection::new(partition_spec);
+        match self.0.entry(spec_id) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                let mut inclusive_projection = InclusiveProjection::new(partition_spec);
 
-            let partition_filter = inclusive_projection
-                .project(filter)?
-                .rewrite_not()
-                .bind(partition_schema, case_sensitive)?;
+                let partition_filter = inclusive_projection
+                    .project(filter)?
+                    .rewrite_not()
+                    .bind(partition_schema, case_sensitive)?;
 
-            self.0.insert(spec_id, partition_filter);
+                Ok(e.insert(partition_filter))
+            }
         }
-
-        self.0.get(&spec_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Expected a partition filter for spec id {} and predicate {}",
-                    spec_id, filter
-                ),
-            )
-        })
     }
 }
 
