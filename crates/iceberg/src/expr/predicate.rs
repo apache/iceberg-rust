@@ -32,7 +32,7 @@ use crate::spec::{Datum, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct LogicalExpression<T, const N: usize> {
     inputs: [Box<T>; N],
 }
@@ -79,7 +79,7 @@ where
 }
 
 /// Unary predicate, for example, `a IS NULL`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
     op: PredicateOperator,
@@ -126,7 +126,7 @@ impl<T> UnaryExpression<T> {
 }
 
 /// Binary predicate, for example, `a > 10`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
     op: PredicateOperator,
@@ -184,7 +184,7 @@ impl<T: Bind> Bind for BinaryExpression<T> {
 }
 
 /// Set predicates, for example, `a in (1, 2, 3)`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
     op: PredicateOperator,
@@ -613,7 +613,7 @@ impl Not for Predicate {
 }
 
 /// Bound predicate expression after binding to a schema.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BoundPredicate {
     /// An expression always evaluates to true.
     AlwaysTrue,

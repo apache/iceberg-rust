@@ -18,17 +18,19 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-use crate::expr::{Bind, Predicate};
+use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
+    DataContentType, ManifestEntryRef, PartitionSpecRef, Schema, SchemaRef, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind};
 use arrow_array::RecordBatch;
 use async_stream::try_stream;
-use futures::stream::{iter, BoxStream};
+use futures::stream::BoxStream;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -176,12 +178,9 @@ impl TableScan {
     /// Returns a stream of file scan tasks.
 
     pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
-        // Cache `ManifestEvaluatorFactory`s created as part of this scan
         let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
+        let mut partition_filter_cache: HashMap<i32, BoundPredicate> = HashMap::new();
 
-        // these variables needed to ensure that we don't need to pass a
-        // reference to self into `try_stream`, as it expects references
-        // passed in to outlive 'static
         let schema = self.schema.clone();
         let snapshot = self.snapshot.clone();
         let table_metadata = self.table_metadata.clone();
@@ -190,34 +189,51 @@ impl TableScan {
         let filter = self.filter.clone();
 
         Ok(try_stream! {
+
             let manifest_list = snapshot
-            .clone()
-            .load_manifest_list(&file_io, &table_metadata)
-            .await?;
+                .load_manifest_list(&file_io, &table_metadata)
+                .await?;
 
-            // Generate data file stream
             for entry in manifest_list.entries() {
-                // If this scan has a filter, check the partition evaluator cache for an existing
-                // PartitionEvaluator that matches this manifest's partition spec ID.
-                // Use one from the cache if there is one. If not, create one, put it in
-                // the cache, and take a reference to it.
-                #[allow(clippy::map_entry)]
                 if let Some(filter) = filter.as_ref() {
-                    if !manifest_evaluator_cache.contains_key(&entry.partition_spec_id) {
-                        manifest_evaluator_cache.insert(entry.partition_spec_id, Self::create_manifest_evaluator(entry.partition_spec_id, schema.clone(), table_metadata.clone(), case_sensitive, filter)?);
-                    }
-                    let manifest_evaluator = &manifest_evaluator_cache[&entry.partition_spec_id];
+                    let bound_filter = filter.bind(schema.clone(), case_sensitive)?;
 
-                    // reject any manifest files whose partition values don't match the filter.
+                    let partition_spec_id = entry.partition_spec_id;
+                    let partition_spec =
+                        Self::create_partition_spec(&table_metadata, partition_spec_id)?;
+
+                    let partition_schema = Self::create_partition_schema(partition_spec, &schema)?;
+
+                    let partition_filter = partition_filter_cache.entry(partition_spec_id).or_insert(
+                        Self::create_partition_filter(
+                            partition_spec.clone(),
+                            partition_schema.clone(),
+                            &bound_filter,
+                            case_sensitive,
+                        )?,
+                    );
+
+                    let manifest_evaluator = manifest_evaluator_cache
+                        .entry(partition_spec_id)
+                        .or_insert(ManifestEvaluator::new(
+                            partition_schema.schema_id(),
+                            partition_filter.clone(),
+                            case_sensitive,
+                        ));
+
                     if !manifest_evaluator.eval(entry)? {
                         continue;
                     }
+
+                    // TODO: Create ExpressionEvaluator
+                    // TODO: Create InclusiveMetricsEvaluator
                 }
 
                 let manifest = entry.load_manifest(&file_io).await?;
+                let mut manifest_entries_stream =
+                    futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
 
-                let mut manifest_entries = iter(manifest.entries().iter().filter(|e| e.is_alive()));
-                while let Some(manifest_entry) = manifest_entries.next().await {
+                while let Some(manifest_entry) = manifest_entries_stream.next().await {
                     match manifest_entry.content_type() {
                         DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
                             yield Err(Error::new(
@@ -236,30 +252,56 @@ impl TableScan {
                     }
                 }
             }
-        }
-        .boxed())
+
+        }.boxed())
     }
 
-    fn create_manifest_evaluator(
-        id: i32,
-        schema: SchemaRef,
-        table_metadata: Arc<TableMetadata>,
+    fn create_partition_spec(
+        table_metadata: &TableMetadataRef,
+        partition_spec_id: i32,
+    ) -> crate::Result<&PartitionSpecRef> {
+        let partition_spec = table_metadata
+            .partition_spec_by_id(partition_spec_id)
+            .ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("Could not find partition spec for id {}", partition_spec_id),
+            ))?;
+
+        Ok(partition_spec)
+    }
+
+    fn create_partition_schema(
+        partition_spec: &PartitionSpecRef,
+        schema: &SchemaRef,
+    ) -> crate::Result<SchemaRef> {
+        let partition_type = partition_spec.partition_type(schema)?;
+
+        let partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
+
+        let partition_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(partition_spec.spec_id)
+                .with_fields(partition_fields)
+                .build()?,
+        );
+
+        Ok(partition_schema)
+    }
+
+    fn create_partition_filter(
+        partition_spec: PartitionSpecRef,
+        partition_schema: SchemaRef,
+        filter: &BoundPredicate,
         case_sensitive: bool,
-        filter: &Predicate,
-    ) -> crate::Result<ManifestEvaluator> {
-        let bound_predicate = filter.bind(schema.clone(), case_sensitive)?;
+    ) -> crate::Result<BoundPredicate> {
+        let mut inclusive_projection = InclusiveProjection::new(partition_spec);
 
-        let partition_spec = table_metadata.partition_spec_by_id(id).ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("Could not find partition spec for id {id}"),
-        ))?;
+        let partition_filter = inclusive_projection
+            .project(filter)?
+            .rewrite_not()
+            .bind(partition_schema, case_sensitive)?;
 
-        ManifestEvaluator::new(
-            partition_spec.clone(),
-            schema.clone(),
-            bound_predicate,
-            case_sensitive,
-        )
+        Ok(partition_filter)
     }
 
     pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
