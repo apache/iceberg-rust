@@ -179,7 +179,7 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of file scan tasks.
     pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
-        let mut context = FileScanStreamContext::new(
+        let context = FileScanStreamContext::new(
             self.schema.clone(),
             self.snapshot.clone(),
             self.table_metadata.clone(),
@@ -187,6 +187,10 @@ impl TableScan {
             self.filter.clone(),
             self.case_sensitive,
         );
+
+        let mut partition_filter_cache: HashMap<i32, BoundPredicate> = HashMap::new();
+
+        let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
 
         Ok(try_stream! {
 
@@ -199,12 +203,11 @@ impl TableScan {
                     let bound_filter = filter.bind(context.schema.clone(), context.case_sensitive)?;
 
                     let partition_spec_id = entry.partition_spec_id;
-                    let partition_spec =
-                        Self::create_partition_spec(&context.table_metadata, partition_spec_id)?;
 
-                    let partition_schema = Self::create_partition_schema(partition_spec, &context.schema)?;
+                    let (partition_spec, partition_schema) = context.create_partition_spec_and_schema(partition_spec_id)?;
 
-                    let partition_filter = context.partition_filter_cache.entry(partition_spec_id).or_insert(
+
+                    let partition_filter = partition_filter_cache.entry(partition_spec_id).or_insert(
                         Self::create_partition_filter(
                             partition_spec.clone(),
                             partition_schema.clone(),
@@ -213,7 +216,7 @@ impl TableScan {
                         )?,
                     );
 
-                    let manifest_evaluator = context.manifest_evaluator_cache
+                    let manifest_evaluator = manifest_evaluator_cache
                         .entry(partition_spec_id)
                         .or_insert(ManifestEvaluator::new(
                             partition_schema.schema_id(),
@@ -308,38 +311,6 @@ impl TableScan {
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
 
-    fn create_partition_spec(
-        table_metadata: &TableMetadataRef,
-        partition_spec_id: i32,
-    ) -> crate::Result<&PartitionSpecRef> {
-        let partition_spec = table_metadata
-            .partition_spec_by_id(partition_spec_id)
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Could not find partition spec for id {}", partition_spec_id),
-            ))?;
-
-        Ok(partition_spec)
-    }
-
-    fn create_partition_schema(
-        partition_spec: &PartitionSpecRef,
-        schema: &SchemaRef,
-    ) -> crate::Result<SchemaRef> {
-        let partition_type = partition_spec.partition_type(schema)?;
-
-        let partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
-
-        let partition_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(partition_spec.spec_id)
-                .with_fields(partition_fields)
-                .build()?,
-        );
-
-        Ok(partition_schema)
-    }
-
     fn create_partition_filter(
         partition_spec: PartitionSpecRef,
         partition_schema: SchemaRef,
@@ -365,8 +336,6 @@ struct FileScanStreamContext {
     file_io: FileIO,
     filter: Option<Arc<Predicate>>,
     case_sensitive: bool,
-    partition_filter_cache: HashMap<i32, BoundPredicate>,
-    manifest_evaluator_cache: HashMap<i32, ManifestEvaluator>,
 }
 
 impl FileScanStreamContext {
@@ -385,9 +354,31 @@ impl FileScanStreamContext {
             file_io,
             filter,
             case_sensitive,
-            partition_filter_cache: HashMap::new(),
-            manifest_evaluator_cache: HashMap::new(),
         }
+    }
+
+    fn create_partition_spec_and_schema(
+        &self,
+        spec_id: i32,
+    ) -> Result<(&PartitionSpecRef, SchemaRef)> {
+        let partition_spec =
+            self.table_metadata
+                .partition_spec_by_id(spec_id)
+                .ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Could not find partition spec for id {}", spec_id),
+                ))?;
+
+        let partition_type = partition_spec.partition_type(&self.schema)?;
+        let partition_fields = partition_type.fields().to_owned();
+        let partition_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(partition_spec.spec_id)
+                .with_fields(partition_fields)
+                .build()?,
+        );
+
+        Ok((partition_spec, partition_schema))
     }
 }
 
