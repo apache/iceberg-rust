@@ -18,20 +18,28 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-use crate::expr::{Bind, Predicate};
+use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestEntryRef, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
+    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, PartitionSpecRef, Schema,
+    SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
-use crate::{Error, ErrorKind};
+use crate::{Error, ErrorKind, Result};
 use arrow_array::RecordBatch;
 use async_stream::try_stream;
-use futures::stream::{iter, BoxStream};
+use futures::stream::BoxStream;
 use futures::StreamExt;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// A stream of [`FileScanTask`].
+pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
+/// A stream of arrow [`RecordBatch`]es.
+pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -99,7 +107,7 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Build the table scan.
-    pub fn build(self) -> crate::Result<TableScan> {
+    pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -169,55 +177,67 @@ pub struct TableScan {
     filter: Option<Arc<Predicate>>,
 }
 
-/// A stream of [`FileScanTask`].
-pub type FileScanTaskStream = BoxStream<'static, crate::Result<FileScanTask>>;
-
 impl TableScan {
-    /// Returns a stream of file scan tasks.
+    /// Returns a stream of [`FileScanTask`]s.
+    pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        let context = FileScanStreamContext::new(
+            self.schema.clone(),
+            self.snapshot.clone(),
+            self.table_metadata.clone(),
+            self.file_io.clone(),
+            self.filter.clone(),
+            self.case_sensitive,
+        )?;
 
-    pub async fn plan_files(&self) -> crate::Result<FileScanTaskStream> {
-        // Cache `ManifestEvaluatorFactory`s created as part of this scan
-        let mut manifest_evaluator_cache: HashMap<i32, ManifestEvaluator> = HashMap::new();
-
-        // these variables needed to ensure that we don't need to pass a
-        // reference to self into `try_stream`, as it expects references
-        // passed in to outlive 'static
-        let schema = self.schema.clone();
-        let snapshot = self.snapshot.clone();
-        let table_metadata = self.table_metadata.clone();
-        let file_io = self.file_io.clone();
-        let case_sensitive = self.case_sensitive;
-        let filter = self.filter.clone();
+        let mut partition_filter_cache = PartitionFilterCache::new();
+        let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
         Ok(try_stream! {
-            let manifest_list = snapshot
-            .clone()
-            .load_manifest_list(&file_io, &table_metadata)
-            .await?;
+            let manifest_list = context
+                .snapshot
+                .load_manifest_list(&context.file_io, &context.table_metadata)
+                .await?;
 
-            // Generate data file stream
             for entry in manifest_list.entries() {
-                // If this scan has a filter, check the partition evaluator cache for an existing
-                // PartitionEvaluator that matches this manifest's partition spec ID.
-                // Use one from the cache if there is one. If not, create one, put it in
-                // the cache, and take a reference to it.
-                #[allow(clippy::map_entry)]
-                if let Some(filter) = filter.as_ref() {
-                    if !manifest_evaluator_cache.contains_key(&entry.partition_spec_id) {
-                        manifest_evaluator_cache.insert(entry.partition_spec_id, Self::create_manifest_evaluator(entry.partition_spec_id, schema.clone(), table_metadata.clone(), case_sensitive, filter)?);
-                    }
-                    let manifest_evaluator = &manifest_evaluator_cache[&entry.partition_spec_id];
+                if !Self::content_type_is_data(entry) {
+                    continue;
+                }
 
-                    // reject any manifest files whose partition values don't match the filter.
+                if let Some(filter) = context.bound_filter() {
+                    let partition_spec_id = entry.partition_spec_id;
+
+                    let (partition_spec, partition_schema) =
+                        context.create_partition_spec_and_schema(partition_spec_id)?;
+
+                    let partition_filter = partition_filter_cache.get(
+                        partition_spec_id,
+                        partition_spec,
+                        partition_schema.clone(),
+                        filter,
+                        context.case_sensitive,
+                    )?;
+
+                    let manifest_evaluator = manifest_evaluator_cache.get(
+                        partition_schema.schema_id(),
+                        partition_filter.clone(),
+                        context.case_sensitive,
+                    );
+
                     if !manifest_evaluator.eval(entry)? {
                         continue;
                     }
+
+                    // TODO: Create ExpressionEvaluator
                 }
 
-                let manifest = entry.load_manifest(&file_io).await?;
+                let manifest = entry.load_manifest(&context.file_io).await?;
+                let mut manifest_entries_stream =
+                    futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
 
-                let mut manifest_entries = iter(manifest.entries().iter().filter(|e| e.is_alive()));
-                while let Some(manifest_entry) = manifest_entries.next().await {
+                while let Some(manifest_entry) = manifest_entries_stream.next().await {
+                    // TODO: Apply ExpressionEvaluator
+                    // TODO: Apply InclusiveMetricsEvaluator::eval()
+
                     match manifest_entry.content_type() {
                         DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
                             yield Err(Error::new(
@@ -226,7 +246,7 @@ impl TableScan {
                             ))?;
                         }
                         DataContentType::Data => {
-                            let scan_task: crate::Result<FileScanTask> = Ok(FileScanTask {
+                            let scan_task: Result<FileScanTask> = Ok(FileScanTask {
                                 data_manifest_entry: manifest_entry.clone(),
                                 start: 0,
                                 length: manifest_entry.file_size_in_bytes(),
@@ -240,29 +260,8 @@ impl TableScan {
         .boxed())
     }
 
-    fn create_manifest_evaluator(
-        id: i32,
-        schema: SchemaRef,
-        table_metadata: Arc<TableMetadata>,
-        case_sensitive: bool,
-        filter: &Predicate,
-    ) -> crate::Result<ManifestEvaluator> {
-        let bound_predicate = filter.bind(schema.clone(), case_sensitive)?;
-
-        let partition_spec = table_metadata.partition_spec_by_id(id).ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("Could not find partition spec for id {id}"),
-        ))?;
-
-        ManifestEvaluator::new(
-            partition_spec.clone(),
-            schema.clone(),
-            bound_predicate,
-            case_sensitive,
-        )
-    }
-
-    pub async fn to_arrow(&self) -> crate::Result<ArrowRecordBatchStream> {
+    /// Returns an [`ArrowRecordBatchStream`].
+    pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.schema.clone());
 
@@ -312,6 +311,147 @@ impl TableScan {
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
+
+    /// Checks whether the [`ManifestContentType`] is `Data` or not.
+    fn content_type_is_data(entry: &ManifestFile) -> bool {
+        if let ManifestContentType::Data = entry.content {
+            return true;
+        }
+        false
+    }
+}
+
+#[derive(Debug)]
+/// Holds the context necessary for file scanning operations
+/// in a streaming environment.
+struct FileScanStreamContext {
+    schema: SchemaRef,
+    snapshot: SnapshotRef,
+    table_metadata: TableMetadataRef,
+    file_io: FileIO,
+    bound_filter: Option<BoundPredicate>,
+    case_sensitive: bool,
+}
+
+impl FileScanStreamContext {
+    /// Creates a new [`FileScanStreamContext`].
+    fn new(
+        schema: SchemaRef,
+        snapshot: SnapshotRef,
+        table_metadata: TableMetadataRef,
+        file_io: FileIO,
+        filter: Option<Arc<Predicate>>,
+        case_sensitive: bool,
+    ) -> Result<Self> {
+        let bound_filter = match filter {
+            Some(ref filter) => Some(filter.bind(schema.clone(), case_sensitive)?),
+            None => None,
+        };
+
+        Ok(Self {
+            schema,
+            snapshot,
+            table_metadata,
+            file_io,
+            bound_filter,
+            case_sensitive,
+        })
+    }
+
+    /// Returns a reference to the [`BoundPredicate`] filter.
+    fn bound_filter(&self) -> Option<&BoundPredicate> {
+        self.bound_filter.as_ref()
+    }
+
+    /// Creates a reference-counted [`PartitionSpec`] and a
+    /// corresponding [`Schema`] based on the specified partition spec id.
+    fn create_partition_spec_and_schema(
+        &self,
+        spec_id: i32,
+    ) -> Result<(PartitionSpecRef, SchemaRef)> {
+        let partition_spec =
+            self.table_metadata
+                .partition_spec_by_id(spec_id)
+                .ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Could not find partition spec for id {}", spec_id),
+                ))?;
+
+        let partition_type = partition_spec.partition_type(&self.schema)?;
+        let partition_fields = partition_type.fields().to_owned();
+        let partition_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(partition_spec.spec_id)
+                .with_fields(partition_fields)
+                .build()?,
+        );
+
+        Ok((partition_spec.clone(), partition_schema))
+    }
+}
+
+#[derive(Debug)]
+/// Manages the caching of [`BoundPredicate`] objects
+/// for [`PartitionSpec`]s based on partition spec id.
+struct PartitionFilterCache(HashMap<i32, BoundPredicate>);
+
+impl PartitionFilterCache {
+    /// Creates a new [`PartitionFilterCache`]
+    /// with an empty internal HashMap.
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Retrieves a [`BoundPredicate`] from the cache
+    /// or computes it if not present.
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_spec: PartitionSpecRef,
+        partition_schema: SchemaRef,
+        filter: &BoundPredicate,
+        case_sensitive: bool,
+    ) -> Result<&BoundPredicate> {
+        match self.0.entry(spec_id) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                let mut inclusive_projection = InclusiveProjection::new(partition_spec);
+
+                let partition_filter = inclusive_projection
+                    .project(filter)?
+                    .rewrite_not()
+                    .bind(partition_schema, case_sensitive)?;
+
+                Ok(e.insert(partition_filter))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Manages the caching of [`ManifestEvaluator`] objects
+/// for [`PartitionSpec`]s based on partition spec id.
+struct ManifestEvaluatorCache(HashMap<i32, ManifestEvaluator>);
+
+impl ManifestEvaluatorCache {
+    /// Creates a new [`ManifestEvaluatorCache`]
+    /// with an empty internal HashMap.
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Retrieves a [`ManifestEvaluator`] from the cache
+    /// or computes it if not present.
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_filter: BoundPredicate,
+        case_sensitive: bool,
+    ) -> &mut ManifestEvaluator {
+        self.0
+            .entry(spec_id)
+            .or_insert(ManifestEvaluator::new(partition_filter, case_sensitive))
+    }
 }
 
 /// A task to scan part of file.
@@ -323,9 +463,6 @@ pub struct FileScanTask {
     #[allow(dead_code)]
     length: u64,
 }
-
-/// A stream of arrow record batches.
-pub type ArrowRecordBatchStream = BoxStream<'static, crate::Result<RecordBatch>>;
 
 impl FileScanTask {
     pub fn data(&self) -> ManifestEntryRef {

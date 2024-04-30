@@ -16,81 +16,37 @@
 // under the License.
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
-use crate::expr::visitors::inclusive_projection::InclusiveProjection;
-use crate::expr::{Bind, BoundPredicate, BoundReference};
-use crate::spec::{Datum, FieldSummary, ManifestFile, PartitionSpecRef, Schema, SchemaRef};
-use crate::{Error, ErrorKind};
+use crate::expr::{BoundPredicate, BoundReference};
+use crate::spec::{Datum, FieldSummary, ManifestFile};
+use crate::Result;
 use fnv::FnvHashSet;
-use std::sync::Arc;
 
-/// Evaluates [`ManifestFile`]s to see if their partition summary matches a provided
-/// [`BoundPredicate`]. Used by [`TableScan`] to filter down the list of [`ManifestFile`]s
+#[derive(Debug)]
+/// Evaluates a [`ManifestFile`] to see if the partition summaries
+/// match a provided [`BoundPredicate`].
+///
+/// Used by [`TableScan`] to prune the list of [`ManifestFile`]s
 /// in which data might be found that matches the TableScan's filter.
 pub(crate) struct ManifestEvaluator {
-    partition_schema: SchemaRef,
     partition_filter: BoundPredicate,
     case_sensitive: bool,
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(
-        partition_spec: PartitionSpecRef,
-        table_schema: SchemaRef,
-        filter: BoundPredicate,
-        case_sensitive: bool,
-    ) -> crate::Result<Self> {
-        let partition_type = partition_spec.partition_type(&table_schema)?;
-
-        // this is needed as SchemaBuilder.with_fields expects an iterator over
-        // Arc<NestedField> rather than &Arc<NestedField>
-        let cloned_partition_fields: Vec<_> =
-            partition_type.fields().iter().map(Arc::clone).collect();
-
-        // The partition_schema's schema_id is set to the partition
-        // spec's spec_id here, and used to perform a sanity check
-        // during eval to confirm that it matches the spec_id
-        // of the ManifestFile we're evaluating
-        let partition_schema = Schema::builder()
-            .with_schema_id(partition_spec.spec_id)
-            .with_fields(cloned_partition_fields)
-            .build()?;
-
-        let partition_schema_ref = Arc::new(partition_schema);
-
-        let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
-        let unbound_partition_filter = inclusive_projection.project(&filter)?;
-
-        let partition_filter = unbound_partition_filter
-            .rewrite_not()
-            .bind(partition_schema_ref.clone(), case_sensitive)?;
-
-        Ok(Self {
-            partition_schema: partition_schema_ref,
+    pub(crate) fn new(partition_filter: BoundPredicate, case_sensitive: bool) -> Self {
+        Self {
             partition_filter,
             case_sensitive,
-        })
+        }
     }
 
     /// Evaluate this `ManifestEvaluator`'s filter predicate against the
     /// provided [`ManifestFile`]'s partitions. Used by [`TableScan`] to
     /// see if this `ManifestFile` could possibly contain data that matches
     /// the scan's filter.
-    pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> crate::Result<bool> {
+    pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> Result<bool> {
         if manifest_file.partitions.is_empty() {
             return Ok(true);
-        }
-
-        // The schema_id of self.partition_schema is set to the
-        // spec_id of the partition spec that this ManifestEvaluator
-        // was created from in ManifestEvaluator::new
-        if self.partition_schema.schema_id() != manifest_file.partition_spec_id {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Partition ID for manifest file '{}' does not match partition ID for the Scan",
-                    &manifest_file.manifest_path
-                ),
-            ));
         }
 
         let mut evaluator = ManifestFilterVisitor::new(self, &manifest_file.partitions);
@@ -273,137 +229,28 @@ impl ManifestFilterVisitor<'_> {
 
 #[cfg(test)]
 mod test {
+    use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-    use crate::expr::{Bind, Predicate, PredicateOperator, Reference, UnaryExpression};
+    use crate::expr::{
+        Bind, BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
+    };
     use crate::spec::{
         FieldSummary, ManifestContentType, ManifestFile, NestedField, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Transform, Type,
+        PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Transform, Type,
     };
+    use crate::Result;
     use std::sync::Arc;
 
-    #[test]
-    fn test_manifest_file_no_partitions() {
-        let (table_schema_ref, partition_spec_ref) = create_test_schema_and_partition_spec();
-
-        let partition_filter = Predicate::AlwaysTrue
-            .bind(table_schema_ref.clone(), false)
-            .unwrap();
-
-        let case_sensitive = false;
-
-        let manifest_file_partitions = vec![];
-        let manifest_file = create_test_manifest_file(manifest_file_partitions);
-
-        let manifest_evaluator = ManifestEvaluator::new(
-            partition_spec_ref,
-            table_schema_ref,
-            partition_filter,
-            case_sensitive,
-        )
-        .unwrap();
-
-        let result = manifest_evaluator.eval(&manifest_file).unwrap();
-
-        assert!(result);
-    }
-
-    #[test]
-    fn test_manifest_file_trivial_partition_passing_filter() {
-        let (table_schema_ref, partition_spec_ref) = create_test_schema_and_partition_spec();
-
-        let partition_filter = Predicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNull,
-            Reference::new("a"),
-        ))
-        .bind(table_schema_ref.clone(), true)
-        .unwrap();
-
-        let manifest_file_partitions = vec![FieldSummary {
-            contains_null: true,
-            contains_nan: None,
-            lower_bound: None,
-            upper_bound: None,
-        }];
-        let manifest_file = create_test_manifest_file(manifest_file_partitions);
-
-        let manifest_evaluator =
-            ManifestEvaluator::new(partition_spec_ref, table_schema_ref, partition_filter, true)
-                .unwrap();
-
-        let result = manifest_evaluator.eval(&manifest_file).unwrap();
-
-        assert!(result);
-    }
-
-    #[test]
-    fn test_manifest_file_partition_id_mismatch_returns_error() {
-        let (table_schema_ref, partition_spec_ref) =
-            create_test_schema_and_partition_spec_with_id_mismatch();
-
-        let partition_filter = Predicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNull,
-            Reference::new("a"),
-        ))
-        .bind(table_schema_ref.clone(), true)
-        .unwrap();
-
-        let manifest_file_partitions = vec![FieldSummary {
-            contains_null: true,
-            contains_nan: None,
-            lower_bound: None,
-            upper_bound: None,
-        }];
-        let manifest_file = create_test_manifest_file(manifest_file_partitions);
-
-        let manifest_evaluator =
-            ManifestEvaluator::new(partition_spec_ref, table_schema_ref, partition_filter, true)
-                .unwrap();
-
-        let result = manifest_evaluator.eval(&manifest_file);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_manifest_file_trivial_partition_rejected_filter() {
-        let (table_schema_ref, partition_spec_ref) = create_test_schema_and_partition_spec();
-
-        let partition_filter = Predicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNan,
-            Reference::new("a"),
-        ))
-        .bind(table_schema_ref.clone(), true)
-        .unwrap();
-
-        let manifest_file_partitions = vec![FieldSummary {
-            contains_null: false,
-            contains_nan: None,
-            lower_bound: None,
-            upper_bound: None,
-        }];
-        let manifest_file = create_test_manifest_file(manifest_file_partitions);
-
-        let manifest_evaluator =
-            ManifestEvaluator::new(partition_spec_ref, table_schema_ref, partition_filter, true)
-                .unwrap();
-
-        let result = manifest_evaluator.eval(&manifest_file).unwrap();
-
-        assert!(!result);
-    }
-
-    fn create_test_schema_and_partition_spec() -> (Arc<Schema>, Arc<PartitionSpec>) {
-        let table_schema = Schema::builder()
+    fn create_schema_and_partition_spec() -> Result<(SchemaRef, PartitionSpecRef)> {
+        let schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
                 "a",
                 Type::Primitive(PrimitiveType::Float),
             ))])
-            .build()
-            .unwrap();
-        let table_schema_ref = Arc::new(table_schema);
+            .build()?;
 
-        let partition_spec = PartitionSpec::builder()
+        let spec = PartitionSpec::builder()
             .with_spec_id(1)
             .with_fields(vec![PartitionField::builder()
                 .source_id(1)
@@ -413,24 +260,21 @@ mod test {
                 .build()])
             .build()
             .unwrap();
-        let partition_spec_ref = Arc::new(partition_spec);
-        (table_schema_ref, partition_spec_ref)
+
+        Ok((Arc::new(schema), Arc::new(spec)))
     }
 
-    fn create_test_schema_and_partition_spec_with_id_mismatch() -> (Arc<Schema>, Arc<PartitionSpec>)
+    fn create_schema_and_partition_spec_with_id_mismatch() -> Result<(SchemaRef, PartitionSpecRef)>
     {
-        let table_schema = Schema::builder()
+        let schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
                 "a",
                 Type::Primitive(PrimitiveType::Float),
             ))])
-            .build()
-            .unwrap();
-        let table_schema_ref = Arc::new(table_schema);
+            .build()?;
 
-        let partition_spec = PartitionSpec::builder()
-            // Spec ID here deliberately doesn't match the one from create_test_manifest_file
+        let spec = PartitionSpec::builder()
             .with_spec_id(999)
             .with_fields(vec![PartitionField::builder()
                 .source_id(1)
@@ -440,11 +284,11 @@ mod test {
                 .build()])
             .build()
             .unwrap();
-        let partition_spec_ref = Arc::new(partition_spec);
-        (table_schema_ref, partition_spec_ref)
+
+        Ok((Arc::new(schema), Arc::new(spec)))
     }
 
-    fn create_test_manifest_file(manifest_file_partitions: Vec<FieldSummary>) -> ManifestFile {
+    fn create_manifest_file(partitions: Vec<FieldSummary>) -> ManifestFile {
         ManifestFile {
             manifest_path: "/test/path".to_string(),
             manifest_length: 0,
@@ -459,8 +303,137 @@ mod test {
             added_rows_count: None,
             existing_rows_count: None,
             deleted_rows_count: None,
-            partitions: manifest_file_partitions,
+            partitions,
             key_metadata: vec![],
         }
+    }
+
+    fn create_partition_schema(
+        partition_spec: &PartitionSpecRef,
+        schema: &SchemaRef,
+    ) -> Result<SchemaRef> {
+        let partition_type = partition_spec.partition_type(schema)?;
+
+        let partition_fields: Vec<_> = partition_type.fields().iter().map(Arc::clone).collect();
+
+        let partition_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(partition_spec.spec_id)
+                .with_fields(partition_fields)
+                .build()?,
+        );
+
+        Ok(partition_schema)
+    }
+
+    fn create_partition_filter(
+        partition_spec: PartitionSpecRef,
+        partition_schema: SchemaRef,
+        filter: &BoundPredicate,
+        case_sensitive: bool,
+    ) -> Result<BoundPredicate> {
+        let mut inclusive_projection = InclusiveProjection::new(partition_spec);
+
+        let partition_filter = inclusive_projection
+            .project(filter)?
+            .rewrite_not()
+            .bind(partition_schema, case_sensitive)?;
+
+        Ok(partition_filter)
+    }
+
+    fn create_manifest_evaluator(
+        schema: SchemaRef,
+        partition_spec: PartitionSpecRef,
+        filter: &BoundPredicate,
+        case_sensitive: bool,
+    ) -> Result<ManifestEvaluator> {
+        let partition_schema = create_partition_schema(&partition_spec, &schema)?;
+        let partition_filter = create_partition_filter(
+            partition_spec,
+            partition_schema.clone(),
+            filter,
+            case_sensitive,
+        )?;
+
+        Ok(ManifestEvaluator::new(partition_filter, case_sensitive))
+    }
+
+    #[test]
+    fn test_manifest_file_empty_partitions() -> Result<()> {
+        let case_sensitive = false;
+
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+
+        let filter = Predicate::AlwaysTrue.bind(schema.clone(), case_sensitive)?;
+
+        let manifest_file = create_manifest_file(vec![]);
+
+        let manifest_evaluator =
+            create_manifest_evaluator(schema, partition_spec, &filter, case_sensitive)?;
+
+        let result = manifest_evaluator.eval(&manifest_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_manifest_file_trivial_partition_passing_filter() -> Result<()> {
+        let case_sensitive = true;
+
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+
+        let filter = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNull,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let manifest_file = create_manifest_file(vec![FieldSummary {
+            contains_null: true,
+            contains_nan: None,
+            lower_bound: None,
+            upper_bound: None,
+        }]);
+
+        let manifest_evaluator =
+            create_manifest_evaluator(schema, partition_spec, &filter, case_sensitive)?;
+
+        let result = manifest_evaluator.eval(&manifest_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_manifest_file_trivial_partition_rejected_filter() -> Result<()> {
+        let case_sensitive = true;
+
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+
+        let filter = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNan,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let manifest_file = create_manifest_file(vec![FieldSummary {
+            contains_null: false,
+            contains_nan: None,
+            lower_bound: None,
+            upper_bound: None,
+        }]);
+
+        let manifest_evaluator =
+            create_manifest_evaluator(schema, partition_spec, &filter, case_sensitive)?;
+
+        let result = manifest_evaluator.eval(&manifest_file).unwrap();
+
+        assert!(!result);
+
+        Ok(())
     }
 }
