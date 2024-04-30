@@ -215,13 +215,13 @@ impl TableScan {
                     let partition_filter = partition_filter_cache.get(
                         partition_spec_id,
                         &context,
-                        partition_schema.clone(),
+                        &partition_schema,
                         filter,
                     )?;
 
                     let manifest_evaluator = manifest_evaluator_cache.get(
                         partition_spec_id,
-                        partition_filter.clone(),
+                        partition_filter,
                         context.case_sensitive,
                     );
 
@@ -384,7 +384,7 @@ impl PartitionFilterCache {
         &mut self,
         spec_id: i32,
         context: &FileScanStreamContext,
-        partition_schema: SchemaRef,
+        partition_schema: &SchemaRef,
         filter: &BoundPredicate,
     ) -> Result<&BoundPredicate> {
         match self.0.entry(spec_id) {
@@ -404,7 +404,7 @@ impl PartitionFilterCache {
                 let partition_filter = inclusive_projection
                     .project(filter)?
                     .rewrite_not()
-                    .bind(partition_schema, context.case_sensitive)?;
+                    .bind(partition_schema.clone(), context.case_sensitive)?;
 
                 Ok(e.insert(partition_filter))
             }
@@ -471,12 +471,13 @@ impl ManifestEvaluatorCache {
     fn get(
         &mut self,
         spec_id: i32,
-        partition_filter: BoundPredicate,
+        partition_filter: &BoundPredicate,
         case_sensitive: bool,
     ) -> &mut ManifestEvaluator {
-        self.0
-            .entry(spec_id)
-            .or_insert(ManifestEvaluator::new(partition_filter, case_sensitive))
+        self.0.entry(spec_id).or_insert(ManifestEvaluator::new(
+            partition_filter.clone(),
+            case_sensitive,
+        ))
     }
 }
 
