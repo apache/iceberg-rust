@@ -187,9 +187,7 @@ impl TableScan {
             self.file_io.clone(),
             self.filter.clone(),
             self.case_sensitive,
-        );
-
-        let bound_filter = context.bound_filter()?;
+        )?;
 
         let mut partition_filter_cache = PartitionFilterCache::new();
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
@@ -201,7 +199,7 @@ impl TableScan {
                 .await?;
 
             for entry in manifest_list.entries() {
-                if let Some(filter) = &bound_filter {
+                if let Some(filter) = context.bound_filter() {
                     let partition_spec_id = entry.partition_spec_id;
 
                     let (partition_spec, partition_schema) =
@@ -320,7 +318,7 @@ struct FileScanStreamContext {
     snapshot: SnapshotRef,
     table_metadata: TableMetadataRef,
     file_io: FileIO,
-    filter: Option<Arc<Predicate>>,
+    bound_filter: Option<BoundPredicate>,
     case_sensitive: bool,
 }
 
@@ -333,23 +331,25 @@ impl FileScanStreamContext {
         file_io: FileIO,
         filter: Option<Arc<Predicate>>,
         case_sensitive: bool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let bound_filter = match filter {
+            Some(ref filter) => Some(filter.bind(schema.clone(), case_sensitive)?),
+            None => None,
+        };
+
+        Ok(Self {
             schema,
             snapshot,
             table_metadata,
             file_io,
-            filter,
+            bound_filter,
             case_sensitive,
-        }
+        })
     }
 
-    /// Creates a [`BoundPredicate`] from row filter [`Predicate`].
-    fn bound_filter(&self) -> Result<Option<BoundPredicate>> {
-        match self.filter {
-            Some(ref filter) => Ok(Some(filter.bind(self.schema.clone(), self.case_sensitive)?)),
-            None => Ok(None),
-        }
+    /// Returns a reference to the [`BoundPredicate`] filter.
+    fn bound_filter(&self) -> Option<&BoundPredicate> {
+        self.bound_filter.as_ref()
     }
 
     /// Creates a reference-counted [`PartitionSpec`] and a
