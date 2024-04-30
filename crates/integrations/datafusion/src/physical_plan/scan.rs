@@ -31,9 +31,9 @@ use iceberg::table::Table;
 
 use crate::to_datafusion_error;
 
-#[derive(Debug)]
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
 /// necessary details and computed properties required for execution planning.
+#[derive(Debug)]
 pub(crate) struct IcebergTableScan {
     /// A table in the catalog.
     table: Table,
