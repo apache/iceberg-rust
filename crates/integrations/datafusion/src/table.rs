@@ -18,6 +18,7 @@
 use std::{any::Any, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::error::Result as DFResult;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
     datasource::{TableProvider, TableType},
@@ -78,7 +79,7 @@ impl TableProvider for IcebergTableProvider {
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
             self.schema.clone(),

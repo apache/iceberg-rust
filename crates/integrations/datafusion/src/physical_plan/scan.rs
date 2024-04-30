@@ -17,6 +17,8 @@
 
 use std::{any::Any, pin::Pin, sync::Arc};
 
+use datafusion::error::Result as DFResult;
+
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef as ArrowSchemaRef},
     execution::{SendableRecordBatchStream, TaskContext},
@@ -81,7 +83,7 @@ impl ExecutionPlan for IcebergTableScan {
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
 
@@ -93,7 +95,7 @@ impl ExecutionPlan for IcebergTableScan {
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
-    ) -> datafusion::error::Result<SendableRecordBatchStream> {
+    ) -> DFResult<SendableRecordBatchStream> {
         let fut = get_batch_stream(self.table.clone());
         let stream = futures::stream::once(fut).try_flatten();
 
@@ -121,9 +123,7 @@ impl DisplayAs for IcebergTableScan {
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
 async fn get_batch_stream(
     table: Table,
-) -> datafusion::error::Result<
-    Pin<Box<dyn Stream<Item = datafusion::error::Result<RecordBatch>> + Send>>,
-> {
+) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
     let table_scan = table.scan().build().map_err(to_datafusion_error)?;
 
     let stream = table_scan

@@ -18,6 +18,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::error::Result as DFResult;
 use datafusion::{catalog::schema::SchemaProvider, datasource::TableProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
@@ -91,7 +92,7 @@ impl SchemaProvider for IcebergSchemaProvider {
         self.tables.get(name).is_some()
     }
 
-    async fn table(&self, name: &str) -> datafusion::error::Result<Option<Arc<dyn TableProvider>>> {
+    async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
         Ok(self.tables.get(name).cloned())
     }
 }
