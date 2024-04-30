@@ -310,7 +310,7 @@ mod test {
 
     fn create_partition_schema(
         partition_spec: &PartitionSpecRef,
-        schema: &SchemaRef,
+        schema: &Schema,
     ) -> Result<SchemaRef> {
         let partition_type = partition_spec.partition_type(schema)?;
 
