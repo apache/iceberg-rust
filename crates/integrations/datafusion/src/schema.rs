@@ -64,7 +64,7 @@ impl IcebergSchemaProvider {
         )
         .await?;
 
-        let tables: Vec<_> = table_names
+        let tables: HashMap<String, Arc<dyn TableProvider>> = table_names
             .into_iter()
             .zip(providers.into_iter())
             .map(|(name, provider)| {
@@ -73,9 +73,7 @@ impl IcebergSchemaProvider {
             })
             .collect();
 
-        Ok(IcebergSchemaProvider {
-            tables: tables.into_iter().collect(),
-        })
+        Ok(IcebergSchemaProvider { tables })
     }
 }
 

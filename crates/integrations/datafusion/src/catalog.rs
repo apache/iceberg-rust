@@ -67,7 +67,7 @@ impl IcebergCatalogProvider {
         )
         .await?;
 
-        let schemas: Vec<_> = schema_names
+        let schemas: HashMap<String, Arc<dyn SchemaProvider>> = schema_names
             .into_iter()
             .zip(providers.into_iter())
             .map(|(name, provider)| {
@@ -76,9 +76,7 @@ impl IcebergCatalogProvider {
             })
             .collect();
 
-        Ok(IcebergCatalogProvider {
-            schemas: schemas.into_iter().collect(),
-        })
+        Ok(IcebergCatalogProvider { schemas })
     }
 }
 
