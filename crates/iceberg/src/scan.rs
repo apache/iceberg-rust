@@ -207,7 +207,7 @@ impl TableScan {
 
                     let partition_filter = partition_filter_cache.get(
                         partition_spec_id,
-                        partition_spec.clone(),
+                        partition_spec,
                         partition_schema.clone(),
                         filter,
                         context.case_sensitive,
@@ -353,11 +353,11 @@ impl FileScanStreamContext {
     }
 
     /// Creates a reference-counted [`PartitionSpec`] and a
-    /// corresponding schema based on the specified partition spec id.
+    /// corresponding [`Schema`] based on the specified partition spec id.
     fn create_partition_spec_and_schema(
         &self,
         spec_id: i32,
-    ) -> Result<(&PartitionSpecRef, SchemaRef)> {
+    ) -> Result<(PartitionSpecRef, SchemaRef)> {
         let partition_spec =
             self.table_metadata
                 .partition_spec_by_id(spec_id)
@@ -375,7 +375,7 @@ impl FileScanStreamContext {
                 .build()?,
         );
 
-        Ok((partition_spec, partition_schema))
+        Ok((partition_spec.clone(), partition_schema))
     }
 }
 
