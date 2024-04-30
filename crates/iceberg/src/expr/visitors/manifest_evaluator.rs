@@ -18,7 +18,7 @@
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, FieldSummary, ManifestFile};
-use crate::{Error, ErrorKind, Result};
+use crate::Result;
 use fnv::FnvHashSet;
 
 #[derive(Debug)]
@@ -28,19 +28,13 @@ use fnv::FnvHashSet;
 /// Used by [`TableScan`] to prune the list of [`ManifestFile`]s
 /// in which data might be found that matches the TableScan's filter.
 pub(crate) struct ManifestEvaluator {
-    partition_schema_id: i32,
     partition_filter: BoundPredicate,
     case_sensitive: bool,
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(
-        partition_schema_id: i32,
-        partition_filter: BoundPredicate,
-        case_sensitive: bool,
-    ) -> Self {
+    pub(crate) fn new(partition_filter: BoundPredicate, case_sensitive: bool) -> Self {
         Self {
-            partition_schema_id,
             partition_filter,
             case_sensitive,
         }
@@ -53,19 +47,6 @@ impl ManifestEvaluator {
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> Result<bool> {
         if manifest_file.partitions.is_empty() {
             return Ok(true);
-        }
-
-        // A [`ManifestEvaluator`] is created for a specific schema id
-        // based on the partition spec. This id should match the partition
-        // spec id of the [`ManifestFile`].
-        if self.partition_schema_id != manifest_file.partition_spec_id {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Partition ID for manifest file '{}' does not match partition ID for the Scan",
-                    &manifest_file.manifest_path
-                ),
-            ));
         }
 
         let mut evaluator = ManifestFilterVisitor::new(self, &manifest_file.partitions);
@@ -375,11 +356,7 @@ mod test {
             case_sensitive,
         )?;
 
-        Ok(ManifestEvaluator::new(
-            partition_schema.schema_id(),
-            partition_filter,
-            case_sensitive,
-        ))
+        Ok(ManifestEvaluator::new(partition_filter, case_sensitive))
     }
 
     #[test]
@@ -427,35 +404,6 @@ mod test {
         let result = manifest_evaluator.eval(&manifest_file)?;
 
         assert!(result);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_manifest_file_partition_id_mismatch_returns_error() -> Result<()> {
-        let case_sensitive = true;
-
-        let (schema, partition_spec) = create_schema_and_partition_spec_with_id_mismatch()?;
-
-        let filter = Predicate::Unary(UnaryExpression::new(
-            PredicateOperator::IsNull,
-            Reference::new("a"),
-        ))
-        .bind(schema.clone(), case_sensitive)?;
-
-        let manifest_file = create_manifest_file(vec![FieldSummary {
-            contains_null: true,
-            contains_nan: None,
-            lower_bound: None,
-            upper_bound: None,
-        }]);
-
-        let manifest_evaluator =
-            create_manifest_evaluator(schema, partition_spec, &filter, case_sensitive)?;
-
-        let result = manifest_evaluator.eval(&manifest_file);
-
-        assert!(result.is_err());
 
         Ok(())
     }
