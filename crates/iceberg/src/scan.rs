@@ -24,7 +24,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
     DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, Schema, SchemaRef,
-    SnapshotRef, TableMetadata, TableMetadataRef,
+    SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -209,20 +209,18 @@ impl TableScan {
 
                     let partition_schema = partition_schema_cache.get(
                         partition_spec_id,
-                        &context.table_metadata,
-                        &context.schema
+                        &context
                     )?;
 
                     let partition_filter = partition_filter_cache.get(
                         partition_spec_id,
-                        &context.table_metadata,
+                        &context,
                         partition_schema.clone(),
                         filter,
-                        context.case_sensitive,
                     )?;
 
                     let manifest_evaluator = manifest_evaluator_cache.get(
-                        partition_schema.schema_id(),
+                        partition_spec_id,
                         partition_filter.clone(),
                         context.case_sensitive,
                     );
@@ -385,16 +383,16 @@ impl PartitionFilterCache {
     fn get(
         &mut self,
         spec_id: i32,
-        table_metadata: &TableMetadata,
+        context: &FileScanStreamContext,
         partition_schema: SchemaRef,
         filter: &BoundPredicate,
-        case_sensitive: bool,
     ) -> Result<&BoundPredicate> {
         match self.0.entry(spec_id) {
             Entry::Occupied(e) => Ok(e.into_mut()),
             Entry::Vacant(e) => {
                 let partition_spec =
-                    table_metadata
+                    context
+                        .table_metadata
                         .partition_spec_by_id(spec_id)
                         .ok_or(Error::new(
                             ErrorKind::Unexpected,
@@ -406,7 +404,7 @@ impl PartitionFilterCache {
                 let partition_filter = inclusive_projection
                     .project(filter)?
                     .rewrite_not()
-                    .bind(partition_schema, case_sensitive)?;
+                    .bind(partition_schema, context.case_sensitive)?;
 
                 Ok(e.insert(partition_filter))
             }
@@ -428,24 +426,20 @@ impl PartitionSchemaCache {
 
     /// Retrieves a partition [`SchemaRef`] from the cache
     /// or computes it if not present.
-    fn get(
-        &mut self,
-        spec_id: i32,
-        table_metadata: &TableMetadata,
-        schema: &Schema,
-    ) -> Result<SchemaRef> {
+    fn get(&mut self, spec_id: i32, context: &FileScanStreamContext) -> Result<SchemaRef> {
         match self.0.entry(spec_id) {
             Entry::Occupied(e) => Ok(e.get().clone()),
             Entry::Vacant(e) => {
                 let partition_spec =
-                    table_metadata
+                    context
+                        .table_metadata
                         .partition_spec_by_id(spec_id)
                         .ok_or(Error::new(
                             ErrorKind::Unexpected,
                             format!("Could not find partition spec for id {}", spec_id),
                         ))?;
 
-                let partition_type = partition_spec.partition_type(schema)?;
+                let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
                 let partition_fields = partition_type.fields().to_owned();
                 let partition_schema = Arc::new(
                     Schema::builder()
