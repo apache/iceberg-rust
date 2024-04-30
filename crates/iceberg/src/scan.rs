@@ -23,8 +23,8 @@ use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestEntryRef, PartitionSpecRef, Schema, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, PartitionSpecRef, Schema,
+    SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -199,6 +199,10 @@ impl TableScan {
                 .await?;
 
             for entry in manifest_list.entries() {
+                if !Self::content_type_is_data(entry) {
+                    continue;
+                }
+
                 if let Some(filter) = context.bound_filter() {
                     let partition_spec_id = entry.partition_spec_id;
 
@@ -306,6 +310,14 @@ impl TableScan {
         }
 
         arrow_reader_builder.build().read(self.plan_files().await?)
+    }
+
+    /// Checks whether the [`ManifestContentType`] is `Data` or not.
+    fn content_type_is_data(entry: &ManifestFile) -> bool {
+        if let ManifestContentType::Data = entry.content {
+            return true;
+        }
+        false
     }
 }
 
