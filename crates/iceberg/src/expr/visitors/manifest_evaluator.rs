@@ -21,12 +21,12 @@ use crate::spec::{Datum, FieldSummary, ManifestFile};
 use crate::Result;
 use fnv::FnvHashSet;
 
-#[derive(Debug)]
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
 ///
 /// Used by [`TableScan`] to prune the list of [`ManifestFile`]s
 /// in which data might be found that matches the TableScan's filter.
+#[derive(Debug)]
 pub(crate) struct ManifestEvaluator {
     partition_filter: BoundPredicate,
     case_sensitive: bool,

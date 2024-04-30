@@ -323,9 +323,9 @@ impl TableScan {
     }
 }
 
-#[derive(Debug)]
 /// Holds the context necessary for file scanning operations
 /// in a streaming environment.
+#[derive(Debug)]
 struct FileScanStreamContext {
     schema: SchemaRef,
     snapshot: SnapshotRef,
@@ -366,9 +366,9 @@ impl FileScanStreamContext {
     }
 }
 
-#[derive(Debug)]
 /// Manages the caching of [`BoundPredicate`] objects
 /// for [`PartitionSpec`]s based on partition spec id.
+#[derive(Debug)]
 struct PartitionFilterCache(HashMap<i32, BoundPredicate>);
 
 impl PartitionFilterCache {
@@ -412,9 +412,9 @@ impl PartitionFilterCache {
     }
 }
 
-#[derive(Debug)]
 /// Manages the caching of partition [`Schema`]s
 /// for [`PartitionSpec`]s based on partition spec id.
+#[derive(Debug)]
 struct PartitionSchemaCache(HashMap<i32, SchemaRef>);
 
 impl PartitionSchemaCache {
@@ -454,9 +454,9 @@ impl PartitionSchemaCache {
     }
 }
 
-#[derive(Debug)]
 /// Manages the caching of [`ManifestEvaluator`] objects
 /// for [`PartitionSpec`]s based on partition spec id.
+#[derive(Debug)]
 struct ManifestEvaluatorCache(HashMap<i32, ManifestEvaluator>);
 
 impl ManifestEvaluatorCache {
