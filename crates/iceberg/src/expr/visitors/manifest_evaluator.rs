@@ -29,15 +29,11 @@ use fnv::FnvHashSet;
 #[derive(Debug)]
 pub(crate) struct ManifestEvaluator {
     partition_filter: BoundPredicate,
-    case_sensitive: bool,
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(partition_filter: BoundPredicate, case_sensitive: bool) -> Self {
-        Self {
-            partition_filter,
-            case_sensitive,
-        }
+    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
+        Self { partition_filter }
     }
 
     /// Evaluate this `ManifestEvaluator`'s filter predicate against the
@@ -356,7 +352,7 @@ mod test {
             case_sensitive,
         )?;
 
-        Ok(ManifestEvaluator::new(partition_filter, case_sensitive))
+        Ok(ManifestEvaluator::new(partition_filter))
     }
 
     #[test]

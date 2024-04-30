@@ -222,7 +222,6 @@ impl TableScan {
                     let manifest_evaluator = manifest_evaluator_cache.get(
                         partition_spec_id,
                         partition_filter,
-                        context.case_sensitive,
                     );
 
                     if !manifest_evaluator.eval(entry)? {
@@ -468,16 +467,10 @@ impl ManifestEvaluatorCache {
 
     /// Retrieves a [`ManifestEvaluator`] from the cache
     /// or computes it if not present.
-    fn get(
-        &mut self,
-        spec_id: i32,
-        partition_filter: &BoundPredicate,
-        case_sensitive: bool,
-    ) -> &mut ManifestEvaluator {
-        self.0.entry(spec_id).or_insert(ManifestEvaluator::new(
-            partition_filter.clone(),
-            case_sensitive,
-        ))
+    fn get(&mut self, spec_id: i32, partition_filter: &BoundPredicate) -> &mut ManifestEvaluator {
+        self.0
+            .entry(spec_id)
+            .or_insert(ManifestEvaluator::new(partition_filter.clone()))
     }
 }
 
