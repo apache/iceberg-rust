@@ -189,7 +189,6 @@ impl TableScan {
             self.case_sensitive,
         )?;
 
-        let mut partition_schema_cache = PartitionSchemaCache::new();
         let mut partition_filter_cache = PartitionFilterCache::new();
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
@@ -204,18 +203,12 @@ impl TableScan {
                     continue;
                 }
 
+                let partition_spec_id = entry.partition_spec_id;
+
                 if let Some(filter) = context.bound_filter() {
-                    let partition_spec_id = entry.partition_spec_id;
-
-                    let partition_schema = partition_schema_cache.get(
-                        partition_spec_id,
-                        &context
-                    )?;
-
                     let partition_filter = partition_filter_cache.get(
                         partition_spec_id,
                         &context,
-                        &partition_schema,
                         filter,
                     )?;
 
@@ -383,51 +376,10 @@ impl PartitionFilterCache {
         &mut self,
         spec_id: i32,
         context: &FileScanStreamContext,
-        partition_schema: &SchemaRef,
         filter: &BoundPredicate,
     ) -> Result<&BoundPredicate> {
         match self.0.entry(spec_id) {
             Entry::Occupied(e) => Ok(e.into_mut()),
-            Entry::Vacant(e) => {
-                let partition_spec =
-                    context
-                        .table_metadata
-                        .partition_spec_by_id(spec_id)
-                        .ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Could not find partition spec for id {}", spec_id),
-                        ))?;
-
-                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
-
-                let partition_filter = inclusive_projection
-                    .project(filter)?
-                    .rewrite_not()
-                    .bind(partition_schema.clone(), context.case_sensitive)?;
-
-                Ok(e.insert(partition_filter))
-            }
-        }
-    }
-}
-
-/// Manages the caching of partition [`Schema`]s
-/// for [`PartitionSpec`]s based on partition spec id.
-#[derive(Debug)]
-struct PartitionSchemaCache(HashMap<i32, SchemaRef>);
-
-impl PartitionSchemaCache {
-    /// Creates a new [`PartitionSchemaCache`]
-    /// with an empty internal HashMap.
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    /// Retrieves a partition [`SchemaRef`] from the cache
-    /// or computes it if not present.
-    fn get(&mut self, spec_id: i32, context: &FileScanStreamContext) -> Result<SchemaRef> {
-        match self.0.entry(spec_id) {
-            Entry::Occupied(e) => Ok(e.get().clone()),
             Entry::Vacant(e) => {
                 let partition_spec =
                     context
@@ -447,7 +399,14 @@ impl PartitionSchemaCache {
                         .build()?,
                 );
 
-                Ok(e.insert(partition_schema).clone())
+                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+
+                let partition_filter = inclusive_projection
+                    .project(filter)?
+                    .rewrite_not()
+                    .bind(partition_schema.clone(), context.case_sensitive)?;
+
+                Ok(e.insert(partition_filter))
             }
         }
     }
