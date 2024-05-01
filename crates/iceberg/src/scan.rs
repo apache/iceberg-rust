@@ -237,7 +237,7 @@ impl TableScan {
                             continue;
                         }
                     }
-                    // TODO: Apply ExpressionEvaluator
+
                     // TODO: Apply InclusiveMetricsEvaluator::eval()
 
                     match manifest_entry.content_type() {
