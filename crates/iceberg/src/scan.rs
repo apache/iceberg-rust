@@ -205,13 +205,12 @@ impl TableScan {
 
                 let partition_spec_id = entry.partition_spec_id;
 
-                if let Some(filter) = context.bound_filter() {
-                    let partition_filter = partition_filter_cache.get(
-                        partition_spec_id,
-                        &context,
-                        filter,
-                    )?;
+                let partition_filter = partition_filter_cache.get(
+                    partition_spec_id,
+                    &context,
+                )?;
 
+                if let Some(partition_filter) = partition_filter {
                     let manifest_evaluator = manifest_evaluator_cache.get(
                         partition_spec_id,
                         partition_filter,
@@ -220,8 +219,6 @@ impl TableScan {
                     if !manifest_evaluator.eval(entry)? {
                         continue;
                     }
-
-                    // TODO: Create ExpressionEvaluator
                 }
 
                 let manifest = entry.load_manifest(&context.file_io).await?;
@@ -376,13 +373,13 @@ impl PartitionFilterCache {
         &mut self,
         spec_id: i32,
         context: &FileScanStreamContext,
-        filter: &BoundPredicate,
-    ) -> Result<&BoundPredicate> {
-        match self.0.entry(spec_id) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
-            Entry::Vacant(e) => {
-                let partition_spec =
-                    context
+    ) -> Result<Option<&BoundPredicate>> {
+        match context.bound_filter() {
+            None => Ok(None),
+            Some(filter) => match self.0.entry(spec_id) {
+                Entry::Occupied(e) => Ok(Some(e.into_mut())),
+                Entry::Vacant(e) => {
+                    let partition_spec = context
                         .table_metadata
                         .partition_spec_by_id(spec_id)
                         .ok_or(Error::new(
@@ -390,24 +387,25 @@ impl PartitionFilterCache {
                             format!("Could not find partition spec for id {}", spec_id),
                         ))?;
 
-                let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
-                let partition_fields = partition_type.fields().to_owned();
-                let partition_schema = Arc::new(
-                    Schema::builder()
-                        .with_schema_id(partition_spec.spec_id)
-                        .with_fields(partition_fields)
-                        .build()?,
-                );
+                    let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
+                    let partition_fields = partition_type.fields().to_owned();
+                    let partition_schema = Arc::new(
+                        Schema::builder()
+                            .with_schema_id(partition_spec.spec_id)
+                            .with_fields(partition_fields)
+                            .build()?,
+                    );
 
-                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+                    let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
 
-                let partition_filter = inclusive_projection
-                    .project(filter)?
-                    .rewrite_not()
-                    .bind(partition_schema.clone(), context.case_sensitive)?;
+                    let partition_filter = inclusive_projection
+                        .project(filter)?
+                        .rewrite_not()
+                        .bind(partition_schema.clone(), context.case_sensitive)?;
 
-                Ok(e.insert(partition_filter))
-            }
+                    Ok(Some(e.insert(partition_filter)))
+                }
+            },
         }
     }
 }
