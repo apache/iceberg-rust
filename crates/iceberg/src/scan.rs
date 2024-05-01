@@ -189,7 +189,6 @@ impl TableScan {
             self.case_sensitive,
         )?;
 
-        let mut partition_schema_cache = PartitionSchemaCache::new();
         let mut partition_filter_cache = PartitionFilterCache::new();
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
 
@@ -204,21 +203,14 @@ impl TableScan {
                     continue;
                 }
 
-                if let Some(filter) = context.bound_filter() {
-                    let partition_spec_id = entry.partition_spec_id;
+                let partition_spec_id = entry.partition_spec_id;
 
-                    let partition_schema = partition_schema_cache.get(
-                        partition_spec_id,
-                        &context
-                    )?;
+                let partition_filter = partition_filter_cache.get(
+                    partition_spec_id,
+                    &context,
+                )?;
 
-                    let partition_filter = partition_filter_cache.get(
-                        partition_spec_id,
-                        &context,
-                        &partition_schema,
-                        filter,
-                    )?;
-
+                if let Some(partition_filter) = partition_filter {
                     let manifest_evaluator = manifest_evaluator_cache.get(
                         partition_spec_id,
                         partition_filter,
@@ -227,8 +219,6 @@ impl TableScan {
                     if !manifest_evaluator.eval(entry)? {
                         continue;
                     }
-
-                    // TODO: Create ExpressionEvaluator
                 }
 
                 let manifest = entry.load_manifest(&context.file_io).await?;
@@ -383,14 +373,13 @@ impl PartitionFilterCache {
         &mut self,
         spec_id: i32,
         context: &FileScanStreamContext,
-        partition_schema: &SchemaRef,
-        filter: &BoundPredicate,
-    ) -> Result<&BoundPredicate> {
-        match self.0.entry(spec_id) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
-            Entry::Vacant(e) => {
-                let partition_spec =
-                    context
+    ) -> Result<Option<&BoundPredicate>> {
+        match context.bound_filter() {
+            None => Ok(None),
+            Some(filter) => match self.0.entry(spec_id) {
+                Entry::Occupied(e) => Ok(Some(e.into_mut())),
+                Entry::Vacant(e) => {
+                    let partition_spec = context
                         .table_metadata
                         .partition_spec_by_id(spec_id)
                         .ok_or(Error::new(
@@ -398,57 +387,25 @@ impl PartitionFilterCache {
                             format!("Could not find partition spec for id {}", spec_id),
                         ))?;
 
-                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+                    let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
+                    let partition_fields = partition_type.fields().to_owned();
+                    let partition_schema = Arc::new(
+                        Schema::builder()
+                            .with_schema_id(partition_spec.spec_id)
+                            .with_fields(partition_fields)
+                            .build()?,
+                    );
 
-                let partition_filter = inclusive_projection
-                    .project(filter)?
-                    .rewrite_not()
-                    .bind(partition_schema.clone(), context.case_sensitive)?;
+                    let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
 
-                Ok(e.insert(partition_filter))
-            }
-        }
-    }
-}
+                    let partition_filter = inclusive_projection
+                        .project(filter)?
+                        .rewrite_not()
+                        .bind(partition_schema.clone(), context.case_sensitive)?;
 
-/// Manages the caching of partition [`Schema`]s
-/// for [`PartitionSpec`]s based on partition spec id.
-#[derive(Debug)]
-struct PartitionSchemaCache(HashMap<i32, SchemaRef>);
-
-impl PartitionSchemaCache {
-    /// Creates a new [`PartitionSchemaCache`]
-    /// with an empty internal HashMap.
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    /// Retrieves a partition [`SchemaRef`] from the cache
-    /// or computes it if not present.
-    fn get(&mut self, spec_id: i32, context: &FileScanStreamContext) -> Result<SchemaRef> {
-        match self.0.entry(spec_id) {
-            Entry::Occupied(e) => Ok(e.get().clone()),
-            Entry::Vacant(e) => {
-                let partition_spec =
-                    context
-                        .table_metadata
-                        .partition_spec_by_id(spec_id)
-                        .ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Could not find partition spec for id {}", spec_id),
-                        ))?;
-
-                let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
-                let partition_fields = partition_type.fields().to_owned();
-                let partition_schema = Arc::new(
-                    Schema::builder()
-                        .with_schema_id(partition_spec.spec_id)
-                        .with_fields(partition_fields)
-                        .build()?,
-                );
-
-                Ok(e.insert(partition_schema).clone())
-            }
+                    Ok(Some(e.insert(partition_filter)))
+                }
+            },
         }
     }
 }
