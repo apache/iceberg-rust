@@ -18,6 +18,7 @@
 //! Table scan api.
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -191,6 +192,7 @@ impl TableScan {
 
         let mut partition_filter_cache = PartitionFilterCache::new();
         let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
+        let mut expression_evaluator_cache = ExpressionEvaluatorCache::new();
 
         Ok(try_stream! {
             let manifest_list = context
@@ -226,6 +228,15 @@ impl TableScan {
                     futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
 
                 while let Some(manifest_entry) = manifest_entries_stream.next().await {
+                    let data_file = manifest_entry.data_file();
+
+                    if let Some(partition_filter) = partition_filter {
+                        let expression_evaluator = expression_evaluator_cache.get(partition_spec_id, partition_filter);
+
+                        if !expression_evaluator.eval(data_file)? {
+                            continue;
+                        }
+                    }
                     // TODO: Apply ExpressionEvaluator
                     // TODO: Apply InclusiveMetricsEvaluator::eval()
 
@@ -428,6 +439,27 @@ impl ManifestEvaluatorCache {
         self.0
             .entry(spec_id)
             .or_insert(ManifestEvaluator::new(partition_filter.clone()))
+    }
+}
+
+/// Manages the caching of [`ExpressionEvaluator`] objects
+/// for [`PartitionSpec`]s based on partition spec id.
+#[derive(Debug)]
+struct ExpressionEvaluatorCache(HashMap<i32, ExpressionEvaluator>);
+
+impl ExpressionEvaluatorCache {
+    /// Creates a new [`ManifestEvaluatorCache`]
+    /// with an empty internal HashMap.
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Retrieves a [`ManifestEvaluator`] from the cache
+    /// or computes it if not present.
+    fn get(&mut self, spec_id: i32, partition_filter: &BoundPredicate) -> &mut ExpressionEvaluator {
+        self.0
+            .entry(spec_id)
+            .or_insert(ExpressionEvaluator::new(partition_filter.clone()))
     }
 }
 
