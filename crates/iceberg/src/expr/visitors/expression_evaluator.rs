@@ -82,7 +82,6 @@ impl<'a> ExpressionEvaluatorVisitor<'a> {
     }
 }
 
-#[allow(unused_variables)]
 impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     type T = bool;
 
@@ -153,7 +152,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         &mut self,
         reference: &BoundReference,
         literal: &Datum,
-        predicate: &BoundPredicate,
+        _predicate: &BoundPredicate,
     ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
@@ -168,7 +167,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         &mut self,
         reference: &BoundReference,
         literal: &Datum,
-        predicate: &BoundPredicate,
+        _predicate: &BoundPredicate,
     ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
@@ -183,7 +182,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         &mut self,
         reference: &BoundReference,
         literal: &Datum,
-        predicate: &BoundPredicate,
+        _predicate: &BoundPredicate,
     ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
