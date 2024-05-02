@@ -260,30 +260,6 @@ mod test {
         Ok((Arc::new(schema), Arc::new(spec)))
     }
 
-    fn create_schema_and_partition_spec_with_id_mismatch() -> Result<(SchemaRef, PartitionSpecRef)>
-    {
-        let schema = Schema::builder()
-            .with_fields(vec![Arc::new(NestedField::optional(
-                1,
-                "a",
-                Type::Primitive(PrimitiveType::Float),
-            ))])
-            .build()?;
-
-        let spec = PartitionSpec::builder()
-            .with_spec_id(999)
-            .with_fields(vec![PartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
-            .build()
-            .unwrap();
-
-        Ok((Arc::new(schema), Arc::new(spec)))
-    }
-
     fn create_manifest_file(partitions: Vec<FieldSummary>) -> ManifestFile {
         ManifestFile {
             manifest_path: "/test/path".to_string(),
