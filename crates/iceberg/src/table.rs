@@ -25,7 +25,7 @@ use futures::AsyncReadExt;
 use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.
-#[derive(TypedBuilder, Debug)]
+#[derive(TypedBuilder, Debug, Clone)]
 pub struct Table {
     file_io: FileIO,
     #[builder(default, setter(strip_option, into))]
