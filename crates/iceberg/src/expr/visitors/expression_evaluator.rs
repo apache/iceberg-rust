@@ -131,7 +131,9 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        Ok(datum.is_nan())
     }
 
     fn not_nan(
@@ -139,7 +141,9 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        Ok(!datum.is_nan())
     }
 
     fn less_than(
@@ -332,6 +336,50 @@ mod tests {
             equality_ids: vec![],
             sort_order_id: None,
         }
+    }
+
+    #[test]
+    fn test_expr_is_not_nan() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let predicate = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::NotNan,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_is_nan() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let predicate = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNan,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(!result);
+
+        Ok(())
     }
 
     #[test]

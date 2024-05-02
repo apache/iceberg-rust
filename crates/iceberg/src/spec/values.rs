@@ -689,6 +689,15 @@ impl Datum {
     pub fn data_type(&self) -> &PrimitiveType {
         &self.r#type
     }
+
+    /// Checks if primitive literal is NaN.
+    pub fn is_nan(&self) -> bool {
+        match self.literal {
+            PrimitiveLiteral::Double(v) => v.into_inner().is_nan(),
+            PrimitiveLiteral::Float(v) => v.into_inner().is_nan(),
+            _ => false,
+        }
+    }
 }
 
 /// Values present in iceberg type
