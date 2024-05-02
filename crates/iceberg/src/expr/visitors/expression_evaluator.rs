@@ -222,7 +222,16 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        if Self::is_null(datum.literal()) {
+            return Ok(false);
+        }
+
+        match (datum.literal(), literal.literal()) {
+            (PrimitiveLiteral::String(d), PrimitiveLiteral::String(l)) => Ok(d.starts_with(l)),
+            _ => Ok(false),
+        }
     }
 
     fn not_starts_with(
@@ -231,7 +240,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        todo!()
+        Ok(!self.starts_with(reference, literal, _predicate)?)
     }
 
     fn r#in(
@@ -272,12 +281,14 @@ mod tests {
 
     use super::ExpressionEvaluator;
 
-    fn create_schema_and_partition_spec() -> Result<(SchemaRef, PartitionSpecRef)> {
+    fn create_schema_and_partition_spec(
+        r#type: PrimitiveType,
+    ) -> Result<(SchemaRef, PartitionSpecRef)> {
         let schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
                 "a",
-                Type::Primitive(PrimitiveType::Float),
+                Type::Primitive(r#type),
             ))])
             .build()?;
 
@@ -331,7 +342,7 @@ mod tests {
         Ok(ExpressionEvaluator::new(partition_filter))
     }
 
-    fn create_data_file() -> DataFile {
+    fn create_data_file_float() -> DataFile {
         let partition = Struct::from_iter([Some(Literal::float(1.0))]);
 
         DataFile {
@@ -354,10 +365,81 @@ mod tests {
         }
     }
 
+    fn create_data_file_string() -> DataFile {
+        let partition = Struct::from_iter([Some(Literal::string("test str"))]);
+
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "/test/path".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition,
+            record_count: 1,
+            file_size_in_bytes: 1,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: vec![],
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+        }
+    }
+
+    #[test]
+    fn test_expr_not_starts_with() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::String)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::NotStartsWith,
+            Reference::new("a"),
+            Datum::string("not"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file_string();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_starts_with() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::String)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::StartsWith,
+            Reference::new("a"),
+            Datum::string("test"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file_string();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
     #[test]
     fn test_expr_not_eq() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotEq,
@@ -369,7 +451,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -381,7 +463,7 @@ mod tests {
     #[test]
     fn test_expr_eq() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::Eq,
@@ -393,7 +475,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -405,7 +487,7 @@ mod tests {
     #[test]
     fn test_expr_greater_than_or_eq() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
@@ -417,7 +499,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -429,7 +511,7 @@ mod tests {
     #[test]
     fn test_expr_greater_than() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThan,
@@ -441,7 +523,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -453,7 +535,7 @@ mod tests {
     #[test]
     fn test_expr_less_than_or_eq() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThanOrEq,
@@ -465,7 +547,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -477,7 +559,7 @@ mod tests {
     #[test]
     fn test_expr_less_than() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
@@ -489,7 +571,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -501,7 +583,7 @@ mod tests {
     #[test]
     fn test_expr_is_not_nan() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNan,
             Reference::new("a"),
@@ -511,7 +593,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -523,7 +605,7 @@ mod tests {
     #[test]
     fn test_expr_is_nan() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNan,
             Reference::new("a"),
@@ -533,7 +615,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -545,7 +627,7 @@ mod tests {
     #[test]
     fn test_expr_is_not_null() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNull,
             Reference::new("a"),
@@ -555,7 +637,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -567,7 +649,7 @@ mod tests {
     #[test]
     fn test_expr_is_null() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNull,
             Reference::new("a"),
@@ -577,7 +659,7 @@ mod tests {
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -589,13 +671,13 @@ mod tests {
     #[test]
     fn test_expr_always_false() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::AlwaysFalse.bind(schema.clone(), case_sensitive)?;
 
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
@@ -607,13 +689,13 @@ mod tests {
     #[test]
     fn test_expr_always_true() -> Result<()> {
         let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::AlwaysTrue.bind(schema.clone(), case_sensitive)?;
 
         let expression_evaluator =
             create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
 
-        let data_file = create_data_file();
+        let data_file = create_data_file_float();
 
         let result = expression_evaluator.eval(&data_file)?;
 
