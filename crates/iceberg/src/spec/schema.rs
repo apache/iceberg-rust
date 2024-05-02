@@ -18,19 +18,22 @@
 //! This module defines schema in iceberg.
 
 use crate::error::Result;
+use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
     ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use crate::{ensure_data_valid, Error, ErrorKind};
 use bimap::BiHashMap;
-use itertools::Itertools;
+use itertools::{zip_eq, Itertools};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use _serde::SchemaEnum;
+
+use super::NestedField;
 
 /// Type alias for schema id.
 pub type SchemaId = i32;
@@ -51,7 +54,10 @@ pub struct Schema {
     id_to_field: HashMap<i32, NestedFieldRef>,
 
     name_to_id: HashMap<String, i32>,
+    lowercase_name_to_id: HashMap<String, i32>,
     id_to_name: HashMap<i32, String>,
+
+    field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
 }
 
 impl PartialEq for Schema {
@@ -102,6 +108,8 @@ impl SchemaBuilder {
     pub fn build(self) -> Result<Schema> {
         let highest_field_id = self.fields.iter().map(|f| f.id).max().unwrap_or(0);
 
+        let field_id_to_accessor = self.build_accessors();
+
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
 
@@ -117,6 +125,11 @@ impl SchemaBuilder {
             index.indexes()
         };
 
+        let lowercase_name_to_id = name_to_id
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), *v))
+            .collect();
+
         Ok(Schema {
             r#struct,
             schema_id: self.schema_id,
@@ -127,8 +140,66 @@ impl SchemaBuilder {
             id_to_field,
 
             name_to_id,
+            lowercase_name_to_id,
             id_to_name,
+
+            field_id_to_accessor,
         })
+    }
+
+    fn build_accessors(&self) -> HashMap<i32, Arc<StructAccessor>> {
+        let mut map = HashMap::new();
+
+        for (pos, field) in self.fields.iter().enumerate() {
+            match field.field_type.as_ref() {
+                Type::Primitive(prim_type) => {
+                    // add an accessor for this field
+                    let accessor = Arc::new(StructAccessor::new(pos, prim_type.clone()));
+                    map.insert(field.id, accessor.clone());
+                }
+
+                Type::Struct(nested) => {
+                    // add accessors for nested fields
+                    for (field_id, accessor) in Self::build_accessors_nested(nested.fields()) {
+                        let new_accessor = Arc::new(StructAccessor::wrap(pos, accessor));
+                        map.insert(field_id, new_accessor.clone());
+                    }
+                }
+                _ => {
+                    // Accessors don't get built for Map or List types
+                }
+            }
+        }
+
+        map
+    }
+
+    fn build_accessors_nested(fields: &[NestedFieldRef]) -> Vec<(i32, Box<StructAccessor>)> {
+        let mut results = vec![];
+        for (pos, field) in fields.iter().enumerate() {
+            match field.field_type.as_ref() {
+                Type::Primitive(prim_type) => {
+                    let accessor = Box::new(StructAccessor::new(pos, prim_type.clone()));
+                    results.push((field.id, accessor));
+                }
+                Type::Struct(nested) => {
+                    let nested_accessors = Self::build_accessors_nested(nested.fields());
+
+                    let wrapped_nested_accessors =
+                        nested_accessors.into_iter().map(|(id, accessor)| {
+                            let new_accessor = Box::new(StructAccessor::wrap(pos, accessor));
+                            (id, new_accessor.clone())
+                        });
+
+                    results.extend(wrapped_nested_accessors);
+                }
+                _ => {
+                    // Accessors don't get built for Map or List types
+                }
+            }
+        }
+
+        results
     }
 
     fn validate_identifier_ids(
@@ -212,6 +283,15 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
+    /// Get field by field name, but in case-insensitive way.
+    ///
+    /// Both full name and short name could work here.
+    pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
+        self.lowercase_name_to_id
+            .get(&field_name.to_lowercase())
+            .and_then(|id| self.field_by_id(*id))
+    }
+
     /// Get field by alias.
     pub fn field_by_alias(&self, alias: &str) -> Option<&NestedFieldRef> {
         self.alias_to_id
@@ -245,6 +325,11 @@ impl Schema {
     /// Get field id by full name.
     pub fn name_by_field_id(&self, field_id: i32) -> Option<&str> {
         self.id_to_name.get(&field_id).map(String::as_str)
+    }
+
+    /// Get an accessor for retrieving data in a struct
+    pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
+        self.field_id_to_accessor.get(&field_id).cloned()
     }
 }
 
@@ -363,7 +448,7 @@ pub fn visit_schema<V: SchemaVisitor>(schema: &Schema, visitor: &mut V) -> Resul
     visitor.schema(schema, result)
 }
 
-/// Creates an field id to field map.
+/// Creates a field id to field map.
 pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>> {
     struct IndexById(HashMap<i32, NestedFieldRef>);
 
@@ -626,6 +711,223 @@ impl SchemaVisitor for IndexByName {
     }
 }
 
+struct PruneColumn {
+    selected: HashSet<i32>,
+    select_full_types: bool,
+}
+
+/// Visit a schema and returns only the fields selected by id set
+pub fn prune_columns(
+    schema: &Schema,
+    selected: impl IntoIterator<Item = i32>,
+    select_full_types: bool,
+) -> Result<Type> {
+    let mut visitor = PruneColumn::new(HashSet::from_iter(selected), select_full_types);
+    let result = visit_schema(schema, &mut visitor);
+
+    match result {
+        Ok(s) => {
+            if let Some(struct_type) = s {
+                Ok(struct_type)
+            } else {
+                Ok(Type::Struct(StructType::default()))
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+impl PruneColumn {
+    fn new(selected: HashSet<i32>, select_full_types: bool) -> Self {
+        Self {
+            selected,
+            select_full_types,
+        }
+    }
+
+    fn project_selected_struct(projected_field: Option<Type>) -> Result<StructType> {
+        match projected_field {
+            // If the field is a StructType, return it as such
+            Some(Type::Struct(s)) => Ok(s),
+            Some(_) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Projected field with struct type must be struct".to_string(),
+            )),
+            // If projected_field is None or not a StructType, return an empty StructType
+            None => Ok(StructType::default()),
+        }
+    }
+    fn project_list(list: &ListType, element_result: Type) -> Result<ListType> {
+        if *list.element_field.field_type == element_result {
+            return Ok(list.clone());
+        }
+        Ok(ListType {
+            element_field: Arc::new(NestedField {
+                id: list.element_field.id,
+                name: list.element_field.name.clone(),
+                required: list.element_field.required,
+                field_type: Box::new(element_result),
+                doc: list.element_field.doc.clone(),
+                initial_default: list.element_field.initial_default.clone(),
+                write_default: list.element_field.write_default.clone(),
+            }),
+        })
+    }
+    fn project_map(map: &MapType, value_result: Type) -> Result<MapType> {
+        if *map.value_field.field_type == value_result {
+            return Ok(map.clone());
+        }
+        Ok(MapType {
+            key_field: map.key_field.clone(),
+            value_field: Arc::new(NestedField {
+                id: map.value_field.id,
+                name: map.value_field.name.clone(),
+                required: map.value_field.required,
+                field_type: Box::new(value_result),
+                doc: map.value_field.doc.clone(),
+                initial_default: map.value_field.initial_default.clone(),
+                write_default: map.value_field.write_default.clone(),
+            }),
+        })
+    }
+}
+
+impl SchemaVisitor for PruneColumn {
+    type T = Option<Type>;
+
+    fn schema(&mut self, _schema: &Schema, value: Option<Type>) -> Result<Option<Type>> {
+        Ok(Some(value.unwrap()))
+    }
+
+    fn field(&mut self, field: &NestedFieldRef, value: Option<Type>) -> Result<Option<Type>> {
+        if self.selected.contains(&field.id) {
+            if self.select_full_types {
+                Ok(Some(*field.field_type.clone()))
+            } else if field.field_type.is_struct() {
+                return Ok(Some(Type::Struct(PruneColumn::project_selected_struct(
+                    value,
+                )?)));
+            } else if !field.field_type.is_nested() {
+                return Ok(Some(*field.field_type.clone()));
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't project list or map field directly when not selecting full type."
+                        .to_string(),
+                )
+                .with_context("field_id", field.id.to_string())
+                .with_context("field_type", field.field_type.to_string()));
+            }
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn r#struct(
+        &mut self,
+        r#struct: &StructType,
+        results: Vec<Option<Type>>,
+    ) -> Result<Option<Type>> {
+        let fields = r#struct.fields();
+        let mut selected_field = Vec::with_capacity(fields.len());
+        let mut same_type = true;
+
+        for (field, projected_type) in zip_eq(fields.iter(), results.iter()) {
+            if let Some(projected_type) = projected_type {
+                if *field.field_type == *projected_type {
+                    selected_field.push(field.clone());
+                } else {
+                    same_type = false;
+                    let new_field = NestedField {
+                        id: field.id,
+                        name: field.name.clone(),
+                        required: field.required,
+                        field_type: Box::new(projected_type.clone()),
+                        doc: field.doc.clone(),
+                        initial_default: field.initial_default.clone(),
+                        write_default: field.write_default.clone(),
+                    };
+                    selected_field.push(Arc::new(new_field));
+                }
+            }
+        }
+
+        if !selected_field.is_empty() {
+            if selected_field.len() == fields.len() && same_type {
+                return Ok(Some(Type::Struct(r#struct.clone())));
+            } else {
+                return Ok(Some(Type::Struct(StructType::new(selected_field))));
+            }
+        }
+        Ok(None)
+    }
+
+    fn list(&mut self, list: &ListType, value: Option<Type>) -> Result<Option<Type>> {
+        if self.selected.contains(&list.element_field.id) {
+            if self.select_full_types {
+                Ok(Some(Type::List(list.clone())))
+            } else if list.element_field.field_type.is_struct() {
+                let projected_struct = PruneColumn::project_selected_struct(value).unwrap();
+                return Ok(Some(Type::List(PruneColumn::project_list(
+                    list,
+                    Type::Struct(projected_struct),
+                )?)));
+            } else if list.element_field.field_type.is_primitive() {
+                return Ok(Some(Type::List(list.clone())));
+            } else {
+                return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
+                    ));
+            }
+        } else if let Some(result) = value {
+            Ok(Some(Type::List(PruneColumn::project_list(list, result)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn map(
+        &mut self,
+        map: &MapType,
+        _key_value: Option<Type>,
+        value: Option<Type>,
+    ) -> Result<Option<Type>> {
+        if self.selected.contains(&map.value_field.id) {
+            if self.select_full_types {
+                Ok(Some(Type::Map(map.clone())))
+            } else if map.value_field.field_type.is_struct() {
+                let projected_struct =
+                    PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
+                return Ok(Some(Type::Map(PruneColumn::project_map(
+                    map,
+                    Type::Struct(projected_struct),
+                )?)));
+            } else if map.value_field.field_type.is_primitive() {
+                return Ok(Some(Type::Map(map.clone())));
+            } else {
+                return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
+                    ));
+            }
+        } else if let Some(value_result) = value {
+            return Ok(Some(Type::Map(PruneColumn::project_map(
+                map,
+                value_result,
+            )?)));
+        } else if self.selected.contains(&map.key_field.id) {
+            Ok(Some(Type::Map(map.clone())))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn primitive(&mut self, _p: &PrimitiveType) -> Result<Option<Type>> {
+        Ok(None)
+    }
+}
+
 pub(super) mod _serde {
     /// This is a helper module that defines types to help with serialization/deserialization.
     /// For deserialization the input first gets read into either the [SchemaV1] or [SchemaV2] struct
@@ -744,7 +1046,8 @@ mod tests {
     };
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
-    use std::collections::HashMap;
+    use crate::spec::{prune_columns, Datum, Literal};
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     use super::DEFAULT_SCHEMA_ID;
 
@@ -1033,6 +1336,42 @@ table {
     }
 
     #[test]
+    fn test_schema_index_by_name_case_insensitive() {
+        let expected_name_to_id = HashMap::from(
+            [
+                ("fOo", 1),
+                ("Bar", 2),
+                ("BAz", 3),
+                ("quX", 4),
+                ("quX.ELEment", 5),
+                ("qUUx", 6),
+                ("QUUX.KEY", 7),
+                ("QUUX.Value", 8),
+                ("qUUX.VALUE.Key", 9),
+                ("qUux.VaLue.Value", 10),
+                ("lOCAtION", 11),
+                ("LOCAtioN.ELeMENt", 12),
+                ("LoCATion.element.LATitude", 13),
+                ("locatION.ElemeNT.LONgitude", 14),
+                ("LOCAtiON.LATITUDE", 13),
+                ("LOCATION.LONGITUDE", 14),
+                ("PERSon", 15),
+                ("PERSON.Name", 16),
+                ("peRSON.AGe", 17),
+            ]
+            .map(|e| (e.0.to_string(), e.1)),
+        );
+
+        let schema = table_schema_nested();
+        for (name, id) in expected_name_to_id {
+            assert_eq!(
+                Some(id),
+                schema.field_by_name_case_insensitive(&name).map(|f| f.id)
+            );
+        }
+    }
+
+    #[test]
     fn test_schema_find_column_name() {
         let expected_column_name = HashMap::from([
             (1, "foo"),
@@ -1285,5 +1624,578 @@ table {
                 id
             );
         }
+    }
+
+    #[test]
+    fn test_build_accessors() {
+        let schema = table_schema_nested();
+
+        let test_struct = crate::spec::Struct::from_iter(vec![
+            Some(Literal::string("foo value")),
+            Some(Literal::int(1002)),
+            Some(Literal::bool(true)),
+            Some(Literal::List(vec![
+                Some(Literal::string("qux item 1")),
+                Some(Literal::string("qux item 2")),
+            ])),
+            Some(Literal::Map(BTreeMap::from([(
+                Literal::string("quux key 1"),
+                Some(Literal::Map(BTreeMap::from([(
+                    Literal::string("quux nested key 1"),
+                    Some(Literal::int(1000)),
+                )]))),
+            )]))),
+            Some(Literal::List(vec![Some(Literal::Struct(
+                crate::spec::Struct::from_iter(vec![
+                    Some(Literal::float(52.509_09)),
+                    Some(Literal::float(-1.885_249)),
+                ]),
+            ))])),
+            Some(Literal::Struct(crate::spec::Struct::from_iter(vec![
+                Some(Literal::string("Testy McTest")),
+                Some(Literal::int(33)),
+            ]))),
+        ]);
+
+        assert_eq!(
+            schema
+                .accessor_by_field_id(1)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::string("foo value")
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(2)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::int(1002)
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(3)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::bool(true)
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(16)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::string("Testy McTest")
+        );
+        assert_eq!(
+            schema
+                .accessor_by_field_id(17)
+                .unwrap()
+                .get(&test_struct)
+                .unwrap(),
+            Datum::int(33)
+        );
+    }
+
+    #[test]
+    fn test_schema_prune_columns_string() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "foo",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([1]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_schema_prune_columns_string_full() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "foo",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([1]);
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_schema_prune_columns_list() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    4,
+                    "qux",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([5]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_list_itself() {
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([4]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_prune_columns_list_full() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    4,
+                    "qux",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([5]);
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_map() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([9]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_map_itself() {
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([6]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prune_columns_map_full() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([9]);
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_map_key() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "quux",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Map(MapType {
+                                key_field: NestedField::map_key_element(
+                                    9,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                value_field: NestedField::map_value_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Int),
+                                    true,
+                                )
+                                .into(),
+                            }),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([10]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_struct() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![NestedField::optional(
+                        16,
+                        "name",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into()])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([16]);
+        let result = prune_columns(&schema, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_struct_full() {
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![NestedField::optional(
+                        16,
+                        "name",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into()])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = HashSet::from([16]);
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_empty_struct() {
+        let schema_with_empty_struct_field = Schema::builder()
+            .with_fields(vec![NestedField::optional(
+                15,
+                "person",
+                Type::Struct(StructType::new(vec![])),
+            )
+            .into()])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let selected: HashSet<i32> = HashSet::from([15]);
+        let result = prune_columns(&schema_with_empty_struct_field, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_empty_struct_full() {
+        let schema_with_empty_struct_field = Schema::builder()
+            .with_fields(vec![NestedField::optional(
+                15,
+                "person",
+                Type::Struct(StructType::new(vec![])),
+            )
+            .into()])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    15,
+                    "person",
+                    Type::Struct(StructType::new(vec![])),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let selected: HashSet<i32> = HashSet::from([15]);
+        let result = prune_columns(&schema_with_empty_struct_field, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_struct_in_map() {
+        let schema_with_struct_in_map_field = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![NestedField::required(
+                6,
+                "id_to_person",
+                Type::Map(MapType {
+                    key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                    value_field: NestedField::map_value_element(
+                        8,
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
+                        ])),
+                        true,
+                    )
+                    .into(),
+                }),
+            )
+            .into()])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "id_to_person",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Struct(StructType::new(vec![NestedField::required(
+                                11,
+                                "age",
+                                Primitive(PrimitiveType::Int),
+                            )
+                            .into()])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let selected: HashSet<i32> = HashSet::from([11]);
+        let result = prune_columns(&schema_with_struct_in_map_field, selected, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+    #[test]
+    fn test_prune_columns_struct_in_map_full() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![NestedField::required(
+                6,
+                "id_to_person",
+                Type::Map(MapType {
+                    key_field: NestedField::map_key_element(7, Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                    value_field: NestedField::map_value_element(
+                        8,
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(10, "name", Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(11, "age", Primitive(PrimitiveType::Int)).into(),
+                        ])),
+                        true,
+                    )
+                    .into(),
+                }),
+            )
+            .into()])
+            .build()
+            .unwrap();
+        let expected_type = Type::from(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    6,
+                    "id_to_person",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            8,
+                            Type::Struct(StructType::new(vec![NestedField::required(
+                                11,
+                                "age",
+                                Primitive(PrimitiveType::Int),
+                            )
+                            .into()])),
+                            true,
+                        )
+                        .into(),
+                    }),
+                )
+                .into()])
+                .build()
+                .unwrap()
+                .as_struct()
+                .clone(),
+        );
+        let selected: HashSet<i32> = HashSet::from([11]);
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_type);
+    }
+
+    #[test]
+    fn test_prune_columns_select_original_schema() {
+        let schema = table_schema_nested();
+        let selected: HashSet<i32> = (0..schema.highest_field_id() + 1).collect();
+        let result = prune_columns(&schema, selected, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
     }
 }

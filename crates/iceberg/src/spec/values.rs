@@ -20,6 +20,7 @@
  */
 
 use std::fmt::{Display, Formatter};
+use std::ops::Index;
 use std::str::FromStr;
 use std::{any::Any, collections::BTreeMap};
 
@@ -84,7 +85,7 @@ pub enum PrimitiveLiteral {
 ///
 /// By default, we decouple the type and value of a literal, so we can use avoid the cost of storing extra type info
 /// for each literal. But associate type with literal can be useful in some cases, for example, in unbound expression.
-#[derive(Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct Datum {
     r#type: PrimitiveType,
     literal: PrimitiveLiteral,
@@ -141,6 +142,11 @@ impl From<Datum> for Literal {
 }
 
 impl Datum {
+    /// Creates a `Datum` from a `PrimitiveType` and a `PrimitiveLiteral`
+    pub(crate) fn new(r#type: PrimitiveType, literal: PrimitiveLiteral) -> Self {
+        Datum { r#type, literal }
+    }
+
     /// Creates a boolean value.
     ///
     /// Example:
@@ -673,6 +679,16 @@ impl Datum {
             )),
         }
     }
+
+    /// Get the primitive literal from datum.
+    pub fn literal(&self) -> &PrimitiveLiteral {
+        &self.literal
+    }
+
+    /// Get the primitive type from datum.
+    pub fn data_type(&self) -> &PrimitiveType {
+        &self.r#type
+    }
 }
 
 /// Values present in iceberg type
@@ -1130,6 +1146,14 @@ impl Struct {
                 }
             },
         )
+    }
+}
+
+impl Index<usize> for Struct {
+    type Output = Literal;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        &self.fields[idx]
     }
 }
 

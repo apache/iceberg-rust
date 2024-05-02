@@ -29,9 +29,12 @@ use super::{
     snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
     PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
 };
+use super::{PartitionSpec, SortOrder};
 
 use _serde::TableMetadataEnum;
 
+use crate::error::Result;
+use crate::{Error, ErrorKind, TableCreation};
 use chrono::{DateTime, TimeZone, Utc};
 
 static MAIN_BRANCH: &str = "main";
@@ -52,46 +55,46 @@ pub type TableMetadataRef = Arc<TableMetadata>;
 /// We check the validity of this data structure when constructing.
 pub struct TableMetadata {
     /// Integer Version for the format.
-    format_version: FormatVersion,
+    pub(crate) format_version: FormatVersion,
     /// A UUID that identifies the table
-    table_uuid: Uuid,
+    pub(crate) table_uuid: Uuid,
     /// Location tables base location
-    location: String,
+    pub(crate) location: String,
     /// The tables highest sequence number
-    last_sequence_number: i64,
+    pub(crate) last_sequence_number: i64,
     /// Timestamp in milliseconds from the unix epoch when the table was last updated.
-    last_updated_ms: i64,
+    pub(crate) last_updated_ms: i64,
     /// An integer; the highest assigned column ID for the table.
-    last_column_id: i32,
+    pub(crate) last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    schemas: HashMap<i32, SchemaRef>,
+    pub(crate) schemas: HashMap<i32, SchemaRef>,
     /// ID of the table’s current schema.
-    current_schema_id: i32,
+    pub(crate) current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
-    partition_specs: HashMap<i32, PartitionSpecRef>,
+    pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
-    default_spec_id: i32,
+    pub(crate) default_spec_id: i32,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
-    last_partition_id: i32,
+    pub(crate) last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
     /// affect reading and writing and is not intended to be used for arbitrary metadata.
     /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    properties: HashMap<String, String>,
+    pub(crate) properties: HashMap<String, String>,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
-    current_snapshot_id: Option<i64>,
+    pub(crate) current_snapshot_id: Option<i64>,
     ///A list of valid snapshots. Valid snapshots are snapshots for which all
     /// data files exist in the file system. A data file must not be deleted
     /// from the file system until the last snapshot in which it was listed is
     /// garbage collected.
-    snapshots: HashMap<i64, SnapshotRef>,
+    pub(crate) snapshots: HashMap<i64, SnapshotRef>,
     /// A list (optional) of timestamp and snapshot ID pairs that encodes changes
     /// to the current snapshot for the table. Each time the current-snapshot-id
     /// is changed, a new entry should be added with the last-updated-ms
     /// and the new current-snapshot-id. When snapshots are expired from
     /// the list of valid snapshots, all entries before a snapshot that has
     /// expired should be removed.
-    snapshot_log: Vec<SnapshotLog>,
+    pub(crate) snapshot_log: Vec<SnapshotLog>,
 
     /// A list (optional) of timestamp and metadata file location pairs
     /// that encodes changes to the previous metadata files for the table.
@@ -99,19 +102,19 @@ pub struct TableMetadata {
     /// previous metadata file location should be added to the list.
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
-    metadata_log: Vec<MetadataLog>,
+    pub(crate) metadata_log: Vec<MetadataLog>,
 
     /// A list of sort orders, stored as full sort order objects.
-    sort_orders: HashMap<i64, SortOrderRef>,
+    pub(crate) sort_orders: HashMap<i64, SortOrderRef>,
     /// Default sort order id of the table. Note that this could be used by
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
-    default_sort_order_id: i64,
+    pub(crate) default_sort_order_id: i64,
     ///A map of snapshot references. The map keys are the unique snapshot reference
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
-    refs: HashMap<String, SnapshotReference>,
+    pub(crate) refs: HashMap<String, SnapshotReference>,
 }
 
 impl TableMetadata {
@@ -272,6 +275,100 @@ impl TableMetadata {
         self.snapshot_log.push(snapshot.log());
         self.snapshots
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
+    }
+}
+
+/// Manipulating table metadata.
+pub struct TableMetadataBuilder(TableMetadata);
+
+impl TableMetadataBuilder {
+    /// Creates a new table metadata builder from the given table metadata.
+    pub fn new(origin: TableMetadata) -> Self {
+        Self(origin)
+    }
+
+    /// Creates a new table metadata builder from the given table creation.
+    pub fn from_table_creation(table_creation: TableCreation) -> Result<Self> {
+        let TableCreation {
+            name: _,
+            location,
+            schema,
+            partition_spec,
+            sort_order,
+            properties,
+        } = table_creation;
+
+        let partition_specs = match partition_spec {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with partition spec now",
+                ))
+            }
+            None => HashMap::from([(
+                DEFAULT_SPEC_ID,
+                Arc::new(PartitionSpec {
+                    spec_id: DEFAULT_SPEC_ID,
+                    fields: vec![],
+                }),
+            )]),
+        };
+
+        let sort_orders = match sort_order {
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Can't create table with sort order now",
+                ))
+            }
+            None => HashMap::from([(
+                DEFAULT_SORT_ORDER_ID,
+                Arc::new(SortOrder {
+                    order_id: DEFAULT_SORT_ORDER_ID,
+                    fields: vec![],
+                }),
+            )]),
+        };
+
+        let table_metadata = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::new_v4(),
+            location: location.ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't create table without location",
+                )
+            })?,
+            last_sequence_number: 0,
+            last_updated_ms: Utc::now().timestamp_millis(),
+            last_column_id: schema.highest_field_id(),
+            current_schema_id: schema.schema_id(),
+            schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
+            partition_specs,
+            default_spec_id: DEFAULT_SPEC_ID,
+            last_partition_id: 0,
+            properties,
+            current_snapshot_id: None,
+            snapshots: Default::default(),
+            snapshot_log: vec![],
+            sort_orders,
+            metadata_log: vec![],
+            default_sort_order_id: DEFAULT_SORT_ORDER_ID,
+            refs: Default::default(),
+        };
+
+        Ok(Self(table_metadata))
+    }
+
+    /// Changes uuid of table metadata.
+    pub fn assign_uuid(mut self, uuid: Uuid) -> Result<Self> {
+        self.0.table_uuid = uuid;
+        Ok(self)
+    }
+
+    /// Returns the new table metadata after changes.
+    pub fn build(self) -> Result<TableMetadata> {
+        Ok(self.0)
     }
 }
 
@@ -649,14 +746,10 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
-                properties: if v.properties.is_empty() {
-                    None
-                } else {
-                    Some(v.properties)
-                },
+                properties: Some(v.properties),
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
                 snapshots: if v.snapshots.is_empty() {
-                    None
+                    Some(vec![])
                 } else {
                     Some(
                         v.snapshots
@@ -838,13 +931,16 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::spec::{
-        table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-        SortDirection, SortField, SortOrder, Summary, Transform, Type,
+    use crate::{
+        spec::{
+            table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
+            PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
+            SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        },
+        TableCreation,
     };
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1568,5 +1664,65 @@ mod tests {
             table_meta_data.default_sort_order(),
             table_meta_data.sort_orders.get(&default_sort_order_id)
         )
+    }
+
+    #[test]
+    fn test_table_metadata_builder_from_table_creation() {
+        let table_creation = TableCreation::builder()
+            .location("s3://db/table".to_string())
+            .name("table".to_string())
+            .properties(HashMap::new())
+            .schema(Schema::builder().build().unwrap())
+            .build();
+        let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(table_metadata.location, "s3://db/table");
+        assert_eq!(table_metadata.schemas.len(), 1);
+        assert_eq!(
+            table_metadata
+                .schemas
+                .get(&0)
+                .unwrap()
+                .as_struct()
+                .fields()
+                .len(),
+            0
+        );
+        assert_eq!(table_metadata.properties.len(), 0);
+        assert_eq!(
+            table_metadata.partition_specs,
+            HashMap::from([(
+                0,
+                Arc::new(PartitionSpec {
+                    spec_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
+        assert_eq!(
+            table_metadata.sort_orders,
+            HashMap::from([(
+                0,
+                Arc::new(SortOrder {
+                    order_id: 0,
+                    fields: vec![]
+                })
+            )])
+        );
+    }
+
+    #[test]
+    fn test_table_builder_from_table_metadata() {
+        let table_metadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+        let uuid = Uuid::new_v4();
+        let table_metadata = table_metadata_builder
+            .assign_uuid(uuid)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(table_metadata.uuid(), uuid);
     }
 }

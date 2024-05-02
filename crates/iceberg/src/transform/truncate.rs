@@ -20,7 +20,10 @@ use std::sync::Arc;
 use arrow_array::ArrayRef;
 use arrow_schema::DataType;
 
-use crate::Error;
+use crate::{
+    spec::{Datum, PrimitiveLiteral},
+    Error,
+};
 
 use super::TransformFunction;
 
@@ -34,11 +37,27 @@ impl Truncate {
         Self { width }
     }
 
-    fn truncate_str_by_char(s: &str, max_chars: usize) -> &str {
-        match s.char_indices().nth(max_chars) {
+    #[inline]
+    fn truncate_str(s: &str, width: usize) -> &str {
+        match s.char_indices().nth(width) {
             None => s,
             Some((idx, _)) => &s[..idx],
         }
+    }
+
+    #[inline]
+    fn truncate_i32(v: i32, width: i32) -> i32 {
+        v - v.rem_euclid(width)
+    }
+
+    #[inline]
+    fn truncate_i64(v: i64, width: i64) -> i64 {
+        v - (((v % width) + width) % width)
+    }
+
+    #[inline]
+    fn truncate_decimal_i128(v: i128, width: i128) -> i128 {
+        v - (((v % width) + width) % width)
     }
 }
 
@@ -56,7 +75,7 @@ impl TransformFunction for Truncate {
                     .as_any()
                     .downcast_ref::<arrow_array::Int32Array>()
                     .unwrap()
-                    .unary(|v| v - v.rem_euclid(width));
+                    .unary(|v| Self::truncate_i32(v, width));
                 Ok(Arc::new(res))
             }
             DataType::Int64 => {
@@ -65,7 +84,7 @@ impl TransformFunction for Truncate {
                     .as_any()
                     .downcast_ref::<arrow_array::Int64Array>()
                     .unwrap()
-                    .unary(|v| v - (((v % width) + width) % width));
+                    .unary(|v| Self::truncate_i64(v, width));
                 Ok(Arc::new(res))
             }
             DataType::Decimal128(precision, scale) => {
@@ -74,7 +93,7 @@ impl TransformFunction for Truncate {
                     .as_any()
                     .downcast_ref::<arrow_array::Decimal128Array>()
                     .unwrap()
-                    .unary(|v| v - (((v % width) + width) % width))
+                    .unary(|v| Self::truncate_decimal_i128(v, width))
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|err| Error::new(crate::ErrorKind::Unexpected, format!("{err}")))?;
                 Ok(Arc::new(res))
@@ -87,7 +106,7 @@ impl TransformFunction for Truncate {
                         .downcast_ref::<arrow_array::StringArray>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| Self::truncate_str_by_char(v, len))),
+                        .map(|v| v.map(|v| Self::truncate_str(v, len))),
                 );
                 Ok(Arc::new(res))
             }
@@ -99,11 +118,50 @@ impl TransformFunction for Truncate {
                         .downcast_ref::<arrow_array::LargeStringArray>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| Self::truncate_str_by_char(v, len))),
+                        .map(|v| v.map(|v| Self::truncate_str(v, len))),
                 );
                 Ok(Arc::new(res))
             }
-            _ => unreachable!("Truncate transform only supports (int,long,decimal,string) types"),
+            _ => Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                format!(
+                    "Unsupported data type for truncate transform: {:?}",
+                    input.data_type()
+                ),
+            )),
+        }
+    }
+
+    fn transform_literal(&self, input: &Datum) -> crate::Result<Option<Datum>> {
+        match input.literal() {
+            PrimitiveLiteral::Int(v) => Ok(Some({
+                let width: i32 = self.width.try_into().map_err(|_| {
+                    Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        "width is failed to convert to i32 when truncate Int32Array",
+                    )
+                })?;
+                Datum::int(Self::truncate_i32(*v, width))
+            })),
+            PrimitiveLiteral::Long(v) => Ok(Some({
+                let width = self.width as i64;
+                Datum::long(Self::truncate_i64(*v, width))
+            })),
+            PrimitiveLiteral::Decimal(v) => Ok(Some({
+                let width = self.width as i128;
+                Datum::decimal(Self::truncate_decimal_i128(*v, width))?
+            })),
+            PrimitiveLiteral::String(v) => Ok(Some({
+                let len = self.width as usize;
+                Datum::string(Self::truncate_str(v, len).to_string())
+            })),
+            _ => Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                format!(
+                    "Unsupported data type for truncate transform: {:?}",
+                    input.data_type()
+                ),
+            )),
         }
     }
 }
@@ -112,11 +170,547 @@ impl TransformFunction for Truncate {
 mod test {
     use std::sync::Arc;
 
+    use crate::spec::PrimitiveType::{
+        Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
+        Timestamptz, Uuid,
+    };
+    use crate::spec::StructType;
+    use crate::spec::Type::{Primitive, Struct};
+    use crate::transform::test::TestTransformFixture;
     use arrow_array::{
         builder::PrimitiveBuilder, types::Decimal128Type, Decimal128Array, Int32Array, Int64Array,
     };
 
-    use crate::transform::TransformFunction;
+    use crate::{
+        expr::PredicateOperator,
+        spec::{Datum, NestedField, PrimitiveType, Transform, Type},
+        transform::{test::TestProjectionFixture, TransformFunction},
+        Result,
+    };
+
+    #[test]
+    fn test_truncate_transform() {
+        let trans = Transform::Truncate(4);
+
+        let fixture = TestTransformFixture {
+            display: "truncate[4]".to_string(),
+            json: r#""truncate[4]""#.to_string(),
+            dedup_name: "truncate[4]".to_string(),
+            preserves_order: true,
+            satisfies_order_of: vec![
+                (Transform::Truncate(4), true),
+                (Transform::Truncate(2), false),
+                (Transform::Bucket(4), false),
+                (Transform::Void, false),
+                (Transform::Day, false),
+            ],
+            trans_types: vec![
+                (Primitive(Binary), Some(Primitive(Binary))),
+                (Primitive(Date), None),
+                (
+                    Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    }),
+                    Some(Primitive(Decimal {
+                        precision: 8,
+                        scale: 5,
+                    })),
+                ),
+                (Primitive(Fixed(8)), None),
+                (Primitive(Int), Some(Primitive(Int))),
+                (Primitive(Long), Some(Primitive(Long))),
+                (Primitive(StringType), Some(Primitive(StringType))),
+                (Primitive(Uuid), None),
+                (Primitive(Time), None),
+                (Primitive(Timestamp), None),
+                (Primitive(Timestamptz), None),
+                (
+                    Struct(StructType::new(vec![NestedField::optional(
+                        1,
+                        "a",
+                        Primitive(Timestamp),
+                    )
+                    .into()])),
+                    None,
+                ),
+            ],
+        };
+
+        fixture.assert_transform(trans);
+    }
+
+    #[test]
+    fn test_projection_truncate_string_rewrite_op() -> Result<()> {
+        let value = "abcde";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(5),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string(value)),
+            Some(r#"name = "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotStartsWith, Datum::string(value)),
+            Some(r#"name != "abcde""#),
+        )?;
+
+        let value = "abcdefg";
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string(value)),
+            Some(r#"name STARTS WITH "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotStartsWith, Datum::string(value)),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_string() -> Result<()> {
+        let value = "abcdefg";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(5),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::String)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::string(value)),
+            Some(r#"name <= "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::string(value)),
+            Some(r#"name <= "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::string(value)),
+            Some(r#"name >= "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::string(value)),
+            Some(r#"name >= "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::string(value)),
+            Some(r#"name = "abcde""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![Datum::string(value), Datum::string(format!("{}abc", value))],
+            ),
+            Some(r#"name IN ("abcde")"#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::string(value), Datum::string(format!("{}abc", value))],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_upper_bound_decimal() -> Result<()> {
+        let prev = "98.99";
+        let curr = "99.99";
+        let next = "100.99";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
+            Some("name <= 9990"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            Some("name <= 9990"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            Some("name >= 9990"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
+            Some("name = 9990"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::decimal_from_str(curr)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::decimal_from_str(prev)?,
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(next)?,
+                ],
+            ),
+            Some("name IN (10090, 9990, 9890)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(next)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_lower_bound_decimal() -> Result<()> {
+        let prev = "99.00";
+        let curr = "100.00";
+        let next = "101.00";
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
+            Some("name <= 9990"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::LessThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            Some("name <= 10000"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(
+                PredicateOperator::GreaterThanOrEq,
+                Datum::decimal_from_str(curr)?,
+            ),
+            Some("name >= 10000"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
+            Some("name = 10000"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::decimal_from_str(curr)?),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::decimal_from_str(prev)?,
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(next)?,
+                ],
+            ),
+            Some("name IN (9900, 10000, 10100)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![
+                    Datum::decimal_from_str(curr)?,
+                    Datum::decimal_from_str(next)?,
+                ],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_upper_bound_long() -> Result<()> {
+        let value = 99i64;
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Long)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::long(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::long(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::long(value)),
+            Some("name >= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::long(value)),
+            Some("name = 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::long(value - 1),
+                    Datum::long(value),
+                    Datum::long(value + 1),
+                ],
+            ),
+            Some("name IN (100, 90)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::long(value), Datum::long(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_lower_bound_long() -> Result<()> {
+        let value = 100i64;
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Long)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::long(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::long(value)),
+            Some("name <= 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::long(value)),
+            Some("name >= 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::long(value)),
+            Some("name = 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::long(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::long(value - 1),
+                    Datum::long(value),
+                    Datum::long(value + 1),
+                ],
+            ),
+            Some("name IN (100, 90)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::long(value), Datum::long(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_upper_bound_integer() -> Result<()> {
+        let value = 99;
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::int(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::int(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::int(value)),
+            Some("name >= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(value)),
+            Some("name = 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::int(value - 1),
+                    Datum::int(value),
+                    Datum::int(value + 1),
+                ],
+            ),
+            Some("name IN (100, 90)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::int(value), Datum::int(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_truncate_lower_bound_integer() -> Result<()> {
+        let value = 100;
+
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(10),
+            "name",
+            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThan, Datum::int(value)),
+            Some("name <= 90"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::LessThanOrEq, Datum::int(value)),
+            Some("name <= 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::GreaterThanOrEq, Datum::int(value)),
+            Some("name >= 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(value)),
+            Some("name = 100"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotEq, Datum::int(value)),
+            None,
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::In,
+                vec![
+                    Datum::int(value - 1),
+                    Datum::int(value),
+                    Datum::int(value + 1),
+                ],
+            ),
+            Some("name IN (100, 90)"),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.set_predicate(
+                PredicateOperator::NotIn,
+                vec![Datum::int(value), Datum::int(value + 1)],
+            ),
+            None,
+        )?;
+
+        Ok(())
+    }
 
     // Test case ref from: https://iceberg.apache.org/spec/#truncate-transform-details
     #[test]
@@ -187,32 +781,74 @@ mod test {
     fn test_string_truncate() {
         let test1 = "イロハニホヘト";
         let test1_2_expected = "イロ";
-        assert_eq!(
-            super::Truncate::truncate_str_by_char(test1, 2),
-            test1_2_expected
-        );
+        assert_eq!(super::Truncate::truncate_str(test1, 2), test1_2_expected);
 
         let test1_3_expected = "イロハ";
-        assert_eq!(
-            super::Truncate::truncate_str_by_char(test1, 3),
-            test1_3_expected
-        );
+        assert_eq!(super::Truncate::truncate_str(test1, 3), test1_3_expected);
 
         let test2 = "щщаεはчωいにπάほхεろへσκζ";
         let test2_7_expected = "щщаεはчω";
-        assert_eq!(
-            super::Truncate::truncate_str_by_char(test2, 7),
-            test2_7_expected
-        );
+        assert_eq!(super::Truncate::truncate_str(test2, 7), test2_7_expected);
 
         let test3 = "\u{FFFF}\u{FFFF}";
-        assert_eq!(super::Truncate::truncate_str_by_char(test3, 2), test3);
+        assert_eq!(super::Truncate::truncate_str(test3, 2), test3);
 
         let test4 = "\u{10000}\u{10000}";
         let test4_1_expected = "\u{10000}";
-        assert_eq!(
-            super::Truncate::truncate_str_by_char(test4, 1),
-            test4_1_expected
-        );
+        assert_eq!(super::Truncate::truncate_str(test4, 1), test4_1_expected);
+    }
+
+    #[test]
+    fn test_literal_int() {
+        let input = Datum::int(1);
+        let res = super::Truncate::new(10)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::int(0),);
+
+        let input = Datum::int(-1);
+        let res = super::Truncate::new(10)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::int(-10),);
+    }
+
+    #[test]
+    fn test_literal_long() {
+        let input = Datum::long(1);
+        let res = super::Truncate::new(10)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::long(0),);
+
+        let input = Datum::long(-1);
+        let res = super::Truncate::new(10)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::long(-10),);
+    }
+
+    #[test]
+    fn test_decimal_literal() {
+        let input = Datum::decimal(1065).unwrap();
+        let res = super::Truncate::new(50)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::decimal(1050).unwrap(),);
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let input = Datum::string("iceberg".to_string());
+        let res = super::Truncate::new(3)
+            .transform_literal(&input)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Datum::string("ice".to_string()),);
     }
 }

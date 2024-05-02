@@ -18,12 +18,14 @@
 //! This module contains expressions.
 
 mod term;
-
-use std::fmt::{Display, Formatter};
-
 pub use term::*;
+pub(crate) mod accessor;
 mod predicate;
+pub(crate) mod visitors;
 pub use predicate::*;
+
+use crate::spec::SchemaRef;
+use std::fmt::{Display, Formatter};
 
 /// Predicate operators used in expressions.
 ///
@@ -31,6 +33,7 @@ pub use predicate::*;
 /// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 #[repr(u16)]
 pub enum PredicateOperator {
     // Unary operators
@@ -145,6 +148,14 @@ impl PredicateOperator {
             PredicateOperator::NotStartsWith => PredicateOperator::StartsWith,
         }
     }
+}
+
+/// Bind expression to a schema.
+pub trait Bind {
+    /// The type of the bound result.
+    type Bound;
+    /// Bind an expression to a schema.
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound>;
 }
 
 #[cfg(test)]

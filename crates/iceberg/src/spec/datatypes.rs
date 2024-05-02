@@ -112,6 +112,21 @@ impl Type {
         matches!(self, Type::Struct(_))
     }
 
+    /// Whether the type is nested type.
+    #[inline(always)]
+    pub fn is_nested(&self) -> bool {
+        matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
+    }
+
+    /// Convert Type to StructType
+    pub fn as_struct_type(self) -> Option<StructType> {
+        if let Type::Struct(struct_type) = self {
+            Some(struct_type)
+        } else {
+            None
+        }
+    }
+
     /// Return max precision for decimal given [`num_bytes`] bytes.
     #[inline(always)]
     pub fn decimal_max_precision(num_bytes: u32) -> Result<u32> {
@@ -134,6 +149,15 @@ impl Type {
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
         ensure_data_valid!(precision > 0 && precision <= MAX_DECIMAL_PRECISION, "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",);
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
+    }
+
+    /// Check if it's float or double type.
+    #[inline(always)]
+    pub fn is_floating_type(&self) -> bool {
+        matches!(
+            self,
+            Type::Primitive(PrimitiveType::Float) | Type::Primitive(PrimitiveType::Double)
+        )
     }
 }
 
@@ -184,15 +208,15 @@ pub enum PrimitiveType {
     },
     /// Calendar date without timezone or time.
     Date,
-    /// Time of day without date or timezone.
+    /// Time of day in microsecond precision, without date or timezone.
     Time,
-    /// Timestamp without timezone
+    /// Timestamp in microsecond precision, without timezone
     Timestamp,
-    /// Timestamp with timezone
+    /// Timestamp in microsecond precision, with timezone
     Timestamptz,
     /// Arbitrary-length character sequences encoded in utf-8
     String,
-    /// Universally Unique Identifiers
+    /// Universally Unique Identifiers, should use 16-byte fixed
     Uuid,
     /// Fixed length byte array
     Fixed(u64),
@@ -325,7 +349,7 @@ impl fmt::Display for PrimitiveType {
 }
 
 /// DataType for a specific struct
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 #[serde(rename = "struct", tag = "type")]
 pub struct StructType {
     /// Struct fields

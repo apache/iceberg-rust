@@ -166,45 +166,42 @@ impl ManifestListWriter {
         }
     }
 
-    /// Append manifest entries to be written.
-    pub fn add_manifest_entries(
-        &mut self,
-        manifest_entries: impl Iterator<Item = ManifestFile>,
-    ) -> Result<()> {
+    /// Append manifests to be written.
+    pub fn add_manifests(&mut self, manifests: impl Iterator<Item = ManifestFile>) -> Result<()> {
         match self.format_version {
             FormatVersion::V1 => {
-                for manifest_entry in manifest_entries {
-                    let manifest_entry: ManifestFileV1 = manifest_entry.try_into()?;
-                    self.avro_writer.append_ser(manifest_entry)?;
+                for manifest in manifests {
+                    let manifes: ManifestFileV1 = manifest.try_into()?;
+                    self.avro_writer.append_ser(manifes)?;
                 }
             }
             FormatVersion::V2 => {
-                for mut manifest_entry in manifest_entries {
-                    if manifest_entry.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
-                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                for mut manifest in manifests {
+                    if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest.added_snapshot_id != self.snapshot_id {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
                                     "Found unassigned sequence number for a manifest from snapshot {}.",
-                                    manifest_entry.added_snapshot_id
+                                    manifest.added_snapshot_id
                                 ),
                             ));
                         }
-                        manifest_entry.sequence_number = self.sequence_number;
+                        manifest.sequence_number = self.sequence_number;
                     }
-                    if manifest_entry.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
-                        if manifest_entry.added_snapshot_id != self.snapshot_id {
+                    if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
+                        if manifest.added_snapshot_id != self.snapshot_id {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
                                     "Found unassigned sequence number for a manifest from snapshot {}.",
-                                    manifest_entry.added_snapshot_id
+                                    manifest.added_snapshot_id
                                 ),
                             ));
                         }
-                        manifest_entry.min_sequence_number = self.sequence_number;
+                        manifest.min_sequence_number = self.sequence_number;
                     }
-                    let manifest_entry: ManifestFileV2 = manifest_entry.try_into()?;
+                    let manifest_entry: ManifestFileV2 = manifest.try_into()?;
                     self.avro_writer.append_ser(manifest_entry)?;
                 }
             }
@@ -604,11 +601,11 @@ impl FromStr for ManifestContentType {
     }
 }
 
-impl ToString for ManifestContentType {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for ManifestContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ManifestContentType::Data => "data".to_string(),
-            ManifestContentType::Deletes => "deletes".to_string(),
+            ManifestContentType::Data => write!(f, "data"),
+            ManifestContentType::Deletes => write!(f, "deletes"),
         }
     }
 }
@@ -1145,7 +1142,7 @@ mod test {
         );
 
         writer
-            .add_manifest_entries(manifest_list.entries.clone().into_iter())
+            .add_manifests(manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
@@ -1213,7 +1210,7 @@ mod test {
         );
 
         writer
-            .add_manifest_entries(manifest_list.entries.clone().into_iter())
+            .add_manifests(manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
@@ -1332,7 +1329,7 @@ mod test {
 
         let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, 0);
         writer
-            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
@@ -1388,7 +1385,7 @@ mod test {
 
         let mut writer = ManifestListWriter::v2(output_file, snapshot_id, 0, seq_num);
         writer
-            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 
@@ -1442,7 +1439,7 @@ mod test {
 
         let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, 0, 1);
         writer
-            .add_manifest_entries(expected_manifest_list.entries.clone().into_iter())
+            .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
 

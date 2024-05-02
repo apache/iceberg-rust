@@ -42,9 +42,11 @@ check-toml:
 
 check: check-fmt check-clippy cargo-sort check-toml
 
-unit-test:
+doc-test:
+	cargo test --no-fail-fast --doc --all-features --workspace
+
+unit-test: doc-test
 	cargo test --no-fail-fast --lib --all-features --workspace
 
-test:
+test: doc-test
 	cargo test --no-fail-fast --all-targets --all-features --workspace
-	cargo test --no-fail-fast --doc --all-features --workspace

@@ -31,7 +31,17 @@ keywords = ["iceberg", "hive", "catalog"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
+log = { workspace = true }
+pilota = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 typed-builder = { workspace = true }
+uuid = { workspace = true }
 volo-thrift = { workspace = true }
+
+[dev-dependencies]
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+port_scanner = { workspace = true }

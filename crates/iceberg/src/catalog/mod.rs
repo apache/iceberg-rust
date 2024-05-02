@@ -18,7 +18,8 @@
 //! Catalog API for Apache Iceberg
 
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, UnboundPartitionSpec,
+    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
+    UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -50,7 +51,7 @@ pub trait Catalog: Debug + Sync + Send {
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace>;
 
     /// Check if namespace exists in catalog.
-    async fn namespace_exists(&self, namesace: &NamespaceIdent) -> Result<bool>;
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool>;
 
     /// Update a namespace inside the catalog.
     ///
@@ -83,7 +84,7 @@ pub trait Catalog: Debug + Sync + Send {
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
-    async fn stat_table(&self, table: &TableIdent) -> Result<bool>;
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()>;
@@ -427,14 +428,24 @@ pub enum TableUpdate {
     },
 }
 
+impl TableUpdate {
+    /// Applies the update to the table metadata builder.
+    pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
+        match self {
+            TableUpdate::AssignUuid { uuid } => builder.assign_uuid(uuid),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        TableMetadataBuilder, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
-    use crate::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
+    use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
     use serde::de::DeserializeOwned;
     use serde::Serialize;
     use std::collections::HashMap;
@@ -1064,5 +1075,29 @@ mod tests {
         };
 
         test_serde_json(json, update);
+    }
+
+    #[test]
+    fn test_table_update_apply() {
+        let table_creation = TableCreation::builder()
+            .location("s3://db/table".to_string())
+            .name("table".to_string())
+            .properties(HashMap::new())
+            .schema(Schema::builder().build().unwrap())
+            .build();
+        let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap();
+        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+
+        let uuid = uuid::Uuid::new_v4();
+        let update = TableUpdate::AssignUuid { uuid };
+        let updated_metadata = update
+            .apply(table_metadata_builder)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(updated_metadata.uuid(), uuid);
     }
 }
