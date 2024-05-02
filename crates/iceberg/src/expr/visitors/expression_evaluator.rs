@@ -98,11 +98,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         Err(Error::new(ErrorKind::Unexpected, "The evaluation of expressions should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it."))
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         if let PrimitiveLiteral::Boolean(false) = datum.literal() {
@@ -115,8 +111,8 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     fn not_null(
         &mut self,
         reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+        _predicate: &BoundPredicate,
+    ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         if let PrimitiveLiteral::Boolean(false) = datum.literal() {
@@ -126,21 +122,13 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         Ok(true)
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         Ok(datum.is_nan())
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         Ok(!datum.is_nan())
