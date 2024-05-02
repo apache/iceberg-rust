@@ -448,13 +448,13 @@ impl ManifestEvaluatorCache {
 struct ExpressionEvaluatorCache(HashMap<i32, ExpressionEvaluator>);
 
 impl ExpressionEvaluatorCache {
-    /// Creates a new [`ManifestEvaluatorCache`]
+    /// Creates a new [`ExpressionEvaluatorCache`]
     /// with an empty internal HashMap.
     fn new() -> Self {
         Self(HashMap::new())
     }
 
-    /// Retrieves a [`ManifestEvaluator`] from the cache
+    /// Retrieves a [`ExpressionEvaluator`] from the cache
     /// or computes it if not present.
     fn get(&mut self, spec_id: i32, partition_filter: &BoundPredicate) -> &mut ExpressionEvaluator {
         self.0
