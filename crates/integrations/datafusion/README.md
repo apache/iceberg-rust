@@ -17,6 +17,6 @@
   ~ under the License.
 -->
 
-# Apache Iceberg Datafusion Integration
+# Apache Iceberg DataFusion Integration
 
-This crate contains the integration of Apache Datafusion and Apache Iceberg.
+This crate contains the integration of Apache DataFusion and Apache Iceberg.
