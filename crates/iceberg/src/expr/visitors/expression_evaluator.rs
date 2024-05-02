@@ -19,7 +19,7 @@ use fnv::FnvHashSet;
 
 use crate::{
     expr::{BoundPredicate, BoundReference},
-    spec::{DataFile, Datum, Struct},
+    spec::{DataFile, Datum, PrimitiveLiteral, Struct},
     Error, ErrorKind, Result,
 };
 
@@ -101,9 +101,15 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     fn is_null(
         &mut self,
         reference: &BoundReference,
-        predicate: &BoundPredicate,
+        _predicate: &BoundPredicate,
     ) -> Result<Self::T> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        if let PrimitiveLiteral::Boolean(false) = datum.literal() {
+            return Ok(true);
+        };
+
+        Ok(false)
     }
 
     fn not_null(
@@ -111,7 +117,13 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        if let PrimitiveLiteral::Boolean(false) = datum.literal() {
+            return Ok(false);
+        };
+
+        Ok(true)
     }
 
     fn is_nan(
@@ -228,6 +240,7 @@ mod tests {
     use crate::{
         expr::{
             visitors::inclusive_projection::InclusiveProjection, Bind, BoundPredicate, Predicate,
+            PredicateOperator, Reference, UnaryExpression,
         },
         spec::{
             DataContentType, DataFile, DataFileFormat, Literal, NestedField, PartitionField,
@@ -319,6 +332,50 @@ mod tests {
             equality_ids: vec![],
             sort_order_id: None,
         }
+    }
+
+    #[test]
+    fn test_expr_is_not_null() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let predicate = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::NotNull,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_is_null() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+        let predicate = Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::IsNull,
+            Reference::new("a"),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(!result);
+
+        Ok(())
     }
 
     #[test]
