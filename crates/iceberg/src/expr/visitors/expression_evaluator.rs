@@ -73,6 +73,7 @@ impl<'a> ExpressionEvaluatorVisitor<'a> {
         }
     }
 
+    /// Checks if the [`PrimitiveLiteral`] is null.
     fn is_null(literal: &PrimitiveLiteral) -> bool {
         if let PrimitiveLiteral::Boolean(false) = literal {
             return true;
