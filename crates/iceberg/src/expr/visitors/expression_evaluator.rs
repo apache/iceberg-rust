@@ -154,7 +154,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         if Self::is_null(datum.literal()) {
@@ -169,7 +169,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         if Self::is_null(datum.literal()) {
@@ -184,7 +184,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
         if Self::is_null(datum.literal()) {
@@ -199,7 +199,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    ) -> Result<bool> {
         todo!()
     }
 
