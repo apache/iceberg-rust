@@ -293,7 +293,7 @@ mod tests {
         case_sensitive: bool,
     ) -> Result<ExpressionEvaluator> {
         let partition_filter =
-            create_partition_filter(&schema, partition_spec, predicate, case_sensitive)?;
+            create_partition_filter(schema, partition_spec, predicate, case_sensitive)?;
 
         Ok(ExpressionEvaluator::new(partition_filter))
     }
