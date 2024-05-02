@@ -198,9 +198,11 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         &mut self,
         reference: &BoundReference,
         literal: &Datum,
-        predicate: &BoundPredicate,
+        _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        Ok(datum.literal() == literal.literal())
     }
 
     fn not_eq(
@@ -209,7 +211,9 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        todo!()
+        let datum = reference.accessor().get(self.partition)?;
+
+        Ok(datum.literal() != literal.literal())
     }
 
     fn starts_with(
@@ -348,6 +352,54 @@ mod tests {
             equality_ids: vec![],
             sort_order_id: None,
         }
+    }
+
+    #[test]
+    fn test_expr_not_eq() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::NotEq,
+            Reference::new("a"),
+            Datum::float(0.9),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_eq() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec()?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            Reference::new("a"),
+            Datum::float(1.0),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
     }
 
     #[test]
