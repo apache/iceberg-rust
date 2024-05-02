@@ -396,30 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn test_expr_not_in() -> Result<()> {
-        let case_sensitive = true;
-        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
-
-        let predicate = Predicate::Set(SetExpression::new(
-            PredicateOperator::NotIn,
-            Reference::new("a"),
-            FnvHashSet::from_iter([Datum::float(0.9), Datum::float(1.2), Datum::float(2.4)]),
-        ))
-        .bind(schema.clone(), case_sensitive)?;
-
-        let expression_evaluator =
-            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
-
-        let data_file = create_data_file_float();
-
-        let result = expression_evaluator.eval(&data_file)?;
-
-        assert!(result);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_expr_or() -> Result<()> {
         let case_sensitive = true;
         let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
@@ -463,6 +439,30 @@ mod tests {
             Reference::new("a"),
             Datum::float(0.4),
         )))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file_float();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_not_in() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
+
+        let predicate = Predicate::Set(SetExpression::new(
+            PredicateOperator::NotIn,
+            Reference::new("a"),
+            FnvHashSet::from_iter([Datum::float(0.9), Datum::float(1.2), Datum::float(2.4)]),
+        ))
         .bind(schema.clone(), case_sensitive)?;
 
         let expression_evaluator =
