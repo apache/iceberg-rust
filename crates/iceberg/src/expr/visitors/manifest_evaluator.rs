@@ -21,23 +21,19 @@ use crate::spec::{Datum, FieldSummary, ManifestFile};
 use crate::Result;
 use fnv::FnvHashSet;
 
-#[derive(Debug)]
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
 ///
 /// Used by [`TableScan`] to prune the list of [`ManifestFile`]s
 /// in which data might be found that matches the TableScan's filter.
+#[derive(Debug)]
 pub(crate) struct ManifestEvaluator {
     partition_filter: BoundPredicate,
-    case_sensitive: bool,
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(partition_filter: BoundPredicate, case_sensitive: bool) -> Self {
-        Self {
-            partition_filter,
-            case_sensitive,
-        }
+    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
+        Self { partition_filter }
     }
 
     /// Evaluate this `ManifestEvaluator`'s filter predicate against the
@@ -310,7 +306,7 @@ mod test {
 
     fn create_partition_schema(
         partition_spec: &PartitionSpecRef,
-        schema: &SchemaRef,
+        schema: &Schema,
     ) -> Result<SchemaRef> {
         let partition_type = partition_spec.partition_type(schema)?;
 
@@ -356,7 +352,7 @@ mod test {
             case_sensitive,
         )?;
 
-        Ok(ManifestEvaluator::new(partition_filter, case_sensitive))
+        Ok(ManifestEvaluator::new(partition_filter))
     }
 
     #[test]
