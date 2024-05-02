@@ -420,6 +420,64 @@ mod tests {
     }
 
     #[test]
+    fn test_expr_or() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Reference::new("a"),
+            Datum::float(1.0),
+        ))
+        .or(Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThanOrEq,
+            Reference::new("a"),
+            Datum::float(0.4),
+        )))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file_float();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_and() -> Result<()> {
+        let case_sensitive = true;
+        let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Reference::new("a"),
+            Datum::float(1.1),
+        ))
+        .and(Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThanOrEq,
+            Reference::new("a"),
+            Datum::float(0.4),
+        )))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(&schema, partition_spec, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file_float();
+
+        let result = expression_evaluator.eval(&data_file)?;
+
+        assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_in() -> Result<()> {
         let case_sensitive = true;
         let (schema, partition_spec) = create_schema_and_partition_spec(PrimitiveType::Float)?;
