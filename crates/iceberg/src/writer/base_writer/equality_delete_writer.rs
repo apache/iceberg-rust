@@ -22,7 +22,6 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, RecordBatch, StructArray};
 use arrow_schema::{DataType, FieldRef, Fields, Schema, SchemaRef};
 use itertools::Itertools;
-use parquet::arrow::ProjectionMask;
 
 use crate::spec::DataFile;
 use crate::writer::file_writer::FileWriter;
@@ -75,7 +74,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
         Ok(EqualityDeleteFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
             projector,
-            delete_schema: delete_schema,
+            delete_schema,
             equality_ids: config.equality_ids,
         })
     }
@@ -196,5 +195,221 @@ impl FieldProjector {
                 .clone();
         }
         array
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{collections::HashMap, sync::Arc};
+
+    use arrow_array::{types::Int64Type, ArrayRef, Int64Array, RecordBatch, StructArray};
+    use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
+    use tempfile::TempDir;
+
+    use crate::{
+        io::FileIOBuilder,
+        spec::DataFileFormat,
+        writer::{
+            base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder,
+            file_writer::{
+                location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
+                ParquetWriterBuilder,
+            },
+            IcebergWriter, IcebergWriterBuilder,
+        },
+    };
+
+    use super::EqualityDeleteWriterConfig;
+
+    #[tokio::test]
+    async fn test_equality_delete_writer() -> Result<(), anyhow::Error> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // prepare data
+        // Int, Struct(Int), String, List(Int), Struct(Struct(Int))
+        let schema = {
+            let fields = vec![
+                arrow_schema::Field::new("col0", arrow_schema::DataType::Int64, true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                arrow_schema::Field::new(
+                    "col1",
+                    arrow_schema::DataType::Struct(
+                        vec![arrow_schema::Field::new(
+                            "sub_col",
+                            arrow_schema::DataType::Int64,
+                            true,
+                        )
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "5".to_string(),
+                        )]))]
+                        .into(),
+                    ),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+                arrow_schema::Field::new("col2", arrow_schema::DataType::Utf8, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                ),
+                arrow_schema::Field::new(
+                    "col3",
+                    arrow_schema::DataType::List(Arc::new(
+                        arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                "6".to_string(),
+                            )])),
+                    )),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "3".to_string(),
+                )])),
+                arrow_schema::Field::new(
+                    "col4",
+                    arrow_schema::DataType::Struct(
+                        vec![arrow_schema::Field::new(
+                            "sub_col",
+                            arrow_schema::DataType::Struct(
+                                vec![arrow_schema::Field::new(
+                                    "sub_sub_col",
+                                    arrow_schema::DataType::Int64,
+                                    true,
+                                )
+                                .with_metadata(HashMap::from([(
+                                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                                    "7".to_string(),
+                                )]))]
+                                .into(),
+                            ),
+                            true,
+                        )
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "8".to_string(),
+                        )]))]
+                        .into(),
+                    ),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "4".to_string(),
+                )])),
+            ];
+            arrow_schema::Schema::new(fields)
+        };
+        let col0 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+        let col1 = Arc::new(StructArray::new(
+            vec![
+                arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "5".to_string(),
+                    )])),
+            ]
+            .into(),
+            vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
+            None,
+        ));
+        let col2 = Arc::new(arrow_array::StringArray::from_iter_values(vec![
+            "test";
+            1024
+        ])) as ArrayRef;
+        let col3 = Arc::new({
+            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+              Some(
+                  vec![Some(1),]
+              );
+              1024
+          ])
+            .into_parts();
+            arrow_array::ListArray::new(
+                Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "6".to_string(),
+                )]))),
+                list_parts.1,
+                list_parts.2,
+                list_parts.3,
+            )
+        }) as ArrayRef;
+        let col4 = Arc::new(StructArray::new(
+            vec![arrow_schema::Field::new(
+                "sub_col",
+                arrow_schema::DataType::Struct(
+                    vec![arrow_schema::Field::new(
+                        "sub_sub_col",
+                        arrow_schema::DataType::Int64,
+                        true,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "7".to_string(),
+                    )]))]
+                    .into(),
+                ),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "8".to_string(),
+            )]))]
+            .into(),
+            vec![Arc::new(StructArray::new(
+                vec![
+                    arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "7".to_string(),
+                        )])),
+                ]
+                .into(),
+                vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
+                None,
+            ))],
+            None,
+        ));
+        let to_write =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![col0, col1, col2, col3, col4])
+                .unwrap();
+
+        // prepare writer
+        let pb = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            to_write.schema(),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let equality_ids = vec![1, 3];
+        let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
+            .build(EqualityDeleteWriterConfig::new(
+                equality_ids,
+                schema.clone(),
+                PARQUET_FIELD_ID_META_KEY,
+            ))
+            .await?;
+        // write
+        equality_delete_writer.write(to_write.clone()).await?;
+        let res = equality_delete_writer.close().await?;
+        assert_eq!(res.len(), 1);
+        let _data_file = res.into_iter().next().unwrap();
+
+        // check
+        // check_parquet_data_file(&file_io, &data_file, &to_write).await;
+        Ok(())
     }
 }
