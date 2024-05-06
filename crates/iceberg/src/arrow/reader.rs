@@ -233,8 +233,7 @@ impl ArrowReader {
             let mut column_indices = collector
                 .field_ids
                 .iter()
-                .map(|field_id| field_id_map.get(field_id).cloned())
-                .flatten()
+                .filter_map(|field_id| field_id_map.get(field_id).cloned())
                 .collect::<Vec<_>>();
 
             column_indices.sort();
@@ -580,7 +579,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(_) = self.bound_reference(reference) {
+        if self.bound_reference(reference).is_some() {
             self.build_always_true()
         } else {
             // A missing column, treating it as null.
@@ -593,7 +592,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(_) = self.bound_reference(reference) {
+        if self.bound_reference(reference).is_some() {
             self.build_always_false()
         } else {
             // A missing column, treating it as null.
