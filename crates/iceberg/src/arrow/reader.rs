@@ -554,7 +554,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 is_null(&column)
             }))
         } else {
-            self.build_always_false()
+            // A missing column, treating it as null.
+            self.build_always_true()
         }
     }
 
@@ -569,24 +570,35 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
                 is_not_null(&column)
             }))
         } else {
+            // A missing column, treating it as null.
             self.build_always_false()
         }
     }
 
     fn is_nan(
         &mut self,
-        _reference: &BoundReference,
+        reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        self.build_always_true()
+        if let Some(_) = self.bound_reference(reference) {
+            self.build_always_true()
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_false()
+        }
     }
 
     fn not_nan(
         &mut self,
-        _reference: &BoundReference,
+        reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        self.build_always_true()
+        if let Some(_) = self.bound_reference(reference) {
+            self.build_always_false()
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_true()
+        }
     }
 
     fn less_than(
