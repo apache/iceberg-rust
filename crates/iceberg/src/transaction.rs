@@ -105,6 +105,28 @@ impl<'a> Transaction<'a> {
         Ok(self)
     }
 
+    fn generate_unique_snapshot_id(&self) -> i64 {
+        let generate_random_id = || -> i64 {
+            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
+            let snapshot_id = (lhs ^ rhs) as i64;
+            if snapshot_id < 0 {
+                -snapshot_id
+            } else {
+                snapshot_id
+            }
+        };
+        let mut snapshot_id = generate_random_id();
+        while self
+            .table
+            .metadata()
+            .snapshots()
+            .any(|s| s.snapshot_id() == snapshot_id)
+        {
+            snapshot_id = generate_random_id();
+        }
+        snapshot_id
+    }
+
     /// Creates a fast append action.
     pub fn fast_append(
         self,
@@ -116,7 +138,7 @@ impl<'a> Transaction<'a> {
             .metadata()
             .current_snapshot()
             .map(|s| s.snapshot_id());
-        let snapshot_id = parent_snapshot_id.map(|id| id + 1).unwrap_or(0);
+        let snapshot_id = self.generate_unique_snapshot_id();
         let schema = self.table.metadata().current_schema().as_ref().clone();
         let schema_id = schema.schema_id();
         let format_version = self.table.metadata().format_version();
