@@ -240,7 +240,7 @@ impl ArrowReader {
 
             // The converter that converts `BoundPredicates` to `ArrowPredicates`
             let mut converter = PredicateConverter {
-                parquet_schema: &parquet_schema,
+                parquet_schema,
                 column_map: &field_id_map,
                 column_indices: &column_indices,
             };
