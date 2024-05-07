@@ -28,7 +28,7 @@ use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
 use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
-use futures::AsyncWriteExt;
+use bytes::Bytes;
 use serde_json::to_vec;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -291,13 +291,7 @@ impl ManifestWriter {
 
         let length = avro_writer.flush()?;
         let content = avro_writer.into_inner()?;
-        let mut writer = self.output.writer().await?;
-        writer.write_all(&content).await.map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Fail to write Manifest Entry").with_source(err)
-        })?;
-        writer.close().await.map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Fail to write Manifest Entry").with_source(err)
-        })?;
+        self.output.write(Bytes::from(content)).await?;
 
         let partition_summary =
             self.get_field_summary_vec(&manifest.metadata.partition_spec.fields);

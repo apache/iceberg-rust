@@ -22,7 +22,7 @@ use std::{collections::HashMap, str::FromStr};
 use crate::io::FileIO;
 use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
-use futures::{AsyncReadExt, AsyncWriteExt};
+use bytes::Bytes;
 
 use self::{
     _const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2},
@@ -212,7 +212,7 @@ impl ManifestListWriter {
     pub async fn close(self) -> Result<()> {
         let data = self.avro_writer.into_inner()?;
         let mut writer = self.output_file.writer().await?;
-        writer.write_all(&data).await?;
+        writer.write(Bytes::from(data)).await?;
         writer.close().await?;
         Ok(())
     }
@@ -632,13 +632,7 @@ impl ManifestFile {
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
     pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let mut avro = Vec::new();
-        file_io
-            .new_input(&self.manifest_path)?
-            .reader()
-            .await?
-            .read_to_end(&mut avro)
-            .await?;
+        let avro = file_io.new_input(&self.manifest_path)?.read().await?;
 
         let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
 

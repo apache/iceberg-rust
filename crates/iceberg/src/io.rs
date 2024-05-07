@@ -48,14 +48,13 @@
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.
 
+use bytes::Bytes;
+use std::ops::Range;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{error::Result, Error, ErrorKind};
-use futures::{AsyncRead, AsyncSeek, AsyncWrite};
 use once_cell::sync::Lazy;
 use opendal::{Operator, Scheme};
-use tokio::io::AsyncWrite as TokioAsyncWrite;
-use tokio::io::{AsyncRead as TokioAsyncRead, AsyncSeek as TokioAsyncSeek};
 use url::Url;
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -206,6 +205,30 @@ impl FileIO {
     }
 }
 
+/// The struct the represents the metadata of a file.
+///
+/// TODO: we can add last modified time, content type, etc. in the future.
+pub struct FileMetadata {
+    /// The size of the file.
+    pub size: u64,
+}
+
+/// Trait for reading file.
+#[async_trait::async_trait]
+pub trait FileRead: Send + Unpin + 'static {
+    /// Read file content with given range.
+    ///
+    /// TODO: we can support reading non-contiguous bytes in the future.
+    async fn read(&self, range: Range<u64>) -> Result<Bytes>;
+}
+
+#[async_trait::async_trait]
+impl FileRead for opendal::Reader {
+    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+        Ok(opendal::Reader::read(self, range).await?.to_bytes())
+    }
+}
+
 /// Input file is used for reading from files.
 #[derive(Debug)]
 pub struct InputFile {
@@ -214,14 +237,6 @@ pub struct InputFile {
     path: String,
     // Relative path of file to uri, starts at [`relative_path_pos`]
     relative_path_pos: usize,
-}
-
-/// Trait for reading file.
-pub trait FileRead: AsyncRead + AsyncSeek + Send + Unpin + TokioAsyncRead + TokioAsyncSeek {}
-
-impl<T> FileRead for T where
-    T: AsyncRead + AsyncSeek + Send + Unpin + TokioAsyncRead + TokioAsyncSeek
-{
 }
 
 impl InputFile {
@@ -238,16 +253,58 @@ impl InputFile {
             .await?)
     }
 
-    /// Creates [`InputStream`] for reading.
+    /// Fetch and returns metadata of file.
+    pub async fn metadata(&self) -> Result<FileMetadata> {
+        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
+
+        Ok(FileMetadata {
+            size: meta.content_length(),
+        })
+    }
+
+    /// Read and returns whole content of file.
+    ///
+    /// For continues reading, use [`Self::reader`] instead.
+    pub async fn read(&self) -> Result<Bytes> {
+        Ok(self
+            .op
+            .read(&self.path[self.relative_path_pos..])
+            .await?
+            .to_bytes())
+    }
+
+    /// Creates [`FileRead`] for continues reading.
+    ///
+    /// For one-time reading, use [`Self::read`] instead.
     pub async fn reader(&self) -> Result<impl FileRead> {
         Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
     }
 }
 
 /// Trait for writing file.
-pub trait FileWrite: AsyncWrite + TokioAsyncWrite + Send + Unpin {}
+#[async_trait::async_trait]
+pub trait FileWrite: Send + Unpin + 'static {
+    /// Write bytes to file.
+    ///
+    /// TODO: we can support writing non-contiguous bytes in the future.
+    async fn write(&mut self, bs: Bytes) -> Result<()>;
 
-impl<T> FileWrite for T where T: AsyncWrite + TokioAsyncWrite + Send + Unpin {}
+    /// Close file.
+    ///
+    /// Calling close on closed file will generate an error.
+    async fn close(&mut self) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+impl FileWrite for opendal::Writer {
+    async fn write(&mut self, bs: Bytes) -> Result<()> {
+        Ok(opendal::Writer::write(self, bs).await?)
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(opendal::Writer::close(self).await?)
+    }
+}
 
 /// Output file is used for writing to files..
 #[derive(Debug)]
@@ -282,7 +339,23 @@ impl OutputFile {
         }
     }
 
-    /// Creates output file for writing.
+    /// Create a new output file with given bytes.
+    ///
+    /// # Notes
+    ///
+    /// Calling `write` will overwrite the file if it exists.
+    /// For continues writing, use [`Self::writer`].
+    pub async fn write(&self, bs: Bytes) -> Result<()> {
+        let mut writer = self.writer().await?;
+        writer.write(bs).await?;
+        writer.close().await
+    }
+
+    /// Creates output file for continues writing.
+    ///
+    /// # Notes
+    ///
+    /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
         Ok(Box::new(
             self.op.writer(&self.path[self.relative_path_pos..]).await?,
@@ -398,7 +471,7 @@ mod tests {
     use std::{fs::File, path::Path};
 
     use futures::io::AllowStdIo;
-    use futures::{AsyncReadExt, AsyncWriteExt};
+    use futures::AsyncReadExt;
 
     use tempfile::TempDir;
 
@@ -483,9 +556,7 @@ mod tests {
 
         assert!(!output_file.exists().await.unwrap());
         {
-            let mut writer = output_file.writer().await.unwrap();
-            writer.write_all(content.as_bytes()).await.unwrap();
-            writer.close().await.unwrap();
+            output_file.write(content.into()).await.unwrap();
         }
 
         assert_eq!(&full_path, output_file.location());

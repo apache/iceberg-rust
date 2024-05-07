@@ -17,12 +17,14 @@
 
 //! The module contains the file writer for parquet file format.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicI64, Arc},
 };
 
-use crate::{io::FileIO, Result};
+use crate::{io::FileIO, io::FileWrite, Result};
 use crate::{
     io::OutputFile,
     spec::{DataFileBuilder, DataFileFormat},
@@ -30,6 +32,8 @@ use crate::{
     Error,
 };
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use bytes::Bytes;
+use futures::future::BoxFuture;
 use parquet::{arrow::AsyncArrowWriter, format::FileMetaData};
 use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
 
@@ -103,7 +107,8 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
                 .generate_location(&self.file_name_generator.generate_file_name()),
         )?;
         let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
-        let writer = AsyncArrowWriter::try_new(inner_writer, self.schema.clone(), Some(self.props))
+        let async_writer = AsyncFileWriter::new(inner_writer);
+        let writer = AsyncArrowWriter::try_new(async_writer, self.schema.clone(), Some(self.props))
             .map_err(|err| {
                 Error::new(
                     crate::ErrorKind::Unexpected,
@@ -125,7 +130,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     out_file: OutputFile,
-    writer: AsyncArrowWriter<TrackWriter>,
+    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
     field_ids: Vec<i32>,
@@ -243,6 +248,105 @@ impl CurrentFileStatus for ParquetWriter {
 
     fn current_written_size(&self) -> usize {
         self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
+    }
+}
+
+/// AsyncFileWriter is a wrapper of FileWrite to make it compatible with tokio::io::AsyncWrite.
+///
+/// # NOTES
+///
+/// We keep this wrapper been used inside only.
+///
+/// # TODO
+///
+/// Maybe we can use the buffer from ArrowWriter directly.
+struct AsyncFileWriter<W: FileWrite>(State<W>);
+
+enum State<W: FileWrite> {
+    Idle(Option<W>),
+    Write(BoxFuture<'static, (W, Result<()>)>),
+    Close(BoxFuture<'static, (W, Result<()>)>),
+}
+
+impl<W: FileWrite> AsyncFileWriter<W> {
+    /// Create a new `AsyncFileWriter` with the given writer.
+    pub fn new(writer: W) -> Self {
+        Self(State::Idle(Some(writer)))
+    }
+}
+
+impl<W: FileWrite> tokio::io::AsyncWrite for AsyncFileWriter<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, std::io::Error>> {
+        let this = self.get_mut();
+        loop {
+            match &mut this.0 {
+                State::Idle(w) => {
+                    let mut writer = w.take().unwrap();
+                    let bs = Bytes::copy_from_slice(buf);
+                    let fut = async move {
+                        let res = writer.write(bs).await;
+                        (writer, res)
+                    };
+                    this.0 = State::Write(Box::pin(fut));
+                }
+                State::Write(fut) => {
+                    let (writer, res) = futures::ready!(fut.as_mut().poll(cx));
+                    this.0 = State::Idle(Some(writer));
+                    return Poll::Ready(res.map(|_| buf.len()).map_err(|err| {
+                        std::io::Error::new(std::io::ErrorKind::Other, Box::new(err))
+                    }));
+                }
+                State::Close(_) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "file is closed",
+                    )));
+                }
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        let this = self.get_mut();
+        loop {
+            match &mut this.0 {
+                State::Idle(w) => {
+                    let mut writer = w.take().unwrap();
+                    let fut = async move {
+                        let res = writer.close().await;
+                        (writer, res)
+                    };
+                    this.0 = State::Close(Box::pin(fut));
+                }
+                State::Write(_) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "file is writing",
+                    )));
+                }
+                State::Close(fut) => {
+                    let (writer, res) = futures::ready!(fut.as_mut().poll(cx));
+                    this.0 = State::Idle(Some(writer));
+                    return Poll::Ready(res.map_err(|err| {
+                        std::io::Error::new(std::io::ErrorKind::Other, Box::new(err))
+                    }));
+                }
+            }
+        }
     }
 }
 
