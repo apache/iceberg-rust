@@ -41,3 +41,4 @@ tokio = { workspace = true }
 iceberg-catalog-hms = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
+opendal = { workspace = true, features = ["services-s3"] }
