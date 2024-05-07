@@ -25,8 +25,8 @@ use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry, ManifestFile,
     ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, PartitionSpec, Schema,
-    Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-    Transform,
+    Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct,
+    StructType, Summary, Transform,
 };
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
@@ -326,11 +326,16 @@ impl<'a> FastAppendAction<'a> {
         let manifest_entries = appended_data_files
             .into_iter()
             .map(|data_file| {
-                ManifestEntry::builder()
+                let builder = ManifestEntry::builder()
                     .status(crate::spec::ManifestStatus::Added)
-                    .snapshot_id(self.snapshot_id)
-                    .data_file(data_file)
-                    .build()
+                    .data_file(data_file);
+                if self.format_version as u8 == 1u8 {
+                    builder.snapshot_id(self.snapshot_id).build()
+                } else {
+                    // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
+                    // commit failed.
+                    builder.build()
+                }
             })
             .collect();
         let manifest_meta = ManifestMetadata::builder()
