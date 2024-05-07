@@ -214,6 +214,11 @@ pub struct FileMetadata {
 }
 
 /// Trait for reading file.
+///
+/// # TODO
+///
+/// It's possible for us to remove the async_trait, but we need to figure
+/// out how to handle the object safety.
 #[async_trait::async_trait]
 pub trait FileRead: Send + Unpin + 'static {
     /// Read file content with given range.
@@ -282,6 +287,11 @@ impl InputFile {
 }
 
 /// Trait for writing file.
+///
+/// # TODO
+///
+/// It's possible for us to remove the async_trait, but we need to figure
+/// out how to handle the object safety.
 #[async_trait::async_trait]
 pub trait FileWrite: Send + Unpin + 'static {
     /// Write bytes to file.
