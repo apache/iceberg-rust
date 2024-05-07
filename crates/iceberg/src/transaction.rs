@@ -213,12 +213,50 @@ impl<'a> FastAppendAction<'a> {
         })
     }
 
+    // Check if the partition value is compatible with the partition type.
+    fn validate_partition_value(
+        partition_value: &Struct,
+        partition_type: &StructType,
+    ) -> Result<()> {
+        if partition_value.fields().len() != partition_type.fields().len() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Partition value is not compatitable with partition type",
+            ));
+        }
+        if partition_value
+            .fields()
+            .iter()
+            .zip(partition_type.fields())
+            .any(|(field, field_type)| !field_type.field_type.compatible(field))
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Partition value is not compatitable partition type",
+            ));
+        }
+        Ok(())
+    }
+
     /// Add data files to the snapshot.
     pub fn add_data_files(
         &mut self,
-        data_file: impl IntoIterator<Item = DataFile>,
+        data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        self.appended_data_files.extend(data_file);
+        let data_files: Vec<DataFile> = data_files.into_iter().collect();
+        for data_file in &data_files {
+            if data_file.content_type() != crate::spec::DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Only data content type is allowed for fast append",
+                ));
+            }
+            Self::validate_partition_value(
+                data_file.partition(),
+                &self.partition_spec.partition_type(&self.schema)?,
+            )?;
+        }
+        self.appended_data_files.extend(data_files);
         Ok(self)
     }
 
