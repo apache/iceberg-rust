@@ -32,6 +32,7 @@ use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use port_scanner::scan_port_addr;
 use std::collections::HashMap;
@@ -168,6 +169,26 @@ async fn test_append_data_file() {
     .unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
+
+    // check parquet file schema
+    let batch_stream_builder = ParquetRecordBatchStreamBuilder::new(
+        table
+            .file_io()
+            .new_input(data_file[0].file_path())
+            .unwrap()
+            .reader()
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let field_ids: Vec<i32> = batch_stream_builder
+        .parquet_schema()
+        .columns()
+        .iter()
+        .map(|col| col.self_type().get_basic_info().id())
+        .collect();
+    assert_eq!(field_ids, vec![1, 2, 3]);
 
     // commit result
     let tx = Transaction::new(&table);

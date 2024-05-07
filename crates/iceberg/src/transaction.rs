@@ -357,6 +357,8 @@ impl<'a> FastAppendAction<'a> {
         writer.write(manifest).await
     }
 
+    // # TODO:
+    // Complete the summary.
     fn summary(&self) -> Summary {
         Summary {
             operation: crate::spec::Operation::Append,
@@ -740,7 +742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_snapshot_actio() {
+    async fn test_merge_snapshot_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
 
