@@ -1575,6 +1575,9 @@ impl Struct {
     /// returns true if the field at position `index` is null
     pub fn is_null_at_index(&self, index: usize) -> bool {
         self.null_bitmap[index]
+    /// Return fields in the struct.
+    pub fn fields(&self) -> &[Literal] {
+        &self.fields
     }
 }
 
