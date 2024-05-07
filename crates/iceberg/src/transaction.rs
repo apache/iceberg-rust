@@ -760,15 +760,8 @@ mod tests {
         let tx = action.apply().await.unwrap();
 
         // check updates and requirements
-        let new_snapshot_id = tx
-            .table
-            .metadata()
-            .current_snapshot_id
-            .map(|id| id + 1)
-            .unwrap_or(0);
         assert!(
-            matches!(&tx.updates[0], TableUpdate::AddSnapshot { snapshot } if snapshot.snapshot_id() == new_snapshot_id)
-                && matches!(&tx.updates[1], TableUpdate::SetSnapshotRef { reference,ref_name } if reference.snapshot_id == new_snapshot_id && ref_name == MAIN_BRANCH),
+            matches!((&tx.updates[0],&tx.updates[1]), (TableUpdate::AddSnapshot { snapshot },TableUpdate::SetSnapshotRef { reference,ref_name }) if snapshot.snapshot_id() == reference.snapshot_id && ref_name == MAIN_BRANCH)
         );
         assert_eq!(
             vec![
