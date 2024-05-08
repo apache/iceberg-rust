@@ -68,7 +68,6 @@ impl ManifestList {
                 from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type_provider)
             }
             FormatVersion::V2 => {
-                //let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
                 let reader = Reader::new(bs)?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type_provider)
