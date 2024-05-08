@@ -68,7 +68,8 @@ impl ManifestList {
                 from_value::<_serde::ManifestListV1>(&values)?.try_into(partition_type_provider)
             }
             FormatVersion::V2 => {
-                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
+                //let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V2, bs)?;
+                let reader = Reader::new(bs)?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV2>(&values)?.try_into(partition_type_provider)
             }
@@ -802,6 +803,9 @@ pub(super) mod _serde {
         pub key_metadata: Option<ByteBuf>,
     }
 
+    // Aliases were added to fields that were renemaed in Iceberg  1.5.0 (https://github.com/apache/iceberg/pull/5338), in order to support both conventions/versions.
+    // In the current implementation deserialization is done using field names, and therefore these fields may appear as either.
+    // see issue that raised this here: https://github.com/apache/iceberg-rust/issues/338
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     pub(super) struct ManifestFileV2 {
         pub manifest_path: String,
@@ -811,8 +815,11 @@ pub(super) mod _serde {
         pub sequence_number: i64,
         pub min_sequence_number: i64,
         pub added_snapshot_id: i64,
+        #[serde(alias = "added_data_files_count", alias = "added_files_count")]
         pub added_data_files_count: i32,
+        #[serde(alias = "existing_data_files_count", alias = "existing_files_count")]
         pub existing_data_files_count: i32,
+        #[serde(alias = "deleted_data_files_count", alias = "deleted_files_count")]
         pub deleted_data_files_count: i32,
         pub added_rows_count: i64,
         pub existing_rows_count: i64,
