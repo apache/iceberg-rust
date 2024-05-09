@@ -101,6 +101,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         Ok(self.field_summary_for_reference(reference).contains_null)
     }
 
+    #[allow(clippy::bool_comparison)]
     fn not_null(
         &mut self,
         reference: &BoundReference,
@@ -115,7 +116,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if all_null && reference.field().field_type.is_floating_type() {
             // floating point types may include NaN values, which we check separately.
             // In case bounds don't include NaN value, contains_nan needs to be checked against.
-            all_null = field.contains_nan.is_some_and(|x| !x);
+            all_null = field.contains_nan.is_some_and(|x| x == false);
         }
 
         Ok(!all_null)
@@ -134,13 +135,14 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         }
     }
 
+    #[allow(clippy::bool_comparison)]
     fn not_nan(
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if field.contains_nan.is_some_and(|x| x)
+        if field.contains_nan.is_some_and(|x| x == true)
             && !field.contains_null
             && field.lower_bound.is_none()
         {
@@ -248,7 +250,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
         let prefix_len = prefix.chars().count();
 
-        if let Some(lower_bound) = field.lower_bound.clone() {
+        if let Some(lower_bound) = &field.lower_bound {
             let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -263,7 +265,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             }
         }
 
-        if let Some(upper_bound) = field.upper_bound.clone() {
+        if let Some(upper_bound) = &field.upper_bound {
             let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
