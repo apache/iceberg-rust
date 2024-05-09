@@ -242,7 +242,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         let PrimitiveLiteral::String(prefix) = datum.literal() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                "Cannot perfom starts_with on non-string value",
+                "Cannot perform starts_with on non-string value",
             ));
         };
 
@@ -252,7 +252,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    "Cannot perfom starts_with on non-string lower bound",
+                    "Cannot perform starts_with on non-string lower bound",
                 ));
             };
 
@@ -267,7 +267,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    "Cannot perfom starts_with on non-string upper bound",
+                    "Cannot perform starts_with on non-string upper bound",
                 ));
             };
 
@@ -296,7 +296,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         let PrimitiveLiteral::String(prefix) = datum.literal() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                "Cannot perfom not_starts_with on non-string value",
+                "Cannot perform not_starts_with on non-string value",
             ));
         };
 
@@ -308,7 +308,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
-                    "Cannot perfom not_starts_with on non-string lower bound",
+                    "Cannot perform not_starts_with on non-string lower bound",
                 ));
             };
 
@@ -324,7 +324,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                     else {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            "Cannot perfom not_starts_with on non-string upper bound",
+                            "Cannot perform not_starts_with on non-string upper bound",
                         ));
                     };
 
