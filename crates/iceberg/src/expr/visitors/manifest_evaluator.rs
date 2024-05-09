@@ -306,7 +306,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
         // not_starts_with will match unless all values must start with the prefix. This happens when
         // the lower and upper bounds both start with the prefix.
-        if let Some(lower_bound) = field.lower_bound.clone() {
+        if let Some(lower_bound) = &field.lower_bound {
             let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -321,7 +321,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
             let truncated_lower_bound = String::from(&lower_bound[..prefix_len]);
             if prefix == &truncated_lower_bound {
-                if let Some(upper_bound) = field.upper_bound.clone() {
+                if let Some(upper_bound) = &field.upper_bound {
                     let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound
                     else {
                         return Err(Error::new(
