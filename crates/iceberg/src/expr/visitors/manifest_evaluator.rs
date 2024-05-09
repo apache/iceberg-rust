@@ -17,9 +17,13 @@
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{Datum, FieldSummary, ManifestFile};
-use crate::Result;
+use crate::spec::{Datum, FieldSummary, Literal, ManifestFile, PrimitiveLiteral, Type};
+use crate::{Error, ErrorKind, Result};
 use fnv::FnvHashSet;
+
+const IN_PREDICATE_LIMIT: usize = 200;
+const ROWS_MIGHT_MATCH: Result<bool> = Ok(true);
+const ROWS_CANT_MATCH: Result<bool> = Ok(false);
 
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
@@ -42,7 +46,7 @@ impl ManifestEvaluator {
     /// the scan's filter.
     pub(crate) fn eval(&self, manifest_file: &ManifestFile) -> Result<bool> {
         if manifest_file.partitions.is_empty() {
-            return Ok(true);
+            return ROWS_MIGHT_MATCH;
         }
 
         let mut evaluator = ManifestFilterVisitor::new(self, &manifest_file.partitions);
@@ -70,59 +74,79 @@ impl<'a> ManifestFilterVisitor<'a> {
 impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     type T = bool;
 
-    fn always_true(&mut self) -> crate::Result<bool> {
-        Ok(true)
+    fn always_true(&mut self) -> Result<bool> {
+        ROWS_MIGHT_MATCH
     }
 
-    fn always_false(&mut self) -> crate::Result<bool> {
-        Ok(false)
+    fn always_false(&mut self) -> Result<bool> {
+        ROWS_CANT_MATCH
     }
 
-    fn and(&mut self, lhs: bool, rhs: bool) -> crate::Result<bool> {
+    fn and(&mut self, lhs: bool, rhs: bool) -> Result<bool> {
         Ok(lhs && rhs)
     }
 
-    fn or(&mut self, lhs: bool, rhs: bool) -> crate::Result<bool> {
+    fn or(&mut self, lhs: bool, rhs: bool) -> Result<bool> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> crate::Result<bool> {
+    fn not(&mut self, inner: bool) -> Result<bool> {
         Ok(!inner)
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        Ok(self.field_summary_for_reference(reference).contains_null)
+    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+        if self.field_summary_for_reference(reference).contains_null {
+            return ROWS_CANT_MATCH;
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn not_null(
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        if self.contains_nulls_only(field_summary, reference.field().field_type.as_ref()) {
+            return ROWS_CANT_MATCH;
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        Ok(self
-            .field_summary_for_reference(reference)
-            .contains_nan
-            .is_some())
+    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        if let Some(contains_nan) = field_summary.contains_nan {
+            if !contains_nan {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        if self.contains_nulls_only(field_summary, reference.field().field_type.as_ref()) {
+            return ROWS_CANT_MATCH;
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+        let FieldSummary {
+            contains_nan,
+            contains_null,
+            lower_bound,
+            ..
+        } = self.field_summary_for_reference(reference);
+
+        if let Some(contains_nan) = contains_nan {
+            if *contains_nan && !contains_null && lower_bound.is_none() {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn less_than(
@@ -130,8 +154,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        self.visit_inequality(reference, literal, PartialOrd::lt, true)
     }
 
     fn less_than_or_eq(
@@ -139,8 +163,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        self.visit_inequality(reference, literal, PartialOrd::le, true)
     }
 
     fn greater_than(
@@ -148,8 +172,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        self.visit_inequality(reference, literal, PartialOrd::gt, false)
     }
 
     fn greater_than_or_eq(
@@ -157,8 +181,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        self.visit_inequality(reference, literal, PartialOrd::ge, false)
     }
 
     fn eq(
@@ -166,8 +190,20 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        if let Ok(result) = self.visit_inequality(reference, literal, PartialOrd::lt, true) {
+            if !result {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        if let Ok(result) = self.visit_inequality(reference, literal, PartialOrd::gt, false) {
+            if !result {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn not_eq(
@@ -175,8 +211,10 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        // because the bounds are not necessarily a min or max value, this cannot be answered using
+        // them. notEq(col, X) with (X, Y) doesn't guarantee that X is a value in col.
+        ROWS_MIGHT_MATCH
     }
 
     fn starts_with(
@@ -184,8 +222,57 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        if self.contains_nulls_only(field_summary, reference.field().field_type.as_ref()) {
+            return ROWS_CANT_MATCH;
+        }
+
+        let PrimitiveLiteral::String(datum) = literal.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string values",
+            ));
+        };
+
+        if let Some(lower_bound) = &field_summary.lower_bound {
+            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use StartsWith operator on non-string lower_bound value",
+                ));
+            };
+
+            let prefix_length = lower_bound.chars().count().min(datum.chars().count());
+
+            // truncate lower bound so that its length
+            // is not greater than the length of prefix
+            let truncated_lower_bound = lower_bound.chars().take(prefix_length).collect::<String>();
+            if datum < &truncated_lower_bound {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        if let Some(upper_bound) = &field_summary.upper_bound {
+            let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use StartsWith operator on non-string upper_bound value",
+                ));
+            };
+
+            let prefix_length = upper_bound.chars().count().min(datum.chars().count());
+
+            // truncate upper bound so that its length
+            // is not greater than the length of prefix
+            let truncated_upper_bound = upper_bound.chars().take(prefix_length).collect::<String>();
+            if datum > &truncated_upper_bound {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn not_starts_with(
@@ -193,8 +280,72 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        if field_summary.contains_null {
+            return ROWS_MIGHT_MATCH;
+        }
+
+        let PrimitiveLiteral::String(literal) = literal.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string values",
+            ));
+        };
+
+        // notStartsWith will match unless all values start with the prefix. This happens when
+        // the lower and upper bounds both start with the prefix.
+        if let Some(lower_bound) = &field_summary.lower_bound {
+            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use StartsWith operator on non-string lower_bound value",
+                ));
+            };
+
+            if let Some(upper_bound) = &field_summary.upper_bound {
+                let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "Cannot use StartsWith operator on non-string upper_bound value",
+                    ));
+                };
+
+                let literal_length = literal.chars().count();
+                let lower_bound_length = lower_bound.chars().count();
+
+                // if lower is shorter than the prefix, it can't start with the prefix
+                if lower_bound_length < literal_length {
+                    return ROWS_MIGHT_MATCH;
+                }
+
+                // truncate lower bound so that its length
+                // is not greater than the length of prefix
+                let truncated_lower_bound =
+                    lower_bound.chars().take(literal_length).collect::<String>();
+
+                if truncated_lower_bound.eq(literal) {
+                    let upper_bound_length = upper_bound.chars().count();
+
+                    // the lower bound starts with the prefix; check the upper bound
+                    // if upper is shorter than the prefix, it can't start with the prefix
+                    if upper_bound_length < literal_length {
+                        return ROWS_MIGHT_MATCH;
+                    }
+
+                    let truncated_upper_bound =
+                        upper_bound.chars().take(literal_length).collect::<String>();
+
+                    if truncated_upper_bound.eq(literal) {
+                        // both bounds match the prefix, so all rows must match the prefix and none do not match
+                        return ROWS_CANT_MATCH;
+                    }
+                }
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn r#in(
@@ -202,8 +353,58 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        let Some(lower_bound) = &field_summary.lower_bound else {
+            // values are all null and `literals` cannot contain null.
+            return ROWS_CANT_MATCH;
+        };
+
+        if literals.len() > IN_PREDICATE_LIMIT {
+            // skip evaluating the predicate if the number of values is too big
+            return ROWS_MIGHT_MATCH;
+        }
+
+        if let Some(lower_bound) = &field_summary.lower_bound {
+            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use StartsWith operator on non-string lower_bound value",
+                ));
+            };
+
+            let lower_bound_lit = PrimitiveLiteral::String(lower_bound.to_string());
+
+            let all_literals_less_than_lower_bound = literals
+                .iter()
+                .all(|lit| lit.literal().lt(&lower_bound_lit));
+
+            if all_literals_less_than_lower_bound {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        if let Some(upper_bound) = &field_summary.upper_bound {
+            let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use StartsWith operator on non-string upper_bound value",
+                ));
+            };
+
+            let upper_bound_lit = PrimitiveLiteral::String(upper_bound.to_string());
+
+            let all_literals_greater_than_upper_bound = literals
+                .iter()
+                .all(|lit| lit.literal().gt(&upper_bound_lit));
+
+            if all_literals_greater_than_upper_bound {
+                return ROWS_CANT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn not_in(
@@ -211,8 +412,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        todo!()
+    ) -> Result<bool> {
+        ROWS_MIGHT_MATCH
     }
 }
 
@@ -220,6 +421,51 @@ impl ManifestFilterVisitor<'_> {
     fn field_summary_for_reference(&self, reference: &BoundReference) -> &FieldSummary {
         let pos = reference.accessor().position();
         &self.partitions[pos]
+    }
+
+    fn contains_nulls_only(&self, summary: &FieldSummary, type_id: &Type) -> bool {
+        // containsNull encodes whether at least one partition value is null,
+        // lowerBound is null if all partition values are null
+        let all_null = summary.contains_null && summary.lower_bound.is_none();
+
+        if all_null && (type_id.is_floating_type()) {
+            // floating point types may include NaN values, which we check separately.
+            // In case bounds don't include NaN value, containsNaN needs to be checked against.
+            if let Some(contains_nan) = summary.contains_nan {
+                return !contains_nan;
+            }
+            return false;
+        }
+
+        all_null
+    }
+
+    fn visit_inequality(
+        &mut self,
+        reference: &BoundReference,
+        datum: &Datum,
+        cmp_fn: fn(&PrimitiveLiteral, &PrimitiveLiteral) -> bool,
+        use_lower_bound: bool,
+    ) -> Result<bool> {
+        let field_summary = self.field_summary_for_reference(reference);
+
+        let bound = if use_lower_bound {
+            &field_summary.lower_bound
+        } else {
+            &field_summary.upper_bound
+        };
+
+        let Some(bound) = bound else {
+            return ROWS_CANT_MATCH;
+        };
+
+        if let Literal::Primitive(bound) = bound {
+            if cmp_fn(bound, datum.literal()) {
+                return ROWS_MIGHT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 }
 
