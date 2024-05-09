@@ -32,6 +32,8 @@ services:
       - minio
     links:
       - minio:icebergdata.minio
+    ports:
+      - 8181:8181
     expose:
       - 8181
 
@@ -41,6 +43,8 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=minio
+    ports:
+      - 9001:9001
     expose:
       - 9001
       - 9000
