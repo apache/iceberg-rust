@@ -22,23 +22,19 @@ use crate::Result;
 use crate::{Error, ErrorKind};
 use fnv::FnvHashSet;
 
-#[derive(Debug)]
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
 ///
 /// Used by [`TableScan`] to prune the list of [`ManifestFile`]s
 /// in which data might be found that matches the TableScan's filter.
+#[derive(Debug)]
 pub(crate) struct ManifestEvaluator {
     partition_filter: BoundPredicate,
-    case_sensitive: bool,
 }
 
 impl ManifestEvaluator {
-    pub(crate) fn new(partition_filter: BoundPredicate, case_sensitive: bool) -> Self {
-        Self {
-            partition_filter,
-            case_sensitive,
-        }
+    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
+        Self { partition_filter }
     }
 
     /// Evaluate this `ManifestEvaluator`'s filter predicate against the
@@ -621,7 +617,7 @@ mod test {
 
         let filter = Predicate::AlwaysTrue.bind(schema.clone(), case_sensitive)?;
 
-        assert!(ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?);
+        assert!(ManifestEvaluator::new(filter).eval(&manifest_file)?);
 
         Ok(())
     }
@@ -635,7 +631,7 @@ mod test {
 
         let filter = Predicate::AlwaysFalse.bind(schema.clone(), case_sensitive)?;
 
-        assert!(!ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?);
+        assert!(!ManifestEvaluator::new(filter).eval(&manifest_file)?);
 
         Ok(())
     }
@@ -654,8 +650,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nulls_missing_nan_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            !ManifestEvaluator::new(all_nulls_missing_nan_filter).eval(&manifest_file)?,
             "Should skip: all nulls column with non-floating type contains all null"
         );
 
@@ -666,8 +661,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_float_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_missing_nan_float_filter).eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -678,7 +672,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(some_nulls_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(some_nulls_filter).eval(&manifest_file)?,
             "Should read: column with some nulls contains a non-null value"
         );
 
@@ -690,7 +684,7 @@ mod test {
         .bind(schema.clone(), case_sensitive)?;
 
         assert!(
-            ManifestEvaluator::new(no_nulls_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(no_nulls_filter).eval(&manifest_file)?,
             "Should read: non-null column contains a non-null value"
         );
 
@@ -711,8 +705,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_missing_nan_filter).eval(&manifest_file)?,
             "Should read: at least one null value in all null column"
         );
 
@@ -723,7 +716,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(some_nulls_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(some_nulls_filter).eval(&manifest_file)?,
             "Should read: column with some nulls contains a null value"
         );
 
@@ -735,7 +728,7 @@ mod test {
         .bind(schema.clone(), case_sensitive)?;
 
         assert!(
-            !ManifestEvaluator::new(no_nulls_filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(no_nulls_filter).eval(&manifest_file)?,
             "Should skip: non-null column contains no null values"
         );
 
@@ -746,8 +739,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
             "Should read: both_nan_and_null column contains no null values"
         );
 
@@ -768,7 +760,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(float_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(float_filter).eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -779,7 +771,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_double_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_double_filter).eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -790,8 +782,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_missing_nan_float_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_missing_nan_float_filter).eval(&manifest_file)?,
             "Should read: no NaN information may indicate presence of NaN value"
         );
 
@@ -802,8 +793,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nulls_no_nans_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            !ManifestEvaluator::new(all_nulls_no_nans_filter).eval(&manifest_file)?,
             "Should skip: no nan column doesn't contain nan value"
         );
 
@@ -814,7 +804,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nans_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nans_filter).eval(&manifest_file)?,
             "Should read: all_nans column contains nan value"
         );
 
@@ -825,8 +815,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
             "Should read: both_nan_and_null column contains nan value"
         );
 
@@ -837,7 +826,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(no_nan_or_null_filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(no_nan_or_null_filter).eval(&manifest_file)?,
             "Should skip: no_nan_or_null column doesn't contain nan value"
         );
 
@@ -858,7 +847,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(float_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(float_filter).eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -869,7 +858,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_double_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_double_filter).eval(&manifest_file)?,
             "Should read: all null column contains non nan value"
         );
 
@@ -880,8 +869,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(all_nulls_no_nans_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(all_nulls_no_nans_filter).eval(&manifest_file)?,
             "Should read: no_nans column contains non nan value"
         );
 
@@ -892,7 +880,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(all_nans_filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(all_nans_filter).eval(&manifest_file)?,
             "Should skip: all nans column doesn't contain non nan value"
         );
 
@@ -903,8 +891,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(both_nan_and_null_filter, case_sensitive)
-                .eval(&manifest_file)?,
+            ManifestEvaluator::new(both_nan_and_null_filter).eval(&manifest_file)?,
             "Should read: both_nan_and_null nans column contains non nan value"
         );
 
@@ -915,7 +902,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(no_nan_or_null_filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(no_nan_or_null_filter).eval(&manifest_file)?,
             "Should read: no_nan_or_null column contains non nan value"
         );
 
@@ -941,7 +928,7 @@ mod test {
         )))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: no information on if there are nan value in float column"
         );
 
@@ -967,7 +954,7 @@ mod test {
         )))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should skip: or(false, false)"
         );
 
@@ -989,7 +976,7 @@ mod test {
         .not()
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: not(false)"
         );
 
@@ -1001,7 +988,7 @@ mod test {
         .not()
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should skip: not(true)"
         );
 
@@ -1022,7 +1009,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id range below lower bound (5 < 30)"
         );
 
@@ -1043,7 +1030,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id range below lower bound (5 < 30)"
         );
 
@@ -1064,7 +1051,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id range above upper bound (85 < 79)"
         );
 
@@ -1085,7 +1072,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id range above upper bound (85 < 79)"
         );
 
@@ -1096,7 +1083,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: one possible id"
         );
 
@@ -1117,7 +1104,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id below lower bound"
         );
 
@@ -1128,7 +1115,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: id equal to lower bound"
         );
 
@@ -1149,7 +1136,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: id below lower bound"
         );
 
@@ -1173,7 +1160,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: id below lower bound (5 < 30, 6 < 30)"
         );
 
@@ -1187,7 +1174,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: id equal to lower bound (30 == 30)"
         );
 
@@ -1211,7 +1198,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: id below lower bound (5 < 30, 6 < 30)"
         );
 
@@ -1232,7 +1219,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: range matches"
         );
 
@@ -1243,7 +1230,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should skip: range doesn't match"
         );
 
@@ -1264,7 +1251,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should read: range matches"
         );
 
@@ -1275,7 +1262,7 @@ mod test {
         ))
         .bind(schema.clone(), case_sensitive)?;
         assert!(
-            !ManifestEvaluator::new(filter, case_sensitive).eval(&manifest_file)?,
+            !ManifestEvaluator::new(filter).eval(&manifest_file)?,
             "Should not read: all values start with the prefix"
         );
 
