@@ -802,7 +802,7 @@ pub(super) mod _serde {
         pub key_metadata: Option<ByteBuf>,
     }
 
-    // Aliases were added to fields that were renemaed in Iceberg  1.5.0 (https://github.com/apache/iceberg/pull/5338), in order to support both conventions/versions.
+    // Aliases were added to fields that were renamed in Iceberg  1.5.0 (https://github.com/apache/iceberg/pull/5338), in order to support both conventions/versions.
     // In the current implementation deserialization is done using field names, and therefore these fields may appear as either.
     // see issue that raised this here: https://github.com/apache/iceberg-rust/issues/338
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
