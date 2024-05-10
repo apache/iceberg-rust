@@ -22,7 +22,7 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
-use futures::TryFutureExt;
+use futures::{try_join, TryFutureExt};
 use parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::file::metadata::ParquetMetaData;
@@ -100,10 +100,7 @@ impl ArrowReader {
             while let Some(Ok(task)) = tasks.next().await {
                 let parquet_file = file_io
                     .new_input(task.data().data_file().file_path())?;
-                let parquet_metadata = parquet_file.metadata().await?;
-                let parquet_reader =parquet_file
-                    .reader()
-                    .await?;
+                let (parquet_metadata, parquet_reader) = try_join!(parquet_file.metadata(), parquet_file.reader())?;
                 let arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
                 let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(arrow_file_reader)
