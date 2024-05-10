@@ -17,7 +17,7 @@
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{Datum, FieldSummary, Literal, ManifestFile, PrimitiveLiteral};
+use crate::spec::{Datum, FieldSummary, Literal, ManifestFile, PrimitiveLiteral, Type};
 use crate::Result;
 use crate::{Error, ErrorKind};
 use fnv::FnvHashSet;
@@ -101,7 +101,6 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         Ok(self.field_summary_for_reference(reference).contains_null)
     }
 
-    #[allow(clippy::bool_comparison)]
     fn not_null(
         &mut self,
         reference: &BoundReference,
@@ -111,28 +110,29 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
-        let mut all_null: bool = field.contains_null && field.lower_bound.is_none();
-
-        if all_null && reference.field().field_type.is_floating_type() {
-            // floating point types may include NaN values, which we check separately.
-            // In case bounds don't include NaN value, contains_nan needs to be checked against.
-            all_null = field.contains_nan.is_some_and(|x| x == false);
+        if self.are_all_null(field, &reference.field().field_type) {
+            ROWS_CANNOT_MATCH
+        } else {
+            ROWS_MIGHT_MATCH
         }
-
-        Ok(!all_null)
     }
 
+    #[allow(clippy::bool_comparison)]
     fn is_nan(
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if let Some(contains_nan) = field.contains_nan {
-            Ok(contains_nan)
-        } else {
-            ROWS_MIGHT_MATCH
+        if field.contains_nan.is_some_and(|x| x == false) {
+            return ROWS_CANNOT_MATCH;
         }
+
+        if self.are_all_null(field, &reference.field().field_type) {
+            return ROWS_CANNOT_MATCH;
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     #[allow(clippy::bool_comparison)]
@@ -159,8 +159,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if let Some(lower_bound) = &field.lower_bound {
-            Ok(lower_bound < &Literal::from(datum.clone()))
+        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
+            Ok(lower_bound < datum.literal())
         } else {
             ROWS_CANNOT_MATCH
         }
@@ -173,8 +173,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if let Some(lower_bound) = &field.lower_bound {
-            Ok(lower_bound <= &Literal::from(datum.clone()))
+        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
+            Ok(lower_bound <= datum.literal())
         } else {
             ROWS_CANNOT_MATCH
         }
@@ -187,8 +187,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if let Some(upper_bound) = &field.upper_bound {
-            Ok(upper_bound > &Literal::from(datum.clone()))
+        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
+            Ok(upper_bound > datum.literal())
         } else {
             ROWS_CANNOT_MATCH
         }
@@ -201,8 +201,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if let Some(upper_bound) = &field.upper_bound {
-            Ok(upper_bound >= &Literal::from(datum.clone()))
+        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
+            Ok(upper_bound >= datum.literal())
         } else {
             ROWS_CANNOT_MATCH
         }
@@ -259,7 +259,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             };
 
             let min_len = lower_bound.chars().count().min(prefix_len);
-            let truncated_lower_bound = String::from(&lower_bound[..min_len]);
+            let truncated_lower_bound = lower_bound.chars().take(min_len).collect::<String>();
             if prefix < &truncated_lower_bound {
                 return ROWS_CANNOT_MATCH;
             }
@@ -274,7 +274,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             };
 
             let min_len = upper_bound.chars().count().min(prefix_len);
-            let truncated_upper_bound = String::from(&upper_bound[..min_len]);
+            let truncated_upper_bound = upper_bound.chars().take(min_len).collect::<String>();
             if prefix > &truncated_upper_bound {
                 return ROWS_CANNOT_MATCH;
             }
@@ -319,7 +319,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 return ROWS_MIGHT_MATCH;
             }
 
-            let truncated_lower_bound = String::from(&lower_bound[..prefix_len]);
+            let truncated_lower_bound = lower_bound.chars().take(prefix_len).collect::<String>();
             if prefix == &truncated_lower_bound {
                 if let Some(upper_bound) = &field.upper_bound {
                     let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound
@@ -335,7 +335,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                         return ROWS_MIGHT_MATCH;
                     }
 
-                    let truncated_upper_bound = String::from(&upper_bound[..prefix_len]);
+                    let truncated_upper_bound =
+                        upper_bound.chars().take(prefix_len).collect::<String>();
                     if prefix == &truncated_upper_bound {
                         return ROWS_CANNOT_MATCH;
                     }
@@ -361,19 +362,16 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        if literals
-            .iter()
-            .all(|datum| field.lower_bound.as_ref().unwrap() > &Literal::from(datum.clone()))
-        {
-            return ROWS_CANNOT_MATCH;
+        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
+            if literals.iter().all(|datum| lower_bound > datum.literal()) {
+                return ROWS_CANNOT_MATCH;
+            }
         }
 
-        if field.upper_bound.is_some()
-            && literals
-                .iter()
-                .all(|datum| field.upper_bound.as_ref().unwrap() < &Literal::from(datum.clone()))
-        {
-            return ROWS_CANNOT_MATCH;
+        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
+            if literals.iter().all(|datum| upper_bound < datum.literal()) {
+                return ROWS_CANNOT_MATCH;
+            }
         }
 
         ROWS_MIGHT_MATCH
@@ -395,6 +393,21 @@ impl ManifestFilterVisitor<'_> {
     fn field_summary_for_reference(&self, reference: &BoundReference) -> &FieldSummary {
         let pos = reference.accessor().position();
         &self.partitions[pos]
+    }
+
+    #[allow(clippy::bool_comparison)]
+    fn are_all_null(&self, field: &FieldSummary, r#type: &Type) -> bool {
+        // contains_null encodes whether at least one partition value is null,
+        // lowerBound is null if all partition values are null
+        let mut all_null: bool = field.contains_null && field.lower_bound.is_none();
+
+        if all_null && r#type.is_floating_type() {
+            // floating point types may include NaN values, which we check separately.
+            // In case bounds don't include NaN value, contains_nan needs to be checked against.
+            all_null = field.contains_nan.is_some_and(|x| x == false);
+        }
+
+        all_null
     }
 }
 
