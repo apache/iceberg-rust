@@ -23,18 +23,24 @@ use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, Schema, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, Schema,
+    SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use arrow_array::RecordBatch;
-use async_stream::try_stream;
+use futures::channel::mpsc::{channel, Sender};
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt, TryStreamExt};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::spawn;
+
+const CHANNEL_BUFFER_SIZE: usize = 10;
+const CONCURRENCY_LIMIT_MANIFEST_FILES: usize = 10;
+const CONCURRENCY_LIMIT_MANIFEST_ENTRIES: usize = 10;
+const SUPPORTED_MANIFEST_FILE_CONTENT_TYPES: [ManifestContentType; 1] = [ManifestContentType::Data];
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
@@ -189,66 +195,20 @@ impl TableScan {
             self.case_sensitive,
         )?;
 
-        let mut partition_filter_cache = PartitionFilterCache::new();
-        let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
+        let (sender, receiver) = channel(CHANNEL_BUFFER_SIZE);
 
-        Ok(try_stream! {
-            let manifest_list = context
-                .snapshot
-                .load_manifest_list(&context.file_io, &context.table_metadata)
-                .await?;
+        let manifest_list = context
+            .snapshot
+            .load_manifest_list(&context.file_io, &context.table_metadata)
+            .await?;
 
-            for entry in manifest_list.entries() {
-                if !Self::content_type_is_data(entry) {
-                    continue;
-                }
+        spawn(async move {
+            let _ = ConcurrentFileScanStreamContext::new(context, sender, manifest_list)
+                .run()
+                .await;
+        });
 
-                let partition_spec_id = entry.partition_spec_id;
-
-                let partition_filter = partition_filter_cache.get(
-                    partition_spec_id,
-                    &context,
-                )?;
-
-                if let Some(partition_filter) = partition_filter {
-                    let manifest_evaluator = manifest_evaluator_cache.get(
-                        partition_spec_id,
-                        partition_filter,
-                    );
-
-                    if !manifest_evaluator.eval(entry)? {
-                        continue;
-                    }
-                }
-
-                let manifest = entry.load_manifest(&context.file_io).await?;
-                let mut manifest_entries_stream =
-                    futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
-
-                while let Some(manifest_entry) = manifest_entries_stream.next().await {
-                    // TODO: Apply ExpressionEvaluator
-                    // TODO: Apply InclusiveMetricsEvaluator::eval()
-
-                    match manifest_entry.content_type() {
-                        DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
-                            yield Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                "Delete files are not supported yet.",
-                            ))?;
-                        }
-                        DataContentType::Data => {
-                            let scan_task: Result<FileScanTask> = Ok(FileScanTask {
-                                data_manifest_entry: manifest_entry.clone(),
-                                start: 0,
-                                length: manifest_entry.file_size_in_bytes(),
-                            });
-                            yield scan_task?;
-                        }
-                    }
-                }
-            }
-        }
-        .boxed())
+        return Ok(receiver.boxed());
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -302,13 +262,116 @@ impl TableScan {
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
+}
 
-    /// Checks whether the [`ManifestContentType`] is `Data` or not.
-    fn content_type_is_data(entry: &ManifestFile) -> bool {
-        if let ManifestContentType::Data = entry.content {
-            return true;
+#[derive(Debug)]
+struct ConcurrentFileScanStreamContext {
+    context: FileScanStreamContext,
+    sender: Sender<Result<FileScanTask>>,
+    manifest_list: ManifestList,
+    manifest_evaluator_cache: ManifestEvaluatorCache,
+    partition_filter_cache: PartitionFilterCache,
+}
+
+impl ConcurrentFileScanStreamContext {
+    fn new(
+        context: FileScanStreamContext,
+        sender: Sender<Result<FileScanTask>>,
+        manifest_list: ManifestList,
+    ) -> Self {
+        ConcurrentFileScanStreamContext {
+            context,
+            sender,
+            manifest_list,
+            manifest_evaluator_cache: ManifestEvaluatorCache::new(),
+            partition_filter_cache: PartitionFilterCache::new(),
         }
-        false
+    }
+
+    async fn run(&mut self) -> Result<()> {
+        let file_io = self.context.file_io.clone();
+        let sender = self.sender.clone();
+
+        let mut filtered_manifest_files = vec![];
+        for manifest_file in self.manifest_list.entries() {
+            if !SUPPORTED_MANIFEST_FILE_CONTENT_TYPES.contains(&manifest_file.content) {
+                continue;
+            }
+
+            let partition_spec_id = manifest_file.partition_spec_id;
+
+            let partition_filter = self
+                .partition_filter_cache
+                .get(partition_spec_id, &self.context)?;
+
+            if let Some(partition_filter) = partition_filter {
+                let manifest_evaluator = self
+                    .manifest_evaluator_cache
+                    .get(partition_spec_id, partition_filter);
+
+                if !manifest_evaluator.eval(manifest_file)? {
+                    continue;
+                }
+            }
+
+            filtered_manifest_files.push(Ok((manifest_file, file_io.clone(), sender.clone())));
+        }
+
+        futures::stream::iter(filtered_manifest_files)
+            .try_for_each_concurrent(
+                CONCURRENCY_LIMIT_MANIFEST_FILES,
+                Self::process_manifest_file,
+            )
+            .await
+    }
+
+    async fn process_manifest_file(
+        manifest_and_file_io_and_sender: (&ManifestFile, FileIO, Sender<Result<FileScanTask>>),
+    ) -> Result<()> {
+        let (manifest_file, file_io, sender) = manifest_and_file_io_and_sender;
+
+        let manifest = manifest_file.load_manifest(&file_io).await?;
+
+        let manifest_entries = manifest
+            .entries()
+            .iter()
+            .filter(|x| x.is_alive())
+            .map(|manifest_entry| Ok((manifest_entry, sender.clone())));
+
+        futures::stream::iter(manifest_entries)
+            .try_for_each_concurrent(
+                CONCURRENCY_LIMIT_MANIFEST_ENTRIES,
+                Self::process_manifest_entry,
+            )
+            .await
+    }
+
+    async fn process_manifest_entry(
+        manifest_entry_and_sender: (&ManifestEntryRef, Sender<Result<FileScanTask>>),
+    ) -> Result<()> {
+        let (manifest_entry, mut sender) = manifest_entry_and_sender;
+
+        if matches!(manifest_entry.content_type(), DataContentType::Data) {
+            Ok(sender
+                .send(Ok(Self::manifest_entry_to_file_scan_task(manifest_entry)))
+                .await?)
+        } else {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Files of type '{:?}' are not supported yet.",
+                    manifest_entry.content_type()
+                ),
+            ))
+        }
+    }
+
+    fn manifest_entry_to_file_scan_task(manifest_entry: &ManifestEntryRef) -> FileScanTask {
+        FileScanTask {
+            data_manifest_entry: manifest_entry.clone(),
+            start: 0,
+            length: manifest_entry.file_size_in_bytes(),
+        }
     }
 }
 
