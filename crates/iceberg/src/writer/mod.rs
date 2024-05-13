@@ -92,6 +92,7 @@ pub trait CurrentFileStatus {
 
 #[cfg(test)]
 mod tests {
+
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use arrow_select::concat::concat_batches;
@@ -174,6 +175,86 @@ mod tests {
             let expect = batch.column(k as usize).null_count() as u64;
             assert_eq!(v, expect);
         });
+
+        assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
+        data_file
+            .split_offsets
+            .iter()
+            .enumerate()
+            .for_each(|(i, &v)| {
+                let expect = metadata.row_groups()[i].file_offset().unwrap();
+                assert_eq!(v, expect);
+            });
+    }
+
+    pub(crate) async fn check_parquet_data_file_with_equality_delete_write(
+        file_io: &FileIO,
+        data_file: &DataFile,
+        batch: &RecordBatch,
+    ) {
+        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
+
+        // read the written file
+        let mut input_file = file_io
+            .new_input(data_file.file_path.clone())
+            .unwrap()
+            .reader()
+            .await
+            .unwrap();
+        let mut res = vec![];
+        let file_size = input_file.read_to_end(&mut res).await.unwrap();
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
+        let metadata = reader_builder.metadata().clone();
+
+        // check data
+        let reader = reader_builder.build().unwrap();
+        let batches = reader.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+        let res = concat_batches(&batch.schema(), &batches).unwrap();
+        assert_eq!(*batch, res);
+
+        // check metadata
+        let expect_column_num = batch.num_columns();
+
+        assert_eq!(
+            data_file.record_count,
+            metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.num_rows())
+                .sum::<i64>() as u64
+        );
+
+        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
+
+        assert_eq!(data_file.column_sizes.len(), expect_column_num);
+
+        for (index, id) in data_file.column_sizes().keys().sorted().enumerate() {
+            metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.columns())
+                .for_each(|column| {
+                    assert_eq!(
+                        *data_file.column_sizes.get(id).unwrap() as i64,
+                        column.get(index).unwrap().compressed_size()
+                    );
+                });
+        }
+
+        assert_eq!(data_file.value_counts.len(), expect_column_num);
+        data_file.value_counts.iter().for_each(|(_, &v)| {
+            let expect = metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.num_rows())
+                .sum::<i64>() as u64;
+            assert_eq!(v, expect);
+        });
+
+        for (index, id) in data_file.null_value_counts().keys().enumerate() {
+            let expect = batch.column(index).null_count() as u64;
+            assert_eq!(*data_file.null_value_counts.get(id).unwrap(), expect);
+        }
 
         assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
         data_file

@@ -218,11 +218,14 @@ mod test {
         io::FileIOBuilder,
         spec::DataFileFormat,
         writer::{
-            base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder,
+            base_writer::equality_delete_writer::{
+                EqualityDeleteFileWriterBuilder, FieldProjector,
+            },
             file_writer::{
                 location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
                 ParquetWriterBuilder,
             },
+            tests::check_parquet_data_file_with_equality_delete_write,
             IcebergWriter, IcebergWriterBuilder,
         },
     };
@@ -390,34 +393,46 @@ mod test {
             ))],
             None,
         ));
-        let to_write =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![col0, col1, col2, col3, col4])
-                .unwrap();
+        let columns = vec![col0, col1, col2, col3, col4];
+
+        let equality_ids = vec![1, 3];
+        let (projector, fields) =
+            FieldProjector::new(schema.fields(), &equality_ids, PARQUET_FIELD_ID_META_KEY)?;
+        let delete_schema = arrow_schema::Schema::new(fields);
+        let delete_schema_ref = Arc::new(delete_schema.clone());
 
         // prepare writer
+        let to_write = RecordBatch::try_new(Arc::new(schema.clone()), columns).unwrap();
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
-            to_write.schema(),
+            delete_schema_ref.clone(),
             file_io.clone(),
             location_gen,
             file_name_gen,
         );
-        let equality_ids = vec![1, 3];
+
         let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
             .build(EqualityDeleteWriterConfig::new(
                 equality_ids,
-                schema.clone(),
-                PARQUET_FIELD_ID_META_KEY,
+                projector,
+                delete_schema.clone(),
+                None,
             ))
             .await?;
         // write
         equality_delete_writer.write(to_write.clone()).await?;
         let res = equality_delete_writer.close().await?;
         assert_eq!(res.len(), 1);
-        let _data_file = res.into_iter().next().unwrap();
+        let data_file = res.into_iter().next().unwrap();
 
         // check
-        // check_parquet_data_file(&file_io, &data_file, &to_write).await;
+        let to_write_projected = equality_delete_writer.project_record_batch_columns(to_write)?;
+        check_parquet_data_file_with_equality_delete_write(
+            &file_io,
+            &data_file,
+            &to_write_projected,
+        )
+        .await;
         Ok(())
     }
 }
