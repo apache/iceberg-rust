@@ -17,13 +17,11 @@
 
 //! This module provide `EqualityDeleteWriter`.
 
-use std::sync::Arc;
-
 use arrow_array::{ArrayRef, RecordBatch, StructArray};
 use arrow_schema::{DataType, FieldRef, Fields, Schema, SchemaRef};
 use itertools::Itertools;
 
-use crate::spec::DataFile;
+use crate::spec::{DataFile, Struct};
 use crate::writer::file_writer::FileWriter;
 use crate::writer::{file_writer::FileWriterBuilder, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
@@ -44,17 +42,24 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
 /// Config for `EqualityDeleteWriter`.
 pub struct EqualityDeleteWriterConfig {
     equality_ids: Vec<usize>,
+    projector: FieldProjector,
     schema: SchemaRef,
-    column_id_meta_key: String,
+    partition_value: Struct,
 }
 
 impl EqualityDeleteWriterConfig {
     /// Create a new `DataFileWriterConfig` with equality ids.
-    pub fn new(equality_ids: Vec<usize>, schema: Schema, column_id_meta_key: &str) -> Self {
+    pub fn new(
+        equality_ids: Vec<usize>,
+        projector: FieldProjector,
+        schema: Schema,
+        partition_value: Option<Struct>,
+    ) -> Self {
         Self {
             equality_ids,
+            projector,
             schema: schema.into(),
-            column_id_meta_key: column_id_meta_key.to_string(),
+            partition_value: partition_value.unwrap_or(Struct::empty()),
         }
     }
 }
@@ -65,17 +70,12 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
     type C = EqualityDeleteWriterConfig;
 
     async fn build(self, config: Self::C) -> Result<Self::R> {
-        let (projector, fields) = FieldProjector::new(
-            config.schema.fields(),
-            &config.equality_ids,
-            &config.column_id_meta_key,
-        )?;
-        let delete_schema = Arc::new(arrow_schema::Schema::new(fields));
         Ok(EqualityDeleteFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
-            projector,
-            delete_schema,
+            projector: config.projector,
+            delete_schema_ref: config.schema,
             equality_ids: config.equality_ids,
+            partition_value: config.partition_value,
         })
     }
 }
@@ -84,18 +84,25 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
 pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     projector: FieldProjector,
-    delete_schema: SchemaRef,
+    delete_schema_ref: SchemaRef,
     equality_ids: Vec<usize>,
+    partition_value: Struct,
+}
+
+impl<B: FileWriterBuilder> EqualityDeleteFileWriter<B> {
+    fn project_record_batch_columns(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            self.delete_schema_ref.clone(),
+            self.projector.project(batch.columns()),
+        )
+        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
+    }
 }
 
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        let batch = RecordBatch::try_new(
-            self.delete_schema.clone(),
-            self.projector.project(batch.columns()),
-        )
-        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))?;
+        let batch = self.project_record_batch_columns(batch)?;
         self.inner_writer.as_mut().unwrap().write(&batch).await
     }
 
@@ -108,6 +115,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
             .map(|mut res| {
                 res.content(crate::spec::DataContentType::EqualityDeletes);
                 res.equality_ids(self.equality_ids.iter().map(|id| *id as i32).collect_vec());
+                res.partition(self.partition_value.clone());
                 res.build().expect("msg")
             })
             .collect_vec())
