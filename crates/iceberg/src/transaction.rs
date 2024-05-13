@@ -454,9 +454,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 .file_io()
                 .new_output(manifest_list_path.clone())?,
             self.snapshot_id,
-            // # TODO
-            // Should we use `0` here for default parent snapshot id?
-            self.parent_snapshot_id.unwrap_or_default(),
+            self.parent_snapshot_id,
             next_seq_num,
         );
         manifest_list_writer.add_manifests(manifest_files.into_iter())?;
