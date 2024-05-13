@@ -122,18 +122,20 @@ impl ManifestListWriter {
     pub fn v2(
         output_file: OutputFile,
         snapshot_id: i64,
-        parent_snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
         sequence_number: i64,
     ) -> Self {
-        let metadata = HashMap::from_iter([
+        let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
-            (
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
+        if let Some(parent_snapshot_id) = parent_snapshot_id {
+            metadata.insert(
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            );
+        }
         Self::new(
             FormatVersion::V2,
             output_file,
@@ -1213,7 +1215,7 @@ mod test {
         let mut writer = ManifestListWriter::v2(
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
-            1646658105718557341,
+            Some(1646658105718557341),
             1,
         );
 
@@ -1391,7 +1393,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, 0, seq_num);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1445,7 +1447,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, 0, 1);
+        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, Some(0), 1);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
