@@ -35,8 +35,6 @@ use iceberg::{
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 use typed_builder::TypedBuilder;
 use volo_thrift::ResponseError;
 
@@ -349,13 +347,10 @@ impl Catalog for HmsCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        let mut file = self
-            .file_io
+        self.file_io
             .new_output(&metadata_location)?
-            .writer()
+            .write(serde_json::to_vec(&metadata)?.into())
             .await?;
-        file.write_all(&serde_json::to_vec(&metadata)?).await?;
-        file.shutdown().await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
@@ -406,10 +401,8 @@ impl Catalog for HmsCatalog {
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
-        let mut metadata_str = String::new();
-        reader.read_to_string(&mut metadata_str).await?;
-        let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
+        let metadata_content = self.file_io.new_input(&metadata_location)?.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
         let table = Table::builder()
             .file_io(self.file_io())

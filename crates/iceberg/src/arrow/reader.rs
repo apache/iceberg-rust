@@ -19,14 +19,21 @@
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use async_stream::try_stream;
+use bytes::Bytes;
+use futures::future::BoxFuture;
 use futures::stream::StreamExt;
+use futures::{try_join, TryFutureExt};
+use parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::arrow::arrow_schema_to_schema;
-use crate::io::FileIO;
+use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
 use crate::spec::SchemaRef;
 use crate::{Error, ErrorKind};
@@ -91,12 +98,12 @@ impl ArrowReader {
 
         Ok(try_stream! {
             while let Some(Ok(task)) = tasks.next().await {
-                let parquet_reader = file_io
-                    .new_input(task.data().data_file().file_path())?
-                    .reader()
-                    .await?;
+                let parquet_file = file_io
+                    .new_input(task.data().data_file().file_path())?;
+                let (parquet_metadata, parquet_reader) = try_join!(parquet_file.metadata(), parquet_file.reader())?;
+                let arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
-                let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(parquet_reader)
+                let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(arrow_file_reader)
                     .await?;
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
@@ -185,5 +192,45 @@ impl ArrowReader {
             }
             Ok(ProjectionMask::leaves(parquet_schema, indices))
         }
+    }
+}
+
+/// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
+///
+/// # TODO
+///
+/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64) contains the following hints to speed up metadata loading, we can consider adding them to this struct:
+///
+/// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
+/// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
+/// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
+struct ArrowFileReader<R: FileRead> {
+    meta: FileMetadata,
+    r: R,
+}
+
+impl<R: FileRead> ArrowFileReader<R> {
+    /// Create a new ArrowFileReader
+    fn new(meta: FileMetadata, r: R) -> Self {
+        Self { meta, r }
+    }
+}
+
+impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
+    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        Box::pin(
+            self.r
+                .read(range.start as _..range.end as _)
+                .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
+        )
+    }
+
+    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
+            let file_size = self.meta.size;
+            let mut loader = MetadataLoader::load(self, file_size as usize, None).await?;
+            loader.load_page_index(false, false).await?;
+            Ok(Arc::new(loader.finish()))
+        })
     }
 }
