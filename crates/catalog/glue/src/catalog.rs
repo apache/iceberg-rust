@@ -25,7 +25,6 @@ use iceberg::{
     TableIdent,
 };
 use std::{collections::HashMap, fmt::Debug};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use typed_builder::TypedBuilder;
 
@@ -358,13 +357,10 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        let mut file = self
-            .file_io
+        self.file_io
             .new_output(&metadata_location)?
-            .writer()
+            .write(serde_json::to_vec(&metadata)?.into())
             .await?;
-        file.write_all(&serde_json::to_vec(&metadata)?).await?;
-        file.shutdown().await?;
 
         let glue_table = convert_to_glue_table(
             &table_name,
@@ -431,10 +427,9 @@ impl Catalog for GlueCatalog {
             Some(table) => {
                 let metadata_location = get_metadata_location(&table.parameters)?;
 
-                let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
-                let mut metadata_str = String::new();
-                reader.read_to_string(&mut metadata_str).await?;
-                let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
+                let input_file = self.file_io.new_input(&metadata_location)?;
+                let metadata_content = input_file.read().await?;
+                let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
                 let table = Table::builder()
                     .file_io(self.file_io())

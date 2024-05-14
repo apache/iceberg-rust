@@ -16,36 +16,29 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-rest"
+name = "iceberg-datafusion"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Rust REST API"
+description = "Apache Iceberg Datafusion Integration"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "rest", "catalog"]
+keywords = ["iceberg", "integrations", "datafusion"]
 
 [dependencies]
-# async-trait = { workspace = true }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
+datafusion = { version = "37.0.0" }
+futures = { workspace = true }
 iceberg = { workspace = true }
-itertools = { workspace = true }
-log = "0.4.20"
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_derive = { workspace = true }
-serde_json = { workspace = true }
-typed-builder = { workspace = true }
-urlencoding = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+log = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
+iceberg-catalog-hms = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-mockito = { workspace = true }
-opendal = { workspace = true, features = ["services-fs"] }
+opendal = { workspace = true, features = ["services-s3"] }
 port_scanner = { workspace = true }
-tokio = { workspace = true }
