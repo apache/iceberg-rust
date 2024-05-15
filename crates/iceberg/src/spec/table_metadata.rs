@@ -37,6 +37,8 @@ use crate::error::Result;
 use crate::{Error, ErrorKind, TableCreation};
 use chrono::{DateTime, TimeZone, Utc};
 
+pub(crate) const LEGACY_CURRENT_SNAPSHOT_ID: &str = "legacy-current-snapshot-id";
+
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
@@ -377,13 +379,13 @@ pub(super) mod _serde {
     /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
     /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, env, sync::Arc};
 
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::{Snapshot, EMPTY_SNAPSHOT_ID};
+    use crate::spec::{Snapshot, EMPTY_SNAPSHOT_ID, LEGACY_CURRENT_SNAPSHOT_ID};
     use crate::{
         spec::{
             schema::_serde::{SchemaV1, SchemaV2},
@@ -460,7 +462,7 @@ pub(super) mod _serde {
         pub last_partition_id: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub properties: Option<HashMap<String, String>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "skip_current_snapshot")]
         pub current_snapshot_id: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub snapshots: Option<Vec<SnapshotV1>>,
@@ -470,6 +472,22 @@ pub(super) mod _serde {
         pub metadata_log: Option<Vec<MetadataLog>>,
         pub sort_orders: Option<Vec<SortOrder>>,
         pub default_sort_order_id: Option<i64>,
+    }
+
+    // Skip serializing currrent snapshot if snapshot is none
+    // and `legacy-current-snapshot-id` is not enabled.
+    fn skip_current_snapshot(current_snapshot_id: &Option<i64>) -> bool {
+        if use_legacy_snapshot_id() {
+            return false;
+        }
+        current_snapshot_id.is_none()
+    }
+
+    fn use_legacy_snapshot_id() -> bool {
+        match env::var(LEGACY_CURRENT_SNAPSHOT_ID) {
+            Ok(val) if val == "true" => true,
+            _ => false,
+        }
     }
 
     /// Helper to serialize and deserialize the format version.
@@ -535,11 +553,7 @@ pub(super) mod _serde {
     impl TryFrom<TableMetadataV2> for TableMetadata {
         type Error = Error;
         fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
-            let current_snapshot_id = if let &Some(-1) = &value.current_snapshot_id {
-                None
-            } else {
-                value.current_snapshot_id
-            };
+            let current_snapshot_id = value.current_snapshot_id;
             let schemas = HashMap::from_iter(
                 value
                     .schemas
@@ -673,16 +687,19 @@ pub(super) mod _serde {
                     .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
                 partition_specs,
                 schemas,
-
                 properties: value.properties.unwrap_or_default(),
-                current_snapshot_id: if let &Some(id) = &value.current_snapshot_id {
-                    if id == EMPTY_SNAPSHOT_ID {
-                        None
-                    } else {
-                        Some(id)
+                current_snapshot_id: match &value.current_snapshot_id {
+                    Some(id) if id == &EMPTY_SNAPSHOT_ID => {
+                        if use_legacy_snapshot_id() {
+                            None
+                        } else {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                "Snapshot ID cannot be -1, enable `legacy-current-snapshot-id` variable to override this behavior",
+                               ));
+                        }
                     }
-                } else {
-                    value.current_snapshot_id
+                    _ => value.current_snapshot_id,
                 },
                 snapshots: value
                     .snapshots
@@ -747,7 +764,7 @@ pub(super) mod _serde {
                 default_spec_id: v.default_spec_id,
                 last_partition_id: v.last_partition_id,
                 properties: Some(v.properties),
-                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {
                     Some(vec![])
                 } else {
@@ -831,7 +848,12 @@ pub(super) mod _serde {
                 } else {
                     Some(v.properties)
                 },
-                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                current_snapshot_id: if v.current_snapshot_id.is_none() && use_legacy_snapshot_id()
+                {
+                    Some(EMPTY_SNAPSHOT_ID)
+                } else {
+                    v.current_snapshot_id
+                },
                 snapshots: if v.snapshots.is_empty() {
                     None
                 } else {
@@ -924,7 +946,7 @@ impl SnapshotLog {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, sync::Arc};
+    use std::{collections::HashMap, env, fs, sync::Arc};
 
     use anyhow::Result;
     use uuid::Uuid;
@@ -933,9 +955,10 @@ mod tests {
 
     use crate::{
         spec::{
-            table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
-            PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-            SortDirection, SortField, SortOrder, Summary, Transform, Type,
+            table_metadata::TableMetadata, table_metadata::LEGACY_CURRENT_SNAPSHOT_ID, NestedField,
+            NullOrder, Operation, PartitionField, PartitionSpec, PrimitiveType, Schema, Snapshot,
+            SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
+            Transform, Type,
         },
         TableCreation,
     };
@@ -1473,10 +1496,11 @@ mod tests {
         check_table_metadata_serde(&metadata, expected);
     }
 
-    #[test]
-    fn test_table_metadata_v1_file_valid() {
-        let metadata =
-            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
+    fn check_v1_table_with_valid_metadata_file(
+        file_location: &str,
+        current_snapshot_id: Option<i64>,
+    ) {
+        let metadata = fs::read_to_string(file_location).unwrap();
 
         let schema = Schema::builder()
             .with_schema_id(0)
@@ -1532,7 +1556,7 @@ mod tests {
             refs: HashMap::from_iter(vec![(
                 "main".to_string(),
                 SnapshotReference {
-                    snapshot_id: -1,
+                    snapshot_id: current_snapshot_id.unwrap_or_default(),
                     retention: SnapshotRetention::Branch {
                         min_snapshots_to_keep: None,
                         max_snapshot_age_ms: None,
@@ -1543,6 +1567,49 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    fn check_v1_table_err_for_legacy_snaphot() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1LegacySnapshotId.json")
+                .unwrap();
+
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "DataInvalid => Snapshot ID cannot be -1, enable `legacy-current-snapshot-id` variable to override this behavior"
+        )
+    }
+
+    #[test]
+    fn test_table_metadata_v1_file() {
+        // test metadata file v1 with current_snapshot_id optional
+        check_v1_table_with_valid_metadata_file(
+            "testdata/table_metadata/TableMetadataV1Valid.json",
+            None,
+        );
+
+        // test metadata file v1 with `legacy-current-snapshot-id` flag on and current_snapshot_id not optional
+        env::set_var(LEGACY_CURRENT_SNAPSHOT_ID, "true");
+        assert_eq!(env::var(LEGACY_CURRENT_SNAPSHOT_ID), Ok("true".to_string()));
+        check_v1_table_with_valid_metadata_file(
+            "testdata/table_metadata/TableMetadataV1LegacySnapshotId.json",
+            Some(-1),
+        );
+
+        // test metadata file v1 with `legacy-current-snapshot-id` flag off and current_snapshot_id not optional
+        env::set_var(LEGACY_CURRENT_SNAPSHOT_ID, "false");
+        assert_eq!(
+            env::var(LEGACY_CURRENT_SNAPSHOT_ID),
+            Ok("false".to_string())
+        );
+        check_v1_table_err_for_legacy_snaphot();
+
+        // test metadata file v1 with `legacy-current-snapshot-id` flag unset and current_snapshot_id not optional
+        env::remove_var(LEGACY_CURRENT_SNAPSHOT_ID);
+        assert!(env::var(LEGACY_CURRENT_SNAPSHOT_ID).is_err());
+        check_v1_table_err_for_legacy_snaphot();
     }
 
     #[test]
