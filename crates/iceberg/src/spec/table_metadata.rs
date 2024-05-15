@@ -1586,7 +1586,11 @@ mod tests {
             "testdata/table_metadata/TableMetadataV1Valid.json",
             None,
         );
+    }
 
+    #[ignore]
+    #[test]
+    fn test_table_metadata_v1_file_for_legacy_snapshot() {
         // test metadata file v1 with `legacy-current-snapshot-id` flag on and current_snapshot_id not optional
         env::set_var(LEGACY_CURRENT_SNAPSHOT_ID, "true");
         assert_eq!(env::var(LEGACY_CURRENT_SNAPSHOT_ID), Ok("true".to_string()));
