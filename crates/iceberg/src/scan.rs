@@ -46,6 +46,7 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Empty column names means to select all columns
     column_names: Vec<String>,
+    predicates: Option<Predicate>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
@@ -57,6 +58,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: vec![],
+            predicates: None,
             snapshot_id: None,
             batch_size: None,
             case_sensitive: true,
@@ -88,6 +90,12 @@ impl<'a> TableScanBuilder<'a> {
     /// Select all columns.
     pub fn select_all(mut self) -> Self {
         self.column_names.clear();
+        self
+    }
+
+    /// Add a predicate to the scan. The scan will only return rows that match the predicate.
+    pub fn filter(mut self, predicate: Predicate) -> Self {
+        self.predicates = Some(predicate);
         self
     }
 
@@ -150,11 +158,18 @@ impl<'a> TableScanBuilder<'a> {
             }
         }
 
+        let bound_predicates = if let Some(ref predicates) = self.predicates {
+            Some(predicates.bind(schema.clone(), true)?)
+        } else {
+            None
+        };
+
         Ok(TableScan {
             snapshot,
             file_io: self.table.file_io().clone(),
             table_metadata: self.table.metadata_ref(),
             column_names: self.column_names,
+            bound_predicates,
             schema,
             batch_size: self.batch_size,
             case_sensitive: self.case_sensitive,
@@ -171,6 +186,7 @@ pub struct TableScan {
     table_metadata: TableMetadataRef,
     file_io: FileIO,
     column_names: Vec<String>,
+    bound_predicates: Option<BoundPredicate>,
     schema: SchemaRef,
     batch_size: Option<usize>,
     case_sensitive: bool,
@@ -298,6 +314,10 @@ impl TableScan {
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
+        }
+
+        if let Some(ref bound_predicates) = self.bound_predicates {
+            arrow_reader_builder = arrow_reader_builder.with_predicates(bound_predicates.clone());
         }
 
         arrow_reader_builder.build().read(self.plan_files().await?)
@@ -449,9 +469,10 @@ impl FileScanTask {
 
 #[cfg(test)]
 mod tests {
+    use crate::expr::Reference;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
     };
@@ -642,9 +663,23 @@ mod tests {
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
+            // 3 columns:
+            // x: [1, 1, 1, 1, ...]
             let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
-            let col2 = Arc::new(Int64Array::from_iter_values(vec![2; 1024])) as ArrayRef;
-            let col3 = Arc::new(Int64Array::from_iter_values(vec![3; 1024])) as ArrayRef;
+
+            let mut values = vec![2; 512];
+            values.append(vec![3; 200].as_mut());
+            values.append(vec![4; 300].as_mut());
+            values.append(vec![5; 12].as_mut());
+
+            // y: [2, 2, 2, 2, ..., 3, 3, 3, 3, ..., 4, 4, 4, 4, ..., 5, 5, 5, 5]
+            let col2 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+
+            let mut values = vec![3; 512];
+            values.append(vec![4; 512].as_mut());
+
+            // z: [3, 3, 3, 3, ..., 4, 4, 4, 4]
+            let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
             let to_write = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
 
             // Write the Parquet files
@@ -802,5 +837,162 @@ mod tests {
         let col2 = batches[0].column_by_name("z").unwrap();
         let int64_arr = col2.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 3);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_lt() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y < 3
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").less_than(Datum::long(3));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 2);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_gt_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y >= 5
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 12);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 5);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_is_null() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y is null
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").is_null();
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_is_not_null() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y is not null
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y").is_not_null();
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches[0].num_rows(), 1024);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_lt_and_gt() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y < 5 AND z >= 4
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y")
+            .less_than(Datum::long(5))
+            .and(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches[0].num_rows(), 500);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let expected_x = Arc::new(Int64Array::from_iter_values(vec![1; 500])) as ArrayRef;
+        assert_eq!(col, &expected_x);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let mut values = vec![];
+        values.append(vec![3; 200].as_mut());
+        values.append(vec![4; 300].as_mut());
+        let expected_y = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+        assert_eq!(col, &expected_y);
+
+        let col = batches[0].column_by_name("z").unwrap();
+        let expected_z = Arc::new(Int64Array::from_iter_values(vec![4; 500])) as ArrayRef;
+        assert_eq!(col, &expected_z);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_lt_or_gt() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: y < 5 AND z >= 4
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("y")
+            .less_than(Datum::long(5))
+            .or(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches[0].num_rows(), 1024);
+
+        let col = batches[0].column_by_name("x").unwrap();
+        let expected_x = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+        assert_eq!(col, &expected_x);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let mut values = vec![2; 512];
+        values.append(vec![3; 200].as_mut());
+        values.append(vec![4; 300].as_mut());
+        values.append(vec![5; 12].as_mut());
+        let expected_y = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+        assert_eq!(col, &expected_y);
+
+        let col = batches[0].column_by_name("z").unwrap();
+        let mut values = vec![3; 512];
+        values.append(vec![4; 512].as_mut());
+        let expected_z = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+        assert_eq!(col, &expected_z);
     }
 }

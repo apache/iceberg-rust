@@ -116,10 +116,13 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+
+    /// Return the operator of this predicate.
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
 
+    /// Return the term of this predicate.
     pub(crate) fn term(&self) -> &T {
         &self.term
     }
@@ -155,10 +158,13 @@ impl<T> BinaryExpression<T> {
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
+
+    /// Return the literal of this predicate.
     pub(crate) fn literal(&self) -> &Datum {
         &self.literal
     }
 
+    /// Return the term of this predicate.
     pub(crate) fn term(&self) -> &T {
         &self.term
     }
@@ -210,13 +216,16 @@ impl<T> SetExpression<T> {
         Self { op, term, literals }
     }
 
+    /// Return the operator of this predicate.
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
+
     pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
         &self.literals
     }
 
+    /// Return the term of this predicate.
     pub(crate) fn term(&self) -> &T {
         &self.term
     }
