@@ -106,7 +106,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
 
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
@@ -117,15 +117,16 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         }
     }
 
-    #[allow(clippy::bool_comparison)]
     fn is_nan(
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if field.contains_nan.is_some_and(|x| x == false) {
-            return ROWS_CANNOT_MATCH;
+        let field = self.field_summary_for_reference(reference);
+        if let Some(contains_nan) = field.contains_nan {
+            if !contains_nan {
+                return ROWS_CANNOT_MATCH;
+            }
         }
 
         if self.are_all_null(field, &reference.field().field_type) {
@@ -135,21 +136,18 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         ROWS_MIGHT_MATCH
     }
 
-    #[allow(clippy::bool_comparison)]
     fn not_nan(
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
-        if field.contains_nan.is_some_and(|x| x == true)
-            && !field.contains_null
-            && field.lower_bound.is_none()
-        {
-            ROWS_CANNOT_MATCH
-        } else {
-            ROWS_MIGHT_MATCH
+        let field = self.field_summary_for_reference(reference);
+        if let Some(contains_nan) = field.contains_nan {
+            if contains_nan && !field.contains_null && field.lower_bound.is_none() {
+                return ROWS_CANNOT_MATCH;
+            }
         }
+        ROWS_MIGHT_MATCH
     }
 
     fn less_than(
@@ -158,12 +156,13 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
         if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            Ok(lower_bound < datum.literal())
-        } else {
-            ROWS_CANNOT_MATCH
+            if datum.literal() <= lower_bound {
+                return ROWS_CANNOT_MATCH;
+            }
         }
+        ROWS_MIGHT_MATCH
     }
 
     fn less_than_or_eq(
@@ -172,12 +171,13 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
         if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            Ok(lower_bound <= datum.literal())
-        } else {
-            ROWS_CANNOT_MATCH
+            if datum.literal() < lower_bound {
+                return ROWS_CANNOT_MATCH;
+            }
         }
+        ROWS_MIGHT_MATCH
     }
 
     fn greater_than(
@@ -186,12 +186,13 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
         if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            Ok(upper_bound > datum.literal())
-        } else {
-            ROWS_CANNOT_MATCH
+            if datum.literal() >= upper_bound {
+                return ROWS_CANNOT_MATCH;
+            }
         }
+        ROWS_MIGHT_MATCH
     }
 
     fn greater_than_or_eq(
@@ -200,12 +201,13 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
         if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            Ok(upper_bound >= datum.literal())
-        } else {
-            ROWS_CANNOT_MATCH
+            if datum.literal() > upper_bound {
+                return ROWS_CANNOT_MATCH;
+            }
         }
+        ROWS_MIGHT_MATCH
     }
 
     fn eq(
@@ -214,8 +216,25 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        Ok(self.less_than_or_eq(reference, datum, _predicate)?
-            && self.greater_than_or_eq(reference, datum, _predicate)?)
+        let field = self.field_summary_for_reference(reference);
+
+        if field.lower_bound.is_none() || field.upper_bound.is_none() {
+            return ROWS_CANNOT_MATCH;
+        }
+
+        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
+            if lower_bound > datum.literal() {
+                return ROWS_CANNOT_MATCH;
+            }
+        }
+
+        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
+            if upper_bound < datum.literal() {
+                return ROWS_CANNOT_MATCH;
+            }
+        }
+
+        ROWS_MIGHT_MATCH
     }
 
     fn not_eq(
@@ -235,7 +254,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
 
         if field.lower_bound.is_none() || field.upper_bound.is_none() {
             return ROWS_CANNOT_MATCH;
@@ -289,7 +308,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
 
         if field.contains_null || field.lower_bound.is_none() || field.upper_bound.is_none() {
             return ROWS_MIGHT_MATCH;
@@ -353,7 +372,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field: &FieldSummary = self.field_summary_for_reference(reference);
+        let field = self.field_summary_for_reference(reference);
         if field.lower_bound.is_none() {
             return ROWS_CANNOT_MATCH;
         }
@@ -395,7 +414,6 @@ impl ManifestFilterVisitor<'_> {
         &self.partitions[pos]
     }
 
-    #[allow(clippy::bool_comparison)]
     fn are_all_null(&self, field: &FieldSummary, r#type: &Type) -> bool {
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
@@ -404,7 +422,10 @@ impl ManifestFilterVisitor<'_> {
         if all_null && r#type.is_floating_type() {
             // floating point types may include NaN values, which we check separately.
             // In case bounds don't include NaN value, contains_nan needs to be checked against.
-            all_null = field.contains_nan.is_some_and(|x| x == false);
+            all_null = match field.contains_nan {
+                Some(val) => !val,
+                None => false,
+            }
         }
 
         all_null
