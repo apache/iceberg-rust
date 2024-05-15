@@ -20,7 +20,6 @@
 */
 use crate::error::Result;
 use chrono::{DateTime, TimeZone, Utc};
-use futures::AsyncReadExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -166,13 +165,7 @@ impl Snapshot {
         file_io: &FileIO,
         table_metadata: &TableMetadata,
     ) -> Result<ManifestList> {
-        let mut manifest_list_content = Vec::new();
-        file_io
-            .new_input(&self.manifest_list)?
-            .reader()
-            .await?
-            .read_to_end(&mut manifest_list_content)
-            .await?;
+        let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
 
         let schema = self.schema(table_metadata)?;
 
