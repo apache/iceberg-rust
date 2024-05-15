@@ -474,7 +474,7 @@ pub(super) mod _serde {
         pub default_sort_order_id: Option<i64>,
     }
 
-    // Skip serializing currrent snapshot if snapshot is none
+    // Skip serializing current snapshot if snapshot is none
     // and `legacy-current-snapshot-id` is not enabled.
     fn skip_current_snapshot(current_snapshot_id: &Option<i64>) -> bool {
         if use_legacy_snapshot_id() {
@@ -484,10 +484,7 @@ pub(super) mod _serde {
     }
 
     fn use_legacy_snapshot_id() -> bool {
-        match env::var(LEGACY_CURRENT_SNAPSHOT_ID) {
-            Ok(val) if val == "true" => true,
-            _ => false,
-        }
+        matches!(env::var(LEGACY_CURRENT_SNAPSHOT_ID), Ok(val) if val == "true")
     }
 
     /// Helper to serialize and deserialize the format version.
@@ -1569,7 +1566,7 @@ mod tests {
         check_table_metadata_serde(&metadata, expected);
     }
 
-    fn check_v1_table_err_for_legacy_snaphot() {
+    fn check_v1_table_err_for_legacy_snapshot() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV1LegacySnapshotId.json")
                 .unwrap();
@@ -1604,12 +1601,12 @@ mod tests {
             env::var(LEGACY_CURRENT_SNAPSHOT_ID),
             Ok("false".to_string())
         );
-        check_v1_table_err_for_legacy_snaphot();
+        check_v1_table_err_for_legacy_snapshot();
 
         // test metadata file v1 with `legacy-current-snapshot-id` flag unset and current_snapshot_id not optional
         env::remove_var(LEGACY_CURRENT_SNAPSHOT_ID);
         assert!(env::var(LEGACY_CURRENT_SNAPSHOT_ID).is_err());
-        check_v1_table_err_for_legacy_snaphot();
+        check_v1_table_err_for_legacy_snapshot();
     }
 
     #[test]
