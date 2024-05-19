@@ -80,6 +80,18 @@ pub enum PrimitiveLiteral {
     Decimal(i128),
 }
 
+impl PrimitiveLiteral {
+    /// Returns true if the Literal represents a primitive type
+    /// that can be a NaN, and that it's value is NaN
+    pub fn is_nan(&self) -> bool {
+        match self {
+            PrimitiveLiteral::Double(val) => val.is_nan(),
+            PrimitiveLiteral::Float(val) => val.is_nan(),
+            _ => false,
+        }
+    }
+}
+
 /// Literal associated with its type. The value and type pair is checked when construction, so the type and value is
 /// guaranteed to be correct when used.
 ///
@@ -688,6 +700,16 @@ impl Datum {
     /// Get the primitive type from datum.
     pub fn data_type(&self) -> &PrimitiveType {
         &self.r#type
+    }
+
+    /// Returns true if the Literal represents a primitive type
+    /// that can be a NaN, and that it's value is NaN
+    pub fn is_nan(&self) -> bool {
+        match self.literal {
+            PrimitiveLiteral::Double(val) => val.is_nan(),
+            PrimitiveLiteral::Float(val) => val.is_nan(),
+            _ => false,
+        }
     }
 }
 
