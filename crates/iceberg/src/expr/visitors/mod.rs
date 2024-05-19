@@ -17,5 +17,6 @@
 
 pub(crate) mod bound_predicate_visitor;
 pub(crate) mod expression_evaluator;
+pub(crate) mod inclusive_metrics_evaluator;
 pub(crate) mod inclusive_projection;
 pub(crate) mod manifest_evaluator;
