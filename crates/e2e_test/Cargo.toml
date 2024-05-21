@@ -34,4 +34,4 @@ iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 log = { workspace = true }
 parquet = { workspace = true }
 port_scanner = { workspace = true }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
