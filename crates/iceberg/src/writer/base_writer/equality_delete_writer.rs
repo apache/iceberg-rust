@@ -93,7 +93,7 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriter<B> {
     fn project_record_batch_columns(&self, batch: RecordBatch) -> Result<RecordBatch> {
         RecordBatch::try_new(
             self.delete_schema_ref.clone(),
-            self.projector.project(batch.columns()),
+            self.projector.project(batch.columns())?,
         )
         .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
     }
@@ -203,25 +203,28 @@ impl FieldProjector {
         ))
     }
     /// Do projection with batch
-    pub fn project(&self, batch: &[ArrayRef]) -> Vec<ArrayRef> {
+    pub fn project(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
         self.index_vec_vec
             .iter()
             .map(|index_vec| Self::get_column_by_index_vec(batch, index_vec))
-            .collect_vec()
+            .collect::<Result<Vec<_>>>()
     }
 
-    fn get_column_by_index_vec(batch: &[ArrayRef], index_vec: &[usize]) -> ArrayRef {
+    fn get_column_by_index_vec(batch: &[ArrayRef], index_vec: &[usize]) -> Result<ArrayRef> {
         let mut rev_iterator = index_vec.iter().rev();
         let mut array = batch[*rev_iterator.next().unwrap()].clone();
         for idx in rev_iterator {
             array = array
                 .as_any()
                 .downcast_ref::<StructArray>()
-                .unwrap()
+                .ok_or(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot convert Array to StructArray",
+                ))?
                 .column(*idx)
                 .clone();
         }
-        array
+        Ok(array)
     }
 }
 
