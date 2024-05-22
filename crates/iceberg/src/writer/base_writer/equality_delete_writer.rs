@@ -138,7 +138,7 @@ impl FieldProjector {
         let mut fields = Vec::with_capacity(column_ids.len());
         for &id in column_ids {
             let mut index_vec = vec![];
-            if let Some(field) = Self::fetch_column_index(
+            if let Ok(field) = Self::fetch_column_index(
                 batch_fields,
                 &mut index_vec,
                 id as i64,
@@ -149,7 +149,10 @@ impl FieldProjector {
             } else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Can't find source column id: {}", id),
+                    format!(
+                        "Can't find source column id or column data type invalid: {}",
+                        id
+                    ),
                 ));
             }
         }
@@ -161,28 +164,45 @@ impl FieldProjector {
         index_vec: &mut Vec<usize>,
         col_id: i64,
         column_id_meta_key: &str,
-    ) -> Option<FieldRef> {
+    ) -> Result<FieldRef> {
         for (pos, field) in fields.iter().enumerate() {
-            let id: i64 = field
-                .metadata()
-                .get(column_id_meta_key)
-                .expect("column_id must be set")
-                .parse()
-                .expect("column_id must can be parse as i64");
-            if col_id == id {
-                index_vec.push(pos);
-                return Some(field.clone());
-            }
-            if let DataType::Struct(inner) = field.data_type() {
-                let res = Self::fetch_column_index(inner, index_vec, col_id, column_id_meta_key);
-                if !index_vec.is_empty() {
-                    index_vec.push(pos);
-                    return res;
+            match field.data_type() {
+                DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Delete column data type cannot be float or double",
+                    ));
+                }
+                _ => {
+                    let id = field
+                        .metadata()
+                        .get(column_id_meta_key)
+                        .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "column_id must be set"))?
+                        .parse::<i64>()
+                        .map_err(|_| {
+                            Error::new(ErrorKind::DataInvalid, "column_id must be parsable as i64")
+                        })?;
+                    if col_id == id {
+                        index_vec.push(pos);
+                        return Ok(field.clone());
+                    }
+                    if let DataType::Struct(inner) = field.data_type() {
+                        let res =
+                            Self::fetch_column_index(inner, index_vec, col_id, column_id_meta_key)?;
+                        if !index_vec.is_empty() {
+                            index_vec.push(pos);
+                        }
+                        return Ok(res);
+                    }
                 }
             }
         }
-        None
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Column ID not found in fields",
+        ))
     }
+
     /// Do projection with batch
     pub fn project(&self, batch: &[ArrayRef]) -> Vec<ArrayRef> {
         self.index_vec_vec
@@ -208,15 +228,22 @@ impl FieldProjector {
 
 #[cfg(test)]
 mod test {
+    use arrow_select::concat::concat_batches;
+    use bytes::Bytes;
+    use futures::AsyncReadExt;
+    use itertools::Itertools;
     use std::{collections::HashMap, sync::Arc};
 
     use arrow_array::{types::Int64Type, ArrayRef, Int64Array, RecordBatch, StructArray};
-    use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
+    use parquet::{
+        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, PARQUET_FIELD_ID_META_KEY},
+        file::properties::WriterProperties,
+    };
     use tempfile::TempDir;
 
     use crate::{
-        io::FileIOBuilder,
-        spec::DataFileFormat,
+        io::{FileIO, FileIOBuilder},
+        spec::{DataFile, DataFileFormat},
         writer::{
             base_writer::equality_delete_writer::{
                 EqualityDeleteFileWriterBuilder, FieldProjector,
@@ -225,12 +252,91 @@ mod test {
                 location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
                 ParquetWriterBuilder,
             },
-            tests::check_parquet_data_file_with_equality_delete_write,
             IcebergWriter, IcebergWriterBuilder,
         },
     };
 
     use super::EqualityDeleteWriterConfig;
+
+    pub(crate) async fn check_parquet_data_file_with_equality_delete_write(
+        file_io: &FileIO,
+        data_file: &DataFile,
+        batch: &RecordBatch,
+    ) {
+        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
+
+        // read the written file
+        let mut input_file = file_io
+            .new_input(data_file.file_path.clone())
+            .unwrap()
+            .reader()
+            .await
+            .unwrap();
+        let mut res = vec![];
+        let file_size = input_file.read_to_end(&mut res).await.unwrap();
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
+        let metadata = reader_builder.metadata().clone();
+
+        // check data
+        let reader = reader_builder.build().unwrap();
+        let batches = reader.map(|batch| batch.unwrap()).collect::<Vec<_>>();
+        let res = concat_batches(&batch.schema(), &batches).unwrap();
+        assert_eq!(*batch, res);
+
+        // check metadata
+        let expect_column_num = batch.num_columns();
+
+        assert_eq!(
+            data_file.record_count,
+            metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.num_rows())
+                .sum::<i64>() as u64
+        );
+
+        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
+
+        assert_eq!(data_file.column_sizes.len(), expect_column_num);
+
+        for (index, id) in data_file.column_sizes().keys().sorted().enumerate() {
+            metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.columns())
+                .for_each(|column| {
+                    assert_eq!(
+                        *data_file.column_sizes.get(id).unwrap() as i64,
+                        column.get(index).unwrap().compressed_size()
+                    );
+                });
+        }
+
+        assert_eq!(data_file.value_counts.len(), expect_column_num);
+        data_file.value_counts.iter().for_each(|(_, &v)| {
+            let expect = metadata
+                .row_groups()
+                .iter()
+                .map(|group| group.num_rows())
+                .sum::<i64>() as u64;
+            assert_eq!(v, expect);
+        });
+
+        for (index, id) in data_file.null_value_counts().keys().enumerate() {
+            let expect = batch.column(index).null_count() as u64;
+            assert_eq!(*data_file.null_value_counts.get(id).unwrap(), expect);
+        }
+
+        assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
+        data_file
+            .split_offsets
+            .iter()
+            .enumerate()
+            .for_each(|(i, &v)| {
+                let expect = metadata.row_groups()[i].file_offset().unwrap();
+                assert_eq!(v, expect);
+            });
+    }
 
     #[tokio::test]
     async fn test_equality_delete_writer() -> Result<(), anyhow::Error> {
