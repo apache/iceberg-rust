@@ -174,7 +174,7 @@ impl FieldProjector {
                     ));
                 }
                 _ => {
-                    let id = field
+                    let id: i64 = field
                         .metadata()
                         .get(column_id_meta_key)
                         .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "column_id must be set"))?
@@ -188,21 +188,20 @@ impl FieldProjector {
                     }
                     if let DataType::Struct(inner) = field.data_type() {
                         let res =
-                            Self::fetch_column_index(inner, index_vec, col_id, column_id_meta_key)?;
+                            Self::fetch_column_index(inner, index_vec, col_id, column_id_meta_key);
                         if !index_vec.is_empty() {
                             index_vec.push(pos);
+                            return res;
                         }
-                        return Ok(res);
                     }
                 }
             }
         }
         Err(Error::new(
             ErrorKind::DataInvalid,
-            "Column ID not found in fields",
+            "Column id not found in fields",
         ))
     }
-
     /// Do projection with batch
     pub fn project(&self, batch: &[ArrayRef]) -> Vec<ArrayRef> {
         self.index_vec_vec
