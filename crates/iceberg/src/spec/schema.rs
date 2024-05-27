@@ -1315,6 +1315,15 @@ table {
     }
 
     #[test]
+    fn test_schema_into_builder() {
+        let original_schema = table_schema_nested();
+        let builder = original_schema.clone().into_builder();
+        let schema = builder.build().unwrap();
+
+        assert_eq!(original_schema, schema);
+    }
+
+    #[test]
     fn test_schema_index_by_name() {
         let expected_name_to_id = HashMap::from(
             [
