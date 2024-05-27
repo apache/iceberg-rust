@@ -125,7 +125,7 @@ impl ArrowReader {
         Ok(try_stream! {
             while let Some(Ok(task)) = tasks.next().await {
                 let parquet_file = file_io
-                    .new_input(task.data().data_file().file_path())?;
+                    .new_input(task.data_file_path())?;
                 let (parquet_metadata, parquet_reader) = try_join!(parquet_file.metadata(), parquet_file.reader())?;
                 let arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
