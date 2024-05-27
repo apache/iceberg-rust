@@ -273,7 +273,7 @@ impl Schema {
     pub fn into_builder(self) -> SchemaBuilder {
         SchemaBuilder {
             schema_id: self.schema_id,
-            fields: self.r#struct.fields().iter().cloned().collect(),
+            fields: self.r#struct.fields().to_vec(),
             alias_to_id: self.alias_to_id,
             identifier_field_ids: self.identifier_field_ids,
         }
