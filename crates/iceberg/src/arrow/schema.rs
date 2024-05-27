@@ -35,6 +35,9 @@ use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
+pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+
 /// A post order arrow schema visitor.
 ///
 /// For order of methods called, please refer to [`visit_schema`].
@@ -500,9 +503,10 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             _ => unreachable!(),
         };
         let field = Field::new(
-            "entries",
+            DEFAULT_MAP_FIELD_NAME,
             DataType::Struct(vec![key_field, value_field].into()),
-            map.value_field.required,
+            // Map field is always not nullable
+            false,
         );
 
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::Map(
@@ -562,7 +566,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::Date32))
             }
             crate::spec::PrimitiveType::Time => Ok(ArrowSchemaOrFieldOrType::Type(
-                DataType::Time32(TimeUnit::Microsecond),
+                DataType::Time64(TimeUnit::Microsecond),
             )),
             crate::spec::PrimitiveType::Timestamp => Ok(ArrowSchemaOrFieldOrType::Type(
                 DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -659,10 +663,9 @@ mod tests {
         let r#struct = DataType::Struct(fields);
         let map = DataType::Map(
             Arc::new(
-                Field::new("entries", r#struct, false).with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "19".to_string(),
-                )])),
+                Field::new(DEFAULT_MAP_FIELD_NAME, r#struct, false).with_metadata(HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "19".to_string()),
+                ])),
             ),
             false,
         );
@@ -1024,7 +1027,10 @@ mod tests {
         ]);
 
         let r#struct = DataType::Struct(fields);
-        let map = DataType::Map(Arc::new(Field::new("entries", r#struct, false)), false);
+        let map = DataType::Map(
+            Arc::new(Field::new(DEFAULT_MAP_FIELD_NAME, r#struct, false)),
+            false,
+        );
 
         let fields = Fields::from(vec![
             Field::new("aa", DataType::Int32, false).with_metadata(HashMap::from([(
@@ -1088,7 +1094,7 @@ mod tests {
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "8".to_string(),
             )])),
-            Field::new("i", DataType::Time32(TimeUnit::Microsecond), false).with_metadata(
+            Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
                 HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "9".to_string())]),
             ),
             Field::new(
