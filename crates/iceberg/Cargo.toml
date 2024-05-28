@@ -52,7 +52,7 @@ lazy_static = { workspace = true }
 log = { workspace = true }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }
-opendal = { workspace = true }
+opendal = { workspace = true, features = ["services-s3"] }
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 reqwest = { workspace = true }
