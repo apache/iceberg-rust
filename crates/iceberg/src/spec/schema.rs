@@ -269,6 +269,16 @@ impl Schema {
         }
     }
 
+    /// Create a new schema builder from a schema.
+    pub fn into_builder(self) -> SchemaBuilder {
+        SchemaBuilder {
+            schema_id: self.schema_id,
+            fields: self.r#struct.fields().to_vec(),
+            alias_to_id: self.alias_to_id,
+            identifier_field_ids: self.identifier_field_ids,
+        }
+    }
+
     /// Get field by field id.
     pub fn field_by_id(&self, field_id: i32) -> Option<&NestedFieldRef> {
         self.id_to_field.get(&field_id)
@@ -1302,6 +1312,15 @@ table {
             .unwrap_err()
             .message()
             .contains("Invalid schema: multiple fields for name baz"));
+    }
+
+    #[test]
+    fn test_schema_into_builder() {
+        let original_schema = table_schema_nested();
+        let builder = original_schema.clone().into_builder();
+        let schema = builder.build().unwrap();
+
+        assert_eq!(original_schema, schema);
     }
 
     #[test]
