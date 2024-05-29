@@ -230,6 +230,7 @@ impl FieldProjector {
 
 #[cfg(test)]
 mod test {
+    use anyhow::Ok;
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use futures::AsyncReadExt;
@@ -260,7 +261,7 @@ mod test {
 
     use super::EqualityDeleteWriterConfig;
 
-    pub(crate) async fn check_parquet_data_file_with_equality_delete_write(
+    async fn check_parquet_data_file_with_equality_delete_write(
         file_io: &FileIO,
         data_file: &DataFile,
         batch: &RecordBatch,
@@ -541,6 +542,44 @@ mod test {
             &to_write_projected,
         )
         .await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_float_or_double_column() -> Result<(), anyhow::Error> {
+        // Float32, Float64
+        let schema = {
+            let fields = vec![
+                arrow_schema::Field::new("col0", arrow_schema::DataType::Float32, true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                arrow_schema::Field::new("col1", arrow_schema::DataType::Float64, true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "1".to_string(),
+                    )])),
+            ];
+            arrow_schema::Schema::new(fields)
+        };
+
+        let equality_id_float = vec![0];
+        let result_float = FieldProjector::new(
+            schema.fields(),
+            &equality_id_float,
+            PARQUET_FIELD_ID_META_KEY,
+        );
+        assert!(result_float.is_err());
+
+        let equality_ids_double = vec![1];
+        let result_double = FieldProjector::new(
+            schema.fields(),
+            &equality_ids_double,
+            PARQUET_FIELD_ID_META_KEY,
+        );
+        assert!(result_double.is_err());
+
         Ok(())
     }
 }
