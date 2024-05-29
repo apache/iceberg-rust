@@ -17,7 +17,7 @@
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{DataFile, Datum, Literal, PrimitiveLiteral};
+use crate::spec::{DataFile, Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind};
 use fnv::FnvHashSet;
 
@@ -63,11 +63,11 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         self.data_file.value_counts.get(&field_id)
     }
 
-    fn lower_bound(&self, field_id: i32) -> Option<&Literal> {
+    fn lower_bound(&self, field_id: i32) -> Option<&Datum> {
         self.data_file.lower_bounds.get(&field_id)
     }
 
-    fn upper_bound(&self, field_id: i32) -> Option<&Literal> {
+    fn upper_bound(&self, field_id: i32) -> Option<&Datum> {
         self.data_file.upper_bounds.get(&field_id)
     }
 
@@ -97,7 +97,7 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         &mut self,
         reference: &BoundReference,
         datum: &Datum,
-        cmp_fn: fn(&PrimitiveLiteral, &PrimitiveLiteral) -> bool,
+        cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
@@ -119,14 +119,7 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         };
 
         if let Some(bound) = bound {
-            let Literal::Primitive(bound) = bound else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Inequality Predicates can only compare against a Primitive Literal",
-                ));
-            };
-
-            if cmp_fn(bound, datum.literal()) {
+            if cmp_fn(bound, datum) {
                 return ROWS_MIGHT_MATCH;
             }
 
@@ -265,33 +258,21 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let Literal::Primitive(lower_bound) = lower_bound else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Eq Predicate can only compare against a Primitive Literal",
-                ));
-            };
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
-            } else if lower_bound.gt(datum.literal()) {
+            } else if lower_bound.gt(datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let Literal::Primitive(upper_bound) = upper_bound else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Eq Predicate can only compare against a Primitive Literal",
-                ));
-            };
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
-            } else if upper_bound.lt(datum.literal()) {
+            } else if upper_bound.lt(datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -331,7 +312,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         };
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+            let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot use StartsWith operator on non-string lower_bound value",
@@ -349,7 +330,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+            let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot use StartsWith operator on non-string upper_bound value",
@@ -395,7 +376,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             return ROWS_MIGHT_MATCH;
         };
 
-        let Literal::Primitive(PrimitiveLiteral::String(lower_bound_str)) = lower_bound else {
+        let PrimitiveLiteral::String(lower_bound_str) = lower_bound.literal() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 "Cannot use NotStartsWith operator on non-string lower_bound value",
@@ -416,7 +397,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
                 return ROWS_MIGHT_MATCH;
             };
 
-            let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+            let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot use NotStartsWith operator on non-string upper_bound value",
@@ -456,36 +437,24 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let Literal::Primitive(lower_bound) = lower_bound else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Eq Predicate can only compare against a Primitive Literal",
-                ));
-            };
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.literal().ge(lower_bound)) {
+            if !literals.iter().any(|datum| datum.ge(lower_bound)) {
                 // if all values are less than lower bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let Literal::Primitive(upper_bound) = upper_bound else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Eq Predicate can only compare against a Primitive Literal",
-                ));
-            };
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.literal().le(upper_bound)) {
+            if !literals.iter().any(|datum| datum.le(upper_bound)) {
                 // if all values are greater than upper bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
@@ -519,7 +488,7 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionField,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionField,
         PartitionSpec, PrimitiveType, Schema, Struct, Transform, Type,
     };
     use fnv::FnvHashSet;
@@ -2152,17 +2121,17 @@ mod test {
             nan_value_counts: HashMap::from([(7, 50), (8, 10), (9, 0)]),
 
             lower_bounds: HashMap::from([
-                (1, Literal::int(INT_MIN_VALUE)),
-                (11, Literal::float(f32::NAN)),
-                (12, Literal::double(f64::NAN)),
-                (14, Literal::string("")),
+                (1, Datum::int(INT_MIN_VALUE)),
+                (11, Datum::float(f32::NAN)),
+                (12, Datum::double(f64::NAN)),
+                (14, Datum::string("")),
             ]),
 
             upper_bounds: HashMap::from([
-                (1, Literal::int(INT_MAX_VALUE)),
-                (11, Literal::float(f32::NAN)),
-                (12, Literal::double(f64::NAN)),
-                (14, Literal::string("房东整租霍营小区二层两居室")),
+                (1, Datum::int(INT_MAX_VALUE)),
+                (11, Datum::float(f32::NAN)),
+                (12, Datum::double(f64::NAN)),
+                (14, Datum::string("房东整租霍营小区二层两居室")),
             ]),
 
             column_sizes: Default::default(),
@@ -2187,9 +2156,9 @@ mod test {
 
             nan_value_counts: HashMap::default(),
 
-            lower_bounds: HashMap::from([(3, Literal::string("aa"))]),
+            lower_bounds: HashMap::from([(3, Datum::string("aa"))]),
 
-            upper_bounds: HashMap::from([(3, Literal::string("dC"))]),
+            upper_bounds: HashMap::from([(3, Datum::string("dC"))]),
 
             column_sizes: Default::default(),
             key_metadata: vec![],
@@ -2214,9 +2183,9 @@ mod test {
 
             nan_value_counts: HashMap::default(),
 
-            lower_bounds: HashMap::from([(3, Literal::string("1str1"))]),
+            lower_bounds: HashMap::from([(3, Datum::string("1str1"))]),
 
-            upper_bounds: HashMap::from([(3, Literal::string("3str3"))]),
+            upper_bounds: HashMap::from([(3, Datum::string("3str3"))]),
 
             column_sizes: Default::default(),
             key_metadata: vec![],
@@ -2241,9 +2210,9 @@ mod test {
 
             nan_value_counts: HashMap::default(),
 
-            lower_bounds: HashMap::from([(3, Literal::string("abc"))]),
+            lower_bounds: HashMap::from([(3, Datum::string("abc"))]),
 
-            upper_bounds: HashMap::from([(3, Literal::string("イロハニホヘト"))]),
+            upper_bounds: HashMap::from([(3, Datum::string("イロハニホヘト"))]),
 
             column_sizes: Default::default(),
             key_metadata: vec![],

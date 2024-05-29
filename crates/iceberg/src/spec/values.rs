@@ -19,10 +19,12 @@
  * Value in iceberg
  */
 
+use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::ops::Index;
 use std::str::FromStr;
-use std::{any::Any, collections::BTreeMap};
 
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
@@ -48,7 +50,7 @@ use super::datatypes::{PrimitiveType, Type};
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -103,6 +105,109 @@ pub struct Datum {
     literal: PrimitiveLiteral,
 }
 
+impl PartialOrd for Datum {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (&self.literal, &other.literal, &self.r#type, &other.r#type) {
+            // generate the arm with same type and same literal
+            (
+                PrimitiveLiteral::Boolean(val),
+                PrimitiveLiteral::Boolean(other_val),
+                PrimitiveType::Boolean,
+                PrimitiveType::Boolean,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Int(val),
+                PrimitiveLiteral::Int(other_val),
+                PrimitiveType::Int,
+                PrimitiveType::Int,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
+                PrimitiveType::Long,
+                PrimitiveType::Long,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Float(val),
+                PrimitiveLiteral::Float(other_val),
+                PrimitiveType::Float,
+                PrimitiveType::Float,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Double(val),
+                PrimitiveLiteral::Double(other_val),
+                PrimitiveType::Double,
+                PrimitiveType::Double,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Date(val),
+                PrimitiveLiteral::Date(other_val),
+                PrimitiveType::Date,
+                PrimitiveType::Date,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Time(val),
+                PrimitiveLiteral::Time(other_val),
+                PrimitiveType::Time,
+                PrimitiveType::Time,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Timestamp(val),
+                PrimitiveLiteral::Timestamp(other_val),
+                PrimitiveType::Timestamp,
+                PrimitiveType::Timestamp,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::TimestampTZ(val),
+                PrimitiveLiteral::TimestampTZ(other_val),
+                PrimitiveType::Timestamptz,
+                PrimitiveType::Timestamptz,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::String(val),
+                PrimitiveLiteral::String(other_val),
+                PrimitiveType::String,
+                PrimitiveType::String,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::UUID(val),
+                PrimitiveLiteral::UUID(other_val),
+                PrimitiveType::Uuid,
+                PrimitiveType::Uuid,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Fixed(val),
+                PrimitiveLiteral::Fixed(other_val),
+                PrimitiveType::Fixed(_),
+                PrimitiveType::Fixed(_),
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Binary(val),
+                PrimitiveLiteral::Binary(other_val),
+                PrimitiveType::Binary,
+                PrimitiveType::Binary,
+            ) => val.partial_cmp(other_val),
+            (
+                PrimitiveLiteral::Decimal(val),
+                PrimitiveLiteral::Decimal(other_val),
+                PrimitiveType::Decimal {
+                    precision: _,
+                    scale,
+                },
+                PrimitiveType::Decimal {
+                    precision: _,
+                    scale: other_scale,
+                },
+            ) => {
+                let val = Decimal::from_i128_with_scale(*val, *scale);
+                let other_val = Decimal::from_i128_with_scale(*other_val, *other_scale);
+                val.partial_cmp(&other_val)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
@@ -153,10 +258,58 @@ impl From<Datum> for Literal {
     }
 }
 
+impl From<Datum> for PrimitiveLiteral {
+    fn from(value: Datum) -> Self {
+        value.literal
+    }
+}
+
 impl Datum {
     /// Creates a `Datum` from a `PrimitiveType` and a `PrimitiveLiteral`
     pub(crate) fn new(r#type: PrimitiveType, literal: PrimitiveLiteral) -> Self {
         Datum { r#type, literal }
+    }
+
+    /// Create iceberg value from bytes
+    pub fn try_from_bytes(bytes: &[u8], data_type: PrimitiveType) -> Result<Self> {
+        let literal = match data_type {
+            PrimitiveType::Boolean => {
+                if bytes.len() == 1 && bytes[0] == 0u8 {
+                    PrimitiveLiteral::Boolean(false)
+                } else {
+                    PrimitiveLiteral::Boolean(true)
+                }
+            }
+            PrimitiveType::Int => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Long => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Float => {
+                PrimitiveLiteral::Float(OrderedFloat(f32::from_le_bytes(bytes.try_into()?)))
+            }
+            PrimitiveType::Double => {
+                PrimitiveLiteral::Double(OrderedFloat(f64::from_le_bytes(bytes.try_into()?)))
+            }
+            PrimitiveType::Date => PrimitiveLiteral::Date(i32::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Time => PrimitiveLiteral::Time(i64::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Timestamp => {
+                PrimitiveLiteral::Timestamp(i64::from_le_bytes(bytes.try_into()?))
+            }
+            PrimitiveType::Timestamptz => {
+                PrimitiveLiteral::TimestampTZ(i64::from_le_bytes(bytes.try_into()?))
+            }
+            PrimitiveType::String => {
+                PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
+            }
+            PrimitiveType::Uuid => {
+                PrimitiveLiteral::UUID(Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)))
+            }
+            PrimitiveType::Fixed(_) => PrimitiveLiteral::Fixed(Vec::from(bytes)),
+            PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Decimal {
+                precision: _,
+                scale: _,
+            } => todo!(),
+        };
+        Ok(Datum::new(data_type, literal))
     }
 
     /// Creates a boolean value.
@@ -713,8 +866,99 @@ impl Datum {
     }
 }
 
+/// Map is a collection of key-value pairs with a key type and a value type.
+/// It used in Literal::Map, to make it hashable, the order of key-value pairs is stored in a separate vector
+/// so that we can hash the map in a deterministic way. But it also means that the order of key-value pairs is matter
+/// for the hash value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Map {
+    inner: HashMap<Literal, Option<Literal>>,
+    order: Vec<Literal>,
+}
+
+impl Map {
+    /// Creates a new empty map.
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+            order: Vec::new(),
+        }
+    }
+
+    /// Return the number of key-value pairs in the map.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns true if the map contains no elements.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Inserts a key-value pair into the map.
+    /// If the map did not have this key present, None is returned.
+    /// If the map did have this key present, the value is updated, and the old value is returned.
+    pub fn insert(&mut self, key: Literal, value: Option<Literal>) -> Option<Option<Literal>> {
+        self.order.push(key.clone());
+        self.inner.insert(key, value)
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    /// If the key is not present in the map, None is returned.
+    pub fn get(&self, key: &Literal) -> Option<&Option<Literal>> {
+        self.inner.get(key)
+    }
+}
+
+impl Default for Map {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Hash for Map {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for k in &self.order {
+            k.hash(state);
+            self.inner.get(k).unwrap().hash(state);
+        }
+    }
+}
+
+impl FromIterator<(Literal, Option<Literal>)> for Map {
+    fn from_iter<T: IntoIterator<Item = (Literal, Option<Literal>)>>(iter: T) -> Self {
+        let mut inner = HashMap::new();
+        let mut order = Vec::new();
+        for (k, v) in iter {
+            inner.insert(k.clone(), v.clone());
+            order.push(k);
+        }
+
+        Self { inner, order }
+    }
+}
+
+impl IntoIterator for Map {
+    type Item = (Literal, Option<Literal>);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.order
+            .into_iter()
+            .map(|k| (k.clone(), self.inner.get(&k).cloned().unwrap()))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+impl<const N: usize> From<[(Literal, Option<Literal>); N]> for Map {
+    fn from(value: [(Literal, Option<Literal>); N]) -> Self {
+        value.iter().cloned().collect()
+    }
+}
+
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Literal {
     /// A primitive value
     Primitive(PrimitiveLiteral),
@@ -729,7 +973,7 @@ pub enum Literal {
     /// A map is a collection of key-value pairs with a key type and a value type.
     /// Both the key field and value field each have an integer id that is unique in the table schema.
     /// Map keys are required and map values can be either optional or required. Both map keys and map values may be any type, including nested types.
-    Map(BTreeMap<Literal, Option<Literal>>),
+    Map(Map),
 }
 
 impl Literal {
@@ -1077,32 +1321,65 @@ impl Literal {
     }
 }
 
+impl From<PrimitiveLiteral> for ByteBuf {
+    fn from(value: PrimitiveLiteral) -> Self {
+        match value {
+            PrimitiveLiteral::Boolean(val) => {
+                if val {
+                    ByteBuf::from([1u8])
+                } else {
+                    ByteBuf::from([0u8])
+                }
+            }
+            PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
+            PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
+            PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
+            PrimitiveLiteral::Binary(val) => ByteBuf::from(val),
+            PrimitiveLiteral::Decimal(_) => todo!(),
+        }
+    }
+}
+
 impl From<Literal> for ByteBuf {
     fn from(value: Literal) -> Self {
         match value {
-            Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => {
-                    if val {
-                        ByteBuf::from([1u8])
-                    } else {
-                        ByteBuf::from([0u8])
-                    }
-                }
-                PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
-                PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
-                PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
-                PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
-                PrimitiveLiteral::Binary(val) => ByteBuf::from(val),
-                PrimitiveLiteral::Decimal(_) => todo!(),
-            },
+            Literal::Primitive(val) => val.into(),
             _ => unimplemented!(),
+        }
+    }
+}
+
+impl From<PrimitiveLiteral> for Vec<u8> {
+    fn from(value: PrimitiveLiteral) -> Self {
+        match value {
+            PrimitiveLiteral::Boolean(val) => {
+                if val {
+                    Vec::from([1u8])
+                } else {
+                    Vec::from([0u8])
+                }
+            }
+            PrimitiveLiteral::Int(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Long(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Float(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Double(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Date(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Time(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamp(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::TimestampTZ(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::String(val) => Vec::from(val.as_bytes()),
+            PrimitiveLiteral::UUID(val) => Vec::from(val.as_u128().to_be_bytes()),
+            PrimitiveLiteral::Fixed(val) => val,
+            PrimitiveLiteral::Binary(val) => val,
+            PrimitiveLiteral::Decimal(_) => todo!(),
         }
     }
 }
@@ -1110,28 +1387,7 @@ impl From<Literal> for ByteBuf {
 impl From<Literal> for Vec<u8> {
     fn from(value: Literal) -> Self {
         match value {
-            Literal::Primitive(prim) => match prim {
-                PrimitiveLiteral::Boolean(val) => {
-                    if val {
-                        Vec::from([1u8])
-                    } else {
-                        Vec::from([0u8])
-                    }
-                }
-                PrimitiveLiteral::Int(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Long(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Float(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Double(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Date(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Time(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::Timestamp(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::TimestampTZ(val) => Vec::from(val.to_le_bytes()),
-                PrimitiveLiteral::String(val) => Vec::from(val.as_bytes()),
-                PrimitiveLiteral::UUID(val) => Vec::from(val.as_u128().to_be_bytes()),
-                PrimitiveLiteral::Fixed(val) => val,
-                PrimitiveLiteral::Binary(val) => val,
-                PrimitiveLiteral::Decimal(_) => todo!(),
-            },
+            Literal::Primitive(val) => val.into(),
             _ => unimplemented!(),
         }
     }
@@ -1140,7 +1396,7 @@ impl From<Literal> for Vec<u8> {
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Struct {
     /// Vector to store the field values
     fields: Vec<Literal>,
@@ -1237,55 +1493,10 @@ impl Literal {
     /// Create iceberg value from bytes
     pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self> {
         match data_type {
-            Type::Primitive(primitive) => match primitive {
-                PrimitiveType::Boolean => {
-                    if bytes.len() == 1 && bytes[0] == 0u8 {
-                        Ok(Literal::Primitive(PrimitiveLiteral::Boolean(false)))
-                    } else {
-                        Ok(Literal::Primitive(PrimitiveLiteral::Boolean(true)))
-                    }
-                }
-                PrimitiveType::Int => Ok(Literal::Primitive(PrimitiveLiteral::Int(
-                    i32::from_le_bytes(bytes.try_into()?),
-                ))),
-                PrimitiveType::Long => Ok(Literal::Primitive(PrimitiveLiteral::Long(
-                    i64::from_le_bytes(bytes.try_into()?),
-                ))),
-                PrimitiveType::Float => Ok(Literal::Primitive(PrimitiveLiteral::Float(
-                    OrderedFloat(f32::from_le_bytes(bytes.try_into()?)),
-                ))),
-                PrimitiveType::Double => Ok(Literal::Primitive(PrimitiveLiteral::Double(
-                    OrderedFloat(f64::from_le_bytes(bytes.try_into()?)),
-                ))),
-                PrimitiveType::Date => Ok(Literal::Primitive(PrimitiveLiteral::Date(
-                    i32::from_le_bytes(bytes.try_into()?),
-                ))),
-                PrimitiveType::Time => Ok(Literal::Primitive(PrimitiveLiteral::Time(
-                    i64::from_le_bytes(bytes.try_into()?),
-                ))),
-                PrimitiveType::Timestamp => Ok(Literal::Primitive(PrimitiveLiteral::Timestamp(
-                    i64::from_le_bytes(bytes.try_into()?),
-                ))),
-                PrimitiveType::Timestamptz => Ok(Literal::Primitive(
-                    PrimitiveLiteral::TimestampTZ(i64::from_le_bytes(bytes.try_into()?)),
-                )),
-                PrimitiveType::String => Ok(Literal::Primitive(PrimitiveLiteral::String(
-                    std::str::from_utf8(bytes)?.to_string(),
-                ))),
-                PrimitiveType::Uuid => Ok(Literal::Primitive(PrimitiveLiteral::UUID(
-                    Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)),
-                ))),
-                PrimitiveType::Fixed(_) => Ok(Literal::Primitive(PrimitiveLiteral::Fixed(
-                    Vec::from(bytes),
-                ))),
-                PrimitiveType::Binary => Ok(Literal::Primitive(PrimitiveLiteral::Binary(
-                    Vec::from(bytes),
-                ))),
-                PrimitiveType::Decimal {
-                    precision: _,
-                    scale: _,
-                } => todo!(),
-            },
+            Type::Primitive(primitive_type) => {
+                let datum = Datum::try_from_bytes(bytes, primitive_type.clone())?;
+                Ok(Literal::Primitive(datum.literal))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::DataInvalid,
                 "Converting bytes to non-primitive types is not supported.",
@@ -1426,7 +1637,7 @@ impl Literal {
                     if let (Some(JsonValue::Array(keys)), Some(JsonValue::Array(values))) =
                         (object.remove("keys"), object.remove("values"))
                     {
-                        Ok(Some(Literal::Map(BTreeMap::from_iter(
+                        Ok(Some(Literal::Map(Map::from_iter(
                             keys.into_iter()
                                 .zip(values.into_iter())
                                 .map(|(key, value)| {
@@ -1667,8 +1878,6 @@ mod timestamptz {
 }
 
 mod _serde {
-    use std::collections::BTreeMap;
-
     use serde::{
         de::Visitor,
         ser::{SerializeMap, SerializeSeq, SerializeStruct},
@@ -1683,7 +1892,7 @@ mod _serde {
         Error, ErrorKind,
     };
 
-    use super::{Literal, PrimitiveLiteral};
+    use super::{Literal, Map, PrimitiveLiteral};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -2138,7 +2347,7 @@ mod _serde {
                         Type::Map(map_ty) => {
                             let key_ty = map_ty.key_field.field_type.as_ref();
                             let value_ty = map_ty.value_field.field_type.as_ref();
-                            let mut map = BTreeMap::new();
+                            let mut map = Map::new();
                             for k_v in v.list {
                                 let k_v = k_v.ok_or_else(|| invalid_err_with_reason("list","In deserialize, None will be represented as Some(RawLiteral::Null), all element in list must be valid"))?;
                                 if let RawLiteralEnum::Record(Record {
@@ -2221,7 +2430,7 @@ mod _serde {
                                 "Map key must be string",
                             ));
                         }
-                        let mut map = BTreeMap::new();
+                        let mut map = Map::new();
                         for (k, v) in required {
                             let value = v.try_into(&map_ty.value_field.field_type)?;
                             if map_ty.value_field.required && value.is_none() {
@@ -2523,7 +2732,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Map(BTreeMap::from([
+            Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
                     Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
@@ -2727,7 +2936,7 @@ mod tests {
     #[test]
     fn avro_convert_test_map() {
         check_convert_with_avro(
-            Literal::Map(BTreeMap::from([
+            Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::Int(1)),
                     Some(Literal::Primitive(PrimitiveLiteral::Long(1))),
@@ -2751,7 +2960,7 @@ mod tests {
         );
 
         check_convert_with_avro(
-            Literal::Map(BTreeMap::from([
+            Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::Int(1)),
                     Some(Literal::Primitive(PrimitiveLiteral::Long(1))),
@@ -2781,7 +2990,7 @@ mod tests {
     #[test]
     fn avro_convert_test_string_map() {
         check_convert_with_avro(
-            Literal::Map(BTreeMap::from([
+            Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
                     Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
@@ -2808,7 +3017,7 @@ mod tests {
         );
 
         check_convert_with_avro(
-            Literal::Map(BTreeMap::from([
+            Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
                     Some(Literal::Primitive(PrimitiveLiteral::Int(1))),

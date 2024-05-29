@@ -20,7 +20,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use crate::io::FileIO;
-use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
+use crate::{io::OutputFile, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
 use bytes::Bytes;
 
@@ -29,7 +29,7 @@ use self::{
     _serde::{ManifestFileV1, ManifestFileV2},
 };
 
-use super::{FormatVersion, Manifest, StructType};
+use super::{Datum, FormatVersion, Manifest, StructType};
 use crate::error::Result;
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -662,11 +662,11 @@ pub struct FieldSummary {
     /// field: 510
     /// The minimum value for the field in the manifests
     /// partitions.
-    pub lower_bound: Option<Literal>,
+    pub lower_bound: Option<Datum>,
     /// field: 511
     /// The maximum value for the field in the manifests
     /// partitions.
-    pub upper_bound: Option<Literal>,
+    pub upper_bound: Option<Datum>,
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
@@ -675,7 +675,7 @@ pub struct FieldSummary {
 /// [ManifestFileV1] and [ManifestFileV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
     use crate::{
-        spec::{Literal, StructType, Type},
+        spec::{Datum, PrimitiveLiteral, PrimitiveType, StructType},
         Error,
     };
     pub use serde_bytes::ByteBuf;
@@ -833,17 +833,17 @@ pub(super) mod _serde {
         /// Converts the [FieldSummary] into a [super::FieldSummary].
         /// [lower_bound] and [upper_bound] are converted into [Literal]s need the type info so use
         /// this function instead of [std::TryFrom] trait.
-        pub(crate) fn try_into(self, r#type: &Type) -> Result<super::FieldSummary> {
+        pub(crate) fn try_into(self, r#type: &PrimitiveType) -> Result<super::FieldSummary> {
             Ok(super::FieldSummary {
                 contains_null: self.contains_null,
                 contains_nan: self.contains_nan,
                 lower_bound: self
                     .lower_bound
-                    .map(|v| Literal::try_from_bytes(&v, r#type))
+                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
                     .transpose()?,
                 upper_bound: self
                     .upper_bound
-                    .map(|v| Literal::try_from_bytes(&v, r#type))
+                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
                     .transpose()?,
             })
         }
@@ -869,7 +869,14 @@ pub(super) mod _serde {
                 partitions
                     .into_iter()
                     .zip(partition_types)
-                    .map(|(v, field)| v.try_into(&field.field_type))
+                    .map(|(v, field)| {
+                        v.try_into(field.field_type.as_primitive_type_ref().ok_or_else(|| {
+                            Error::new(
+                                crate::ErrorKind::DataInvalid,
+                                "Invalid partition spec. Field type is not primitive",
+                            )
+                        })?)
+                    })
                     .collect::<Result<Vec<_>>>()
             } else {
                 Err(Error::new(
@@ -958,8 +965,8 @@ pub(super) mod _serde {
                     .map(|v| FieldSummary {
                         contains_null: v.contains_null,
                         contains_nan: v.contains_nan,
-                        lower_bound: v.lower_bound.map(|v| v.into()),
-                        upper_bound: v.upper_bound.map(|v| v.into()),
+                        lower_bound: v.lower_bound.map(|v| PrimitiveLiteral::from(v).into()),
+                        upper_bound: v.upper_bound.map(|v| PrimitiveLiteral::from(v).into()),
                     })
                     .collect(),
             )
@@ -1096,7 +1103,7 @@ mod test {
     use crate::{
         io::FileIOBuilder,
         spec::{
-            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
+            manifest_list::_serde::ManifestListV1, Datum, FieldSummary, ManifestContentType,
             ManifestFile, ManifestList, ManifestListWriter, NestedField, PrimitiveType, StructType,
             Type, UNASSIGNED_SEQUENCE_NUMBER,
         },
@@ -1172,7 +1179,7 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                     key_metadata: vec![],
                 },
                 ManifestFile {
@@ -1189,7 +1196,7 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::float(1.1)), upper_bound: Some(Literal::float(2.1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1)), upper_bound: Some(Datum::float(2.1))}],
                     key_metadata: vec![],
                 }
             ]
@@ -1288,7 +1295,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         }.try_into().unwrap();
@@ -1316,7 +1323,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };
@@ -1372,7 +1379,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };
@@ -1426,7 +1433,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };

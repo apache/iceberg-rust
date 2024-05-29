@@ -1056,8 +1056,9 @@ mod tests {
     };
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
+    use crate::spec::values::Map as MapValue;
     use crate::spec::{prune_columns, Datum, Literal};
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{HashMap, HashSet};
 
     use super::DEFAULT_SCHEMA_ID;
 
@@ -1657,9 +1658,9 @@ table {
                 Some(Literal::string("qux item 1")),
                 Some(Literal::string("qux item 2")),
             ])),
-            Some(Literal::Map(BTreeMap::from([(
+            Some(Literal::Map(MapValue::from([(
                 Literal::string("quux key 1"),
-                Some(Literal::Map(BTreeMap::from([(
+                Some(Literal::Map(MapValue::from([(
                     Literal::string("quux nested key 1"),
                     Some(Literal::int(1000)),
                 )]))),
