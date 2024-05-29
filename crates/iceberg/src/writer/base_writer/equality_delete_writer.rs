@@ -230,7 +230,6 @@ impl FieldProjector {
 
 #[cfg(test)]
 mod test {
-    use anyhow::Ok;
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use futures::AsyncReadExt;
@@ -249,7 +248,7 @@ mod test {
         spec::{DataFile, DataFileFormat},
         writer::{
             base_writer::equality_delete_writer::{
-                EqualityDeleteFileWriterBuilder, FieldProjector,
+                EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig, FieldProjector,
             },
             file_writer::{
                 location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
@@ -258,8 +257,6 @@ mod test {
             IcebergWriter, IcebergWriterBuilder,
         },
     };
-
-    use super::EqualityDeleteWriterConfig;
 
     async fn check_parquet_data_file_with_equality_delete_write(
         file_io: &FileIO,
