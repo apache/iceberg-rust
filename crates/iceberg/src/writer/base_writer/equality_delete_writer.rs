@@ -232,7 +232,6 @@ impl FieldProjector {
 mod test {
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
-    use futures::AsyncReadExt;
     use itertools::Itertools;
     use std::{collections::HashMap, sync::Arc};
 
@@ -266,15 +265,11 @@ mod test {
         assert_eq!(data_file.file_format, DataFileFormat::Parquet);
 
         // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
+        let input_file = file_io.new_input(data_file.file_path.clone()).unwrap();
+        // read the written file
+        let input_content = input_file.read().await.unwrap();
+        let reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(input_content.clone()).unwrap();
         let metadata = reader_builder.metadata().clone();
 
         // check data
@@ -295,7 +290,7 @@ mod test {
                 .sum::<i64>() as u64
         );
 
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
+        assert_eq!(data_file.file_size_in_bytes, input_content.len() as u64);
 
         assert_eq!(data_file.column_sizes.len(), expect_column_num);
 
