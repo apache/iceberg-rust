@@ -103,22 +103,35 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriter<B> {
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.project_record_batch_columns(batch)?;
-        self.inner_writer.as_mut().unwrap().write(&batch).await
+        if let Some(writer) = self.inner_writer.as_mut() {
+            writer.write(&batch).await
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "Equality delete inner writer does not exist",
+            ))
+        }
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
-        let writer = self.inner_writer.take().unwrap();
-        Ok(writer
-            .close()
-            .await?
-            .into_iter()
-            .map(|mut res| {
-                res.content(crate::spec::DataContentType::EqualityDeletes);
-                res.equality_ids(self.equality_ids.iter().map(|id| *id as i32).collect_vec());
-                res.partition(self.partition_value.clone());
-                res.build().expect("msg")
-            })
-            .collect_vec())
+        if let Some(writer) = self.inner_writer.take() {
+            Ok(writer
+                .close()
+                .await?
+                .into_iter()
+                .map(|mut res| {
+                    res.content(crate::spec::DataContentType::EqualityDeletes);
+                    res.equality_ids(self.equality_ids.iter().map(|id| *id as i32).collect_vec());
+                    res.partition(self.partition_value.clone());
+                    res.build().expect("msg")
+                })
+                .collect_vec())
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "Equality delete inner writer does not exist",
+            ))
+        }
     }
 }
 
@@ -231,7 +244,6 @@ impl FieldProjector {
 #[cfg(test)]
 mod test {
     use arrow_select::concat::concat_batches;
-    use bytes::Bytes;
     use itertools::Itertools;
     use std::{collections::HashMap, sync::Arc};
 
