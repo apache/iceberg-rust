@@ -872,41 +872,47 @@ impl Datum {
 /// for the hash value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Map {
-    inner: HashMap<Literal, Option<Literal>>,
-    order: Vec<Literal>,
+    index: HashMap<Literal, usize>,
+    pair: Vec<(Literal, Option<Literal>)>,
 }
 
 impl Map {
     /// Creates a new empty map.
     pub fn new() -> Self {
         Self {
-            inner: HashMap::new(),
-            order: Vec::new(),
+            index: HashMap::new(),
+            pair: Vec::new(),
         }
     }
 
     /// Return the number of key-value pairs in the map.
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.pair.len()
     }
 
     /// Returns true if the map contains no elements.
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.pair.is_empty()
     }
 
     /// Inserts a key-value pair into the map.
     /// If the map did not have this key present, None is returned.
     /// If the map did have this key present, the value is updated, and the old value is returned.
     pub fn insert(&mut self, key: Literal, value: Option<Literal>) -> Option<Option<Literal>> {
-        self.order.push(key.clone());
-        self.inner.insert(key, value)
+        if let Some(index) = self.index.get(&key) {
+            let old_value = std::mem::replace(&mut self.pair[*index].1, value);
+            Some(old_value)
+        } else {
+            self.pair.push((key.clone(), value));
+            self.index.insert(key, self.pair.len() - 1);
+            None
+        }
     }
 
     /// Returns a reference to the value corresponding to the key.
     /// If the key is not present in the map, None is returned.
     pub fn get(&self, key: &Literal) -> Option<&Option<Literal>> {
-        self.inner.get(key)
+        self.index.get(key).map(|index| &self.pair[*index].1)
     }
 }
 
@@ -918,23 +924,20 @@ impl Default for Map {
 
 impl Hash for Map {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for k in &self.order {
-            k.hash(state);
-            self.inner.get(k).unwrap().hash(state);
+        for (key, value) in &self.pair {
+            key.hash(state);
+            value.hash(state);
         }
     }
 }
 
 impl FromIterator<(Literal, Option<Literal>)> for Map {
     fn from_iter<T: IntoIterator<Item = (Literal, Option<Literal>)>>(iter: T) -> Self {
-        let mut inner = HashMap::new();
-        let mut order = Vec::new();
-        for (k, v) in iter {
-            inner.insert(k.clone(), v.clone());
-            order.push(k);
+        let mut map = Map::new();
+        for (key, value) in iter {
+            map.insert(key, value);
         }
-
-        Self { inner, order }
+        map
     }
 }
 
@@ -943,11 +946,7 @@ impl IntoIterator for Map {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.order
-            .into_iter()
-            .map(|k| (k.clone(), self.inner.get(&k).cloned().unwrap()))
-            .collect::<Vec<_>>()
-            .into_iter()
+        self.pair.into_iter()
     }
 }
 
