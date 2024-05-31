@@ -870,7 +870,7 @@ pub(super) mod _serde {
                     .into_iter()
                     .zip(partition_types)
                     .map(|(v, field)| {
-                        v.try_into(field.field_type.as_primitive_type_ref().ok_or_else(|| {
+                        v.try_into(field.field_type.as_primitive_type().ok_or_else(|| {
                             Error::new(
                                 crate::ErrorKind::DataInvalid,
                                 "Invalid partition spec. Field type is not primitive",

@@ -119,7 +119,7 @@ impl Type {
     }
 
     /// Convert Type to reference of PrimitiveType
-    pub fn as_primitive_type_ref(&self) -> Option<&PrimitiveType> {
+    pub fn as_primitive_type(&self) -> Option<&PrimitiveType> {
         if let Type::Primitive(primitive_type) = self {
             Some(primitive_type)
         } else {
@@ -128,7 +128,7 @@ impl Type {
     }
 
     /// Convert Type to StructType
-    pub fn as_struct_type(self) -> Option<StructType> {
+    pub fn to_struct_type(self) -> Option<StructType> {
         if let Type::Struct(struct_type) = self {
             Some(struct_type)
         } else {

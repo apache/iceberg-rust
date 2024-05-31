@@ -69,7 +69,7 @@ pub enum PrimitiveLiteral {
     /// Timestamp without timezone
     Timestamp(i64),
     /// Timestamp with timezone
-    TimestampTZ(i64),
+    Timestamptz(i64),
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
@@ -158,8 +158,8 @@ impl PartialOrd for Datum {
                 PrimitiveType::Timestamp,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::TimestampTZ(val),
-                PrimitiveLiteral::TimestampTZ(other_val),
+                PrimitiveLiteral::Timestamptz(val),
+                PrimitiveLiteral::Timestamptz(other_val),
                 PrimitiveType::Timestamptz,
                 PrimitiveType::Timestamptz,
             ) => val.partial_cmp(other_val),
@@ -221,7 +221,7 @@ impl Display for Datum {
             (_, PrimitiveLiteral::Timestamp(val)) => {
                 write!(f, "{}", microseconds_to_datetime(*val))
             }
-            (_, PrimitiveLiteral::TimestampTZ(val)) => {
+            (_, PrimitiveLiteral::Timestamptz(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
@@ -294,7 +294,7 @@ impl Datum {
                 PrimitiveLiteral::Timestamp(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::Timestamptz => {
-                PrimitiveLiteral::TimestampTZ(i64::from_le_bytes(bytes.try_into()?))
+                PrimitiveLiteral::Timestamptz(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::String => {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
@@ -652,7 +652,7 @@ impl Datum {
     pub fn timestamptz_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamptz,
-            literal: PrimitiveLiteral::TimestampTZ(value),
+            literal: PrimitiveLiteral::Timestamptz(value),
         }
     }
 
@@ -1182,7 +1182,7 @@ impl Literal {
 
     /// Creates a timestamp with timezone from unix epoch in microseconds.
     pub fn timestamptz(value: i64) -> Self {
-        Self::Primitive(PrimitiveLiteral::TimestampTZ(value))
+        Self::Primitive(PrimitiveLiteral::Timestamptz(value))
     }
 
     /// Creates a timestamp from [`DateTime`].
@@ -1337,7 +1337,7 @@ impl From<PrimitiveLiteral> for ByteBuf {
             PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::TimestampTZ(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
             PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
             PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
@@ -1373,7 +1373,7 @@ impl From<PrimitiveLiteral> for Vec<u8> {
             PrimitiveLiteral::Date(val) => Vec::from(val.to_le_bytes()),
             PrimitiveLiteral::Time(val) => Vec::from(val.to_le_bytes()),
             PrimitiveLiteral::Timestamp(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::TimestampTZ(val) => Vec::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamptz(val) => Vec::from(val.to_le_bytes()),
             PrimitiveLiteral::String(val) => Vec::from(val.as_bytes()),
             PrimitiveLiteral::UUID(val) => Vec::from(val.as_u128().to_be_bytes()),
             PrimitiveLiteral::Fixed(val) => val,
@@ -1555,7 +1555,7 @@ impl Literal {
                     )),
                 ))),
                 (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::TimestampTZ(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Timestamptz(
                         timestamptz::datetimetz_to_microseconds(&Utc.from_utc_datetime(
                             &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
                         )),
@@ -1697,7 +1697,7 @@ impl Literal {
                         .format("%Y-%m-%dT%H:%M:%S%.f")
                         .to_string(),
                 )),
-                PrimitiveLiteral::TimestampTZ(val) => Ok(JsonValue::String(
+                PrimitiveLiteral::Timestamptz(val) => Ok(JsonValue::String(
                     timestamptz::microseconds_to_datetimetz(val)
                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
                         .to_string(),
@@ -1788,7 +1788,7 @@ impl Literal {
                 PrimitiveLiteral::Date(any) => Box::new(any),
                 PrimitiveLiteral::Time(any) => Box::new(any),
                 PrimitiveLiteral::Timestamp(any) => Box::new(any),
-                PrimitiveLiteral::TimestampTZ(any) => Box::new(any),
+                PrimitiveLiteral::Timestamptz(any) => Box::new(any),
                 PrimitiveLiteral::Fixed(any) => Box::new(any),
                 PrimitiveLiteral::Binary(any) => Box::new(any),
                 PrimitiveLiteral::String(any) => Box::new(any),
@@ -2136,7 +2136,7 @@ mod _serde {
                     super::PrimitiveLiteral::Date(v) => RawLiteralEnum::Int(v),
                     super::PrimitiveLiteral::Time(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
-                    super::PrimitiveLiteral::TimestampTZ(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::Timestamptz(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
                     super::PrimitiveLiteral::UUID(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))
@@ -2641,7 +2641,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Timestamptz(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamptz),
         );
     }
@@ -2891,7 +2891,7 @@ mod tests {
     #[test]
     fn avro_convert_test_timestamptz() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::TimestampTZ(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Timestamptz(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamptz),
         );
     }

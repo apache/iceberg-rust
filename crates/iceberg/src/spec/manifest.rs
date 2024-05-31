@@ -1428,7 +1428,7 @@ mod _serde {
             if let Some(field) = schema.field_by_id(entry.key) {
                 let data_type = field
                     .field_type
-                    .as_primitive_type_ref()
+                    .as_primitive_type()
                     .ok_or_else(|| {
                         Error::new(
                             ErrorKind::DataInvalid,
