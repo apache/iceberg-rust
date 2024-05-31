@@ -914,6 +914,25 @@ impl Map {
     pub fn get(&self, key: &Literal) -> Option<&Option<Literal>> {
         self.index.get(key).map(|index| &self.pair[*index].1)
     }
+
+    /// The order of map is matter, so this method used to compare two maps has same key-value pairs without considering the order.
+    pub fn has_same_content(&self, other: &Map) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        for (key, value) in &self.pair {
+            if let Some(other_value) = other.get(key) {
+                if value != other_value {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl Default for Map {
@@ -2932,9 +2951,47 @@ mod tests {
         );
     }
 
+    fn check_convert_with_avro_map(expected_literal: Literal, expected_type: &Type) {
+        let fields = vec![NestedField::required(1, "col", expected_type.clone()).into()];
+        let schema = Schema::builder()
+            .with_fields(fields.clone())
+            .build()
+            .unwrap();
+        let avro_schema = schema_to_avro_schema("test", &schema).unwrap();
+        let struct_type = Type::Struct(StructType::new(fields));
+        let struct_literal =
+            Literal::Struct(Struct::from_iter(vec![Some(expected_literal.clone())]));
+
+        let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        let raw_literal = RawLiteral::try_from(struct_literal.clone(), &struct_type).unwrap();
+        writer.append_ser(raw_literal).unwrap();
+        let encoded = writer.into_inner().unwrap();
+
+        let reader = apache_avro::Reader::new(&*encoded).unwrap();
+        for record in reader {
+            let result = apache_avro::from_value::<RawLiteral>(&record.unwrap()).unwrap();
+            let desered_literal = result.try_into(&struct_type).unwrap().unwrap();
+            match (&desered_literal, &struct_literal) {
+                (Literal::Struct(desered), Literal::Struct(expected)) => {
+                    match (&desered.fields[0], &expected.fields[0]) {
+                        (Literal::Map(desered), Literal::Map(expected)) => {
+                            assert!(desered.has_same_content(expected))
+                        }
+                        _ => {
+                            unreachable!()
+                        }
+                    }
+                }
+                _ => {
+                    panic!("unexpected literal type");
+                }
+            }
+        }
+    }
+
     #[test]
     fn avro_convert_test_map() {
-        check_convert_with_avro(
+        check_convert_with_avro_map(
             Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::Int(1)),
@@ -2958,7 +3015,7 @@ mod tests {
             }),
         );
 
-        check_convert_with_avro(
+        check_convert_with_avro_map(
             Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::Int(1)),
@@ -2988,7 +3045,7 @@ mod tests {
 
     #[test]
     fn avro_convert_test_string_map() {
-        check_convert_with_avro(
+        check_convert_with_avro_map(
             Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
@@ -3015,7 +3072,7 @@ mod tests {
             }),
         );
 
-        check_convert_with_avro(
+        check_convert_with_avro_map(
             Literal::Map(Map::from([
                 (
                     Literal::Primitive(PrimitiveLiteral::String("a".to_string())),
