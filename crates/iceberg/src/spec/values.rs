@@ -922,12 +922,9 @@ impl Map {
         }
 
         for (key, value) in &self.pair {
-            if let Some(other_value) = other.get(key) {
-                if value != other_value {
-                    return false;
-                }
-            } else {
-                return false;
+            match other.get(key) {
+                Some(other_value) if value == other_value => (),
+                _ => return false,
             }
         }
 
