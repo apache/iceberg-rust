@@ -382,7 +382,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     SetDefaultSortOrder {
         /// Sort order ID to set as the default, or -1 to set last added sort order
-        sort_order_id: i32,
+        sort_order_id: i64,
     },
     /// Add snapshot to table.
     #[serde(rename_all = "kebab-case")]

@@ -20,7 +20,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use crate::io::FileIO;
-use crate::{io::OutputFile, spec::Literal, Error, ErrorKind};
+use crate::{io::OutputFile, Error, ErrorKind};
 use apache_avro::{from_value, types::Value, Reader, Writer};
 use bytes::Bytes;
 
@@ -29,7 +29,7 @@ use self::{
     _serde::{ManifestFileV1, ManifestFileV2},
 };
 
-use super::{FormatVersion, Manifest, StructType};
+use super::{Datum, FormatVersion, Manifest, StructType};
 use crate::error::Result;
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -297,7 +297,7 @@ mod _const_schema {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 504,
-                "added_data_files_count",
+                "added_files_count",
                 Type::Primitive(PrimitiveType::Int),
             ))
         })
@@ -315,7 +315,7 @@ mod _const_schema {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 505,
-                "existing_data_files_count",
+                "existing_files_count",
                 Type::Primitive(PrimitiveType::Int),
             ))
         })
@@ -333,7 +333,7 @@ mod _const_schema {
         Lazy::new(|| {
             Arc::new(NestedField::required(
                 506,
-                "deleted_data_files_count",
+                "deleted_files_count",
                 Type::Primitive(PrimitiveType::Int),
             ))
         })
@@ -537,17 +537,17 @@ pub struct ManifestFile {
     ///
     /// Number of entries in the manifest that have status ADDED, when null
     /// this is assumed to be non-zero
-    pub added_data_files_count: Option<u32>,
+    pub added_files_count: Option<u32>,
     /// field: 505
     ///
     /// Number of entries in the manifest that have status EXISTING (0),
     /// when null this is assumed to be non-zero
-    pub existing_data_files_count: Option<u32>,
+    pub existing_files_count: Option<u32>,
     /// field: 506
     ///
     /// Number of entries in the manifest that have status DELETED (2),
     /// when null this is assumed to be non-zero
-    pub deleted_data_files_count: Option<u32>,
+    pub deleted_files_count: Option<u32>,
     /// field: 512
     ///
     /// Number of rows in all of files in the manifest that have status
@@ -662,11 +662,11 @@ pub struct FieldSummary {
     /// field: 510
     /// The minimum value for the field in the manifests
     /// partitions.
-    pub lower_bound: Option<Literal>,
+    pub lower_bound: Option<Datum>,
     /// field: 511
     /// The maximum value for the field in the manifests
     /// partitions.
-    pub upper_bound: Option<Literal>,
+    pub upper_bound: Option<Datum>,
 }
 
 /// This is a helper module that defines types to help with serialization/deserialization.
@@ -675,7 +675,7 @@ pub struct FieldSummary {
 /// [ManifestFileV1] and [ManifestFileV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
     use crate::{
-        spec::{Literal, StructType, Type},
+        spec::{Datum, PrimitiveLiteral, PrimitiveType, StructType},
         Error,
     };
     pub use serde_bytes::ByteBuf;
@@ -809,11 +809,11 @@ pub(super) mod _serde {
         pub min_sequence_number: i64,
         pub added_snapshot_id: i64,
         #[serde(alias = "added_data_files_count", alias = "added_files_count")]
-        pub added_data_files_count: i32,
+        pub added_files_count: i32,
         #[serde(alias = "existing_data_files_count", alias = "existing_files_count")]
-        pub existing_data_files_count: i32,
+        pub existing_files_count: i32,
         #[serde(alias = "deleted_data_files_count", alias = "deleted_files_count")]
-        pub deleted_data_files_count: i32,
+        pub deleted_files_count: i32,
         pub added_rows_count: i64,
         pub existing_rows_count: i64,
         pub deleted_rows_count: i64,
@@ -833,17 +833,17 @@ pub(super) mod _serde {
         /// Converts the [FieldSummary] into a [super::FieldSummary].
         /// [lower_bound] and [upper_bound] are converted into [Literal]s need the type info so use
         /// this function instead of [std::TryFrom] trait.
-        pub(crate) fn try_into(self, r#type: &Type) -> Result<super::FieldSummary> {
+        pub(crate) fn try_into(self, r#type: &PrimitiveType) -> Result<super::FieldSummary> {
             Ok(super::FieldSummary {
                 contains_null: self.contains_null,
                 contains_nan: self.contains_nan,
                 lower_bound: self
                     .lower_bound
-                    .map(|v| Literal::try_from_bytes(&v, r#type))
+                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
                     .transpose()?,
                 upper_bound: self
                     .upper_bound
-                    .map(|v| Literal::try_from_bytes(&v, r#type))
+                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
                     .transpose()?,
             })
         }
@@ -869,7 +869,14 @@ pub(super) mod _serde {
                 partitions
                     .into_iter()
                     .zip(partition_types)
-                    .map(|(v, field)| v.try_into(&field.field_type))
+                    .map(|(v, field)| {
+                        v.try_into(field.field_type.as_primitive_type().ok_or_else(|| {
+                            Error::new(
+                                crate::ErrorKind::DataInvalid,
+                                "Invalid partition spec. Field type is not primitive",
+                            )
+                        })?)
+                    })
                     .collect::<Result<Vec<_>>>()
             } else {
                 Err(Error::new(
@@ -895,9 +902,9 @@ pub(super) mod _serde {
                 sequence_number: self.sequence_number,
                 min_sequence_number: self.min_sequence_number,
                 added_snapshot_id: self.added_snapshot_id,
-                added_data_files_count: Some(self.added_data_files_count.try_into()?),
-                existing_data_files_count: Some(self.existing_data_files_count.try_into()?),
-                deleted_data_files_count: Some(self.deleted_data_files_count.try_into()?),
+                added_files_count: Some(self.added_files_count.try_into()?),
+                existing_files_count: Some(self.existing_files_count.try_into()?),
+                deleted_files_count: Some(self.deleted_files_count.try_into()?),
                 added_rows_count: Some(self.added_rows_count.try_into()?),
                 existing_rows_count: Some(self.existing_rows_count.try_into()?),
                 deleted_rows_count: Some(self.deleted_rows_count.try_into()?),
@@ -917,15 +924,15 @@ pub(super) mod _serde {
                 manifest_length: self.manifest_length,
                 partition_spec_id: self.partition_spec_id,
                 added_snapshot_id: self.added_snapshot_id,
-                added_data_files_count: self
+                added_files_count: self
                     .added_data_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
-                existing_data_files_count: self
+                existing_files_count: self
                     .existing_data_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
-                deleted_data_files_count: self
+                deleted_files_count: self
                     .deleted_data_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
@@ -958,8 +965,8 @@ pub(super) mod _serde {
                     .map(|v| FieldSummary {
                         contains_null: v.contains_null,
                         contains_nan: v.contains_nan,
-                        lower_bound: v.lower_bound.map(|v| v.into()),
-                        upper_bound: v.upper_bound.map(|v| v.into()),
+                        lower_bound: v.lower_bound.map(|v| PrimitiveLiteral::from(v).into()),
+                        upper_bound: v.upper_bound.map(|v| PrimitiveLiteral::from(v).into()),
                     })
                     .collect(),
             )
@@ -988,8 +995,8 @@ pub(super) mod _serde {
                 sequence_number: value.sequence_number,
                 min_sequence_number: value.min_sequence_number,
                 added_snapshot_id: value.added_snapshot_id,
-                added_data_files_count: value
-                    .added_data_files_count
+                added_files_count: value
+                    .added_files_count
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
@@ -997,8 +1004,8 @@ pub(super) mod _serde {
                         )
                     })?
                     .try_into()?,
-                existing_data_files_count: value
-                    .existing_data_files_count
+                existing_files_count: value
+                    .existing_files_count
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
@@ -1006,8 +1013,8 @@ pub(super) mod _serde {
                         )
                     })?
                     .try_into()?,
-                deleted_data_files_count: value
-                    .deleted_data_files_count
+                deleted_files_count: value
+                    .deleted_files_count
                     .ok_or_else(|| {
                         Error::new(
                             crate::ErrorKind::DataInvalid,
@@ -1060,15 +1067,15 @@ pub(super) mod _serde {
                 partition_spec_id: value.partition_spec_id,
                 added_snapshot_id: value.added_snapshot_id,
                 added_data_files_count: value
-                    .added_data_files_count
+                    .added_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
                 existing_data_files_count: value
-                    .existing_data_files_count
+                    .existing_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
                 deleted_data_files_count: value
-                    .deleted_data_files_count
+                    .deleted_files_count
                     .map(TryInto::try_into)
                     .transpose()?,
                 added_rows_count: value.added_rows_count.map(TryInto::try_into).transpose()?,
@@ -1096,7 +1103,7 @@ mod test {
     use crate::{
         io::FileIOBuilder,
         spec::{
-            manifest_list::_serde::ManifestListV1, FieldSummary, Literal, ManifestContentType,
+            manifest_list::_serde::ManifestListV1, Datum, FieldSummary, ManifestContentType,
             ManifestFile, ManifestList, ManifestListWriter, NestedField, PrimitiveType, StructType,
             Type, UNASSIGNED_SEQUENCE_NUMBER,
         },
@@ -1116,9 +1123,9 @@ mod test {
                     sequence_number: 0,
                     min_sequence_number: 0,
                     added_snapshot_id: 1646658105718557341,
-                    added_data_files_count: Some(3),
-                    existing_data_files_count: Some(0),
-                    deleted_data_files_count: Some(0),
+                    added_files_count: Some(3),
+                    existing_files_count: Some(0),
+                    deleted_files_count: Some(0),
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
@@ -1166,13 +1173,13 @@ mod test {
                     sequence_number: 1,
                     min_sequence_number: 1,
                     added_snapshot_id: 377075049360453639,
-                    added_data_files_count: Some(1),
-                    existing_data_files_count: Some(0),
-                    deleted_data_files_count: Some(0),
+                    added_files_count: Some(1),
+                    existing_files_count: Some(0),
+                    deleted_files_count: Some(0),
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                     key_metadata: vec![],
                 },
                 ManifestFile {
@@ -1183,13 +1190,13 @@ mod test {
                     sequence_number: 1,
                     min_sequence_number: 1,
                     added_snapshot_id: 377075049360453639,
-                    added_data_files_count: Some(1),
-                    existing_data_files_count: Some(0),
-                    deleted_data_files_count: Some(0),
+                    added_files_count: Some(1),
+                    existing_files_count: Some(0),
+                    deleted_files_count: Some(0),
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::float(1.1)), upper_bound: Some(Literal::float(2.1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1)), upper_bound: Some(Datum::float(2.1))}],
                     key_metadata: vec![],
                 }
             ]
@@ -1254,9 +1261,9 @@ mod test {
                 sequence_number: 0,
                 min_sequence_number: 0,
                 added_snapshot_id: 1646658105718557341,
-                added_data_files_count: Some(3),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
+                added_files_count: Some(3),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
@@ -1282,20 +1289,20 @@ mod test {
                 sequence_number: 1,
                 min_sequence_number: 1,
                 added_snapshot_id: 377075049360453639,
-                added_data_files_count: Some(1),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         }.try_into().unwrap();
         let result = serde_json::to_string(&manifest_list).unwrap();
         assert_eq!(
             result,
-            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_data_files_count":1,"existing_data_files_count":0,"deleted_data_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
+            r#"[{"manifest_path":"s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro","manifest_length":6926,"partition_spec_id":1,"content":0,"sequence_number":1,"min_sequence_number":1,"added_snapshot_id":377075049360453639,"added_files_count":1,"existing_files_count":0,"deleted_files_count":0,"added_rows_count":3,"existing_rows_count":0,"deleted_rows_count":0,"partitions":[{"contains_null":false,"contains_nan":false,"lower_bound":[1,0,0,0,0,0,0,0],"upper_bound":[1,0,0,0,0,0,0,0]}],"key_metadata":null}]"#
         );
     }
 
@@ -1310,13 +1317,13 @@ mod test {
                 sequence_number: 0,
                 min_sequence_number: 0,
                 added_snapshot_id: 1646658105718557341,
-                added_data_files_count: Some(3),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
+                added_files_count: Some(3),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };
@@ -1366,13 +1373,13 @@ mod test {
                 sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
                 min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
                 added_snapshot_id: snapshot_id,
-                added_data_files_count: Some(1),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };
@@ -1420,13 +1427,13 @@ mod test {
                 sequence_number: 0,
                 min_sequence_number: 0,
                 added_snapshot_id: 1646658105718557341,
-                added_data_files_count: Some(3),
-                existing_data_files_count: Some(0),
-                deleted_data_files_count: Some(0),
+                added_files_count: Some(3),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Literal::long(1)), upper_bound: Some(Literal::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
                 key_metadata: vec![],
             }]
         };
