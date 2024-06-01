@@ -18,11 +18,11 @@
 //! Manifest for Iceberg.
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 
+use super::UNASSIGNED_SEQUENCE_NUMBER;
 use super::{
-    FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
+    Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
     SchemaId, Struct, INITIAL_SEQUENCE_NUMBER,
 };
-use super::{Literal, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
@@ -1003,7 +1003,7 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) lower_bounds: HashMap<i32, Literal>,
+    pub(crate) lower_bounds: HashMap<i32, Datum>,
     /// field id: 128
     /// key field id: 129
     /// value field id: 130
@@ -1016,7 +1016,7 @@ pub struct DataFile {
     ///
     /// - [Binary single-value serialization](https://iceberg.apache.org/spec/#binary-single-value-serialization)
     #[builder(default)]
-    pub(crate) upper_bounds: HashMap<i32, Literal>,
+    pub(crate) upper_bounds: HashMap<i32, Datum>,
     /// field id: 131
     ///
     /// Implementation-specific key metadata for encryption
@@ -1102,12 +1102,12 @@ impl DataFile {
     }
     /// Get the lower bounds of the data file values per column.
     /// Map from column id to lower bound in the column serialized as binary.
-    pub fn lower_bounds(&self) -> &HashMap<i32, Literal> {
+    pub fn lower_bounds(&self) -> &HashMap<i32, Datum> {
         &self.lower_bounds
     }
     /// Get the upper bounds of the data file values per column.
     /// Map from column id to upper bound in the column serialized as binary.
-    pub fn upper_bounds(&self) -> &HashMap<i32, Literal> {
+    pub fn upper_bounds(&self) -> &HashMap<i32, Datum> {
         &self.upper_bounds
     }
     /// Get the Implementation-specific key metadata for the data file.
@@ -1207,7 +1207,9 @@ mod _serde {
     use serde_derive::{Deserialize, Serialize};
     use serde_with::serde_as;
 
+    use crate::spec::Datum;
     use crate::spec::Literal;
+    use crate::spec::PrimitiveLiteral;
     use crate::spec::RawLiteral;
     use crate::spec::Schema;
     use crate::spec::Struct;
@@ -1331,8 +1333,12 @@ mod _serde {
                 value_counts: Some(to_i64_entry(value.value_counts)?),
                 null_value_counts: Some(to_i64_entry(value.null_value_counts)?),
                 nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
-                lower_bounds: Some(to_bytes_entry(value.lower_bounds)),
-                upper_bounds: Some(to_bytes_entry(value.upper_bounds)),
+                lower_bounds: Some(to_bytes_entry(
+                    value.lower_bounds.into_iter().map(|(k, v)| (k, v.into())),
+                )),
+                upper_bounds: Some(to_bytes_entry(
+                    value.upper_bounds.into_iter().map(|(k, v)| (k, v.into())),
+                )),
                 key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
                 split_offsets: Some(value.split_offsets),
                 equality_ids: Some(value.equality_ids),
@@ -1415,19 +1421,28 @@ mod _serde {
     fn parse_bytes_entry(
         v: Vec<BytesEntry>,
         schema: &Schema,
-    ) -> Result<HashMap<i32, Literal>, Error> {
+    ) -> Result<HashMap<i32, Datum>, Error> {
         let mut m = HashMap::with_capacity(v.len());
         for entry in v {
             // We ignore the entry if the field is not found in the schema, due to schema evolution.
             if let Some(field) = schema.field_by_id(entry.key) {
-                let data_type = &field.field_type;
-                m.insert(entry.key, Literal::try_from_bytes(&entry.value, data_type)?);
+                let data_type = field
+                    .field_type
+                    .as_primitive_type()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("field {} is not a primitive type", field.name),
+                        )
+                    })?
+                    .clone();
+                m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
             }
         }
         Ok(m)
     }
 
-    fn to_bytes_entry(v: HashMap<i32, Literal>) -> Vec<BytesEntry> {
+    fn to_bytes_entry(v: impl IntoIterator<Item = (i32, PrimitiveLiteral)>) -> Vec<BytesEntry> {
         v.into_iter()
             .map(|e| BytesEntry {
                 key: e.0,
@@ -1495,6 +1510,7 @@ mod tests {
 
     use super::*;
     use crate::io::FileIOBuilder;
+    use crate::spec::Literal;
     use crate::spec::NestedField;
     use crate::spec::PrimitiveType;
     use crate::spec::Struct;
@@ -1824,8 +1840,8 @@ mod tests {
                     value_counts: HashMap::from([(1,1),(2,1),(3,1)]),
                     null_value_counts: HashMap::from([(1,0),(2,0),(3,0)]),
                     nan_value_counts: HashMap::new(),
-                    lower_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
-                    upper_bounds: HashMap::from([(1,Literal::int(1)),(2,Literal::string("a")),(3,Literal::string("AC/DC"))]),
+                    lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
+                    upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
                     key_metadata: vec![],
                     split_offsets: vec![4],
                     equality_ids: vec![],
@@ -1903,14 +1919,14 @@ mod tests {
                         null_value_counts: HashMap::from([(1, 0), (2, 0), (3, 0)]),
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::string("a")),
-                        (3, Literal::string("x"))
+                        (1, Datum::long(1)),
+                        (2, Datum::string("a")),
+                        (3, Datum::string("x"))
                         ]),
                         upper_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::string("a")),
-                        (3, Literal::string("x"))
+                        (1, Datum::long(1)),
+                        (2, Datum::string("a")),
+                        (3, Datum::string("x"))
                         ]),
                         key_metadata: vec![],
                         split_offsets: vec![4],
@@ -1926,8 +1942,8 @@ mod tests {
         let entry = test_manifest_read_write(manifest, writer).await;
 
         assert_eq!(entry.partitions.len(), 1);
-        assert_eq!(entry.partitions[0].lower_bound, Some(Literal::string("x")));
-        assert_eq!(entry.partitions[0].upper_bound, Some(Literal::string("x")));
+        assert_eq!(entry.partitions[0].lower_bound, Some(Datum::string("x")));
+        assert_eq!(entry.partitions[0].upper_bound, Some(Datum::string("x")));
     }
 
     #[tokio::test]
@@ -1978,14 +1994,14 @@ mod tests {
                     null_value_counts: HashMap::default(),
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::int(2)),
-                        (3, Literal::string("x"))
+                        (1, Datum::long(1)),
+                        (2, Datum::int(2)),
+                        (3, Datum::string("x"))
                     ]),
                     upper_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::int(2)),
-                        (3, Literal::string("x"))
+                        (1, Datum::long(1)),
+                        (2, Datum::int(2)),
+                        (3, Datum::string("x"))
                     ]),
                     key_metadata: vec![],
                     split_offsets: vec![4],
@@ -2050,12 +2066,12 @@ mod tests {
                     null_value_counts: HashMap::default(),
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::int(2)),
+                        (1, Datum::long(1)),
+                        (2, Datum::int(2)),
                     ]),
                     upper_bounds: HashMap::from([
-                        (1, Literal::long(1)),
-                        (2, Literal::int(2)),
+                        (1, Datum::long(1)),
+                        (2, Datum::int(2)),
                     ]),
                     key_metadata: vec![],
                     split_offsets: vec![4],
