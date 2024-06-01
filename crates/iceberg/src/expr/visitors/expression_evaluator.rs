@@ -73,6 +73,7 @@ impl<'a> ExpressionEvaluatorVisitor<'a> {
         }
     }
 
+    // TODO: Remove once Accessor returns Option<>
     /// Checks if the [`PrimitiveLiteral`] is null.
     fn is_null(literal: &PrimitiveLiteral) -> bool {
         if let PrimitiveLiteral::Boolean(false) = literal {
@@ -146,7 +147,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
             return Ok(false);
         }
 
-        Ok(datum.literal() < literal.literal())
+        Ok(&datum < literal)
     }
 
     fn less_than_or_eq(
@@ -161,7 +162,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
             return Ok(false);
         }
 
-        Ok(datum.literal() <= literal.literal())
+        Ok(&datum <= literal)
     }
 
     fn greater_than(
@@ -176,7 +177,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
             return Ok(false);
         }
 
-        Ok(datum.literal() > literal.literal())
+        Ok(&datum > literal)
     }
 
     fn greater_than_or_eq(
@@ -191,7 +192,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
             return Ok(false);
         }
 
-        Ok(datum.literal() >= literal.literal())
+        Ok(&datum >= literal)
     }
 
     fn eq(
@@ -202,7 +203,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
-        Ok(datum.literal() == literal.literal())
+        Ok(&datum == literal)
     }
 
     fn not_eq(
@@ -213,7 +214,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     ) -> Result<bool> {
         let datum = reference.accessor().get(self.partition)?;
 
-        Ok(datum.literal() != literal.literal())
+        Ok(&datum != literal)
     }
 
     fn starts_with(
