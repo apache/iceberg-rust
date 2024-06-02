@@ -75,7 +75,7 @@ pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Close the writer and return the written data files.
     /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
     /// # NOTE
-    /// After close, no matter successfully or fail,the writer should never be used again, otherwise the writer will panic.
+    /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
     async fn close(&mut self) -> Result<O>;
 }
 
