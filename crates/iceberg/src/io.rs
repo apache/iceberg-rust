@@ -451,6 +451,9 @@ impl Storage {
         new_props.insert("root".to_string(), DEFAULT_ROOT_PATH.to_string());
 
         match scheme {
+            Scheme::Memory => Ok(Self::LocalFs {
+                op: Operator::via_map(Scheme::Memory, new_props)?,
+            }),
             Scheme::Fs => Ok(Self::LocalFs {
                 op: Operator::via_map(Scheme::Fs, new_props)?,
             }),

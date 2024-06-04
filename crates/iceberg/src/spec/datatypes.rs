@@ -25,12 +25,14 @@ use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::convert::identity;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::{collections::HashMap, fmt, ops::Index};
 
 use super::values::Literal;
+use super::{PrimitiveLiteral, Struct};
 
 /// Field name for list type.
 pub(crate) const LIST_FILED_NAME: &str = "element";
@@ -100,6 +102,23 @@ impl fmt::Display for Type {
 }
 
 impl Type {
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, literal: &Literal) -> bool {
+        match (self, literal) {
+            (Type::Primitive(primitive), Literal::Primitive(primitive_literal)) => {
+                primitive.compatible(primitive_literal)
+            }
+            (Type::Struct(struct_type), Literal::Struct(struct_literal)) => {
+                struct_type.compatible(struct_literal)
+            }
+            (Type::List(list_type), Literal::List(list_literal)) => {
+                list_type.compatible(list_literal)
+            }
+            (Type::Map(map_type), Literal::Map(map_literal)) => map_type.compatible(map_literal),
+            _ => false,
+        }
+    }
+
     /// Whether the type is primitive type.
     #[inline(always)]
     pub fn is_primitive(&self) -> bool {
@@ -266,6 +285,29 @@ impl<'de> Deserialize<'de> for PrimitiveType {
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
+    }
+}
+
+impl PrimitiveType {
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
+        matches!(
+            (self, literal),
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(_))
+                | (PrimitiveType::Int, PrimitiveLiteral::Int(_))
+                | (PrimitiveType::Long, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::Float, PrimitiveLiteral::Float(_))
+                | (PrimitiveType::Double, PrimitiveLiteral::Double(_))
+                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Decimal(_))
+                | (PrimitiveType::Date, PrimitiveLiteral::Date(_))
+                | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
+                | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
+                | (PrimitiveType::Timestamptz, PrimitiveLiteral::TimestampTZ(_))
+                | (PrimitiveType::String, PrimitiveLiteral::String(_))
+                | (PrimitiveType::Uuid, PrimitiveLiteral::UUID(_))
+                | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
+                | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+        )
     }
 }
 
@@ -465,6 +507,17 @@ impl StructType {
     /// Get fields.
     pub fn fields(&self) -> &[NestedFieldRef] {
         &self.fields
+    }
+
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, struct_literal: &Struct) -> bool {
+        if self.fields().len() != struct_literal.fields().len() {
+            return false;
+        }
+        self.fields()
+            .iter()
+            .zip(struct_literal.fields())
+            .all(|(field, literal)| field.field_type.compatible(literal))
     }
 }
 
@@ -667,6 +720,17 @@ pub struct ListType {
     pub element_field: NestedFieldRef,
 }
 
+impl ListType {
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, list_literal: &[Option<Literal>]) -> bool {
+        list_literal.iter().all(|x| {
+            x.as_ref()
+                .map(|x| self.element_field.field_type.compatible(x))
+                .unwrap_or(true)
+        })
+    }
+}
+
 /// Module for type serialization/deserialization.
 pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
@@ -780,6 +844,19 @@ pub struct MapType {
     pub key_field: NestedFieldRef,
     /// Field for value.
     pub value_field: NestedFieldRef,
+}
+
+impl MapType {
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, map_literal: &BTreeMap<Literal, Option<Literal>>) -> bool {
+        map_literal.iter().all(|(key, value)| {
+            self.key_field.field_type.compatible(key)
+                && value
+                    .as_ref()
+                    .map(|x| self.value_field.field_type.compatible(x))
+                    .unwrap_or(true)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1085,5 +1162,129 @@ mod tests {
 
         assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
         assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_type_compatitable() {
+        let types = vec![
+            PrimitiveType::Boolean,
+            PrimitiveType::Int,
+            PrimitiveType::Long,
+            PrimitiveType::Float,
+            PrimitiveType::Double,
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            PrimitiveType::Date,
+            PrimitiveType::Time,
+            PrimitiveType::Timestamp,
+            PrimitiveType::Timestamptz,
+            PrimitiveType::String,
+            PrimitiveType::Uuid,
+            PrimitiveType::Fixed(8),
+            PrimitiveType::Binary,
+        ];
+        let literals = vec![
+            PrimitiveLiteral::Boolean(true),
+            PrimitiveLiteral::Int(1),
+            PrimitiveLiteral::Long(1),
+            PrimitiveLiteral::Float(1.0.into()),
+            PrimitiveLiteral::Double(1.0.into()),
+            PrimitiveLiteral::Decimal(1),
+            PrimitiveLiteral::Date(1),
+            PrimitiveLiteral::Time(1),
+            PrimitiveLiteral::Timestamp(1),
+            PrimitiveLiteral::TimestampTZ(1),
+            PrimitiveLiteral::String("1".to_string()),
+            PrimitiveLiteral::UUID(Uuid::new_v4()),
+            PrimitiveLiteral::Fixed(vec![1]),
+            PrimitiveLiteral::Binary(vec![1]),
+        ];
+        for (i, t) in types.iter().enumerate() {
+            for (j, l) in literals.iter().enumerate() {
+                assert_eq!(i == j, t.compatible(l));
+            }
+        }
+    }
+
+    #[test]
+    fn test_complex_type_compatitable() {
+        // test struct
+        let struct_type = StructType::new(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+        ]);
+        let struct_literal = Struct::from_iter(vec![
+            Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                "name".to_string(),
+            ))),
+        ]);
+        let struct_literal2 = Struct::from_iter(vec![
+            Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+            None,
+        ]);
+        assert!(struct_type.compatible(&struct_literal));
+        assert!(!struct_type.compatible(&struct_literal2));
+
+        // test list
+        let list_type = ListType {
+            element_field: NestedField::list_element(1, Type::Primitive(PrimitiveType::Int), true)
+                .into(),
+        };
+        let list_literal = vec![Some(Literal::Primitive(PrimitiveLiteral::Int(1)))];
+        let list_literal2 = vec![None];
+        let list_literal3 = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+            "1".to_string(),
+        )))];
+        assert!(list_type.compatible(&list_literal));
+        assert!(list_type.compatible(&list_literal2));
+        assert!(!list_type.compatible(&list_literal3));
+
+        // test map
+        let map_type = MapType {
+            key_field: NestedField::map_key_element(1, Type::Primitive(PrimitiveType::Int)).into(),
+            value_field: NestedField::map_value_element(
+                2,
+                Type::Primitive(PrimitiveType::String),
+                true,
+            )
+            .into(),
+        };
+        let map_literal1 = BTreeMap::from_iter(vec![
+            (
+                Literal::Primitive(PrimitiveLiteral::Int(1)),
+                Some(Literal::Primitive(PrimitiveLiteral::String(
+                    "1".to_string(),
+                ))),
+            ),
+            (
+                Literal::Primitive(PrimitiveLiteral::Int(2)),
+                Some(Literal::Primitive(PrimitiveLiteral::String(
+                    "2".to_string(),
+                ))),
+            ),
+        ]);
+        let map_literal2 = BTreeMap::from_iter(vec![
+            (
+                Literal::Primitive(PrimitiveLiteral::Int(1)),
+                Some(Literal::Primitive(PrimitiveLiteral::String(
+                    "1".to_string(),
+                ))),
+            ),
+            (Literal::Primitive(PrimitiveLiteral::Int(2)), None),
+        ]);
+        let map_literal3 = BTreeMap::from_iter(vec![]);
+        let map_literal4 = BTreeMap::from_iter(vec![(
+            Literal::Primitive(PrimitiveLiteral::String("1".to_string())),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                "1".to_string(),
+            ))),
+        )]);
+        assert!(map_type.compatible(&map_literal1));
+        assert!(map_type.compatible(&map_literal2));
+        assert!(map_type.compatible(&map_literal3));
+        assert!(!map_type.compatible(&map_literal4));
     }
 }

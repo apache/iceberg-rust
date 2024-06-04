@@ -883,6 +883,12 @@ impl ManifestEntry {
         }
     }
 
+    /// Snapshot id
+    #[inline]
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
+    }
+
     /// Data sequence number.
     #[inline]
     pub fn sequence_number(&self) -> Option<i64> {

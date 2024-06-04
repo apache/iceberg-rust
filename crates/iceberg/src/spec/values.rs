@@ -1440,6 +1440,11 @@ impl Struct {
             },
         )
     }
+
+    /// Return fields in the struct.
+    pub fn fields(&self) -> &[Literal] {
+        &self.fields
+    }
 }
 
 impl Index<usize> for Struct {
