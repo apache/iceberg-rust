@@ -92,7 +92,6 @@ pub trait CurrentFileStatus {
 
 #[cfg(test)]
 mod tests {
-
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use arrow_select::concat::concat_batches;
