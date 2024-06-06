@@ -75,7 +75,7 @@ pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Close the writer and return the written data files.
     /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
     /// # NOTE
-    /// After close, no matter successfully or fail,the writer should never be used again, otherwise the writer will panic.
+    /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
     async fn close(&mut self) -> Result<O>;
 }
 
@@ -95,8 +95,6 @@ mod tests {
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use arrow_select::concat::concat_batches;
-    use bytes::Bytes;
-    use futures::AsyncReadExt;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use crate::{
@@ -124,16 +122,11 @@ mod tests {
     ) {
         assert_eq!(data_file.file_format, DataFileFormat::Parquet);
 
+        let input_file = file_io.new_input(data_file.file_path.clone()).unwrap();
         // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
+        let input_content = input_file.read().await.unwrap();
+        let reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(input_content.clone()).unwrap();
         let metadata = reader_builder.metadata().clone();
 
         // check data
@@ -154,7 +147,7 @@ mod tests {
                 .sum::<i64>() as u64
         );
 
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
+        assert_eq!(data_file.file_size_in_bytes, input_content.len() as u64);
 
         assert_eq!(data_file.column_sizes.len(), expect_column_num);
         data_file.column_sizes.iter().for_each(|(&k, &v)| {

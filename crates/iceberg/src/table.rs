@@ -21,7 +21,6 @@ use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::Result;
 use crate::TableIdent;
-use futures::AsyncReadExt;
 use typed_builder::TypedBuilder;
 
 /// Table represents a table in the catalog.
@@ -118,12 +117,8 @@ impl StaticTable {
         file_io: FileIO,
     ) -> Result<Self> {
         let metadata_file = file_io.new_input(metadata_file_path)?;
-        let mut metadata_file_reader = metadata_file.reader().await?;
-        let mut metadata_file_content = String::new();
-        metadata_file_reader
-            .read_to_string(&mut metadata_file_content)
-            .await?;
-        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_file_content)?;
+        let metadata_file_content = metadata_file.read().await?;
+        let table_metadata = serde_json::from_slice::<TableMetadata>(&metadata_file_content)?;
         Self::from_metadata(table_metadata, table_ident, file_io).await
     }
 
@@ -148,6 +143,7 @@ impl StaticTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
     async fn test_static_table_from_file() {
         let metadata_file_name = "TableMetadataV2Valid.json";
@@ -211,13 +207,9 @@ mod tests {
             .build()
             .unwrap();
         let metadata_file = file_io.new_input(metadata_file_path).unwrap();
-        let mut metadata_file_reader = metadata_file.reader().await.unwrap();
-        let mut metadata_file_content = String::new();
-        metadata_file_reader
-            .read_to_string(&mut metadata_file_content)
-            .await
-            .unwrap();
-        let table_metadata = serde_json::from_str::<TableMetadata>(&metadata_file_content).unwrap();
+        let metadata_file_content = metadata_file.read().await.unwrap();
+        let table_metadata =
+            serde_json::from_slice::<TableMetadata>(&metadata_file_content).unwrap();
         let static_identifier = TableIdent::from_strs(["ns", "table"]).unwrap();
         let table = Table::builder()
             .metadata(table_metadata)
