@@ -1440,6 +1440,11 @@ impl Struct {
             },
         )
     }
+
+    /// returns true if the field at position `index` is null
+    pub fn is_null_at_index(&self, index: usize) -> bool {
+        self.null_bitmap[index]
+    }
 }
 
 impl Index<usize> for Struct {
