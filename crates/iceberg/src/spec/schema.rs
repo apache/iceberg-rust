@@ -1683,7 +1683,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::string("foo value")
+            Some(Datum::string("foo value"))
         );
         assert_eq!(
             schema
@@ -1691,7 +1691,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::int(1002)
+            Some(Datum::int(1002))
         );
         assert_eq!(
             schema
@@ -1699,7 +1699,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::bool(true)
+            Some(Datum::bool(true))
         );
         assert_eq!(
             schema
@@ -1707,7 +1707,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::string("Testy McTest")
+            Some(Datum::string("Testy McTest"))
         );
         assert_eq!(
             schema
@@ -1715,7 +1715,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::int(33)
+            Some(Datum::int(33))
         );
     }
 

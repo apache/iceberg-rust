@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::spec::{Datum, Literal, PrimitiveType, Struct};
-use crate::{Error, ErrorKind};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
+
+use crate::spec::{Datum, Literal, PrimitiveType, Struct};
+use crate::{Error, ErrorKind, Result};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct StructAccessor {
@@ -54,11 +55,13 @@ impl StructAccessor {
         &self.r#type
     }
 
-    pub(crate) fn get<'a>(&'a self, container: &'a Struct) -> crate::Result<Datum> {
+    pub(crate) fn get<'a>(&'a self, container: &'a Struct) -> Result<Option<Datum>> {
         match &self.inner {
             None => {
-                if let Literal::Primitive(literal) = &container[self.position] {
-                    Ok(Datum::new(self.r#type().clone(), literal.clone()))
+                if container.is_null_at_index(self.position) {
+                    Ok(None)
+                } else if let Literal::Primitive(literal) = &container[self.position] {
+                    Ok(Some(Datum::new(self.r#type().clone(), literal.clone())))
                 } else {
                     Err(Error::new(
                         ErrorKind::Unexpected,
@@ -95,7 +98,19 @@ mod tests {
         let test_struct =
             Struct::from_iter(vec![Some(Literal::bool(false)), Some(Literal::bool(true))]);
 
-        assert_eq!(accessor.get(&test_struct).unwrap(), Datum::bool(true));
+        assert_eq!(accessor.get(&test_struct).unwrap(), Some(Datum::bool(true)));
+    }
+
+    #[test]
+    fn test_single_level_accessor_null() {
+        let accessor = StructAccessor::new(1, PrimitiveType::Boolean);
+
+        assert_eq!(accessor.r#type(), &PrimitiveType::Boolean);
+        assert_eq!(accessor.position(), 1);
+
+        let test_struct = Struct::from_iter(vec![Some(Literal::bool(false)), None]);
+
+        assert_eq!(accessor.get(&test_struct).unwrap(), None);
     }
 
     #[test]
@@ -115,6 +130,25 @@ mod tests {
             Some(Literal::Struct(nested_test_struct)),
         ]);
 
-        assert_eq!(accessor.get(&test_struct).unwrap(), Datum::bool(true));
+        assert_eq!(accessor.get(&test_struct).unwrap(), Some(Datum::bool(true)));
+    }
+
+    #[test]
+    fn test_nested_accessor_null() {
+        let nested_accessor = StructAccessor::new(0, PrimitiveType::Boolean);
+        let accessor = StructAccessor::wrap(2, Box::new(nested_accessor));
+
+        assert_eq!(accessor.r#type(), &PrimitiveType::Boolean);
+        //assert_eq!(accessor.position(), 1);
+
+        let nested_test_struct = Struct::from_iter(vec![None, Some(Literal::bool(true))]);
+
+        let test_struct = Struct::from_iter(vec![
+            Some(Literal::bool(false)),
+            Some(Literal::bool(false)),
+            Some(Literal::Struct(nested_test_struct)),
+        ]);
+
+        assert_eq!(accessor.get(&test_struct).unwrap(), None);
     }
 }

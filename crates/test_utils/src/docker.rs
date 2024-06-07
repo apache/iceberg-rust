@@ -18,9 +18,9 @@
 use crate::cmd::{get_cmd_output, run_command};
 use std::process::Command;
 
-/// A utility to manage lifecycle of docker compose.
+/// A utility to manage the lifecycle of `docker compose`.
 ///
-/// It's will start docker compose when calling `run` method, and will be stopped when dropped.
+/// It will start `docker compose` when calling the `run` method and will be stopped via [`Drop`].
 #[derive(Debug)]
 pub struct DockerCompose {
     project_name: String,
