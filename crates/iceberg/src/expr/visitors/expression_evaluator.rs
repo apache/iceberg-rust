@@ -72,16 +72,6 @@ impl<'a> ExpressionEvaluatorVisitor<'a> {
             partition,
         }
     }
-
-    // TODO: Remove once Accessor returns Option<>
-    /// Checks if the [`PrimitiveLiteral`] is null.
-    fn is_null(literal: &PrimitiveLiteral) -> bool {
-        if let PrimitiveLiteral::Boolean(false) = literal {
-            return true;
-        };
-
-        false
-    }
 }
 
 impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
