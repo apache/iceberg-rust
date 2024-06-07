@@ -108,9 +108,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(Self::is_null(datum.literal()))
+        match reference.accessor().get(self.partition)? {
+            Some(_) => Ok(false),
+            None => Ok(true),
+        }
     }
 
     fn not_null(
@@ -118,21 +119,24 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(!Self::is_null(datum.literal()))
+        match reference.accessor().get(self.partition)? {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
     }
 
     fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(datum.is_nan())
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(datum.is_nan()),
+            None => Ok(false),
+        }
     }
 
     fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(!datum.is_nan())
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(!datum.is_nan()),
+            None => Ok(true),
+        }
     }
 
     fn less_than(
@@ -141,13 +145,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        if Self::is_null(datum.literal()) {
-            return Ok(false);
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum < literal),
+            None => Ok(false),
         }
-
-        Ok(&datum < literal)
     }
 
     fn less_than_or_eq(
@@ -156,13 +157,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        if Self::is_null(datum.literal()) {
-            return Ok(false);
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum <= literal),
+            None => Ok(false),
         }
-
-        Ok(&datum <= literal)
     }
 
     fn greater_than(
@@ -171,13 +169,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        if Self::is_null(datum.literal()) {
-            return Ok(false);
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum > literal),
+            None => Ok(false),
         }
-
-        Ok(&datum > literal)
     }
 
     fn greater_than_or_eq(
@@ -186,13 +181,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        if Self::is_null(datum.literal()) {
-            return Ok(false);
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum >= literal),
+            None => Ok(false),
         }
-
-        Ok(&datum >= literal)
     }
 
     fn eq(
@@ -201,9 +193,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(&datum == literal)
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum == literal),
+            None => Ok(false),
+        }
     }
 
     fn not_eq(
@@ -212,9 +205,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(&datum != literal)
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(&datum != literal),
+            None => Ok(true),
+        }
     }
 
     fn starts_with(
@@ -223,11 +217,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        if Self::is_null(datum.literal()) {
-            return Ok(false);
-        }
+        let datum = match reference.accessor().get(self.partition)? {
+            Some(datum) => datum,
+            None => return Ok(false),
+        };
 
         match (datum.literal(), literal.literal()) {
             (PrimitiveLiteral::String(d), PrimitiveLiteral::String(l)) => Ok(d.starts_with(l)),
@@ -250,9 +243,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(literals.contains(&datum))
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(literals.contains(&datum)),
+            None => Ok(false),
+        }
     }
 
     fn not_in(
@@ -261,9 +255,10 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = reference.accessor().get(self.partition)?;
-
-        Ok(!literals.contains(&datum))
+        match reference.accessor().get(self.partition)? {
+            Some(datum) => Ok(!literals.contains(&datum)),
+            None => Ok(true),
+        }
     }
 }
 
