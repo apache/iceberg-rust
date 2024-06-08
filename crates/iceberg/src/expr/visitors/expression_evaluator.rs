@@ -207,9 +207,8 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let datum = match reference.accessor().get(self.partition)? {
-            Some(datum) => datum,
-            None => return Ok(false),
+        let Some(datum) = reference.accessor().get(self.partition)? else {
+            return Ok(false);
         };
 
         match (datum.literal(), literal.literal()) {
