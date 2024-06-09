@@ -38,7 +38,7 @@ rust-version = "1.77.1"
 anyhow = "1.0.72"
 apache-avro = "0.16"
 array-init = "2"
-arrow-arith = { version = "51" }
+arrow-arith = { version = "52" }
 arrow-array = { version = "51" }
 arrow-ord = { version = "51" }
 arrow-schema = { version = "51" }
