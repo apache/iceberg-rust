@@ -17,7 +17,7 @@
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{Datum, FieldSummary, Literal, ManifestFile, PrimitiveLiteral, Type};
+use crate::spec::{Datum, FieldSummary, ManifestFile, PrimitiveLiteral, Type};
 use crate::Result;
 use crate::{Error, ErrorKind};
 use fnv::FnvHashSet;
@@ -110,7 +110,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
 
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
-        if self.are_all_null(field, &reference.field().field_type) {
+        if ManifestFilterVisitor::are_all_null(field, &reference.field().field_type) {
             ROWS_CANNOT_MATCH
         } else {
             ROWS_MIGHT_MATCH
@@ -129,7 +129,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             }
         }
 
-        if self.are_all_null(field, &reference.field().field_type) {
+        if ManifestFilterVisitor::are_all_null(field, &reference.field().field_type) {
             return ROWS_CANNOT_MATCH;
         }
 
@@ -143,6 +143,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
         if let Some(contains_nan) = field.contains_nan {
+            // check if all values are nan
             if contains_nan && !field.contains_null && field.lower_bound.is_none() {
                 return ROWS_CANNOT_MATCH;
             }
@@ -157,12 +158,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
-        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            if datum.literal() <= lower_bound {
-                return ROWS_CANNOT_MATCH;
-            }
+        match &field.lower_bound {
+            Some(bound) if datum <= bound => ROWS_CANNOT_MATCH,
+            Some(_) => ROWS_MIGHT_MATCH,
+            None => ROWS_CANNOT_MATCH,
         }
-        ROWS_MIGHT_MATCH
     }
 
     fn less_than_or_eq(
@@ -172,12 +172,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
-        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            if datum.literal() < lower_bound {
-                return ROWS_CANNOT_MATCH;
-            }
+        match &field.lower_bound {
+            Some(bound) if datum < bound => ROWS_CANNOT_MATCH,
+            Some(_) => ROWS_MIGHT_MATCH,
+            None => ROWS_CANNOT_MATCH,
         }
-        ROWS_MIGHT_MATCH
     }
 
     fn greater_than(
@@ -187,12 +186,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
-        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            if datum.literal() >= upper_bound {
-                return ROWS_CANNOT_MATCH;
-            }
+        match &field.upper_bound {
+            Some(bound) if datum >= bound => ROWS_CANNOT_MATCH,
+            Some(_) => ROWS_MIGHT_MATCH,
+            None => ROWS_CANNOT_MATCH,
         }
-        ROWS_MIGHT_MATCH
     }
 
     fn greater_than_or_eq(
@@ -202,12 +200,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field = self.field_summary_for_reference(reference);
-        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            if datum.literal() > upper_bound {
-                return ROWS_CANNOT_MATCH;
-            }
+        match &field.upper_bound {
+            Some(bound) if datum > bound => ROWS_CANNOT_MATCH,
+            Some(_) => ROWS_MIGHT_MATCH,
+            None => ROWS_CANNOT_MATCH,
         }
-        ROWS_MIGHT_MATCH
     }
 
     fn eq(
@@ -222,14 +219,14 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_CANNOT_MATCH;
         }
 
-        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            if lower_bound > datum.literal() {
+        if let Some(lower_bound) = &field.lower_bound {
+            if lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
-        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            if upper_bound < datum.literal() {
+        if let Some(upper_bound) = &field.upper_bound {
+            if upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -267,34 +264,32 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             ));
         };
 
-        let prefix_len = prefix.chars().count();
+        let prefix_len = prefix.len();
 
         if let Some(lower_bound) = &field.lower_bound {
-            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+            let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot perform starts_with on non-string lower bound",
                 ));
             };
 
-            let min_len = lower_bound.chars().count().min(prefix_len);
-            let truncated_lower_bound = lower_bound.chars().take(min_len).collect::<String>();
-            if prefix < &truncated_lower_bound {
+            let min_len = lower_bound.len().min(prefix_len);
+            if prefix.as_bytes().lt(&lower_bound.as_bytes()[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = &field.upper_bound {
-            let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound else {
+            let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot perform starts_with on non-string upper bound",
                 ));
             };
 
-            let min_len = upper_bound.chars().count().min(prefix_len);
-            let truncated_upper_bound = upper_bound.chars().take(min_len).collect::<String>();
-            if prefix > &truncated_upper_bound {
+            let min_len = upper_bound.len().min(prefix_len);
+            if prefix.as_bytes().gt(&upper_bound.as_bytes()[..min_len]) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -321,12 +316,12 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             ));
         };
 
-        let prefix_len = prefix.chars().count();
+        let prefix_len = prefix.len();
 
         // not_starts_with will match unless all values must start with the prefix. This happens when
         // the lower and upper bounds both start with the prefix.
         if let Some(lower_bound) = &field.lower_bound {
-            let Literal::Primitive(PrimitiveLiteral::String(lower_bound)) = lower_bound else {
+            let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Cannot perform not_starts_with on non-string lower bound",
@@ -334,15 +329,13 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             };
 
             // if lower is shorter than the prefix then lower doesn't start with the prefix
-            if prefix_len > lower_bound.chars().count() {
+            if prefix_len > lower_bound.len() {
                 return ROWS_MIGHT_MATCH;
             }
 
-            let truncated_lower_bound = lower_bound.chars().take(prefix_len).collect::<String>();
-            if prefix == &truncated_lower_bound {
+            if prefix.as_bytes().eq(&lower_bound.as_bytes()[..prefix_len]) {
                 if let Some(upper_bound) = &field.upper_bound {
-                    let Literal::Primitive(PrimitiveLiteral::String(upper_bound)) = upper_bound
-                    else {
+                    let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
                             "Cannot perform not_starts_with on non-string upper bound",
@@ -350,13 +343,11 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                     };
 
                     // if upper is shorter than the prefix then upper can't start with the prefix
-                    if prefix_len > upper_bound.chars().count() {
+                    if prefix_len > upper_bound.len() {
                         return ROWS_MIGHT_MATCH;
                     }
 
-                    let truncated_upper_bound =
-                        upper_bound.chars().take(prefix_len).collect::<String>();
-                    if prefix == &truncated_upper_bound {
+                    if prefix.as_bytes().eq(&upper_bound.as_bytes()[..prefix_len]) {
                         return ROWS_CANNOT_MATCH;
                     }
                 }
@@ -381,14 +372,14 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        if let Some(Literal::Primitive(lower_bound)) = &field.lower_bound {
-            if literals.iter().all(|datum| lower_bound > datum.literal()) {
+        if let Some(lower_bound) = &field.lower_bound {
+            if literals.iter().all(|datum| lower_bound > datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
 
-        if let Some(Literal::Primitive(upper_bound)) = &field.upper_bound {
-            if literals.iter().all(|datum| upper_bound < datum.literal()) {
+        if let Some(upper_bound) = &field.upper_bound {
+            if literals.iter().all(|datum| upper_bound < datum) {
                 return ROWS_CANNOT_MATCH;
             }
         }
@@ -414,7 +405,7 @@ impl ManifestFilterVisitor<'_> {
         &self.partitions[pos]
     }
 
-    fn are_all_null(&self, field: &FieldSummary, r#type: &Type) -> bool {
+    fn are_all_null(field: &FieldSummary, r#type: &Type) -> bool {
         // contains_null encodes whether at least one partition value is null,
         // lowerBound is null if all partition values are null
         let mut all_null: bool = field.contains_null && field.lower_bound.is_none();
@@ -440,8 +431,8 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        Datum, FieldSummary, Literal, ManifestContentType, ManifestFile, NestedField,
-        PrimitiveType, Schema, SchemaRef, Type,
+        Datum, FieldSummary, ManifestContentType, ManifestFile, NestedField, PrimitiveType, Schema,
+        SchemaRef, Type,
     };
     use crate::Result;
     use fnv::FnvHashSet;
@@ -534,8 +525,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Literal::int(INT_MIN_VALUE)),
-                upper_bound: Some(Literal::int(INT_MAX_VALUE)),
+                lower_bound: Some(Datum::int(INT_MIN_VALUE)),
+                upper_bound: Some(Datum::int(INT_MAX_VALUE)),
             },
             // all_nulls_missing_nan
             FieldSummary {
@@ -548,22 +539,22 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Literal::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Literal::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
             },
             // no_nulls
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Literal::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Literal::string(STRING_MAX_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                upper_bound: Some(Datum::string(STRING_MAX_VALUE)),
             },
             // float
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Literal::float(0.0)),
-                upper_bound: Some(Literal::float(20.0)),
+                lower_bound: Some(Datum::float(0.0)),
+                upper_bound: Some(Datum::float(20.0)),
             },
             // all_nulls_double
             FieldSummary {
@@ -597,8 +588,8 @@ mod test {
             FieldSummary {
                 contains_null: false,
                 contains_nan: Some(false),
-                lower_bound: Some(Literal::float(0.0)),
-                upper_bound: Some(Literal::float(20.0)),
+                lower_bound: Some(Datum::float(0.0)),
+                upper_bound: Some(Datum::float(20.0)),
             },
             // all_nulls_missing_nan_float
             FieldSummary {
@@ -611,15 +602,15 @@ mod test {
             FieldSummary {
                 contains_null: true,
                 contains_nan: None,
-                lower_bound: Some(Literal::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Literal::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
             },
             // no_nulls_same_value_a
             FieldSummary {
                 contains_null: false,
                 contains_nan: None,
-                lower_bound: Some(Literal::string(STRING_MIN_VALUE)),
-                upper_bound: Some(Literal::string(STRING_MIN_VALUE)),
+                lower_bound: Some(Datum::string(STRING_MIN_VALUE)),
+                upper_bound: Some(Datum::string(STRING_MIN_VALUE)),
             },
         ]
     }
