@@ -134,7 +134,7 @@ mod test {
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen =
+        let location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
@@ -143,7 +143,7 @@ mod test {
             WriterProperties::builder().build(),
             Arc::new(Schema::builder().build().unwrap()),
             file_io.clone(),
-            loccation_gen,
+            location_gen,
             file_name_gen,
         );
         let mut data_file_writer = DataFileWriterBuilder::new(pw)

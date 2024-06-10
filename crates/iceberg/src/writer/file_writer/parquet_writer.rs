@@ -20,7 +20,7 @@
 use crate::arrow::DEFAULT_MAP_FIELD_NAME;
 use crate::spec::{
     visit_schema, Datum, ListType, MapType, NestedFieldRef, PrimitiveLiteral, PrimitiveType,
-    Schema, SchemaRef, SchemaVisitor, StructType,
+    Schema, SchemaRef, SchemaVisitor, StructType, Type,
 };
 use crate::ErrorKind;
 use crate::{io::FileIO, io::FileWrite, Result};
@@ -100,11 +100,8 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
         let writer =
             AsyncArrowWriter::try_new(async_writer, arrow_schema.clone(), Some(self.props))
                 .map_err(|err| {
-                    Error::new(
-                        crate::ErrorKind::Unexpected,
-                        "Failed to build parquet writer.",
-                    )
-                    .with_source(err)
+                    Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
+                        .with_source(err)
                 })?;
 
         Ok(ParquetWriter {
@@ -127,8 +124,8 @@ struct IndexByParquetPathName {
 }
 
 impl IndexByParquetPathName {
-    pub fn indexes(self) -> HashMap<String, i32> {
-        self.name_to_id
+    pub fn get(&self, name: &str) -> Option<&i32> {
+        self.name_to_id.get(name)
     }
 }
 
@@ -240,12 +237,12 @@ impl MinMaxColAggregator {
     }
 
     fn update(&mut self, col_id: i32, value: Statistics) -> Result<()> {
-        let crate::spec::Type::Primitive(ty) = &self
+        let Type::Primitive(ty) = &self
             .schema
             .field_by_id(col_id)
             .ok_or_else(|| {
                 Error::new(
-                    crate::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     "Failed to get field by id in schema.",
                 )
             })?
@@ -253,7 +250,7 @@ impl MinMaxColAggregator {
             .as_ref()
         else {
             return Err(Error::new(
-                crate::ErrorKind::Unexpected,
+                ErrorKind::Unexpected,
                 "Composed type is not supported for min max aggregation.",
             ));
         };
@@ -262,29 +259,27 @@ impl MinMaxColAggregator {
             ($self:ident, $stat:ident, $convert_func:expr) => {
                 if $stat.min_is_exact() {
                     let val = $convert_func($stat.min().clone())?;
-                    match $self.lower_bounds.entry(col_id) {
-                        std::collections::hash_map::Entry::Occupied(mut entry) => {
-                            if entry.get() > &val {
-                                entry.insert(val);
+                    $self
+                        .lower_bounds
+                        .entry(col_id)
+                        .and_modify(|e| {
+                            if *e > val {
+                                *e = val.clone()
                             }
-                        }
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(val);
-                        }
-                    }
+                        })
+                        .or_insert(val);
                 }
                 if $stat.max_is_exact() {
                     let val = $convert_func($stat.max().clone())?;
-                    match $self.upper_bounds.entry(col_id) {
-                        std::collections::hash_map::Entry::Occupied(mut entry) => {
-                            if entry.get() < &val {
-                                entry.insert(val);
+                    $self
+                        .upper_bounds
+                        .entry(col_id)
+                        .and_modify(|e| {
+                            if *e < val {
+                                *e = val.clone()
                             }
-                        }
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(val);
-                        }
-                    }
+                        })
+                        .or_insert(val);
                 }
             };
         }
@@ -390,7 +385,7 @@ impl MinMaxColAggregator {
                 let convert_func = |v: FixedLenByteArray| {
                     if v.len() != 16 {
                         return Err(Error::new(
-                            crate::ErrorKind::Unexpected,
+                            ErrorKind::Unexpected,
                             "Invalid length of uuid bytes.",
                         ));
                     }
@@ -404,7 +399,7 @@ impl MinMaxColAggregator {
                 let convert_func = |v: FixedLenByteArray| {
                     if v.len() != *len as usize {
                         return Err(Error::new(
-                            crate::ErrorKind::Unexpected,
+                            ErrorKind::Unexpected,
                             "Invalid length of fixed bytes.",
                         ));
                     }
@@ -414,7 +409,7 @@ impl MinMaxColAggregator {
             }
             (ty, value) => {
                 return Err(Error::new(
-                    crate::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!("Statistics {} is not match with field type {}.", value, ty),
                 ))
             }
@@ -437,7 +432,7 @@ impl ParquetWriter {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::default();
             visit_schema(&schema, &mut visitor)?;
-            visitor.indexes()
+            visitor
         };
 
         let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
@@ -448,37 +443,38 @@ impl ParquetWriter {
 
             for row_group in &metadata.row_groups {
                 for column_chunk in row_group.columns.iter() {
-                    if let Some(column_chunk_metadata) = &column_chunk.meta_data {
-                        let physical_type = column_chunk_metadata.type_;
-                        let field_id = *index_by_parquet_path
-                            .get(&column_chunk_metadata.path_in_schema.join("."))
-                            .ok_or_else(|| {
-                                Error::new(
-                                    crate::ErrorKind::Unexpected,
-                                    format!(
-                                        "Failed to get field id by path in schema for {}",
-                                        column_chunk_metadata.path_in_schema.join(".")
-                                    ),
-                                )
-                            })?;
-                        *per_col_size.entry(field_id).or_insert(0) +=
-                            column_chunk_metadata.total_compressed_size as u64;
-                        *per_col_val_num.entry(field_id).or_insert(0) +=
-                            column_chunk_metadata.num_values as u64;
-                        *per_col_null_val_num.entry(field_id).or_insert(0_u64) +=
-                            column_chunk_metadata
-                                .statistics
-                                .as_ref()
-                                .map(|s| s.null_count)
-                                .unwrap_or(None)
-                                .unwrap_or(0) as u64;
-                        if let Some(statistics) = &column_chunk_metadata.statistics {
-                            min_max_agg.update(
-                                field_id,
-                                from_thrift(physical_type.try_into()?, Some(statistics.clone()))?
-                                    .unwrap(),
-                            )?;
-                        }
+                    let Some(column_chunk_metadata) = &column_chunk.meta_data else {
+                        continue;
+                    };
+                    let physical_type = column_chunk_metadata.type_;
+                    let field_id = *index_by_parquet_path
+                        .get(&column_chunk_metadata.path_in_schema.join("."))
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "Failed to get field id by path in schema for {}",
+                                    column_chunk_metadata.path_in_schema.join(".")
+                                ),
+                            )
+                        })?;
+                    *per_col_size.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.total_compressed_size as u64;
+                    *per_col_val_num.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.num_values as u64;
+                    *per_col_null_val_num.entry(field_id).or_insert(0_u64) += column_chunk_metadata
+                        .statistics
+                        .as_ref()
+                        .map(|s| s.null_count)
+                        .unwrap_or(None)
+                        .unwrap_or(0)
+                        as u64;
+                    if let Some(statistics) = &column_chunk_metadata.statistics {
+                        min_max_agg.update(
+                            field_id,
+                            from_thrift(physical_type.try_into()?, Some(statistics.clone()))?
+                                .unwrap(),
+                        )?;
                     }
                 }
             }
@@ -521,7 +517,7 @@ impl FileWriter for ParquetWriter {
         self.current_row_num += batch.num_rows();
         self.writer.write(batch).await.map_err(|err| {
             Error::new(
-                crate::ErrorKind::Unexpected,
+                ErrorKind::Unexpected,
                 "Failed to write using parquet writer.",
             )
             .with_source(err)
@@ -531,11 +527,7 @@ impl FileWriter for ParquetWriter {
 
     async fn close(self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
         let metadata = self.writer.close().await.map_err(|err| {
-            Error::new(
-                crate::ErrorKind::Unexpected,
-                "Failed to close parquet writer.",
-            )
-            .with_source(err)
+            Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
         })?;
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
@@ -696,77 +688,35 @@ mod tests {
         Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::optional(
-                    0,
-                    "boolean",
-                    crate::spec::Type::Primitive(PrimitiveType::Boolean),
-                )
-                .into(),
-                NestedField::optional(1, "int", crate::spec::Type::Primitive(PrimitiveType::Int))
+                NestedField::optional(0, "boolean", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::optional(1, "int", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "long", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(3, "float", Type::Primitive(PrimitiveType::Float)).into(),
+                NestedField::optional(4, "double", Type::Primitive(PrimitiveType::Double)).into(),
+                NestedField::optional(5, "string", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(6, "binary", Type::Primitive(PrimitiveType::Binary)).into(),
+                NestedField::optional(7, "date", Type::Primitive(PrimitiveType::Date)).into(),
+                NestedField::optional(8, "time", Type::Primitive(PrimitiveType::Time)).into(),
+                NestedField::optional(9, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
                     .into(),
-                NestedField::optional(2, "long", crate::spec::Type::Primitive(PrimitiveType::Long))
-                    .into(),
-                NestedField::optional(
-                    3,
-                    "float",
-                    crate::spec::Type::Primitive(PrimitiveType::Float),
-                )
-                .into(),
-                NestedField::optional(
-                    4,
-                    "double",
-                    crate::spec::Type::Primitive(PrimitiveType::Double),
-                )
-                .into(),
-                NestedField::optional(
-                    5,
-                    "string",
-                    crate::spec::Type::Primitive(PrimitiveType::String),
-                )
-                .into(),
-                NestedField::optional(
-                    6,
-                    "binary",
-                    crate::spec::Type::Primitive(PrimitiveType::Binary),
-                )
-                .into(),
-                NestedField::optional(7, "date", crate::spec::Type::Primitive(PrimitiveType::Date))
-                    .into(),
-                NestedField::optional(8, "time", crate::spec::Type::Primitive(PrimitiveType::Time))
-                    .into(),
-                NestedField::optional(
-                    9,
-                    "timestamp",
-                    crate::spec::Type::Primitive(PrimitiveType::Timestamp),
-                )
-                .into(),
                 NestedField::optional(
                     10,
                     "timestamptz",
-                    crate::spec::Type::Primitive(PrimitiveType::Timestamptz),
+                    Type::Primitive(PrimitiveType::Timestamptz),
                 )
                 .into(),
                 NestedField::optional(
                     11,
                     "decimal",
-                    crate::spec::Type::Primitive(PrimitiveType::Decimal {
+                    Type::Primitive(PrimitiveType::Decimal {
                         precision: 10,
                         scale: 5,
                     }),
                 )
                 .into(),
-                NestedField::optional(
-                    12,
-                    "uuid",
-                    crate::spec::Type::Primitive(PrimitiveType::Uuid),
-                )
-                .into(),
-                NestedField::optional(
-                    13,
-                    "fixed",
-                    crate::spec::Type::Primitive(PrimitiveType::Fixed(10)),
-                )
-                .into(),
+                NestedField::optional(12, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(13, "fixed", Type::Primitive(PrimitiveType::Fixed(10)))
+                    .into(),
             ])
             .build()
             .unwrap()
@@ -777,56 +727,38 @@ mod tests {
         Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(0, "col0", crate::spec::Type::Primitive(PrimitiveType::Long))
-                    .into(),
+                NestedField::required(0, "col0", Type::Primitive(PrimitiveType::Long)).into(),
                 NestedField::required(
                     1,
                     "col1",
-                    crate::spec::Type::Struct(StructType::new(vec![
-                        NestedField::required(
-                            5,
-                            "col_1_5",
-                            crate::spec::Type::Primitive(PrimitiveType::Long),
-                        )
-                        .into(),
-                        NestedField::required(
-                            6,
-                            "col_1_6",
-                            crate::spec::Type::Primitive(PrimitiveType::Long),
-                        )
-                        .into(),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(5, "col_1_5", Type::Primitive(PrimitiveType::Long))
+                            .into(),
+                        NestedField::required(6, "col_1_6", Type::Primitive(PrimitiveType::Long))
+                            .into(),
                     ])),
                 )
                 .into(),
-                NestedField::required(
-                    2,
-                    "col2",
-                    crate::spec::Type::Primitive(PrimitiveType::String),
-                )
-                .into(),
+                NestedField::required(2, "col2", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::required(
                     3,
                     "col3",
-                    crate::spec::Type::List(ListType::new(
-                        NestedField::required(
-                            7,
-                            "element",
-                            crate::spec::Type::Primitive(PrimitiveType::Long),
-                        )
-                        .into(),
+                    Type::List(ListType::new(
+                        NestedField::required(7, "element", Type::Primitive(PrimitiveType::Long))
+                            .into(),
                     )),
                 )
                 .into(),
                 NestedField::required(
                     4,
                     "col4",
-                    crate::spec::Type::Struct(StructType::new(vec![NestedField::required(
+                    Type::Struct(StructType::new(vec![NestedField::required(
                         8,
                         "col_4_8",
-                        crate::spec::Type::Struct(StructType::new(vec![NestedField::required(
+                        Type::Struct(StructType::new(vec![NestedField::required(
                             9,
                             "col_4_8_9",
-                            crate::spec::Type::Primitive(PrimitiveType::Long),
+                            Type::Primitive(PrimitiveType::Long),
                         )
                         .into()])),
                     )
@@ -836,21 +768,17 @@ mod tests {
                 NestedField::required(
                     10,
                     "col5",
-                    crate::spec::Type::Map(MapType::new(
-                        NestedField::required(
-                            11,
-                            "key",
-                            crate::spec::Type::Primitive(PrimitiveType::String),
-                        )
-                        .into(),
+                    Type::Map(MapType::new(
+                        NestedField::required(11, "key", Type::Primitive(PrimitiveType::String))
+                            .into(),
                         NestedField::required(
                             12,
                             "value",
-                            crate::spec::Type::List(ListType::new(
+                            Type::List(ListType::new(
                                 NestedField::required(
                                     13,
                                     "item",
-                                    crate::spec::Type::Primitive(PrimitiveType::Long),
+                                    Type::Primitive(PrimitiveType::Long),
                                 )
                                 .into(),
                             )),
@@ -878,7 +806,7 @@ mod tests {
         ]);
         let mut visitor = IndexByParquetPathName::default();
         visit_schema(&nested_schema_for_test(), &mut visitor).unwrap();
-        assert_eq!(visitor.indexes(), expect);
+        assert_eq!(visitor.name_to_id, expect);
     }
 
     #[tokio::test]
