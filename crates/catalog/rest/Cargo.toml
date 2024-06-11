@@ -32,7 +32,7 @@ keywords = ["iceberg", "rest", "catalog"]
 # async-trait = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-iceberg = { workspace = true }
+iceberg = { workspace = true, features = ["storage-fs"] }
 itertools = { workspace = true }
 log = "0.4.20"
 reqwest = { workspace = true }
@@ -46,6 +46,5 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
-opendal = { workspace = true, features = ["services-fs"] }
 port_scanner = { workspace = true }
 tokio = { workspace = true }

@@ -33,7 +33,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 hive_metastore = { workspace = true }
-iceberg = { workspace = true }
+iceberg = { workspace = true, features = ["storage-s3"] }
 log = { workspace = true }
 pilota = { workspace = true }
 serde_json = { workspace = true }
@@ -44,5 +44,4 @@ volo-thrift = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-opendal = { workspace = true, features = ["services-s3"] }
 port_scanner = { workspace = true }

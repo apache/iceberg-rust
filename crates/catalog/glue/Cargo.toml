@@ -33,7 +33,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-glue = { workspace = true }
-iceberg = { workspace = true }
+iceberg = { workspace = true, features = ["storage-s3"] }
 log = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -42,5 +42,4 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-opendal = { workspace = true, features = ["services-s3"] }
 port_scanner = { workspace = true }

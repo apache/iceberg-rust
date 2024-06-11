@@ -28,6 +28,10 @@ repository = { workspace = true }
 license = { workspace = true }
 keywords = ["iceberg"]
 
+[features]
+storage-fs = ["opendal/services-fs"]
+storage-s3 = ["opendal/services-s3"]
+
 [dependencies]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
