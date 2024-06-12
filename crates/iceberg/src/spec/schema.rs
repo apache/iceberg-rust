@@ -329,8 +329,8 @@ impl Schema {
 
     /// Returns [`identifier_field_ids`].
     #[inline]
-    pub fn identifier_field_ids(&self) -> impl Iterator<item = i32> {
-        self.identifier_field_ids.iter()
+    pub fn identifier_field_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.identifier_field_ids.iter().copied()
     }
 
     /// Get field id by full name.
