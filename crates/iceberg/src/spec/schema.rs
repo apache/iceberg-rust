@@ -329,7 +329,7 @@ impl Schema {
 
     /// Returns [`identifier_field_ids`].
     #[inline]
-    pub fn identifier_field_ids(&self) -> &HashSet<i32> {
+    pub fn identifier_field_ids(&self) -> impl Iterator<item = i32> {
         &self.identifier_field_ids
     }
 
