@@ -332,7 +332,7 @@ pub enum TableRequirement {
 }
 
 /// TableUpdate represents an update to a table in the catalog.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum TableUpdate {
     /// Upgrade table's format version
