@@ -327,6 +327,12 @@ impl Schema {
         &self.r#struct
     }
 
+    /// Returns [`identifier_field_ids`].
+    #[inline]
+    pub fn identifier_field_ids(&self) -> &HashSet<i32> {
+        &self.identifier_field_ids
+    }
+
     /// Get field id by full name.
     pub fn field_id_by_name(&self, name: &str) -> Option<i32> {
         self.name_to_id.get(name).copied()
