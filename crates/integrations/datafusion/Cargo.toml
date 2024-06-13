@@ -40,5 +40,4 @@ tokio = { workspace = true }
 [dev-dependencies]
 iceberg-catalog-hms = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-opendal = { workspace = true, features = ["services-s3"] }
 port_scanner = { workspace = true }
