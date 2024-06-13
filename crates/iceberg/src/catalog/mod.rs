@@ -982,7 +982,9 @@ mod tests {
             ref_name: "hank".to_string(),
             reference: SnapshotReference {
                 snapshot_id: 1,
-                retention: SnapshotRetention::Tag { max_ref_age_ms: 1 },
+                retention: SnapshotRetention::Tag {
+                    max_ref_age_ms: Some(1),
+                },
             },
         };
 

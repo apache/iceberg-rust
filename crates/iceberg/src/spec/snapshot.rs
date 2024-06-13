@@ -351,7 +351,8 @@ pub enum SnapshotRetention {
     Tag {
         /// For snapshot references except the main branch, a positive number for the max age of the snapshot reference to keep while expiring snapshots.
         /// Defaults to table property history.expire.max-ref-age-ms. The main branch never expires.
-        max_ref_age_ms: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_ref_age_ms: Option<i64>,
     },
 }
 
