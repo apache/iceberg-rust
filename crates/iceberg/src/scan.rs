@@ -523,7 +523,7 @@ mod tests {
     };
     use crate::table::Table;
     use crate::TableIdent;
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -705,10 +705,15 @@ mod tests {
                             PARQUET_FIELD_ID_META_KEY.to_string(),
                             "3".to_string(),
                         )])),
+                    arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "4".to_string(),
+                        )])),
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
-            // 3 columns:
+            // 4 columns:
             // x: [1, 1, 1, 1, ...]
             let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
 
@@ -725,7 +730,14 @@ mod tests {
 
             // z: [3, 3, 3, 3, ..., 4, 4, 4, 4]
             let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-            let to_write = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+
+            // a: ["Apache", "Apache", "Apache", ..., "Iceberg", "Iceberg", "Iceberg"]
+            let mut values = vec!["Apache"; 512];
+            values.append(vec!["Iceberg"; 512].as_mut());
+            let col4 = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
+
+            let to_write =
+                RecordBatch::try_new(schema.clone(), vec![col1, col2, col3, col4]).unwrap();
 
             // Write the Parquet files
             let props = WriterProperties::builder()
@@ -773,7 +785,7 @@ mod tests {
     fn test_select_no_exist_column() {
         let table = TableTestFixture::new().table;
 
-        let table_scan = table.scan().select(["x", "y", "z", "a"]).build();
+        let table_scan = table.scan().select(["x", "y", "z", "a", "b"]).build();
         assert!(table_scan.is_err());
     }
 
@@ -1039,5 +1051,95 @@ mod tests {
         values.append(vec![4; 512].as_mut());
         let expected_z = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
         assert_eq!(col, &expected_z);
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_startswith() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: a STARTSWITH "Ice"
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("a").starts_with(Datum::string("Ice"));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("a").unwrap();
+        let string_arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_arr.value(0), "Iceberg");
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_not_startswith() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: a NOT STARTSWITH "Ice"
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("a").not_starts_with(Datum::string("Ice"));
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("a").unwrap();
+        let string_arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_arr.value(0), "Apache");
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_in() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: a IN ("Sioux", "Iceberg")
+        let mut builder = fixture.table.scan();
+        let predicate =
+            Reference::new("a").is_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("a").unwrap();
+        let string_arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_arr.value(0), "Iceberg");
+    }
+
+    #[tokio::test]
+    async fn test_filter_on_arrow_not_in() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: a NOT IN ("Sioux", "Iceberg")
+        let mut builder = fixture.table.scan();
+        let predicate =
+            Reference::new("a").is_not_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
+        builder = builder.filter(predicate);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("a").unwrap();
+        let string_arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_arr.value(0), "Apache");
     }
 }

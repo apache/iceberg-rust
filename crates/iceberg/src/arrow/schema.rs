@@ -26,6 +26,7 @@ use crate::{Error, ErrorKind};
 use arrow_array::types::{validate_decimal_precision_and_scale, Decimal128Type};
 use arrow_array::{
     BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
@@ -605,6 +606,7 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
         PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
         PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
         PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
+        PrimitiveLiteral::String(value) => Ok(Box::new(StringArray::new_scalar(value.as_str()))),
         l => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
