@@ -33,7 +33,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { version = "38.0.0" }
 futures = { workspace = true }
-iceberg = { workspace = true, features = ["storage-s3"] }
+iceberg = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 
