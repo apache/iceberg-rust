@@ -776,7 +776,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
             }))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_always_true()
         }
     }
 
@@ -832,7 +832,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
             }))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_always_true()
         }
     }
 }
@@ -841,7 +841,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 ///
 /// # TODO
 ///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64) contains the following hints to speed up metadata loading, we can consider adding them to this struct:
+/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
+/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
 ///
 /// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
 /// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
