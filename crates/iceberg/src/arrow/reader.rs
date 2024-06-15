@@ -22,6 +22,7 @@ use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
+use arrow_string::like::starts_with;
 use async_stream::try_stream;
 use bytes::Bytes;
 use fnv::FnvHashSet;
@@ -741,42 +742,98 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 
     fn starts_with(
         &mut self,
-        _reference: &BoundReference,
-        _literal: &Datum,
+        reference: &BoundReference,
+        literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        // TODO: Implement starts_with
-        self.build_always_true()
+        if let Some(idx) = self.bound_reference(reference)? {
+            let literal = get_arrow_datum(literal)?;
+
+            Ok(Box::new(move |batch| {
+                let left = project_column(&batch, idx)?;
+                starts_with(&left, literal.as_ref())
+            }))
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_false()
+        }
     }
 
     fn not_starts_with(
         &mut self,
-        _reference: &BoundReference,
-        _literal: &Datum,
+        reference: &BoundReference,
+        literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        // TODO: Implement not_starts_with
-        self.build_always_true()
+        if let Some(idx) = self.bound_reference(reference)? {
+            let literal = get_arrow_datum(literal)?;
+
+            Ok(Box::new(move |batch| {
+                let left = project_column(&batch, idx)?;
+
+                // update here if arrow ever adds a native not_starts_with
+                not(&starts_with(&left, literal.as_ref())?)
+            }))
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_true()
+        }
     }
 
     fn r#in(
         &mut self,
-        _reference: &BoundReference,
-        _literals: &FnvHashSet<Datum>,
+        reference: &BoundReference,
+        literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        // TODO: Implement in
-        self.build_always_true()
+        if let Some(idx) = self.bound_reference(reference)? {
+            let literals: Vec<_> = literals
+                .iter()
+                .map(|lit| get_arrow_datum(lit).unwrap())
+                .collect();
+
+            Ok(Box::new(move |batch| {
+                // update this if arrow ever adds a native is_in kernel
+                let left = project_column(&batch, idx)?;
+                let mut acc = BooleanArray::from(vec![false; batch.num_rows()]);
+                for literal in &literals {
+                    acc = or(&acc, &eq(&left, literal.as_ref())?)?
+                }
+
+                Ok(acc)
+            }))
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_false()
+        }
     }
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
-        _literals: &FnvHashSet<Datum>,
+        reference: &BoundReference,
+        literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        // TODO: Implement not_in
-        self.build_always_true()
+        if let Some(idx) = self.bound_reference(reference)? {
+            let literals: Vec<_> = literals
+                .iter()
+                .map(|lit| get_arrow_datum(lit).unwrap())
+                .collect();
+
+            Ok(Box::new(move |batch| {
+                // update this if arrow ever adds a native not_in kernel
+                let left = project_column(&batch, idx)?;
+                let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
+                for literal in &literals {
+                    acc = and(&acc, &neq(&left, literal.as_ref())?)?
+                }
+
+                Ok(acc)
+            }))
+        } else {
+            // A missing column, treating it as null.
+            self.build_always_true()
+        }
     }
 }
 
@@ -784,7 +841,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 ///
 /// # TODO
 ///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64) contains the following hints to speed up metadata loading, we can consider adding them to this struct:
+/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
+/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
 ///
 /// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
 /// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
