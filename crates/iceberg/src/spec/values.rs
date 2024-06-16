@@ -126,7 +126,7 @@ impl Serialize for Datum {
                     Literal::Primitive(self.literal.clone()),
                     &Type::Primitive(self.r#type.clone()),
                 )
-                .unwrap(),
+                .map_err(serde::ser::Error::custom)?,
             )
             .map_err(serde::ser::Error::custom)?;
         strucet_ser.end()
