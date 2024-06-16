@@ -30,6 +30,9 @@ use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
+use serde::de::{self, MapAccess};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
@@ -103,6 +106,115 @@ impl PrimitiveLiteral {
 pub struct Datum {
     r#type: PrimitiveType,
     literal: PrimitiveLiteral,
+}
+
+impl Serialize for Datum {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut strucet_ser = serializer
+            .serialize_struct("Datum", 2)
+            .map_err(serde::ser::Error::custom)?;
+        strucet_ser
+            .serialize_field("type", &self.r#type)
+            .map_err(serde::ser::Error::custom)?;
+        strucet_ser
+            .serialize_field(
+                "literal",
+                &RawLiteral::try_from(
+                    Literal::Primitive(self.literal.clone()),
+                    &Type::Primitive(self.r#type.clone()),
+                )
+                .unwrap(),
+            )
+            .map_err(serde::ser::Error::custom)?;
+        strucet_ser.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Datum {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Type,
+            Literal,
+        }
+
+        struct DatumVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DatumVisitor {
+            type Value = Datum;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct Datum")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let r#type = seq
+                    .next_element::<PrimitiveType>()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let value = seq
+                    .next_element::<RawLiteral>()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                let Literal::Primitive(primitive) = value
+                    .try_into(&Type::Primitive(r#type.clone()))
+                    .map_err(serde::de::Error::custom)?
+                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                else {
+                    return Err(serde::de::Error::custom("Invalid value"));
+                };
+
+                Ok(Datum::new(r#type, primitive))
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<Datum, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut raw_primitive: Option<RawLiteral> = None;
+                let mut r#type: Option<PrimitiveType> = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Type => {
+                            if r#type.is_some() {
+                                return Err(de::Error::duplicate_field("type"));
+                            }
+                            r#type = Some(map.next_value()?);
+                        }
+                        Field::Literal => {
+                            if raw_primitive.is_some() {
+                                return Err(de::Error::duplicate_field("literal"));
+                            }
+                            raw_primitive = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let Some(r#type) = r#type else {
+                    return Err(serde::de::Error::missing_field("type"));
+                };
+                let Some(raw_primitive) = raw_primitive else {
+                    return Err(serde::de::Error::missing_field("literal"));
+                };
+                let Literal::Primitive(primitive) = raw_primitive
+                    .try_into(&Type::Primitive(r#type.clone()))
+                    .map_err(serde::de::Error::custom)?
+                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                else {
+                    return Err(serde::de::Error::custom("Invalid value"));
+                };
+                Ok(Datum::new(r#type, primitive))
+            }
+        }
+        const FIELDS: &[&str] = &["type", "literal"];
+        deserializer.deserialize_struct("Datum", FIELDS, DatumVisitor)
+    }
 }
 
 impl PartialOrd for Datum {
@@ -2320,10 +2432,17 @@ mod _serde {
                 RawLiteralEnum::Boolean(v) => Ok(Some(Literal::bool(v))),
                 RawLiteralEnum::Int(v) => match ty {
                     Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(v))),
+                    Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(i64::from(v)))),
                     Type::Primitive(PrimitiveType::Date) => Ok(Some(Literal::date(v))),
                     _ => Err(invalid_err("int")),
                 },
                 RawLiteralEnum::Long(v) => match ty {
+                    Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(
+                        i32::try_from(v).map_err(|_| invalid_err("long"))?,
+                    ))),
+                    Type::Primitive(PrimitiveType::Date) => Ok(Some(Literal::date(
+                        i32::try_from(v).map_err(|_| invalid_err("long"))?,
+                    ))),
                     Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(v))),
                     Type::Primitive(PrimitiveType::Time) => Ok(Some(Literal::time(v))),
                     Type::Primitive(PrimitiveType::Timestamp) => Ok(Some(Literal::timestamp(v))),
@@ -2334,9 +2453,20 @@ mod _serde {
                 },
                 RawLiteralEnum::Float(v) => match ty {
                     Type::Primitive(PrimitiveType::Float) => Ok(Some(Literal::float(v))),
+                    Type::Primitive(PrimitiveType::Double) => {
+                        Ok(Some(Literal::double(f64::from(v))))
+                    }
                     _ => Err(invalid_err("float")),
                 },
                 RawLiteralEnum::Double(v) => match ty {
+                    Type::Primitive(PrimitiveType::Float) => {
+                        let v = v as f32;
+                        // Return error if the value has lost precision
+                        if v as f64 != f64::from(v) {
+                            return Err(invalid_err("double"));
+                        }
+                        Ok(Some(Literal::float(v)))
+                    }
                     Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
                     _ => Err(invalid_err("double")),
                 },
@@ -2417,6 +2547,89 @@ mod _serde {
                                 }
                             }
                             Ok(Some(Literal::Map(map)))
+                        }
+                        Type::Primitive(PrimitiveType::Uuid) => {
+                            if v.list.len() != 16 {
+                                return Err(invalid_err_with_reason(
+                                    "list",
+                                    "The length of list should be 16",
+                                ));
+                            }
+                            let mut bytes = [0u8; 16];
+                            for (i, v) in v.list.iter().enumerate() {
+                                if let Some(RawLiteralEnum::Long(v)) = v {
+                                    bytes[i] = *v as u8;
+                                } else {
+                                    return Err(invalid_err_with_reason(
+                                        "list",
+                                        "The element of list should be int",
+                                    ));
+                                }
+                            }
+                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        }
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: _,
+                            scale: _,
+                        }) => {
+                            if v.list.len() != 16 {
+                                return Err(invalid_err_with_reason(
+                                    "list",
+                                    "The length of list should be 16",
+                                ));
+                            }
+                            let mut bytes = [0u8; 16];
+                            for (i, v) in v.list.iter().enumerate() {
+                                if let Some(RawLiteralEnum::Long(v)) = v {
+                                    bytes[i] = *v as u8;
+                                } else {
+                                    return Err(invalid_err_with_reason(
+                                        "list",
+                                        "The element of list should be int",
+                                    ));
+                                }
+                            }
+                            Ok(Some(Literal::decimal(i128::from_be_bytes(bytes))))
+                        }
+                        Type::Primitive(PrimitiveType::Binary) => {
+                            let bytes = v
+                                .list
+                                .into_iter()
+                                .map(|v| {
+                                    if let Some(RawLiteralEnum::Long(v)) = v {
+                                        Ok(v as u8)
+                                    } else {
+                                        Err(invalid_err_with_reason(
+                                            "list",
+                                            "The element of list should be int",
+                                        ))
+                                    }
+                                })
+                                .collect::<Result<Vec<_>, Error>>()?;
+                            Ok(Some(Literal::binary(bytes)))
+                        }
+                        Type::Primitive(PrimitiveType::Fixed(size)) => {
+                            if v.list.len() != *size as usize {
+                                return Err(invalid_err_with_reason(
+                                    "list",
+                                    "The length of list should be equal to size",
+                                ));
+                            }
+                            let bytes = v
+                                .list
+                                .into_iter()
+                                .map(|v| {
+                                    if let Some(RawLiteralEnum::Long(v)) = v {
+                                        Ok(v as u8)
+                                    } else {
+                                        Err(invalid_err_with_reason(
+                                            "list",
+                                            "The element of list should be int",
+                                        ))
+                                    }
+                                })
+                                .collect::<Result<Vec<_>, Error>>()?;
+                            Ok(Some(Literal::fixed(bytes)))
                         }
                         _ => Err(invalid_err("list")),
                     }
@@ -3179,5 +3392,42 @@ mod tests {
             value.is_err(),
             "Parse timestamptz with invalid input should fail!"
         );
+    }
+
+    #[test]
+    fn test_datum_ser_deser() {
+        let test_fn = |datum: Datum| {
+            let json = serde_json::to_string(&datum).unwrap();
+            let desered_datum: Datum = serde_json::from_str(&json).unwrap();
+            assert_eq!(datum, desered_datum);
+        };
+        let datum = Datum::int(1);
+        test_fn(datum);
+        let datum = Datum::long(1);
+        test_fn(datum);
+        let datum = Datum::float(1.0);
+        test_fn(datum);
+        let datum = Datum::double(1.0);
+        test_fn(datum);
+        let datum = Datum::string("iceberg");
+        test_fn(datum);
+        let datum = Datum::bool(true);
+        test_fn(datum);
+        let datum = Datum::date(17486);
+        test_fn(datum);
+        let datum = Datum::time_from_hms_micro(22, 15, 33, 111).unwrap();
+        test_fn(datum);
+        let datum = Datum::timestamp_micros(1510871468123456);
+        test_fn(datum);
+        let datum = Datum::timestamptz_micros(1510871468123456);
+        test_fn(datum);
+        let datum = Datum::uuid(Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap());
+        test_fn(datum);
+        let datum = Datum::decimal(1420).unwrap();
+        test_fn(datum);
+        let datum = Datum::binary(vec![1, 2, 3, 4, 5]);
+        test_fn(datum);
+        let datum = Datum::fixed(vec![1, 2, 3, 4, 5]);
+        test_fn(datum);
     }
 }

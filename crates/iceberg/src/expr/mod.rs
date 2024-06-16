@@ -18,6 +18,7 @@
 //! This module contains expressions.
 
 mod term;
+use serde::{Deserialize, Serialize};
 pub use term::*;
 pub(crate) mod accessor;
 mod predicate;
@@ -32,7 +33,7 @@ use std::fmt::{Display, Formatter};
 /// The discriminant of this enum is used for determining the type of the operator, see
 /// [`PredicateOperator::is_unary`], [`PredicateOperator::is_binary`], [`PredicateOperator::is_set`]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 #[repr(u16)]
 pub enum PredicateOperator {
