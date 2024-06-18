@@ -3400,8 +3400,8 @@ mod tests {
     #[test]
     fn test_datum_ser_deser() {
         let test_fn = |datum: Datum| {
-            let json = serde_json::to_string(&datum).unwrap();
-            let desered_datum: Datum = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_value(&datum).unwrap();
+            let desered_datum: Datum = serde_json::from_value(json).unwrap();
             assert_eq!(datum, desered_datum);
         };
         let datum = Datum::int(1);
@@ -3415,14 +3415,12 @@ mod tests {
         test_fn(datum);
         let datum = Datum::float(-0_f32);
         test_fn(datum);
-
-        // serde_json can't serialize f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::MAX, f32::MIN
         let datum = Datum::float(f32::MAX);
-        let json = serde_json::to_string(&datum).unwrap();
-        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        test_fn(datum);
         let datum = Datum::float(f32::MIN);
-        let json = serde_json::to_string(&datum).unwrap();
-        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        test_fn(datum);
+
+        // serde_json can't serialize f32::INFINITY, f32::NEG_INFINITY, f32::NAN
         let datum = Datum::float(f32::INFINITY);
         let json = serde_json::to_string(&datum).unwrap();
         assert!(serde_json::from_str::<Datum>(&json).is_err());
