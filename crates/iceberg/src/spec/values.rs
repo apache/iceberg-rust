@@ -113,13 +113,13 @@ impl Serialize for Datum {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        let mut strucet_ser = serializer
+        let mut struct_ser = serializer
             .serialize_struct("Datum", 2)
             .map_err(serde::ser::Error::custom)?;
-        strucet_ser
+        struct_ser
             .serialize_field("type", &self.r#type)
             .map_err(serde::ser::Error::custom)?;
-        strucet_ser
+        struct_ser
             .serialize_field(
                 "literal",
                 &RawLiteral::try_from(
@@ -129,7 +129,7 @@ impl Serialize for Datum {
                 .map_err(serde::ser::Error::custom)?,
             )
             .map_err(serde::ser::Error::custom)?;
-        strucet_ser.end()
+        struct_ser.end()
     }
 }
 
@@ -2460,12 +2460,15 @@ mod _serde {
                 },
                 RawLiteralEnum::Double(v) => match ty {
                     Type::Primitive(PrimitiveType::Float) => {
-                        let v = v as f32;
-                        // Return error if the value has lost precision
-                        if v as f64 != f64::from(v) {
-                            return Err(invalid_err("double"));
+                        let v_32 = v as f32;
+                        if v_32.is_finite() {
+                            let v_64 = f64::from(v_32);
+                            if (v_64 - v).abs() > f32::EPSILON as f64 {
+                                // there is a precision loss
+                                return Err(invalid_err("double"));
+                            }
                         }
-                        Ok(Some(Literal::float(v)))
+                        Ok(Some(Literal::float(v_32)))
                     }
                     Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
                     _ => Err(invalid_err("double")),
@@ -3405,10 +3408,49 @@ mod tests {
         test_fn(datum);
         let datum = Datum::long(1);
         test_fn(datum);
+
         let datum = Datum::float(1.0);
         test_fn(datum);
+        let datum = Datum::float(0_f32);
+        test_fn(datum);
+        let datum = Datum::float(-0_f32);
+        test_fn(datum);
+
+        // serde_json can't serialize f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::MAX, f32::MIN
+        let datum = Datum::float(f32::MAX);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::float(f32::MIN);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::float(f32::INFINITY);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::float(f32::NEG_INFINITY);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::float(f32::NAN);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+
         let datum = Datum::double(1.0);
         test_fn(datum);
+        let datum = Datum::double(f64::MAX);
+        test_fn(datum);
+        let datum = Datum::double(f64::MIN);
+        test_fn(datum);
+
+        // serde_json can't serialize f32::INFINITY, f32::NEG_INFINITY, f32::NAN
+        let datum = Datum::double(f64::INFINITY);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::double(f64::NEG_INFINITY);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+        let datum = Datum::double(f64::NAN);
+        let json = serde_json::to_string(&datum).unwrap();
+        assert!(serde_json::from_str::<Datum>(&json).is_err());
+
         let datum = Datum::string("iceberg");
         test_fn(datum);
         let datum = Datum::bool(true);
