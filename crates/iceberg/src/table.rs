@@ -16,6 +16,7 @@
 // under the License.
 
 //! Table API for Apache Iceberg
+use crate::arrow::ArrowReaderBuilder;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
@@ -69,6 +70,11 @@ impl Table {
     /// Returns the flag indicating whether the `Table` is readonly or not
     pub fn readonly(&self) -> bool {
         self.readonly
+    }
+
+    /// Create a reader for the table.
+    pub fn reader_builder(&self) -> ArrowReaderBuilder {
+        ArrowReaderBuilder::new(self.file_io.clone(), self.metadata_ref())
     }
 }
 
@@ -137,6 +143,11 @@ impl StaticTable {
     /// and can't be used to perform modifications on the table.     
     pub fn into_table(self) -> Table {
         self.0
+    }
+
+    /// Create a reader for the table.
+    pub fn reader_builder(&self) -> ArrowReaderBuilder {
+        ArrowReaderBuilder::new(self.0.file_io.clone(), self.metadata())
     }
 }
 
