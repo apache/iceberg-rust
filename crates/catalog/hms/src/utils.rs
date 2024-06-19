@@ -148,7 +148,7 @@ pub(crate) fn convert_to_database(
     // https://github.com/apache/iceberg/blob/main/hive-metastore/src/main/java/org/apache/iceberg/hive/HiveHadoopUtil.java#L44
     if db.owner_name.is_none() {
         db.owner_name = Some(HMS_DEFAULT_DB_OWNER.into());
-        db.owner_type = Some(PrincipalType::ROLE);
+        db.owner_type = Some(PrincipalType::USER);
     }
 
     Ok(db)
