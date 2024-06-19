@@ -25,7 +25,7 @@ use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestFile, Schema, SchemaId, SchemaRef, SnapshotRef,
+    DataContentType, ManifestContentType, ManifestFile, Schema, SchemaRef, SnapshotRef,
     TableMetadataRef,
 };
 use crate::table::Table;
@@ -254,7 +254,6 @@ impl TableScan {
 
         let field_ids = self.field_ids.clone();
         let bound_predicates = self.bound_predicates.clone();
-        let schema_id = self.schema.schema_id();
 
         Ok(try_stream! {
             let manifest_list = context
@@ -326,7 +325,7 @@ impl TableScan {
                                 length: manifest_entry.file_size_in_bytes(),
                                 project_field_ids: field_ids.clone(),
                                 predicate: bound_predicates.clone(),
-                                schema_id,
+                                schema: context.schema.clone(),
                             });
                             yield scan_task?;
                         }
@@ -339,8 +338,7 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder =
-            ArrowReaderBuilder::new(self.file_io.clone(), self.table_metadata.clone());
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone());
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -507,7 +505,7 @@ pub struct FileScanTask {
     project_field_ids: Vec<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     predicate: Option<BoundPredicate>,
-    schema_id: SchemaId,
+    schema: SchemaRef,
 }
 
 impl FileScanTask {
@@ -527,8 +525,8 @@ impl FileScanTask {
     }
 
     /// Returns the schema id of this file scan task.
-    pub fn schema_id(&self) -> SchemaId {
-        self.schema_id
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
@@ -541,7 +539,8 @@ mod tests {
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
+        ManifestWriter, NestedField, PrimitiveType, Schema, Struct, TableMetadata, Type,
+        EMPTY_SNAPSHOT_ID,
     };
     use crate::table::Table;
     use crate::TableIdent;
@@ -912,22 +911,14 @@ mod tests {
             .unwrap();
         assert_eq!(plan_task.len(), 2);
 
-        let reader = ArrowReaderBuilder::new(
-            fixture.table.file_io().clone(),
-            fixture.table.metadata_ref(),
-        )
-        .build();
+        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
         let batche1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let reader = ArrowReaderBuilder::new(
-            fixture.table.file_io().clone(),
-            fixture.table.metadata_ref(),
-        )
-        .build();
+        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
@@ -1217,17 +1208,27 @@ mod tests {
             assert_eq!(task.length, deserialized.length);
             assert_eq!(task.project_field_ids, deserialized.project_field_ids);
             assert_eq!(task.predicate, deserialized.predicate);
-            assert_eq!(task.schema_id, deserialized.schema_id);
+            assert_eq!(task.schema, deserialized.schema);
         };
 
         // without predicate
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Binary),
+                ))])
+                .build()
+                .unwrap(),
+        );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: None,
-            schema_id: 1,
+            schema: schema.clone(),
         };
         test_fn(task);
 
@@ -1238,7 +1239,7 @@ mod tests {
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: Some(BoundPredicate::AlwaysTrue),
-            schema_id: 1,
+            schema,
         };
         test_fn(task);
     }

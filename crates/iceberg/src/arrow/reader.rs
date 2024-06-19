@@ -44,23 +44,21 @@ use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisito
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
-use crate::spec::{Datum, SchemaRef, TableMetadataRef};
+use crate::spec::{Datum, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
     file_io: FileIO,
-    table_metadata: TableMetadataRef,
 }
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
-    pub(crate) fn new(file_io: FileIO, table_metadata: TableMetadataRef) -> Self {
+    pub(crate) fn new(file_io: FileIO) -> Self {
         ArrowReaderBuilder {
             batch_size: None,
             file_io,
-            table_metadata,
         }
     }
 
@@ -76,7 +74,6 @@ impl ArrowReaderBuilder {
         ArrowReader {
             batch_size: self.batch_size,
             file_io: self.file_io,
-            metadata: self.table_metadata,
         }
     }
 }
@@ -86,7 +83,6 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
-    metadata: TableMetadataRef,
 }
 
 impl ArrowReader {
@@ -104,12 +100,7 @@ impl ArrowReader {
                 if let Some(predicates) = task.predicate() {
                     visit(&mut collector, predicates)?;
                 }
-                let iceberg_schema = self.metadata.schema_by_id(task.schema_id()).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Schema with id {} not found.", task.schema_id()),
-                    )
-                })?;
+                let iceberg_schema = task.schema();
 
                 let parquet_file = file_io
                     .new_input(task.data_file_path())?;
@@ -121,7 +112,7 @@ impl ArrowReader {
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
                 let arrow_schema = batch_stream_builder.schema();
-                let projection_mask = self.get_arrow_projection_mask(task.project_field_id(),iceberg_schema,parquet_schema, arrow_schema)?;
+                let projection_mask = self.get_arrow_projection_mask(task.project_field_id(),&iceberg_schema,parquet_schema, arrow_schema)?;
                 batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 let parquet_schema = batch_stream_builder.parquet_schema();

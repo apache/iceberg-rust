@@ -74,7 +74,7 @@ impl Table {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.file_io.clone(), self.metadata_ref())
+        ArrowReaderBuilder::new(self.file_io.clone())
     }
 }
 
@@ -147,7 +147,7 @@ impl StaticTable {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.0.file_io.clone(), self.metadata())
+        ArrowReaderBuilder::new(self.0.file_io.clone())
     }
 }
 
