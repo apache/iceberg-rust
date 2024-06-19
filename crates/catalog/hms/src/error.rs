@@ -19,17 +19,29 @@ use anyhow::anyhow;
 use iceberg::{Error, ErrorKind};
 use std::fmt::Debug;
 use std::io;
+use volo_thrift::MaybeException;
 
 /// Format a thrift error into iceberg error.
-pub fn from_thrift_error<T>(error: volo_thrift::error::ResponseError<T>) -> Error
-where
-    T: Debug,
-{
+///
+/// Please only throw this error when you are sure that the error is caused by thrift.
+pub fn from_thrift_error(error: impl std::error::Error) -> Error {
     Error::new(
         ErrorKind::Unexpected,
         "Operation failed for hitting thrift error".to_string(),
     )
     .with_source(anyhow!("thrift error: {:?}", error))
+}
+
+/// Format a thrift exception into iceberg error.
+pub fn from_thrift_exception<T, E: Debug>(value: MaybeException<T, E>) -> Result<T, Error> {
+    match value {
+        MaybeException::Ok(v) => Ok(v),
+        MaybeException::Exception(err) => Err(Error::new(
+            ErrorKind::Unexpected,
+            "Operation failed for hitting thrift error".to_string(),
+        )
+        .with_source(anyhow!("thrift error: {:?}", err))),
+    }
 }
 
 /// Format an io error into iceberg error.

@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::from_io_error;
 use crate::error::from_thrift_error;
+use crate::error::{from_io_error, from_thrift_exception};
 
 use super::utils::*;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;
 use hive_metastore::ThriftHiveMetastoreClientBuilder;
@@ -36,7 +37,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
 use typed_builder::TypedBuilder;
-use volo_thrift::ResponseError;
+use volo_thrift::MaybeException;
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
@@ -137,7 +138,8 @@ impl Catalog for HmsCatalog {
                 .0
                 .get_all_databases()
                 .await
-                .map_err(from_thrift_error)?
+                .map(from_thrift_exception)
+                .map_err(from_thrift_error)??
         };
 
         Ok(dbs
@@ -195,7 +197,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_database(name.into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let ns = convert_to_namespace(&db)?;
 
@@ -220,17 +223,16 @@ impl Catalog for HmsCatalog {
         let resp = self.client.0.get_database(name.into()).await;
 
         match resp {
-            Ok(_) => Ok(true),
-            Err(err) => {
-                if let ResponseError::UserException(ThriftHiveMetastoreGetDatabaseException::O1(
-                    _,
-                )) = &err
-                {
-                    Ok(false)
-                } else {
-                    Err(from_thrift_error(err))
-                }
+            Ok(MaybeException::Ok(_)) => Ok(true),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetDatabaseException::O1(_))) => {
+                Ok(false)
             }
+            Ok(MaybeException::Exception(exception)) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Operation failed for hitting thrift error".to_string(),
+            )
+            .with_source(anyhow!("thrift error: {:?}", exception))),
+            Err(err) => Err(from_thrift_error(err)),
         }
     }
 
@@ -306,7 +308,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_all_tables(name.into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let tables = tables
             .iter()
@@ -397,7 +400,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_table(db_name.clone().into(), table.name.clone().into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
@@ -457,16 +461,14 @@ impl Catalog for HmsCatalog {
             .await;
 
         match resp {
-            Ok(_) => Ok(true),
-            Err(err) => {
-                if let ResponseError::UserException(ThriftHiveMetastoreGetTableException::O2(_)) =
-                    &err
-                {
-                    Ok(false)
-                } else {
-                    Err(from_thrift_error(err))
-                }
-            }
+            Ok(MaybeException::Ok(_)) => Ok(true),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => Ok(false),
+            Ok(MaybeException::Exception(exception)) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Operation failed for hitting thrift error".to_string(),
+            )
+            .with_source(anyhow!("thrift error: {:?}", exception))),
+            Err(err) => Err(from_thrift_error(err)),
         }
     }
 
@@ -488,7 +490,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         tbl.db_name = Some(dest_dbname.into());
         tbl.table_name = Some(dest_tbl_name.into());
