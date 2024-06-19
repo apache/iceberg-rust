@@ -25,19 +25,25 @@ use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestFile, Schema, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, Schema,
+    SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 use arrow_array::RecordBatch;
-use async_stream::try_stream;
+use futures::channel::mpsc::{channel, Sender};
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::spawn;
+use tokio::sync::Mutex;
+
+const CHANNEL_BUFFER_SIZE: usize = 10;
+const CONCURRENCY_LIMIT_MANIFEST_FILES: usize = 10;
+const SUPPORTED_MANIFEST_FILE_CONTENT_TYPES: [ManifestContentType; 1] = [ManifestContentType::Data];
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
@@ -199,95 +205,28 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let context = FileScanStreamContext::new(
+        let (sender, receiver) = channel(CHANNEL_BUFFER_SIZE);
+
+        let mut context = FileScanStreamContext::new(
             self.schema.clone(),
             self.snapshot.clone(),
             self.table_metadata.clone(),
             self.file_io.clone(),
             self.filter.clone(),
             self.case_sensitive,
+            sender,
         )?;
 
-        let mut partition_filter_cache = PartitionFilterCache::new();
-        let mut manifest_evaluator_cache = ManifestEvaluatorCache::new();
-        let mut expression_evaluator_cache = ExpressionEvaluatorCache::new();
+        let manifest_list = context
+            .snapshot
+            .load_manifest_list(&context.file_io, &context.table_metadata)
+            .await?;
 
-        Ok(try_stream! {
-            let manifest_list = context
-                .snapshot
-                .load_manifest_list(&context.file_io, &context.table_metadata)
-                .await?;
+        spawn(async move {
+            let _ = context.run(manifest_list).await;
+        });
 
-            for entry in manifest_list.entries() {
-                if !Self::content_type_is_data(entry) {
-                    continue;
-                }
-
-                let partition_spec_id = entry.partition_spec_id;
-
-                let partition_filter = partition_filter_cache.get(
-                    partition_spec_id,
-                    &context,
-                )?;
-
-                if let Some(partition_filter) = partition_filter {
-                    let manifest_evaluator = manifest_evaluator_cache.get(
-                        partition_spec_id,
-                        partition_filter,
-                    );
-
-                    if !manifest_evaluator.eval(entry)? {
-                        continue;
-                    }
-                }
-
-                let manifest = entry.load_manifest(&context.file_io).await?;
-                let mut manifest_entries_stream =
-                    futures::stream::iter(manifest.entries().iter().filter(|e| e.is_alive()));
-
-                while let Some(manifest_entry) = manifest_entries_stream.next().await {
-                    let data_file = manifest_entry.data_file();
-
-                    if let Some(partition_filter) = partition_filter {
-                        let expression_evaluator = expression_evaluator_cache.get(partition_spec_id, partition_filter);
-
-                        if !expression_evaluator.eval(data_file)? {
-                            continue;
-                        }
-                    }
-
-
-                    if let Some(bound_predicate) = context.bound_filter() {
-                        // reject any manifest entries whose data file's metrics don't match the filter.
-                        if !InclusiveMetricsEvaluator::eval(
-                            bound_predicate,
-                            manifest_entry.data_file(),
-                            false
-                        )? {
-                            continue;
-                        }
-                    }
-
-                    match manifest_entry.content_type() {
-                        DataContentType::EqualityDeletes | DataContentType::PositionDeletes => {
-                            yield Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                "Delete files are not supported yet.",
-                            ))?;
-                        }
-                        DataContentType::Data => {
-                            let scan_task: Result<FileScanTask> = Ok(FileScanTask {
-                                data_file_path: manifest_entry.data_file().file_path().to_string(),
-                                start: 0,
-                                length: manifest_entry.file_size_in_bytes(),
-                            });
-                            yield scan_task?;
-                        }
-                    }
-                }
-            }
-        }
-        .boxed())
+        return Ok(receiver.boxed());
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -345,14 +284,14 @@ impl TableScan {
 
         arrow_reader_builder.build().read(self.plan_files().await?)
     }
+}
 
-    /// Checks whether the [`ManifestContentType`] is `Data` or not.
-    fn content_type_is_data(entry: &ManifestFile) -> bool {
-        if let ManifestContentType::Data = entry.content {
-            return true;
-        }
-        false
-    }
+struct ManifestFileProcessingContext<'a> {
+    manifest_file: &'a ManifestFile,
+    file_io: FileIO,
+    sender: Sender<Result<FileScanTask>>,
+    filter: &'a Option<BoundPredicate>,
+    expression_evaluator_cache: Arc<Mutex<ExpressionEvaluatorCache>>,
 }
 
 /// Holds the context necessary for file scanning operations
@@ -365,6 +304,10 @@ struct FileScanStreamContext {
     file_io: FileIO,
     bound_filter: Option<BoundPredicate>,
     case_sensitive: bool,
+    sender: Sender<Result<FileScanTask>>,
+    manifest_evaluator_cache: ManifestEvaluatorCache,
+    partition_filter_cache: PartitionFilterCache,
+    expression_evaluator_cache: Arc<Mutex<ExpressionEvaluatorCache>>,
 }
 
 impl FileScanStreamContext {
@@ -376,6 +319,7 @@ impl FileScanStreamContext {
         file_io: FileIO,
         filter: Option<Arc<Predicate>>,
         case_sensitive: bool,
+        sender: Sender<Result<FileScanTask>>,
     ) -> Result<Self> {
         let bound_filter = match filter {
             Some(ref filter) => Some(filter.bind(schema.clone(), case_sensitive)?),
@@ -389,12 +333,158 @@ impl FileScanStreamContext {
             file_io,
             bound_filter,
             case_sensitive,
+            sender,
+            manifest_evaluator_cache: ManifestEvaluatorCache::new(),
+            partition_filter_cache: PartitionFilterCache::new(),
+            expression_evaluator_cache: Arc::new(Mutex::new(ExpressionEvaluatorCache::new())),
         })
     }
 
-    /// Returns a reference to the [`BoundPredicate`] filter.
-    fn bound_filter(&self) -> Option<&BoundPredicate> {
-        self.bound_filter.as_ref()
+    async fn run(&mut self, manifest_list: ManifestList) -> Result<()> {
+        let file_io = self.file_io.clone();
+        let sender = self.sender.clone();
+
+        // This whole Vec-and-for-loop approach feels sub-optimally structured.
+        // I've tried structuring this in multiple ways but run into
+        // issues with ownership. Ideally I'd like to structure this
+        // with a functional programming approach: extracting
+        // sections 1, 2, and 3 out into different methods on Self,
+        // and then use some iterator combinators to orchestrate it all.
+        // Section 1 is pretty trivially refactorable into a static method
+        // that can be used in a closure that can be used with Iterator::filter.
+        // Similarly, section 3 seems easily factor-able into a method that can
+        // be passed into Iterator::map.
+        // Section 2 turns out trickier - we want to exit the entire `run` method early
+        // if the eval fails, and filter out any manifest_files from the iterator / stream
+        // if the eval succeeds but returns true. We bump into ownership issues due
+        // to needing to pass mut self as the caches need to be able to mutate.
+        // Section 3 runs into ownership issues when trying to refactor its closure to be
+        // a static or non-static method.
+
+        // 1
+        let filtered_manifest_files = manifest_list
+            .entries()
+            .iter()
+            .filter(Self::reject_unsupported_content_types);
+
+        // 2
+        let mut filtered_manifest_files2 = vec![];
+        for manifest_file in filtered_manifest_files {
+            if !self.apply_evaluator(manifest_file)? {
+                continue;
+            }
+
+            filtered_manifest_files2.push(manifest_file);
+        }
+
+        // 3
+        let filtered_manifest_files = filtered_manifest_files2.into_iter().map(|manifest_file| {
+            Ok(ManifestFileProcessingContext {
+                manifest_file,
+                file_io: file_io.clone(),
+                sender: sender.clone(),
+                filter: &self.bound_filter,
+                expression_evaluator_cache: self.expression_evaluator_cache.clone(),
+            })
+        });
+
+        futures::stream::iter(filtered_manifest_files)
+            .try_for_each_concurrent(
+                CONCURRENCY_LIMIT_MANIFEST_FILES,
+                Self::process_manifest_file,
+            )
+            .await
+    }
+
+    fn reject_unsupported_content_types(manifest_file: &&ManifestFile) -> bool {
+        SUPPORTED_MANIFEST_FILE_CONTENT_TYPES.contains(&manifest_file.content)
+    }
+
+    fn apply_evaluator(&mut self, manifest_file: &ManifestFile) -> Result<bool> {
+        let partition_spec_id = manifest_file.partition_spec_id;
+
+        let partition_filter = self.partition_filter_cache.get(
+            partition_spec_id,
+            &self.schema,
+            &self.bound_filter,
+            &self.table_metadata,
+            self.case_sensitive,
+        )?;
+
+        if let Some(partition_filter) = partition_filter {
+            let manifest_evaluator = self
+                .manifest_evaluator_cache
+                .get(partition_spec_id, partition_filter);
+
+            if !manifest_evaluator.eval(manifest_file)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    async fn process_manifest_file(mut ctx: ManifestFileProcessingContext<'_>) -> Result<()> {
+        let manifest = ctx.manifest_file.load_manifest(&ctx.file_io).await?;
+        for manifest_entry in manifest.entries() {
+            if !manifest_entry.is_alive() {
+                continue;
+            }
+
+            Self::reject_unsupported_manifest_entry_content_types(manifest_entry)?;
+
+            if let Some(bound_predicate) = ctx.filter {
+                // Apply ExpressionEvaluator
+                {
+                    let mut expression_evaluator_cache =
+                        ctx.expression_evaluator_cache.lock().await;
+                    let expression_evaluator = expression_evaluator_cache
+                        .get(ctx.manifest_file.partition_spec_id, bound_predicate);
+                    if !expression_evaluator.eval(manifest_entry.data_file())? {
+                        return Ok(());
+                    }
+                }
+
+                // reject any manifest entries whose data file's metrics don't match the filter.
+                if !InclusiveMetricsEvaluator::eval(
+                    bound_predicate,
+                    manifest_entry.data_file(),
+                    false,
+                )? {
+                    return Ok(());
+                }
+            }
+
+            ctx.sender
+                .send(Ok(Self::manifest_entry_to_file_scan_task(manifest_entry)))
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    fn reject_unsupported_manifest_entry_content_types(
+        manifest_entry: &ManifestEntryRef,
+    ) -> Result<()> {
+        if matches!(manifest_entry.content_type(), DataContentType::Data) {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Files of type '{:?}' are not supported yet.",
+                    manifest_entry.content_type()
+                ),
+            ))
+        }
+    }
+
+    fn manifest_entry_to_file_scan_task(manifest_entry: &ManifestEntryRef) -> FileScanTask {
+        FileScanTask {
+            data_file_path: manifest_entry.file_path().to_string(),
+            start: 0,
+            length: manifest_entry.file_size_in_bytes(),
+        }
     }
 }
 
@@ -415,22 +505,25 @@ impl PartitionFilterCache {
     fn get(
         &mut self,
         spec_id: i32,
-        context: &FileScanStreamContext,
+        schema: &SchemaRef,
+        filter: &Option<BoundPredicate>,
+        table_metadata: &TableMetadataRef,
+        case_sensitive: bool,
     ) -> Result<Option<&BoundPredicate>> {
-        match context.bound_filter() {
+        match filter {
             None => Ok(None),
             Some(filter) => match self.0.entry(spec_id) {
                 Entry::Occupied(e) => Ok(Some(e.into_mut())),
                 Entry::Vacant(e) => {
-                    let partition_spec = context
-                        .table_metadata
-                        .partition_spec_by_id(spec_id)
-                        .ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Could not find partition spec for id {}", spec_id),
-                        ))?;
+                    let partition_spec =
+                        table_metadata
+                            .partition_spec_by_id(spec_id)
+                            .ok_or(Error::new(
+                                ErrorKind::Unexpected,
+                                format!("Could not find partition spec for id {}", spec_id),
+                            ))?;
 
-                    let partition_type = partition_spec.partition_type(context.schema.as_ref())?;
+                    let partition_type = partition_spec.partition_type(schema.as_ref())?;
                     let partition_fields = partition_type.fields().to_owned();
                     let partition_schema = Arc::new(
                         Schema::builder()
@@ -444,7 +537,7 @@ impl PartitionFilterCache {
                     let partition_filter = inclusive_projection
                         .project(filter)?
                         .rewrite_not()
-                        .bind(partition_schema.clone(), context.case_sensitive)?;
+                        .bind(partition_schema.clone(), case_sensitive)?;
 
                     Ok(Some(e.insert(partition_filter)))
                 }

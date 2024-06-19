@@ -333,6 +333,12 @@ define_from_err!(
 
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
 
+define_from_err!(
+    futures::channel::mpsc::SendError,
+    ErrorKind::Unexpected,
+    "Failed to send a message to a channel"
+);
+
 /// Helper macro to check arguments.
 ///
 ///

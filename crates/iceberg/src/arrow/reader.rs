@@ -53,7 +53,7 @@ pub struct ArrowReaderBuilder {
     field_ids: Vec<usize>,
     file_io: FileIO,
     schema: SchemaRef,
-    predicates: Option<BoundPredicate>,
+    predicate: Option<BoundPredicate>,
 }
 
 impl ArrowReaderBuilder {
@@ -64,7 +64,7 @@ impl ArrowReaderBuilder {
             field_ids: vec![],
             file_io,
             schema,
-            predicates: None,
+            predicate: None,
         }
     }
 
@@ -83,7 +83,7 @@ impl ArrowReaderBuilder {
 
     /// Sets the predicates to apply to the scan.
     pub fn with_predicates(mut self, predicates: BoundPredicate) -> Self {
-        self.predicates = Some(predicates);
+        self.predicate = Some(predicates);
         self
     }
 
@@ -94,7 +94,7 @@ impl ArrowReaderBuilder {
             field_ids: self.field_ids,
             schema: self.schema,
             file_io: self.file_io,
-            predicates: self.predicates,
+            predicate: self.predicate,
         }
     }
 }
@@ -106,7 +106,7 @@ pub struct ArrowReader {
     #[allow(dead_code)]
     schema: SchemaRef,
     file_io: FileIO,
-    predicates: Option<BoundPredicate>,
+    predicate: Option<BoundPredicate>,
 }
 
 impl ArrowReader {
@@ -119,7 +119,7 @@ impl ArrowReader {
         let mut collector = CollectFieldIdVisitor {
             field_ids: HashSet::default(),
         };
-        if let Some(predicates) = &self.predicates {
+        if let Some(predicates) = &self.predicate {
             visit(&mut collector, predicates)?;
         }
 
@@ -163,7 +163,7 @@ impl ArrowReader {
         &self,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
-    ) -> crate::Result<ProjectionMask> {
+    ) -> Result<ProjectionMask> {
         if self.field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
@@ -233,7 +233,7 @@ impl ArrowReader {
         parquet_schema: &SchemaDescriptor,
         collector: &CollectFieldIdVisitor,
     ) -> Result<Option<RowFilter>> {
-        if let Some(predicates) = &self.predicates {
+        if let Some(predicate) = &self.predicate {
             let field_id_map = build_field_id_map(parquet_schema)?;
 
             // Collect Parquet column indices from field ids.
@@ -256,7 +256,7 @@ impl ArrowReader {
             // After collecting required leaf column indices used in the predicate,
             // creates the projection mask for the Arrow predicates.
             let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
-            let predicate_func = visit(&mut converter, predicates)?;
+            let predicate_func = visit(&mut converter, predicate)?;
             let arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
             Ok(Some(RowFilter::new(vec![Box::new(arrow_predicate)])))
         } else {
