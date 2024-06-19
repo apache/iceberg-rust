@@ -1588,25 +1588,18 @@ mod tests {
 
         let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
 
-        assert_eq!(
-            desered.unwrap().current_snapshot_id,
-            None
-        )
+        assert_eq!(desered.unwrap().current_snapshot_id, None)
     }
 
     #[test]
     fn test_table_metadata_v1_file() {
         // test metadata file v1 with current_snapshot_id optional
         let metadata =
-            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json")
-                .unwrap();
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
 
         let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
 
-        assert_eq!(
-            desered.unwrap().current_snapshot_id,
-            None
-        )
+        assert_eq!(desered.unwrap().current_snapshot_id, None)
     }
 
     #[test]
