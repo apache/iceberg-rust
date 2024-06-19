@@ -515,7 +515,7 @@ impl FileScanTask {
     }
 
     /// Returns the project field id of this file scan task.
-    pub fn project_field_id(&self) -> &[i32] {
+    pub fn project_field_ids(&self) -> &[i32] {
         &self.project_field_ids
     }
 
@@ -525,8 +525,8 @@ impl FileScanTask {
     }
 
     /// Returns the schema id of this file scan task.
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 }
 

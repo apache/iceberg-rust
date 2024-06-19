@@ -44,7 +44,7 @@ use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisito
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
-use crate::spec::{Datum, SchemaRef};
+use crate::spec::{Datum, Schema};
 use crate::{Error, ErrorKind};
 
 /// Builder to create ArrowReader
@@ -100,7 +100,6 @@ impl ArrowReader {
                 if let Some(predicates) = task.predicate() {
                     visit(&mut collector, predicates)?;
                 }
-                let iceberg_schema = task.schema();
 
                 let parquet_file = file_io
                     .new_input(task.data_file_path())?;
@@ -112,7 +111,7 @@ impl ArrowReader {
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
                 let arrow_schema = batch_stream_builder.schema();
-                let projection_mask = self.get_arrow_projection_mask(task.project_field_id(),&iceberg_schema,parquet_schema, arrow_schema)?;
+                let projection_mask = self.get_arrow_projection_mask(task.project_field_ids(),task.schema(),parquet_schema, arrow_schema)?;
                 batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
 
                 let parquet_schema = batch_stream_builder.parquet_schema();
@@ -139,7 +138,7 @@ impl ArrowReader {
     fn get_arrow_projection_mask(
         &self,
         field_ids: &[i32],
-        iceberg_schema_from_meta: &SchemaRef,
+        iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
     ) -> crate::Result<ProjectionMask> {
@@ -167,7 +166,7 @@ impl ArrowReader {
                     return false;
                 }
 
-                let iceberg_field = iceberg_schema_from_meta.field_by_id(field_id);
+                let iceberg_field = iceberg_schema_of_task.field_by_id(field_id);
                 let parquet_iceberg_field = iceberg_schema.field_by_id(field_id);
 
                 if iceberg_field.is_none() || parquet_iceberg_field.is_none() {
@@ -187,7 +186,7 @@ impl ArrowReader {
                     ErrorKind::DataInvalid,
                     format!(
                         "Parquet schema {} and Iceberg schema {} do not match.",
-                        iceberg_schema, iceberg_schema_from_meta
+                        iceberg_schema, iceberg_schema_of_task
                     ),
                 ));
             }
