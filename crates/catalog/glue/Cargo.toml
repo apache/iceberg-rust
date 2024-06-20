@@ -35,9 +35,11 @@ aws-config = { workspace = true }
 aws-sdk-glue = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 typed-builder = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
-tokio = { workspace = true }

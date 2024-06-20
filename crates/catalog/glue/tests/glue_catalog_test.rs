@@ -19,7 +19,9 @@
 
 use std::collections::HashMap;
 
-use iceberg::{Catalog, Namespace, NamespaceIdent, Result};
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
@@ -29,6 +31,7 @@ use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 
 const GLUE_CATALOG_PORT: u16 = 5000;
+const MINIO_PORT: u16 = 9000;
 
 #[derive(Debug)]
 struct TestFixture {
@@ -47,6 +50,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     docker_compose.run();
 
     let glue_catalog_ip = docker_compose.get_container_ip("moto");
+    let minio_ip = docker_compose.get_container_ip("minio");
 
     let read_port = format!("{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT);
     loop {
@@ -65,14 +69,22 @@ async fn set_test_fixture(func: &str) -> TestFixture {
             "my_secret_key".to_string(),
         ),
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+        (
+            S3_ENDPOINT.to_string(),
+            format!("http://{}:{}", minio_ip, MINIO_PORT),
+        ),
+        (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+        (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+        (S3_REGION.to_string(), "us-east-1".to_string()),
     ]);
 
     let config = GlueCatalogConfig::builder()
         .uri(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
-        .props(props)
+        .warehouse("s3a://warehouse/hive".to_string())
+        .props(props.clone())
         .build();
 
-    let glue_catalog = GlueCatalog::new(config).await;
+    let glue_catalog = GlueCatalog::new(config).await.unwrap();
 
     TestFixture {
         _docker_compose: docker_compose,
@@ -87,6 +99,176 @@ async fn set_test_namespace(fixture: &TestFixture, namespace: &NamespaceIdent) -
         .glue_catalog
         .create_namespace(namespace, properties)
         .await?;
+
+    Ok(())
+}
+
+fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+
+    let creation = TableCreation::builder()
+        .location(location.to_string())
+        .name(name.to_string())
+        .properties(HashMap::new())
+        .schema(schema)
+        .build();
+
+    Ok(creation)
+}
+
+#[tokio::test]
+async fn test_rename_table() -> Result<()> {
+    let fixture = set_test_fixture("test_rename_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
+
+    fixture
+        .glue_catalog
+        .rename_table(table.identifier(), &dest)
+        .await?;
+
+    let table = fixture.glue_catalog.load_table(&dest).await?;
+    assert_eq!(table.identifier(), &dest);
+
+    let src = TableIdent::new(namespace.name().clone(), "my_table".to_string());
+
+    let src_table_exists = fixture.glue_catalog.table_exists(&src).await?;
+    assert!(!src_table_exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_exists() -> Result<()> {
+    let fixture = set_test_fixture("test_table_exists").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let ident = TableIdent::new(namespace.name().clone(), "my_table".to_string());
+
+    let exists = fixture.glue_catalog.table_exists(&ident).await?;
+    assert!(!exists);
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let exists = fixture
+        .glue_catalog
+        .table_exists(table.identifier())
+        .await?;
+
+    assert!(exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_drop_table() -> Result<()> {
+    let fixture = set_test_fixture("test_drop_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let table = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    fixture.glue_catalog.drop_table(table.identifier()).await?;
+
+    let result = fixture
+        .glue_catalog
+        .table_exists(table.identifier())
+        .await?;
+
+    assert!(!result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_load_table() -> Result<()> {
+    let fixture = set_test_fixture("test_load_table").await;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+
+    fixture
+        .glue_catalog
+        .create_namespace(namespace.name(), HashMap::new())
+        .await?;
+
+    let expected = fixture
+        .glue_catalog
+        .create_table(namespace.name(), creation)
+        .await?;
+
+    let result = fixture
+        .glue_catalog
+        .load_table(&TableIdent::new(
+            namespace.name().clone(),
+            "my_table".to_string(),
+        ))
+        .await?;
+
+    assert_eq!(result.identifier(), expected.identifier());
+    assert_eq!(result.metadata_location(), expected.metadata_location());
+    assert_eq!(result.metadata(), expected.metadata());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_create_table() -> Result<()> {
+    let fixture = set_test_fixture("test_create_table").await;
+    let namespace = NamespaceIdent::new("my_database".to_string());
+    set_test_namespace(&fixture, &namespace).await?;
+    let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
+
+    let result = fixture
+        .glue_catalog
+        .create_table(&namespace, creation)
+        .await?;
+
+    assert_eq!(result.identifier().name(), "my_table");
+    assert!(result
+        .metadata_location()
+        .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
+    assert!(
+        fixture
+            .glue_catalog
+            .file_io()
+            .is_exist("s3a://warehouse/hive/metadata/")
+            .await?
+    );
 
     Ok(())
 }

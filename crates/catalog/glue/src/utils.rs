@@ -20,14 +20,14 @@ use std::collections::HashMap;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_glue::{
     config::Credentials,
-    types::{Database, DatabaseInput},
+    types::{Database, DatabaseInput, StorageDescriptor, TableInput},
 };
+use iceberg::spec::TableMetadata;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
+use uuid::Uuid;
 
-use crate::error::from_aws_build_error;
+use crate::{error::from_aws_build_error, schema::GlueSchemaBuilder};
 
-const _GLUE_SKIP_ARCHIVE: &str = "glue.skip-archive";
-const _GLUE_SKIP_ARCHIVE_DEFAULT: bool = true;
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";
 /// Property aws region
@@ -42,6 +42,16 @@ pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 const DESCRIPTION: &str = "description";
 /// Parameter namespace location uri
 const LOCATION: &str = "location_uri";
+/// Property `metadata_location` for `TableInput`
+const METADATA_LOCATION: &str = "metadata_location";
+/// Property `previous_metadata_location` for `TableInput`
+const PREV_METADATA_LOCATION: &str = "previous_metadata_location";
+/// Property external table for `TableInput`
+const EXTERNAL_TABLE: &str = "EXTERNAL_TABLE";
+/// Parameter key `table_type` for `TableInput`
+const TABLE_TYPE: &str = "table_type";
+/// Parameter value `table_type` for `TableInput`
+const ICEBERG: &str = "ICEBERG";
 
 /// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
@@ -125,6 +135,50 @@ pub(crate) fn convert_to_namespace(database: &Database) -> Namespace {
     Namespace::with_properties(NamespaceIdent::new(db_name), properties)
 }
 
+/// Converts Iceberg table metadata into an
+/// AWS Glue `TableInput` representation.
+///
+/// This function facilitates the integration of Iceberg tables with AWS Glue
+/// by converting Iceberg table metadata into a Glue-compatible `TableInput`
+/// structure.
+pub(crate) fn convert_to_glue_table(
+    table_name: impl Into<String>,
+    metadata_location: String,
+    metadata: &TableMetadata,
+    properties: &HashMap<String, String>,
+    prev_metadata_location: Option<String>,
+) -> Result<TableInput> {
+    let glue_schema = GlueSchemaBuilder::from_iceberg(metadata)?.build();
+
+    let storage_descriptor = StorageDescriptor::builder()
+        .set_columns(Some(glue_schema))
+        .location(&metadata_location)
+        .build();
+
+    let mut parameters = HashMap::from([
+        (TABLE_TYPE.to_string(), ICEBERG.to_string()),
+        (METADATA_LOCATION.to_string(), metadata_location),
+    ]);
+
+    if let Some(prev) = prev_metadata_location {
+        parameters.insert(PREV_METADATA_LOCATION.to_string(), prev);
+    }
+
+    let mut table_input_builder = TableInput::builder()
+        .name(table_name)
+        .set_parameters(Some(parameters))
+        .storage_descriptor(storage_descriptor)
+        .table_type(EXTERNAL_TABLE);
+
+    if let Some(description) = properties.get(DESCRIPTION) {
+        table_input_builder = table_input_builder.description(description);
+    }
+
+    let table_input = table_input_builder.build().map_err(from_aws_build_error)?;
+
+    Ok(table_input)
+}
+
 /// Checks if provided `NamespaceIdent` is valid
 pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     let name = namespace.as_ref();
@@ -151,6 +205,73 @@ pub(crate) fn validate_namespace(namespace: &NamespaceIdent) -> Result<String> {
     Ok(name)
 }
 
+/// Get default table location from `Namespace` properties
+pub(crate) fn get_default_table_location(
+    namespace: &Namespace,
+    db_name: impl AsRef<str>,
+    table_name: impl AsRef<str>,
+    warehouse: impl AsRef<str>,
+) -> String {
+    let properties = namespace.properties();
+
+    match properties.get(LOCATION) {
+        Some(location) => format!("{}/{}", location, table_name.as_ref()),
+        None => {
+            let warehouse_location = warehouse.as_ref().trim_end_matches('/');
+
+            format!(
+                "{}/{}.db/{}",
+                warehouse_location,
+                db_name.as_ref(),
+                table_name.as_ref()
+            )
+        }
+    }
+}
+
+/// Create metadata location from `location` and `version`
+pub(crate) fn create_metadata_location(location: impl AsRef<str>, version: i32) -> Result<String> {
+    if version < 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata version: '{}' must be a non-negative integer",
+                version
+            ),
+        ));
+    };
+
+    let version = format!("{:0>5}", version);
+    let id = Uuid::new_v4();
+    let metadata_location = format!(
+        "{}/metadata/{}-{}.metadata.json",
+        location.as_ref(),
+        version,
+        id
+    );
+
+    Ok(metadata_location)
+}
+
+/// Get metadata location from `GlueTable` parameters
+pub(crate) fn get_metadata_location(
+    parameters: &Option<HashMap<String, String>>,
+) -> Result<String> {
+    match parameters {
+        Some(properties) => match properties.get(METADATA_LOCATION) {
+            Some(location) => Ok(location.to_string()),
+            None => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("No '{}' set on table", METADATA_LOCATION),
+            )),
+        },
+        None => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "No 'parameters' set on table. Location of metadata is undefined",
+        )),
+    }
+}
+
 #[macro_export]
 /// Extends aws sdk builder with `catalog_id` if present
 macro_rules! with_catalog_id {
@@ -165,10 +286,144 @@ macro_rules! with_catalog_id {
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_glue::config::ProvideCredentials;
-    use iceberg::{Namespace, Result};
+    use aws_sdk_glue::{config::ProvideCredentials, types::Column};
+    use iceberg::{
+        spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type},
+        Namespace, Result, TableCreation,
+    };
+
+    use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
 
     use super::*;
+
+    fn create_metadata(schema: Schema) -> Result<TableMetadata> {
+        let table_creation = TableCreation::builder()
+            .name("my_table".to_string())
+            .location("my_location".to_string())
+            .schema(schema)
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+
+        Ok(metadata)
+    }
+
+    #[test]
+    fn test_get_metadata_location() -> Result<()> {
+        let params_valid = Some(HashMap::from([(
+            METADATA_LOCATION.to_string(),
+            "my_location".to_string(),
+        )]));
+        let params_missing_key = Some(HashMap::from([(
+            "not_here".to_string(),
+            "my_location".to_string(),
+        )]));
+
+        let result_valid = get_metadata_location(&params_valid)?;
+        let result_missing_key = get_metadata_location(&params_missing_key);
+        let result_no_params = get_metadata_location(&None);
+
+        assert_eq!(result_valid, "my_location");
+        assert!(result_missing_key.is_err());
+        assert!(result_no_params.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_to_glue_table() -> Result<()> {
+        let table_name = "my_table".to_string();
+        let location = "s3a://warehouse/hive".to_string();
+        let metadata_location = create_metadata_location(location.clone(), 0)?;
+        let properties = HashMap::new();
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![NestedField::required(
+                1,
+                "foo",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .into()])
+            .build()?;
+
+        let metadata = create_metadata(schema)?;
+
+        let parameters = HashMap::from([
+            (ICEBERG_FIELD_ID.to_string(), "1".to_string()),
+            (ICEBERG_FIELD_OPTIONAL.to_string(), "true".to_string()),
+            (ICEBERG_FIELD_CURRENT.to_string(), "true".to_string()),
+        ]);
+
+        let column = Column::builder()
+            .name("foo")
+            .r#type("int")
+            .set_parameters(Some(parameters))
+            .set_comment(None)
+            .build()
+            .map_err(from_aws_build_error)?;
+
+        let storage_descriptor = StorageDescriptor::builder()
+            .set_columns(Some(vec![column]))
+            .location(&metadata_location)
+            .build();
+
+        let result =
+            convert_to_glue_table(&table_name, metadata_location, &metadata, &properties, None)?;
+
+        assert_eq!(result.name(), &table_name);
+        assert_eq!(result.description(), None);
+        assert_eq!(result.storage_descriptor, Some(storage_descriptor));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_metadata_location() -> Result<()> {
+        let location = "my_base_location";
+        let valid_version = 0;
+        let invalid_version = -1;
+
+        let valid_result = create_metadata_location(location, valid_version)?;
+        let invalid_result = create_metadata_location(location, invalid_version);
+
+        assert!(valid_result.starts_with("my_base_location/metadata/00000-"));
+        assert!(valid_result.ends_with(".metadata.json"));
+        assert!(invalid_result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location() -> Result<()> {
+        let properties = HashMap::from([(LOCATION.to_string(), "db_location".to_string())]);
+
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let db_name = validate_namespace(namespace.name())?;
+        let table_name = "my_table";
+
+        let expected = "db_location/my_table";
+        let result =
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_warehouse() -> Result<()> {
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let db_name = validate_namespace(namespace.name())?;
+        let table_name = "my_table";
+
+        let expected = "warehouse_location/default.db/my_table";
+        let result =
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
 
     #[test]
     fn test_convert_to_namespace() -> Result<()> {

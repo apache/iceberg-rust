@@ -26,17 +26,17 @@ Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 ### Catalog
 
 | Catalog Type | Status      |
-|--------------|-------------|
+| ------------ | ----------- |
 | Rest         | Done        |
-| Hive         | In Progress |
-| Sql          | Not Started |
-| Glue         | Not Started |
+| Hive         | Done        |
+| Sql          | In Progress |
+| Glue         | Done        |
 | DynamoDB     | Not Started |
 
 ### FileIO
 
 | FileIO Type | Status      |
-|-------------|-------------|
+| ----------- | ----------- |
 | S3          | Done        |
 | Local File  | Done        |
 | GCS         | Not Started |
@@ -50,19 +50,19 @@ expand to other service.
 #### Reader
 
 | Feature                                                    | Status      |
-|------------------------------------------------------------|-------------|
+| ---------------------------------------------------------- | ----------- |
 | File based task planning                                   | Done        |
 | Size based task planning                                   | Not started |
-| Filter pushdown(manifest evaluation, partition prunning)   | Not started |
+| Filter pushdown(manifest evaluation, partition prunning)   | In Progress |
 | Apply deletions, including equality and position deletions | Not started |
-| Read into arrow record batch                               | Not started |
-| Parquet file support                                       | Not started |
+| Read into arrow record batch                               | In Progress |
+| Parquet file support                                       | Done        |
 | ORC file support                                           | Not started |
 
 #### Writer
 
 | Feature                  | Status      |
-|--------------------------|-------------|
+| ------------------------ | ----------- |
 | Data writer              | Not started |
 | Equality deletion writer | Not started |
 | Position deletion writer | Not started |
@@ -74,7 +74,7 @@ expand to other service.
 #### Transaction
 
 | Feature               | Status      |
-|-----------------------|-------------|
+| --------------------- | ----------- |
 | Schema evolution      | Not started |
 | Update partition spec | Not started |
 | Update properties     | Not started |
@@ -98,7 +98,7 @@ Iceberg is an active open-source project. We are always open to people who want 
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
-- Discuss at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)) / [unsubscribe](mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
+- Discuss at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](<mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)>) / [unsubscribe](<mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)>) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
 - Talk to community directly at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
 
 ## License

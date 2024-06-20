@@ -17,12 +17,14 @@
 
 //! The module contains the file writer for parquet file format.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicI64, Arc},
 };
 
-use crate::{io::FileIO, Result};
+use crate::{io::FileIO, io::FileWrite, Result};
 use crate::{
     io::OutputFile,
     spec::{DataFileBuilder, DataFileFormat},
@@ -30,6 +32,8 @@ use crate::{
     Error,
 };
 use arrow_schema::SchemaRef as ArrowSchemaRef;
+use bytes::Bytes;
+use futures::future::BoxFuture;
 use parquet::{arrow::AsyncArrowWriter, format::FileMetaData};
 use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
 
@@ -103,7 +107,8 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
                 .generate_location(&self.file_name_generator.generate_file_name()),
         )?;
         let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
-        let writer = AsyncArrowWriter::try_new(inner_writer, self.schema.clone(), Some(self.props))
+        let async_writer = AsyncFileWriter::new(inner_writer);
+        let writer = AsyncArrowWriter::try_new(async_writer, self.schema.clone(), Some(self.props))
             .map_err(|err| {
                 Error::new(
                     crate::ErrorKind::Unexpected,
@@ -125,7 +130,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     out_file: OutputFile,
-    writer: AsyncArrowWriter<TrackWriter>,
+    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
     field_ids: Vec<i32>,
@@ -246,6 +251,105 @@ impl CurrentFileStatus for ParquetWriter {
     }
 }
 
+/// AsyncFileWriter is a wrapper of FileWrite to make it compatible with tokio::io::AsyncWrite.
+///
+/// # NOTES
+///
+/// We keep this wrapper been used inside only.
+///
+/// # TODO
+///
+/// Maybe we can use the buffer from ArrowWriter directly.
+struct AsyncFileWriter<W: FileWrite>(State<W>);
+
+enum State<W: FileWrite> {
+    Idle(Option<W>),
+    Write(BoxFuture<'static, (W, Result<()>)>),
+    Close(BoxFuture<'static, (W, Result<()>)>),
+}
+
+impl<W: FileWrite> AsyncFileWriter<W> {
+    /// Create a new `AsyncFileWriter` with the given writer.
+    pub fn new(writer: W) -> Self {
+        Self(State::Idle(Some(writer)))
+    }
+}
+
+impl<W: FileWrite> tokio::io::AsyncWrite for AsyncFileWriter<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, std::io::Error>> {
+        let this = self.get_mut();
+        loop {
+            match &mut this.0 {
+                State::Idle(w) => {
+                    let mut writer = w.take().unwrap();
+                    let bs = Bytes::copy_from_slice(buf);
+                    let fut = async move {
+                        let res = writer.write(bs).await;
+                        (writer, res)
+                    };
+                    this.0 = State::Write(Box::pin(fut));
+                }
+                State::Write(fut) => {
+                    let (writer, res) = futures::ready!(fut.as_mut().poll(cx));
+                    this.0 = State::Idle(Some(writer));
+                    return Poll::Ready(res.map(|_| buf.len()).map_err(|err| {
+                        std::io::Error::new(std::io::ErrorKind::Other, Box::new(err))
+                    }));
+                }
+                State::Close(_) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "file is closed",
+                    )));
+                }
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        let this = self.get_mut();
+        loop {
+            match &mut this.0 {
+                State::Idle(w) => {
+                    let mut writer = w.take().unwrap();
+                    let fut = async move {
+                        let res = writer.close().await;
+                        (writer, res)
+                    };
+                    this.0 = State::Close(Box::pin(fut));
+                }
+                State::Write(_) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "file is writing",
+                    )));
+                }
+                State::Close(fut) => {
+                    let (writer, res) = futures::ready!(fut.as_mut().poll(cx));
+                    this.0 = State::Idle(Some(writer));
+                    return Poll::Ready(res.map_err(|err| {
+                        std::io::Error::new(std::io::ErrorKind::Other, Box::new(err))
+                    }));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -256,9 +360,7 @@ mod tests {
     use arrow_array::Int64Array;
     use arrow_array::RecordBatch;
     use arrow_array::StructArray;
-    use bytes::Bytes;
-    use futures::AsyncReadExt;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
 
@@ -267,6 +369,7 @@ mod tests {
     use crate::spec::Struct;
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::tests::check_parquet_data_file;
 
     #[derive(Clone)]
     struct TestLocationGen;
@@ -318,53 +421,9 @@ mod tests {
             .build()
             .unwrap();
 
-        // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
-        let metadata = reader_builder.metadata().clone();
-
-        // check data
-        let mut reader = reader_builder.build().unwrap();
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write, res);
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write_null, res);
-
-        // check metadata
-        assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.row_group(0).num_columns(), 1);
-        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
-        assert_eq!(
-            data_file.record_count,
-            metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64
-        );
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
-        assert_eq!(data_file.column_sizes.len(), 1);
-        assert_eq!(
-            *data_file.column_sizes.get(&0).unwrap(),
-            metadata.row_group(0).column(0).compressed_size() as u64
-        );
-        assert_eq!(data_file.value_counts.len(), 1);
-        assert_eq!(*data_file.value_counts.get(&0).unwrap(), 2048);
-        assert_eq!(data_file.null_value_counts.len(), 1);
-        assert_eq!(*data_file.null_value_counts.get(&0).unwrap(), 1024);
-        assert_eq!(data_file.key_metadata.len(), 0);
-        assert_eq!(data_file.split_offsets.len(), 1);
-        assert_eq!(
-            *data_file.split_offsets.first().unwrap(),
-            metadata.row_group(0).file_offset().unwrap()
-        );
+        // check the written file
+        let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
 
         Ok(())
     }
@@ -397,7 +456,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "5".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -416,7 +475,7 @@ mod tests {
                         arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
                             .with_metadata(HashMap::from([(
                                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "-1".to_string(),
+                                "6".to_string(),
                             )])),
                     )),
                     true,
@@ -438,7 +497,7 @@ mod tests {
                                 )
                                 .with_metadata(HashMap::from([(
                                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    "-1".to_string(),
+                                    "7".to_string(),
                                 )]))]
                                 .into(),
                             ),
@@ -446,7 +505,7 @@ mod tests {
                         )
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "8".to_string(),
                         )]))]
                         .into(),
                     ),
@@ -465,7 +524,7 @@ mod tests {
                 arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "5".to_string(),
                     )])),
             ]
             .into(),
@@ -487,7 +546,7 @@ mod tests {
             arrow_array::ListArray::new(
                 Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "-1".to_string(),
+                    "6".to_string(),
                 )]))),
                 list_parts.1,
                 list_parts.2,
@@ -505,7 +564,7 @@ mod tests {
                     )
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "-1".to_string(),
+                        "7".to_string(),
                     )]))]
                     .into(),
                 ),
@@ -513,7 +572,7 @@ mod tests {
             )
             .with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
-                "-1".to_string(),
+                "8".to_string(),
             )]))]
             .into(),
             vec![Arc::new(StructArray::new(
@@ -521,7 +580,7 @@ mod tests {
                     arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
                         .with_metadata(HashMap::from([(
                             PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "-1".to_string(),
+                            "7".to_string(),
                         )])),
                 ]
                 .into(),
@@ -556,57 +615,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // read the written file
-        let mut input_file = file_io
-            .new_input(data_file.file_path.clone())
-            .unwrap()
-            .reader()
-            .await
-            .unwrap();
-        let mut res = vec![];
-        let file_size = input_file.read_to_end(&mut res).await.unwrap();
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(res)).unwrap();
-        let metadata = reader_builder.metadata().clone();
-
-        // check data
-        let mut reader = reader_builder.build().unwrap();
-        let res = reader.next().unwrap().unwrap();
-        assert_eq!(to_write, res);
-
-        // check metadata
-        assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.row_group(0).num_columns(), 5);
-        assert_eq!(data_file.file_format, DataFileFormat::Parquet);
-        assert_eq!(
-            data_file.record_count,
-            metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64
-        );
-        assert_eq!(data_file.file_size_in_bytes, file_size as u64);
-        assert_eq!(data_file.column_sizes.len(), 5);
-        assert_eq!(
-            *data_file.column_sizes.get(&0).unwrap(),
-            metadata.row_group(0).column(0).compressed_size() as u64
-        );
-        assert_eq!(data_file.value_counts.len(), 5);
-        data_file
-            .value_counts
-            .iter()
-            .for_each(|(_, v)| assert_eq!(*v, 1024));
-        assert_eq!(data_file.null_value_counts.len(), 5);
-        data_file
-            .null_value_counts
-            .iter()
-            .for_each(|(_, v)| assert_eq!(*v, 0));
-        assert_eq!(data_file.key_metadata.len(), 0);
-        assert_eq!(data_file.split_offsets.len(), 1);
-        assert_eq!(
-            *data_file.split_offsets.first().unwrap(),
-            metadata.row_group(0).file_offset().unwrap()
-        );
+        // check the written file
+        check_parquet_data_file(&file_io, &data_file, &to_write).await;
 
         Ok(())
     }

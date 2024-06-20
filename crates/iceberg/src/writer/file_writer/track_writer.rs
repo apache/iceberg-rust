@@ -15,14 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    pin::Pin,
-    sync::{atomic::AtomicI64, Arc},
-};
-
-use tokio::io::AsyncWrite;
+use bytes::Bytes;
+use std::sync::{atomic::AtomicI64, Arc};
 
 use crate::io::FileWrite;
+use crate::Result;
 
 /// `TrackWriter` is used to track the written size.
 pub(crate) struct TrackWriter {
@@ -39,34 +36,18 @@ impl TrackWriter {
     }
 }
 
-impl AsyncWrite for TrackWriter {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
-        match Pin::new(&mut self.inner).poll_write(cx, buf) {
-            std::task::Poll::Ready(Ok(n)) => {
-                self.written_size
-                    .fetch_add(buf.len() as i64, std::sync::atomic::Ordering::Relaxed);
-                std::task::Poll::Ready(Ok(n))
-            }
-            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
+#[async_trait::async_trait]
+impl FileWrite for TrackWriter {
+    async fn write(&mut self, bs: Bytes) -> Result<()> {
+        let size = bs.len();
+        self.inner.write(bs).await.map(|v| {
+            self.written_size
+                .fetch_add(size as i64, std::sync::atomic::Ordering::Relaxed);
+            v
+        })
     }
 
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+    async fn close(&mut self) -> Result<()> {
+        self.inner.close().await
     }
 }

@@ -118,8 +118,17 @@ impl Type {
         matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
     }
 
+    /// Convert Type to reference of PrimitiveType
+    pub fn as_primitive_type(&self) -> Option<&PrimitiveType> {
+        if let Type::Primitive(primitive_type) = self {
+            Some(primitive_type)
+        } else {
+            None
+        }
+    }
+
     /// Convert Type to StructType
-    pub fn as_struct_type(self) -> Option<StructType> {
+    pub fn to_struct_type(self) -> Option<StructType> {
         if let Type::Struct(struct_type) = self {
             Some(struct_type)
         } else {

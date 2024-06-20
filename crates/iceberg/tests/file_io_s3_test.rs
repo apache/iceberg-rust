@@ -17,7 +17,6 @@
 
 //! Integration tests for FileIO S3.
 
-use futures::{AsyncReadExt, AsyncWriteExt};
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
@@ -74,9 +73,7 @@ async fn test_file_io_s3_output() {
         .new_output("s3://bucket1/test_output")
         .unwrap();
     {
-        let mut writer = output_file.writer().await.unwrap();
-        writer.write_all("123".as_bytes()).await.unwrap();
-        writer.close().await.unwrap();
+        output_file.write("123".into()).await.unwrap();
     }
     assert!(fixture
         .file_io
@@ -93,18 +90,16 @@ async fn test_file_io_s3_input() {
         .new_output("s3://bucket1/test_input")
         .unwrap();
     {
-        let mut writer = output_file.writer().await.unwrap();
-        writer.write_all("test_input".as_bytes()).await.unwrap();
-        writer.close().await.unwrap();
+        output_file.write("test_input".into()).await.unwrap();
     }
+
     let input_file = fixture
         .file_io
         .new_input("s3://bucket1/test_input")
         .unwrap();
+
     {
-        let mut reader = input_file.reader().await.unwrap();
-        let mut buffer = vec![];
-        reader.read_to_end(&mut buffer).await.unwrap();
+        let buffer = input_file.read().await.unwrap();
         assert_eq!(buffer, "test_input".as_bytes());
     }
 }

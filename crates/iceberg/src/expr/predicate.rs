@@ -25,6 +25,7 @@ use std::ops::Not;
 use array_init::array_init;
 use fnv::FnvHashSet;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
@@ -32,9 +33,32 @@ use crate::spec::{Datum, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct LogicalExpression<T, const N: usize> {
     inputs: [Box<T>; N],
+}
+
+impl<T: Serialize, const N: usize> Serialize for LogicalExpression<T, N> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inputs.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for LogicalExpression<T, N> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let inputs = Vec::<Box<T>>::deserialize(deserializer)?;
+        Ok(LogicalExpression::new(
+            array_init::from_iter(inputs.into_iter()).ok_or_else(|| {
+                serde::de::Error::custom(format!("Failed to deserialize LogicalExpression: the len of inputs is not match with the len of LogicalExpression {}",N))
+            })?,
+        ))
+    }
 }
 
 impl<T: Debug, const N: usize> Debug for LogicalExpression<T, N> {
@@ -79,11 +103,12 @@ where
 }
 
 /// Unary predicate, for example, `a IS NULL`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub struct UnaryExpression<T> {
     /// Operator of this predicate, must be single operand operator.
     op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a IS NULL`.
+    #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
     term: T,
 }
 
@@ -116,17 +141,25 @@ impl<T> UnaryExpression<T> {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
+
+    /// Return the operator of this predicate.
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
+    }
+
+    /// Return the term of this predicate.
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 
 /// Binary predicate, for example, `a > 10`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub struct BinaryExpression<T> {
     /// Operator of this predicate, must be binary operator, such as `=`, `>`, `<`, etc.
     op: PredicateOperator,
     /// Term of this predicate, for example, `a` in `a > 10`.
+    #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
     term: T,
     /// Literal of this predicate, for example, `10` in `a > 10`.
     literal: Datum,
@@ -147,11 +180,19 @@ impl<T> BinaryExpression<T> {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
     }
+
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
+
+    /// Return the literal of this predicate.
     pub(crate) fn literal(&self) -> &Datum {
         &self.literal
+    }
+
+    /// Return the term of this predicate.
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 
@@ -175,7 +216,7 @@ impl<T: Bind> Bind for BinaryExpression<T> {
 }
 
 /// Set predicates, for example, `a in (1, 2, 3)`.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub struct SetExpression<T> {
     /// Operator of this predicate, must be set operator, such as `IN`, `NOT IN`, etc.
     op: PredicateOperator,
@@ -200,11 +241,19 @@ impl<T> SetExpression<T> {
         debug_assert!(op.is_set());
         Self { op, term, literals }
     }
+
+    /// Return the operator of this predicate.
     pub(crate) fn op(&self) -> PredicateOperator {
         self.op
     }
+
     pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
         &self.literals
+    }
+
+    /// Return the term of this predicate.
+    pub(crate) fn term(&self) -> &T {
+        &self.term
     }
 }
 
@@ -230,8 +279,12 @@ impl<T: Display + Debug> Display for SetExpression<T> {
 }
 
 /// Unbound predicate expression before binding to a schema.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub enum Predicate {
+    /// AlwaysTrue predicate, for example, `TRUE`.
+    AlwaysTrue,
+    /// AlwaysFalse predicate, for example, `FALSE`.
+    AlwaysFalse,
     /// And predicate, for example, `a > 10 AND b < 20`.
     And(LogicalExpression<Predicate, 2>),
     /// Or predicate, for example, `a > 10 OR b < 20`.
@@ -382,6 +435,8 @@ impl Bind for Predicate {
                     bound_literals,
                 )))
             }
+            Predicate::AlwaysTrue => Ok(BoundPredicate::AlwaysTrue),
+            Predicate::AlwaysFalse => Ok(BoundPredicate::AlwaysFalse),
         }
     }
 }
@@ -389,6 +444,12 @@ impl Bind for Predicate {
 impl Display for Predicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Predicate::AlwaysTrue => {
+                write!(f, "TRUE")
+            }
+            Predicate::AlwaysFalse => {
+                write!(f, "FALSE")
+            }
             Predicate::And(expr) => {
                 write!(f, "({}) AND ({})", expr.inputs()[0], expr.inputs()[1])
             }
@@ -430,7 +491,13 @@ impl Predicate {
     /// assert_eq!(&format!("{expr}"), "(a < 10) AND (b < 20)");
     /// ```
     pub fn and(self, other: Predicate) -> Predicate {
-        Predicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
+        match (self, other) {
+            (Predicate::AlwaysFalse, _) => Predicate::AlwaysFalse,
+            (_, Predicate::AlwaysFalse) => Predicate::AlwaysFalse,
+            (Predicate::AlwaysTrue, rhs) => rhs,
+            (lhs, Predicate::AlwaysTrue) => lhs,
+            (lhs, rhs) => Predicate::And(LogicalExpression::new([Box::new(lhs), Box::new(rhs)])),
+        }
     }
 
     /// Combines two predicates with `OR`.
@@ -451,7 +518,13 @@ impl Predicate {
     /// assert_eq!(&format!("{expr}"), "(a < 10) OR (b < 20)");
     /// ```
     pub fn or(self, other: Predicate) -> Predicate {
-        Predicate::Or(LogicalExpression::new([Box::new(self), Box::new(other)]))
+        match (self, other) {
+            (Predicate::AlwaysTrue, _) => Predicate::AlwaysTrue,
+            (_, Predicate::AlwaysTrue) => Predicate::AlwaysTrue,
+            (Predicate::AlwaysFalse, rhs) => rhs,
+            (lhs, Predicate::AlwaysFalse) => lhs,
+            (lhs, rhs) => Predicate::Or(LogicalExpression::new([Box::new(lhs), Box::new(rhs)])),
+        }
     }
 
     /// Returns a predicate representing the negation ('NOT') of this one,
@@ -476,6 +549,8 @@ impl Predicate {
     /// ```
     pub fn negate(self) -> Predicate {
         match self {
+            Predicate::AlwaysTrue => Predicate::AlwaysFalse,
+            Predicate::AlwaysFalse => Predicate::AlwaysTrue,
             Predicate::And(expr) => Predicate::Or(LogicalExpression::new(
                 expr.inputs.map(|expr| Box::new(expr.negate())),
             )),
@@ -540,6 +615,8 @@ impl Predicate {
             Predicate::Unary(expr) => Predicate::Unary(expr),
             Predicate::Binary(expr) => Predicate::Binary(expr),
             Predicate::Set(expr) => Predicate::Set(expr),
+            Predicate::AlwaysTrue => Predicate::AlwaysTrue,
+            Predicate::AlwaysFalse => Predicate::AlwaysFalse,
         }
     }
 }
@@ -571,7 +648,7 @@ impl Not for Predicate {
 }
 
 /// Bound predicate expression after binding to a schema.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum BoundPredicate {
     /// An expression always evaluates to true.
     AlwaysTrue,
@@ -627,8 +704,9 @@ mod tests {
     use std::ops::Not;
     use std::sync::Arc;
 
-    use crate::expr::Bind;
+    use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
     use crate::expr::Reference;
+    use crate::expr::{Bind, BoundPredicate};
     use crate::spec::Datum;
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
@@ -697,6 +775,42 @@ mod tests {
         let result = expression.rewrite_not();
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_predicate_and_reduce_always_true_false() {
+        let true_or_expr = AlwaysTrue.and(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{true_or_expr}"), "b < 5");
+
+        let expr_or_true = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(AlwaysTrue);
+        assert_eq!(&format!("{expr_or_true}"), "b < 5");
+
+        let false_or_expr = AlwaysFalse.and(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{false_or_expr}"), "FALSE");
+
+        let expr_or_false = Reference::new("b")
+            .less_than(Datum::long(5))
+            .and(AlwaysFalse);
+        assert_eq!(&format!("{expr_or_false}"), "FALSE");
+    }
+
+    #[test]
+    fn test_predicate_or_reduce_always_true_false() {
+        let true_or_expr = AlwaysTrue.or(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{true_or_expr}"), "TRUE");
+
+        let expr_or_true = Reference::new("b").less_than(Datum::long(5)).or(AlwaysTrue);
+        assert_eq!(&format!("{expr_or_true}"), "TRUE");
+
+        let false_or_expr = AlwaysFalse.or(Reference::new("b").less_than(Datum::long(5)));
+        assert_eq!(&format!("{false_or_expr}"), "b < 5");
+
+        let expr_or_false = Reference::new("b")
+            .less_than(Datum::long(5))
+            .or(AlwaysFalse);
+        assert_eq!(&format!("{expr_or_false}"), "b < 5");
     }
 
     #[test]
@@ -791,12 +905,19 @@ mod tests {
         )
     }
 
+    fn test_bound_predicate_serialize_diserialize(bound_predicate: BoundPredicate) {
+        let serialized = serde_json::to_string(&bound_predicate).unwrap();
+        let deserialized: BoundPredicate = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(bound_predicate, deserialized);
+    }
+
     #[test]
     fn test_bind_is_null() {
         let schema = table_schema_simple();
         let expr = Reference::new("foo").is_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "foo IS NULL");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -805,6 +926,7 @@ mod tests {
         let expr = Reference::new("bar").is_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -813,6 +935,7 @@ mod tests {
         let expr = Reference::new("foo").is_not_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "foo IS NOT NULL");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -821,6 +944,7 @@ mod tests {
         let expr = Reference::new("bar").is_not_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -834,6 +958,7 @@ mod tests {
         let expr_string = Reference::new("foo").is_nan();
         let bound_expr_string = expr_string.bind(schema_string, true);
         assert!(bound_expr_string.is_err());
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -850,6 +975,7 @@ mod tests {
         let expr = Reference::new("qux").is_not_nan();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "qux IS NOT NAN");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -866,6 +992,7 @@ mod tests {
         let expr = Reference::new("bar").less_than(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar < 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -882,6 +1009,7 @@ mod tests {
         let expr = Reference::new("bar").less_than_or_equal_to(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar <= 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -898,6 +1026,7 @@ mod tests {
         let expr = Reference::new("bar").greater_than(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar > 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -914,6 +1043,7 @@ mod tests {
         let expr = Reference::new("bar").greater_than_or_equal_to(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar >= 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -930,6 +1060,7 @@ mod tests {
         let expr = Reference::new("bar").equal_to(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar = 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -946,6 +1077,7 @@ mod tests {
         let expr = Reference::new("bar").not_equal_to(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar != 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -962,6 +1094,7 @@ mod tests {
         let expr = Reference::new("foo").starts_with(Datum::string("abcd"));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"foo STARTS WITH "abcd""#);
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -978,6 +1111,7 @@ mod tests {
         let expr = Reference::new("foo").not_starts_with(Datum::string("abcd"));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"foo NOT STARTS WITH "abcd""#);
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -994,6 +1128,7 @@ mod tests {
         let expr = Reference::new("bar").is_in([Datum::int(10), Datum::int(20)]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar IN (20, 10)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1002,6 +1137,7 @@ mod tests {
         let expr = Reference::new("bar").is_in(vec![]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1010,6 +1146,7 @@ mod tests {
         let expr = Reference::new("bar").is_in(vec![Datum::int(10)]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar = 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1026,6 +1163,7 @@ mod tests {
         let expr = Reference::new("bar").is_not_in([Datum::int(10), Datum::int(20)]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar NOT IN (20, 10)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1034,6 +1172,7 @@ mod tests {
         let expr = Reference::new("bar").is_not_in(vec![]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1042,6 +1181,7 @@ mod tests {
         let expr = Reference::new("bar").is_not_in(vec![Datum::int(10)]);
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar != 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1060,6 +1200,7 @@ mod tests {
             .and(Reference::new("foo").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "(bar < 10) AND (foo IS NULL)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1070,6 +1211,7 @@ mod tests {
             .and(Reference::new("bar").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1080,6 +1222,7 @@ mod tests {
             .and(Reference::new("bar").is_not_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"foo < "abcd""#);
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1090,6 +1233,7 @@ mod tests {
             .or(Reference::new("foo").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "(bar < 10) OR (foo IS NULL)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1100,6 +1244,7 @@ mod tests {
             .or(Reference::new("bar").is_not_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1110,6 +1255,7 @@ mod tests {
             .or(Reference::new("bar").is_null());
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"foo < "abcd""#);
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1118,6 +1264,7 @@ mod tests {
         let expr = !Reference::new("bar").less_than(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "NOT (bar < 10)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1126,6 +1273,7 @@ mod tests {
         let expr = !Reference::new("bar").is_not_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
@@ -1134,5 +1282,6 @@ mod tests {
         let expr = !Reference::new("bar").is_null();
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), r#"True"#);
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 }

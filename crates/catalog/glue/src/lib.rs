@@ -21,6 +21,7 @@
 
 mod catalog;
 mod error;
+mod schema;
 mod utils;
 pub use catalog::*;
 pub use utils::{
