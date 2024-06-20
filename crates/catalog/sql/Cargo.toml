@@ -32,7 +32,6 @@ keywords = ["iceberg", "sql", "catalog"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-dashmap = "5.5.3"
 futures = { workspace = true }
 iceberg = { workspace = true }
 log = { workspace = true }
