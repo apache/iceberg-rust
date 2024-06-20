@@ -235,10 +235,37 @@ impl Catalog for SqlCatalog {
 
     async fn create_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        todo!()
+        {
+            let catalog_name = self.name.clone();
+            let namespace = namespace.encode_in_url();
+
+            let query_string = "insert into ".to_string()
+                + NAMESPACE_PROPERTIES_TABLE_NAME
+                + " ("
+                + CATALOG_NAME
+                + ", "
+                + TABLE_NAMESPACE
+                + ", "
+                + NAMESPACE_PROPERTY_KEY
+                + ", "
+                + NAMESPACE_PROPERTY_VALUE
+                + ") values (?, ?, ?, ?);";
+            for (key, value) in properties.iter() {
+                sqlx::query(&query_string)
+                    .bind(&catalog_name)
+                    .bind(&namespace)
+                    .bind(&key)
+                    .bind(&value)
+                    .execute(&self.connection)
+                    .await
+                    .map_err(from_sqlx_error)?;
+            }
+        }
+
+        Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
     async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
@@ -478,6 +505,8 @@ impl Catalog for SqlCatalog {
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::HashMap;
+
     use iceberg::{
         spec::{NestedField, PrimitiveType, Schema, Type},
         Catalog, NamespaceIdent, TableCreation, TableIdent,
@@ -508,6 +537,11 @@ pub mod tests {
         let catalog = SqlCatalog::new(config).await.unwrap();
 
         let namespace = NamespaceIdent::new("test".to_owned());
+
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
 
         let identifier = TableIdent::new(namespace.clone(), "table1".to_owned());
 
