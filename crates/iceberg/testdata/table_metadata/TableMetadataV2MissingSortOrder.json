@@ -47,7 +47,6 @@
   ],
   "last-partition-id": 1000,
   "properties": {},
-  "current-snapshot-id": -1,
   "snapshots": [],
   "snapshot-log": [],
   "metadata-log": []

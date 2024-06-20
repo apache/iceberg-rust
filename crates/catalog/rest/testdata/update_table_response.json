@@ -31,7 +31,6 @@
       "write.summary.partition-limit": "100",
       "write.parquet.compression-codec": "zstd"
     },
-    "current-snapshot-id": -1,
     "refs": {},
     "snapshots": [],
     "snapshot-log": [],

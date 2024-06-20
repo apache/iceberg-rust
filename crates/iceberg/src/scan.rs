@@ -511,7 +511,7 @@ mod tests {
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
+        ManifestWriter, Struct, TableMetadata,
     };
     use crate::table::Table;
     use crate::TableIdent;
@@ -669,9 +669,7 @@ mod tests {
                     .new_output(current_snapshot.manifest_list())
                     .unwrap(),
                 current_snapshot.snapshot_id(),
-                current_snapshot
-                    .parent_snapshot_id()
-                    .unwrap_or(EMPTY_SNAPSHOT_ID),
+                current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
             );
             manifest_list_write
