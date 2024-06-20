@@ -49,7 +49,6 @@ pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Empty column names means to select all columns
     column_names: Vec<String>,
-    predicates: Option<Predicate>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
@@ -61,7 +60,6 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: vec![],
-            predicates: None,
             snapshot_id: None,
             batch_size: None,
             case_sensitive: true,
@@ -93,12 +91,6 @@ impl<'a> TableScanBuilder<'a> {
     /// Select all columns.
     pub fn select_all(mut self) -> Self {
         self.column_names.clear();
-        self
-    }
-
-    /// Add a predicate to the scan. The scan will only return rows that match the predicate.
-    pub fn filter(mut self, predicate: Predicate) -> Self {
-        self.predicates = Some(predicate);
         self
     }
 
@@ -161,7 +153,7 @@ impl<'a> TableScanBuilder<'a> {
             }
         }
 
-        let bound_predicates = if let Some(ref predicates) = self.predicates {
+        let bound_predicates = if let Some(ref predicates) = self.filter {
             Some(predicates.bind(schema.clone(), true)?)
         } else {
             None
@@ -904,7 +896,7 @@ mod tests {
         // Filter: y < 3
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").less_than(Datum::long(3));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -930,7 +922,7 @@ mod tests {
         // Filter: y >= 5
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -956,7 +948,7 @@ mod tests {
         // Filter: y is null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_null();
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -973,7 +965,7 @@ mod tests {
         // Filter: y is not null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_not_null();
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -992,7 +984,7 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .and(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1026,7 +1018,7 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .or(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1061,7 +1053,7 @@ mod tests {
         // Filter: a STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").starts_with(Datum::string("Ice"));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1083,7 +1075,7 @@ mod tests {
         // Filter: a NOT STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").not_starts_with(Datum::string("Ice"));
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1106,7 +1098,7 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1129,7 +1121,7 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_not_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder.filter(predicate);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
