@@ -200,14 +200,28 @@ impl Catalog for SqlCatalog {
         let name = &self.name;
         let rows = match parent {
             None => sqlx::query(
-                "select distinct table_namespace from iceberg_tables where catalog_name = ?;",
+                &("select distinct ".to_string()
+                    + NAMESPACE_NAME
+                    + " from "
+                    + NAMESPACE_PROPERTIES_TABLE_NAME
+                    + " where "
+                    + CATALOG_NAME
+                    + " = ?;"),
             )
             .bind(name)
             .fetch_all(&self.connection)
             .await
             .map_err(from_sqlx_error)?,
             Some(parent) => sqlx::query(
-                "select distinct table_namespace from iceberg_tables where catalog_name = ? and table_namespace like ?%;",
+                &("select distinct ".to_string()
+                    + NAMESPACE_NAME
+                    + " from "
+                    + NAMESPACE_PROPERTIES_TABLE_NAME
+                    + " where "
+                    + CATALOG_NAME
+                    + " = ? and  "
+                    + NAMESPACE_NAME
+                    + "table_namespace like ?%;"),
             )
             .bind(name)
             .bind(parent.join("."))
@@ -242,12 +256,20 @@ impl Catalog for SqlCatalog {
                 + " ("
                 + CATALOG_NAME
                 + ", "
-                + TABLE_NAMESPACE
+                + NAMESPACE_NAME
                 + ", "
                 + NAMESPACE_PROPERTY_KEY
                 + ", "
                 + NAMESPACE_PROPERTY_VALUE
                 + ") values (?, ?, ?, ?);";
+            sqlx::query(&query_string)
+                .bind(&catalog_name)
+                .bind(&namespace)
+                .bind(&None::<String>)
+                .bind(&None::<String>)
+                .execute(&self.connection)
+                .await
+                .map_err(from_sqlx_error)?;
             for (key, value) in properties.iter() {
                 sqlx::query(&query_string)
                     .bind(&catalog_name)
