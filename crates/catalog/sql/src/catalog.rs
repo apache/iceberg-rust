@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use sqlx::any::AnyPoolOptions;
 use sqlx::{
@@ -74,7 +71,6 @@ pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
     fileio: FileIO,
-    cache: Arc<DashMap<TableIdent, (String, TableMetadata)>>,
 }
 
 impl SqlCatalog {
@@ -164,7 +160,6 @@ impl SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
             fileio: file_io,
-            cache: Arc::new(DashMap::new()),
         })
     }
 }
@@ -423,9 +418,6 @@ impl Catalog for SqlCatalog {
         file.reader().await?.read_to_string(&mut json).await?;
 
         let metadata: TableMetadata = serde_json::from_str(&json)?;
-
-        self.cache
-            .insert(identifier.clone(), (metadata_location, metadata.clone()));
 
         let table = Table::builder()
             .file_io(self.fileio.clone())
