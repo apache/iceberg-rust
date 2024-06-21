@@ -317,7 +317,7 @@ impl Schema {
 
     /// Returns [`schema_id`].
     #[inline]
-    pub fn schema_id(&self) -> i32 {
+    pub fn schema_id(&self) -> SchemaId {
         self.schema_id
     }
 
