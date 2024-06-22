@@ -24,6 +24,7 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
     }
 }
 
+#[allow(dead_code)]
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -36,6 +37,7 @@ where
     return JoinHandle::AsyncStd(async_std::task::spawn(f));
 }
 
+#[allow(dead_code)]
 pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
