@@ -15,7 +15,8 @@
       "fields": [
         {"id": 1, "name": "x", "required": true, "type": "long"},
         {"id": 2, "name": "y", "required": true, "type": "long", "doc": "comment"},
-        {"id": 3, "name": "z", "required": true, "type": "long"}
+        {"id": 3, "name": "z", "required": true, "type": "long"},
+        {"id": 4, "name": "a", "required": true, "type": "string"}
       ]
     }
   ],

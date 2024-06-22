@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::from_io_error;
 use crate::error::from_thrift_error;
+use crate::error::{from_io_error, from_thrift_exception};
 
 use super::utils::*;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use hive_metastore::ThriftHiveMetastoreClient;
 use hive_metastore::ThriftHiveMetastoreClientBuilder;
@@ -35,10 +36,8 @@ use iceberg::{
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 use typed_builder::TypedBuilder;
-use volo_thrift::ResponseError;
+use volo_thrift::MaybeException;
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>
@@ -139,7 +138,8 @@ impl Catalog for HmsCatalog {
                 .0
                 .get_all_databases()
                 .await
-                .map_err(from_thrift_error)?
+                .map(from_thrift_exception)
+                .map_err(from_thrift_error)??
         };
 
         Ok(dbs
@@ -197,7 +197,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_database(name.into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let ns = convert_to_namespace(&db)?;
 
@@ -222,17 +223,16 @@ impl Catalog for HmsCatalog {
         let resp = self.client.0.get_database(name.into()).await;
 
         match resp {
-            Ok(_) => Ok(true),
-            Err(err) => {
-                if let ResponseError::UserException(ThriftHiveMetastoreGetDatabaseException::O1(
-                    _,
-                )) = &err
-                {
-                    Ok(false)
-                } else {
-                    Err(from_thrift_error(err))
-                }
+            Ok(MaybeException::Ok(_)) => Ok(true),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetDatabaseException::O1(_))) => {
+                Ok(false)
             }
+            Ok(MaybeException::Exception(exception)) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Operation failed for hitting thrift error".to_string(),
+            )
+            .with_source(anyhow!("thrift error: {:?}", exception))),
+            Err(err) => Err(from_thrift_error(err)),
         }
     }
 
@@ -308,7 +308,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_all_tables(name.into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let tables = tables
             .iter()
@@ -349,13 +350,10 @@ impl Catalog for HmsCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
         let metadata_location = create_metadata_location(&location, 0)?;
 
-        let mut file = self
-            .file_io
+        self.file_io
             .new_output(&metadata_location)?
-            .writer()
+            .write(serde_json::to_vec(&metadata)?.into())
             .await?;
-        file.write_all(&serde_json::to_vec(&metadata)?).await?;
-        file.shutdown().await?;
 
         let hive_table = convert_to_hive_table(
             db_name.clone(),
@@ -402,14 +400,13 @@ impl Catalog for HmsCatalog {
             .0
             .get_table(db_name.clone().into(), table.name.clone().into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         let metadata_location = get_metadata_location(&hive_table.parameters)?;
 
-        let mut reader = self.file_io.new_input(&metadata_location)?.reader().await?;
-        let mut metadata_str = String::new();
-        reader.read_to_string(&mut metadata_str).await?;
-        let metadata = serde_json::from_str::<TableMetadata>(&metadata_str)?;
+        let metadata_content = self.file_io.new_input(&metadata_location)?.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
         let table = Table::builder()
             .file_io(self.file_io())
@@ -464,16 +461,14 @@ impl Catalog for HmsCatalog {
             .await;
 
         match resp {
-            Ok(_) => Ok(true),
-            Err(err) => {
-                if let ResponseError::UserException(ThriftHiveMetastoreGetTableException::O2(_)) =
-                    &err
-                {
-                    Ok(false)
-                } else {
-                    Err(from_thrift_error(err))
-                }
-            }
+            Ok(MaybeException::Ok(_)) => Ok(true),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => Ok(false),
+            Ok(MaybeException::Exception(exception)) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Operation failed for hitting thrift error".to_string(),
+            )
+            .with_source(anyhow!("thrift error: {:?}", exception))),
+            Err(err) => Err(from_thrift_error(err)),
         }
     }
 
@@ -495,7 +490,8 @@ impl Catalog for HmsCatalog {
             .0
             .get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
             .await
-            .map_err(from_thrift_error)?;
+            .map(from_thrift_exception)
+            .map_err(from_thrift_error)??;
 
         tbl.db_name = Some(dest_dbname.into());
         tbl.table_name = Some(dest_tbl_name.into());

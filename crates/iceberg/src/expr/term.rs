@@ -20,6 +20,7 @@
 use std::fmt::{Display, Formatter};
 
 use fnv::FnvHashSet;
+use serde::{Deserialize, Serialize};
 
 use crate::expr::accessor::{StructAccessor, StructAccessorRef};
 use crate::expr::Bind;
@@ -32,7 +33,7 @@ pub type Term = Reference;
 
 /// A named reference in an unbound expression.
 /// For example, `a` in `a > 10`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reference {
     name: String,
 }
@@ -351,7 +352,7 @@ impl Bind for Reference {
 }
 
 /// A named reference in a bound expression after binding to a schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoundReference {
     // This maybe different from [`name`] filed in [`NestedField`] since this contains full path.
     // For example, if the field is `a.b.c`, then `field.name` is `c`, but `original_name` is `a.b.c`.

@@ -29,9 +29,14 @@ license = { workspace = true }
 keywords = ["iceberg"]
 
 [features]
+default = ["storage-fs", "storage-s3", "tokio"]
+storage-all = ["storage-fs", "storage-s3"]
+
+storage-fs = ["opendal/services-fs"]
+storage-s3 = ["opendal/services-s3"]
+
 async-std = ["dep:async-std"]
-tokio = []                    # tokio is not an optional dependency now
-default = ["tokio"]
+tokio = []
 
 [dependencies]
 anyhow = { workspace = true }
@@ -39,9 +44,11 @@ apache-avro = { workspace = true }
 array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
+arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
-async-std = { workspace = true, optional = true, features = ["attributes"] }
 arrow-select = { workspace = true }
+arrow-string = { workspace = true }
+async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 bimap = { workspace = true }

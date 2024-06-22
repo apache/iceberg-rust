@@ -332,7 +332,7 @@ pub enum TableRequirement {
 }
 
 /// TableUpdate represents an update to a table in the catalog.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum TableUpdate {
     /// Upgrade table's format version
@@ -382,7 +382,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     SetDefaultSortOrder {
         /// Sort order ID to set as the default, or -1 to set last added sort order
-        sort_order_id: i32,
+        sort_order_id: i64,
     },
     /// Add snapshot to table.
     #[serde(rename_all = "kebab-case")]
@@ -982,7 +982,9 @@ mod tests {
             ref_name: "hank".to_string(),
             reference: SnapshotReference {
                 snapshot_id: 1,
-                retention: SnapshotRetention::Tag { max_ref_age_ms: 1 },
+                retention: SnapshotRetention::Tag {
+                    max_ref_age_ms: Some(1),
+                },
             },
         };
 

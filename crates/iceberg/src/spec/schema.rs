@@ -269,6 +269,16 @@ impl Schema {
         }
     }
 
+    /// Create a new schema builder from a schema.
+    pub fn into_builder(self) -> SchemaBuilder {
+        SchemaBuilder {
+            schema_id: self.schema_id,
+            fields: self.r#struct.fields().to_vec(),
+            alias_to_id: self.alias_to_id,
+            identifier_field_ids: self.identifier_field_ids,
+        }
+    }
+
     /// Get field by field id.
     pub fn field_by_id(&self, field_id: i32) -> Option<&NestedFieldRef> {
         self.id_to_field.get(&field_id)
@@ -307,7 +317,7 @@ impl Schema {
 
     /// Returns [`schema_id`].
     #[inline]
-    pub fn schema_id(&self) -> i32 {
+    pub fn schema_id(&self) -> SchemaId {
         self.schema_id
     }
 
@@ -315,6 +325,12 @@ impl Schema {
     #[inline]
     pub fn as_struct(&self) -> &StructType {
         &self.r#struct
+    }
+
+    /// Returns [`identifier_field_ids`].
+    #[inline]
+    pub fn identifier_field_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.identifier_field_ids.iter().copied()
     }
 
     /// Get field id by full name.
@@ -1046,8 +1062,9 @@ mod tests {
     };
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
+    use crate::spec::values::Map as MapValue;
     use crate::spec::{prune_columns, Datum, Literal};
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{HashMap, HashSet};
 
     use super::DEFAULT_SCHEMA_ID;
 
@@ -1302,6 +1319,15 @@ table {
             .unwrap_err()
             .message()
             .contains("Invalid schema: multiple fields for name baz"));
+    }
+
+    #[test]
+    fn test_schema_into_builder() {
+        let original_schema = table_schema_nested();
+        let builder = original_schema.clone().into_builder();
+        let schema = builder.build().unwrap();
+
+        assert_eq!(original_schema, schema);
     }
 
     #[test]
@@ -1638,9 +1664,9 @@ table {
                 Some(Literal::string("qux item 1")),
                 Some(Literal::string("qux item 2")),
             ])),
-            Some(Literal::Map(BTreeMap::from([(
+            Some(Literal::Map(MapValue::from([(
                 Literal::string("quux key 1"),
-                Some(Literal::Map(BTreeMap::from([(
+                Some(Literal::Map(MapValue::from([(
                     Literal::string("quux nested key 1"),
                     Some(Literal::int(1000)),
                 )]))),
@@ -1663,7 +1689,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::string("foo value")
+            Some(Datum::string("foo value"))
         );
         assert_eq!(
             schema
@@ -1671,7 +1697,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::int(1002)
+            Some(Datum::int(1002))
         );
         assert_eq!(
             schema
@@ -1679,7 +1705,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::bool(true)
+            Some(Datum::bool(true))
         );
         assert_eq!(
             schema
@@ -1687,7 +1713,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::string("Testy McTest")
+            Some(Datum::string("Testy McTest"))
         );
         assert_eq!(
             schema
@@ -1695,7 +1721,7 @@ table {
                 .unwrap()
                 .get(&test_struct)
                 .unwrap(),
-            Datum::int(33)
+            Some(Datum::int(33))
         );
     }
 
