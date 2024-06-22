@@ -1,36 +1,82 @@
 use std::future::Future;
-use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-#[cfg(feature = "tokio")]
-pub mod tokio_backend;
-#[cfg(feature = "tokio")]
-pub use tokio_backend::*;
-
-#[cfg(all(feature = "async-std", not(feature = "tokio"),))]
-pub mod async_std_backend;
-#[cfg(all(feature = "async-std", not(feature = "tokio"),))]
-pub use async_std_backend::*;
-
-pub trait JoinHandleExt {
-    type Output;
-    fn poll_join(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+pub enum JoinHandle<T> {
+    #[cfg(feature = "tokio")]
+    Tokio(tokio::task::JoinHandle<T>),
+    #[cfg(feature = "async-std")]
+    AsyncStd(async_std::task::JoinHandle<T>),
 }
 
-pub struct JoinHandle<T, J> {
-    inner: J,
-    _marker: PhantomData<T>,
-}
-
-impl<T, J> Future for JoinHandle<T, J>
-where
-    T: Send + 'static + Unpin,
-    J: JoinHandleExt<Output = T> + Unpin,
-{
+impl<T: Send + 'static> Future for JoinHandle<T> {
     type Output = T;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.inner).poll_join(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.get_mut() {
+            #[cfg(feature = "tokio")]
+            JoinHandle::Tokio(handle) => Pin::new(handle)
+                .poll(cx)
+                .map(|h| h.expect("tokio spawned task failed")),
+            #[cfg(feature = "async-std")]
+            JoinHandle::AsyncStd(handle) => Pin::new(handle).poll(cx),
+        }
+    }
+}
+
+pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    #[cfg(feature = "tokio")]
+    return JoinHandle::Tokio(tokio::task::spawn(f));
+
+    #[cfg(feature = "async-std")]
+    return JoinHandle::AsyncStd(async_std::task::spawn(f));
+}
+
+pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    #[cfg(feature = "tokio")]
+    return JoinHandle::Tokio(tokio::task::spawn_blocking(f));
+
+    #[cfg(feature = "async-std")]
+    return JoinHandle::AsyncStd(async_std::task::spawn_blocking(f));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_spawn() {
+        let handle = spawn(async { 1 + 1 });
+        assert_eq!(handle.await, 2);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn test_tokio_spawn_blocking() {
+        let handle = spawn_blocking(|| 1 + 1);
+        assert_eq!(handle.await, 2);
+    }
+
+    #[cfg(feature = "async-std")]
+    #[async_std::test]
+    async fn test_async_std_spawn() {
+        let handle = spawn(async { 1 + 1 });
+        assert_eq!(handle.await, 2);
+    }
+
+    #[cfg(feature = "async-std")]
+    #[async_std::test]
+    async fn test_async_std_spawn_blocking() {
+        let handle = spawn_blocking(|| 1 + 1);
+        assert_eq!(handle.await, 2);
     }
 }
