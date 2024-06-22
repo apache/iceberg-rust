@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 pub enum JoinHandle<T> {
     #[cfg(feature = "tokio")]
     Tokio(tokio::task::JoinHandle<T>),
-    #[cfg(feature = "async-std")]
+    #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     AsyncStd(async_std::task::JoinHandle<T>),
 }
 
@@ -37,7 +37,7 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
             JoinHandle::Tokio(handle) => Pin::new(handle)
                 .poll(cx)
                 .map(|h| h.expect("tokio spawned task failed")),
-            #[cfg(feature = "async-std")]
+            #[cfg(all(feature = "async-std", not(feature = "tokio")))]
             JoinHandle::AsyncStd(handle) => Pin::new(handle).poll(cx),
         }
     }
@@ -52,7 +52,7 @@ where
     #[cfg(feature = "tokio")]
     return JoinHandle::Tokio(tokio::task::spawn(f));
 
-    #[cfg(feature = "async-std")]
+    #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     return JoinHandle::AsyncStd(async_std::task::spawn(f));
 }
 
@@ -65,7 +65,7 @@ where
     #[cfg(feature = "tokio")]
     return JoinHandle::Tokio(tokio::task::spawn_blocking(f));
 
-    #[cfg(feature = "async-std")]
+    #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     return JoinHandle::AsyncStd(async_std::task::spawn_blocking(f));
 }
 
@@ -87,14 +87,14 @@ mod tests {
         assert_eq!(handle.await, 2);
     }
 
-    #[cfg(feature = "async-std")]
+    #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     #[async_std::test]
     async fn test_async_std_spawn() {
         let handle = spawn(async { 1 + 1 });
         assert_eq!(handle.await, 2);
     }
 
-    #[cfg(feature = "async-std")]
+    #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     #[async_std::test]
     async fn test_async_std_spawn_blocking() {
         let handle = spawn_blocking(|| 1 + 1);
