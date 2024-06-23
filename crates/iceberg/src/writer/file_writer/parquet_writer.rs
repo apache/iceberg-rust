@@ -512,8 +512,9 @@ impl ParquetWriter {
             .null_value_counts(null_value_counts)
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
-            // # TODO
+            // # TODO(#417)
             // - nan_value_counts
+            // - distinct_counts
             .key_metadata(metadata.footer_signing_key_metadata.unwrap_or_default())
             .split_offsets(
                 metadata
