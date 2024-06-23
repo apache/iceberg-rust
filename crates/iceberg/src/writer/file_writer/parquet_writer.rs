@@ -34,7 +34,12 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
+use parquet::data_type::{
+    BoolType, ByteArrayType, DataType as ParquetDataType, DoubleType, FixedLenByteArrayType,
+    FloatType, Int32Type, Int64Type,
+};
 use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::TypedStatistics;
 use parquet::{arrow::AsyncArrowWriter, format::FileMetaData};
 use parquet::{
     data_type::{ByteArray, FixedLenByteArray},
@@ -114,7 +119,6 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     }
 }
 
-#[derive(Default)]
 struct IndexByParquetPathName {
     name_to_id: HashMap<String, i32>,
 
@@ -124,6 +128,14 @@ struct IndexByParquetPathName {
 }
 
 impl IndexByParquetPathName {
+    pub fn new() -> Self {
+        Self {
+            name_to_id: HashMap::new(),
+            field_names: Vec::new(),
+            field_id: 0,
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
     }
@@ -236,74 +248,76 @@ impl MinMaxColAggregator {
         }
     }
 
-    fn update(&mut self, col_id: i32, value: Statistics) -> Result<()> {
-        let Type::Primitive(ty) = &self
+    fn update_state<T: ParquetDataType>(
+        &mut self,
+        field_id: i32,
+        state: &TypedStatistics<T>,
+        convert_func: impl Fn(<T as ParquetDataType>::T) -> Result<Datum>,
+    ) {
+        if state.min_is_exact() {
+            let val = convert_func(state.min().clone()).unwrap();
+            self.lower_bounds
+                .entry(field_id)
+                .and_modify(|e| {
+                    if *e > val {
+                        *e = val.clone()
+                    }
+                })
+                .or_insert(val);
+        }
+        if state.max_is_exact() {
+            let val = convert_func(state.max().clone()).unwrap();
+            self.upper_bounds
+                .entry(field_id)
+                .and_modify(|e| {
+                    if *e < val {
+                        *e = val.clone()
+                    }
+                })
+                .or_insert(val);
+        }
+    }
+
+    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+        let Some(ty) = self
             .schema
-            .field_by_id(col_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to get field by id in schema.",
-                )
-            })?
-            .field_type
-            .as_ref()
+            .field_by_id(field_id)
+            .map(|f| f.field_type.as_ref())
         else {
+            // Following java implementation: https://github.com/apache/iceberg/blob/29a2c456353a6120b8c882ed2ab544975b168d7b/parquet/src/main/java/org/apache/iceberg/parquet/ParquetUtil.java#L163
+            // Ignore the field if it is not in schema.
+            return Ok(());
+        };
+        let Type::Primitive(ty) = ty.clone() else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                "Composed type is not supported for min max aggregation.",
+                format!(
+                    "Composed type {} is not supported for min max aggregation.",
+                    ty
+                ),
             ));
         };
 
-        macro_rules! update_stat {
-            ($self:ident, $stat:ident, $convert_func:expr) => {
-                if $stat.min_is_exact() {
-                    let val = $convert_func($stat.min().clone())?;
-                    $self
-                        .lower_bounds
-                        .entry(col_id)
-                        .and_modify(|e| {
-                            if *e > val {
-                                *e = val.clone()
-                            }
-                        })
-                        .or_insert(val);
-                }
-                if $stat.max_is_exact() {
-                    let val = $convert_func($stat.max().clone())?;
-                    $self
-                        .upper_bounds
-                        .entry(col_id)
-                        .and_modify(|e| {
-                            if *e < val {
-                                *e = val.clone()
-                            }
-                        })
-                        .or_insert(val);
-                }
-            };
-        }
-
-        match (ty, value) {
+        match (&ty, value) {
             (PrimitiveType::Boolean, Statistics::Boolean(stat)) => {
                 let convert_func = |v: bool| Result::<Datum>::Ok(Datum::bool(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<BoolType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Int, Statistics::Int32(stat)) => {
                 let convert_func = |v: i32| Result::<Datum>::Ok(Datum::int(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int32Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Long, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::long(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Float, Statistics::Float(stat)) => {
                 let convert_func = |v: f32| Result::<Datum>::Ok(Datum::float(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<FloatType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Double, Statistics::Double(stat)) => {
                 let convert_func = |v: f64| Result::<Datum>::Ok(Datum::double(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<DoubleType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::String, Statistics::ByteArray(stat)) => {
                 let convert_func = |v: ByteArray| {
@@ -311,28 +325,28 @@ impl MinMaxColAggregator {
                         String::from_utf8(v.data().to_vec()).unwrap(),
                     ))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
                 let convert_func =
                     |v: ByteArray| Result::<Datum>::Ok(Datum::binary(v.data().to_vec()));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Date, Statistics::Int32(stat)) => {
                 let convert_func = |v: i32| Result::<Datum>::Ok(Datum::date(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int32Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Time, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Datum::time_micros(v);
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Timestamp, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamp_micros(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Timestamptz, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_micros(v));
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
             (
                 PrimitiveType::Decimal {
@@ -349,7 +363,7 @@ impl MinMaxColAggregator {
                         )),
                     ))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
             }
             (
                 PrimitiveType::Decimal {
@@ -364,7 +378,7 @@ impl MinMaxColAggregator {
                         PrimitiveLiteral::Decimal(i128::from(v)),
                     ))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int32Type>(field_id, &stat, convert_func)
             }
             (
                 PrimitiveType::Decimal {
@@ -379,7 +393,7 @@ impl MinMaxColAggregator {
                         PrimitiveLiteral::Decimal(i128::from(v)),
                     ))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Uuid, Statistics::FixedLenByteArray(stat)) => {
                 let convert_func = |v: FixedLenByteArray| {
@@ -393,7 +407,7 @@ impl MinMaxColAggregator {
                         v.data()[..16].try_into().unwrap(),
                     )))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<FixedLenByteArrayType>(field_id, &stat, convert_func)
             }
             (PrimitiveType::Fixed(len), Statistics::FixedLenByteArray(stat)) => {
                 let convert_func = |v: FixedLenByteArray| {
@@ -405,7 +419,7 @@ impl MinMaxColAggregator {
                     }
                     Ok(Datum::fixed(v.data().to_vec()))
                 };
-                update_stat!(self, stat, convert_func);
+                self.update_state::<FixedLenByteArrayType>(field_id, &stat, convert_func)
             }
             (ty, value) => {
                 return Err(Error::new(
@@ -430,7 +444,7 @@ impl ParquetWriter {
         file_path: String,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
-            let mut visitor = IndexByParquetPathName::default();
+            let mut visitor = IndexByParquetPathName::new();
             visit_schema(&schema, &mut visitor)?;
             visitor
         };
@@ -462,13 +476,13 @@ impl ParquetWriter {
                         column_chunk_metadata.total_compressed_size as u64;
                     *per_col_val_num.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.num_values as u64;
-                    *per_col_null_val_num.entry(field_id).or_insert(0_u64) += column_chunk_metadata
+                    if let Some(Some(null_count)) = column_chunk_metadata
                         .statistics
                         .as_ref()
                         .map(|s| s.null_count)
-                        .unwrap_or(None)
-                        .unwrap_or(0)
-                        as u64;
+                    {
+                        *per_col_null_val_num.entry(field_id).or_insert(0_u64) += null_count as u64;
+                    }
                     if let Some(statistics) = &column_chunk_metadata.statistics {
                         min_max_agg.update(
                             field_id,
@@ -804,7 +818,7 @@ mod tests {
             ("col5.key_value.key".to_string(), 11),
             ("col5.key_value.value.list.item".to_string(), 13),
         ]);
-        let mut visitor = IndexByParquetPathName::default();
+        let mut visitor = IndexByParquetPathName::new();
         visit_schema(&nested_schema_for_test(), &mut visitor).unwrap();
         assert_eq!(visitor.name_to_id, expect);
     }

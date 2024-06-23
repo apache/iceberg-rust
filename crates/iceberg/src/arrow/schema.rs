@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
-pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+pub(crate) const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 
 /// A post order arrow schema visitor.
 ///
