@@ -36,7 +36,7 @@ storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
 
 async-std = ["dep:async-std"]
-tokio = []
+tokio = ["dep:tokio"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -75,7 +75,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, optional = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
@@ -86,3 +86,4 @@ iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
+tokio = { workspace = true }

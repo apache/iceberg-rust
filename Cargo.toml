@@ -16,12 +16,13 @@
 # under the License.
 
 [workspace]
+resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/integrations/*",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/integrations/*",
+    "crates/test_utils",
 ]
 
 [workspace.package]
