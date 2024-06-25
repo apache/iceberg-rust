@@ -71,6 +71,9 @@ jobs:
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
-      
+
+      - name: Async-std Test
+        run: cargo test --no-fail-fast --all-targets --no-default-features  --features "async-std" --features "storage-fs" --workspace
+
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
