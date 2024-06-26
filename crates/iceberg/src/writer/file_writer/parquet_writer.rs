@@ -461,25 +461,21 @@ impl ParquetWriter {
                         continue;
                     };
                     let physical_type = column_chunk_metadata.type_;
-                    let field_id = *index_by_parquet_path
-                        .get(&column_chunk_metadata.path_in_schema.join("."))
-                        .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::Unexpected,
-                                format!(
-                                    "Failed to get field id by path in schema for {}",
-                                    column_chunk_metadata.path_in_schema.join(".")
-                                ),
-                            )
-                        })?;
+                    let Some(&field_id) =
+                        index_by_parquet_path.get(&column_chunk_metadata.path_in_schema.join("."))
+                    else {
+                        // Following java implementation: https://github.com/apache/iceberg/blob/29a2c456353a6120b8c882ed2ab544975b168d7b/parquet/src/main/java/org/apache/iceberg/parquet/ParquetUtil.java#L163
+                        // Ignore the field if it is not in schema.
+                        continue;
+                    };
                     *per_col_size.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.total_compressed_size as u64;
                     *per_col_val_num.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.num_values as u64;
-                    if let Some(Some(null_count)) = column_chunk_metadata
+                    if let Some(null_count) = column_chunk_metadata
                         .statistics
                         .as_ref()
-                        .map(|s| s.null_count)
+                        .and_then(|s| s.null_count)
                     {
                         *per_col_null_val_num.entry(field_id).or_insert(0_u64) += null_count as u64;
                     }
