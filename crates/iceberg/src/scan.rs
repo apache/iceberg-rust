@@ -214,7 +214,6 @@ impl<'a> TableScanBuilder<'a> {
 
 /// Table scan.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct TableScan {
     snapshot: SnapshotRef,
     table_metadata: TableMetadataRef,
