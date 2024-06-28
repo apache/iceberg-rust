@@ -293,39 +293,6 @@ pub(crate) trait AvroSchemaVisitor {
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Self::T>;
 }
 
-/// Visit avro schema in post order visitor.
-pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) -> Result<V::T> {
-    match schema {
-        AvroSchema::Record(record) => {
-            let field_results = record
-                .fields
-                .iter()
-                .map(|f| visit(&f.schema, visitor))
-                .collect::<Result<Vec<V::T>>>()?;
-
-            visitor.record(record, field_results)
-        }
-        AvroSchema::Union(union) => {
-            let option_results = union
-                .variants()
-                .iter()
-                .map(|f| visit(f, visitor))
-                .collect::<Result<Vec<V::T>>>()?;
-
-            visitor.union(union, option_results)
-        }
-        AvroSchema::Array(item) => {
-            let item_result = visit(item, visitor)?;
-            visitor.array(schema, item_result)
-        }
-        AvroSchema::Map(inner) => {
-            let item_result = visit(inner, visitor)?;
-            visitor.map(schema, item_result)
-        }
-        schema => visitor.primitive(schema),
-    }
-}
-
 struct AvroSchemaToSchema {
     next_id: i32,
 }
@@ -496,29 +463,6 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 }
 
-/// Converts avro schema to iceberg schema.
-pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
-    if let AvroSchema::Record(_) = avro_schema {
-        let mut converter = AvroSchemaToSchema { next_id: 0 };
-        let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
-        if let Type::Struct(s) = typ {
-            Schema::builder()
-                .with_fields(s.fields().iter().cloned())
-                .build()
-        } else {
-            Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Expected to convert avro record schema to struct type, but {typ}"),
-            ))
-        }
-    } else {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Can't convert non record avro schema to iceberg schema: {avro_schema}",
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +471,65 @@ mod tests {
     use apache_avro::schema::{Namespace, UnionSchema};
     use apache_avro::Schema as AvroSchema;
     use std::fs::read_to_string;
+
+    /// Visit avro schema in post order visitor.
+    pub(crate) fn visit<V: AvroSchemaVisitor>(
+        schema: &AvroSchema,
+        visitor: &mut V,
+    ) -> Result<V::T> {
+        match schema {
+            AvroSchema::Record(record) => {
+                let field_results = record
+                    .fields
+                    .iter()
+                    .map(|f| visit(&f.schema, visitor))
+                    .collect::<Result<Vec<V::T>>>()?;
+
+                visitor.record(record, field_results)
+            }
+            AvroSchema::Union(union) => {
+                let option_results = union
+                    .variants()
+                    .iter()
+                    .map(|f| visit(f, visitor))
+                    .collect::<Result<Vec<V::T>>>()?;
+
+                visitor.union(union, option_results)
+            }
+            AvroSchema::Array(item) => {
+                let item_result = visit(item, visitor)?;
+                visitor.array(schema, item_result)
+            }
+            AvroSchema::Map(inner) => {
+                let item_result = visit(inner, visitor)?;
+                visitor.map(schema, item_result)
+            }
+            schema => visitor.primitive(schema),
+        }
+    }
+    /// Converts avro schema to iceberg schema.
+    pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
+        if let AvroSchema::Record(_) = avro_schema {
+            let mut converter = AvroSchemaToSchema { next_id: 0 };
+            let typ =
+                visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
+            if let Type::Struct(s) = typ {
+                Schema::builder()
+                    .with_fields(s.fields().iter().cloned())
+                    .build()
+            } else {
+                Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Expected to convert avro record schema to struct type, but {typ}"),
+                ))
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Can't convert non record avro schema to iceberg schema: {avro_schema}",
+            ))
+        }
+    }
 
     fn read_test_data_file_to_avro_schema(filename: &str) -> AvroSchema {
         let input = read_to_string(format!(
