@@ -345,6 +345,11 @@ impl TableScan {
         }
         false
     }
+
+    /// Returns a reference to the column names of the table scan.
+    pub fn get_column_names(&self) -> &[String] {
+        &self.column_names
+    }
 }
 
 /// Holds the context necessary for file scanning operations
