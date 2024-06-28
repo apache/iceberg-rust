@@ -65,9 +65,7 @@ struct ExpressionEvaluatorVisitor<'a> {
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
     fn new(partition: &'a Struct) -> Self {
-        Self {
-            partition,
-        }
+        Self { partition }
     }
 }
 

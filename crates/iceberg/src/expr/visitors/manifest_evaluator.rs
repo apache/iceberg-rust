@@ -58,9 +58,7 @@ struct ManifestFilterVisitor<'a> {
 
 impl<'a> ManifestFilterVisitor<'a> {
     fn new(partitions: &'a Vec<FieldSummary>) -> Self {
-        ManifestFilterVisitor {
-            partitions,
-        }
+        ManifestFilterVisitor { partitions }
     }
 }
 

@@ -1206,64 +1206,6 @@ mod test {
         assert!(result, "Should read: id above upper bound");
     }
 
-    fn test_case_insensitive_integer_not_eq_rewritten() {
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MIN_VALUE - 25),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id below lower bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MIN_VALUE - 1),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id below lower bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MIN_VALUE),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id equal to lower bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MAX_VALUE - 4),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id between lower and upper bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MAX_VALUE),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id equal to upper bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MAX_VALUE + 1),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id above upper bound");
-
-        let result = InclusiveMetricsEvaluator::eval(
-            &equal_int_not_case_insensitive("ID", INT_MAX_VALUE + 6),
-            &get_test_file_1(),
-            true,
-        )
-        .unwrap();
-        assert!(result, "Should read: id above upper bound");
-    }
-
     #[test]
     #[should_panic]
     fn test_case_sensitive_integer_not_eq_rewritten() {
@@ -1880,17 +1822,6 @@ mod test {
         ))
         .not();
         filter.bind(schema.clone(), true).unwrap()
-    }
-
-    fn equal_int_not_case_insensitive(reference: &str, int_literal: i32) -> BoundPredicate {
-        let schema = create_test_schema();
-        let filter = Predicate::Binary(BinaryExpression::new(
-            Eq,
-            Reference::new(reference),
-            Datum::int(int_literal),
-        ))
-        .not();
-        filter.bind(schema.clone(), false).unwrap()
     }
 
     fn not_equal_int(reference: &str, int_literal: i32) -> BoundPredicate {

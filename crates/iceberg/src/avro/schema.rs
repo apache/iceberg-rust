@@ -473,7 +473,10 @@ mod tests {
     use std::fs::read_to_string;
 
     /// Visit avro schema in post order visitor.
-    pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) -> Result<V::T> {
+    pub(crate) fn visit<V: AvroSchemaVisitor>(
+        schema: &AvroSchema,
+        visitor: &mut V,
+    ) -> Result<V::T> {
         match schema {
             AvroSchema::Record(record) => {
                 let field_results = record
@@ -508,7 +511,8 @@ mod tests {
     pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
         if let AvroSchema::Record(_) = avro_schema {
             let mut converter = AvroSchemaToSchema { next_id: 0 };
-            let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
+            let typ =
+                visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
             if let Type::Struct(s) = typ {
                 Schema::builder()
                     .with_fields(s.fields().iter().cloned())
