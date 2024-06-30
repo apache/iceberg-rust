@@ -15,14 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-version: '3.8'
-
 services:
   minio:
     image: minio/minio:RELEASE.2024-03-07T00-43-48Z
-    expose:
-      - 9000
-      - 9001
+    ports:
+      - "9000"
+      - "9001"
     environment:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
@@ -42,5 +40,5 @@ services:
 
   moto:
     image: motoserver/moto:5.0.3
-    expose:
-      - 5000
+    ports:
+      - "5000"

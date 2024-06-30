@@ -21,7 +21,7 @@ use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{DockerCompose, LOCALHOST};
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use std::collections::HashMap;
@@ -44,9 +44,9 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     // Start docker compose
     docker_compose.run();
 
-    let rest_catalog_ip = docker_compose.get_container_ip("rest");
+    let rest_catalog_port = docker_compose.get_container_port("rest", REST_CATALOG_PORT);
 
-    let read_port = format!("{}:{}", rest_catalog_ip, REST_CATALOG_PORT);
+    let read_port = format!("{}:{}", LOCALHOST, rest_catalog_port);
     loop {
         if !scan_port_addr(&read_port) {
             log::info!("Waiting for 1s rest catalog to ready...");
@@ -57,7 +57,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     }
 
     let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
+        .uri(format!("http://{}:{}", LOCALHOST, rest_catalog_port))
         .build();
     let rest_catalog = RestCatalog::new(config).await.unwrap();
 

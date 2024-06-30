@@ -20,7 +20,7 @@
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{DockerCompose, LOCALHOST};
 
 struct MinIOFixture {
     _docker_compose: DockerCompose,
@@ -34,8 +34,8 @@ impl MinIOFixture {
             format!("{}/testdata/file_io_s3", env!("CARGO_MANIFEST_DIR")),
         );
         docker.run();
-        let container_ip = docker.get_container_ip("minio");
-        let read_port = format!("{}:{}", container_ip, 9000);
+        let container_port = docker.get_container_port("minio", 9000);
+        let read_port = format!("{}:{}", LOCALHOST, container_port);
 
         MinIOFixture {
             _docker_compose: docker,

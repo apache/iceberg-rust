@@ -18,6 +18,8 @@
 use crate::cmd::{get_cmd_output, run_command};
 use std::process::Command;
 
+pub const LOCALHOST: &str = "localhost";
+
 /// A utility to manage the lifecycle of `docker compose`.
 ///
 /// It will start `docker compose` when calling the `run` method and will be stopped via [`Drop`].
@@ -63,22 +65,25 @@ impl DockerCompose {
         )
     }
 
-    pub fn get_container_ip(&self, service_name: impl AsRef<str>) -> String {
+    /// Returns the mapped port of the container.
+    pub fn get_container_port(&self, service_name: impl AsRef<str>, inner_port: u16) -> u16 {
         let container_name = format!("{}-{}-1", self.project_name, service_name.as_ref());
         let mut cmd = Command::new("docker");
         cmd.arg("inspect")
             .arg("-f")
-            .arg("{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
+            .arg(format!("{{{{(index (index .NetworkSettings.Ports \"{inner_port}/tcp\") 0).HostPort}}}}"))
             .arg(&container_name);
 
         get_cmd_output(cmd, format!("Get container ip of {container_name}"))
             .trim()
-            .to_string()
+            .parse()
+            .expect("Failed to parse container port to u16")
     }
 }
 
 impl Drop for DockerCompose {
     fn drop(&mut self) {
+        log::info!("Trying to stop docker compose project: {}", self.project_name);
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 

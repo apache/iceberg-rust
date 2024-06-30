@@ -25,7 +25,7 @@ use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableId
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{DockerCompose, LOCALHOST};
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
@@ -49,10 +49,12 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
     docker_compose.run();
 
-    let glue_catalog_ip = docker_compose.get_container_ip("moto");
-    let minio_ip = docker_compose.get_container_ip("minio");
+    log::info!("Docker compose started for {}", docker_compose.project_name());
 
-    let read_port = format!("{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT);
+    let glue_catalog_port = docker_compose.get_container_port("moto", GLUE_CATALOG_PORT);
+    let minio_port = docker_compose.get_container_port("minio", MINIO_PORT);
+
+    let read_port = format!("{}:{}", LOCALHOST, glue_catalog_port);
     loop {
         if !scan_port_addr(&read_port) {
             log::info!("Waiting for 1s glue catalog to ready...");
@@ -71,7 +73,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}:{}", minio_ip, MINIO_PORT),
+            format!("http://{}:{}", LOCALHOST, minio_port),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
@@ -79,7 +81,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     ]);
 
     let config = GlueCatalogConfig::builder()
-        .uri(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
+        .uri(format!("http://{}:{}", LOCALHOST, glue_catalog_port))
         .warehouse("s3a://warehouse/hive".to_string())
         .props(props.clone())
         .build();
