@@ -27,7 +27,7 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_datafusion::IcebergCatalogProvider;
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{DockerCompose, LOCALHOST};
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
@@ -50,10 +50,10 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
     docker_compose.run();
 
-    let hms_catalog_ip = docker_compose.get_container_ip("hive-metastore");
-    let minio_ip = docker_compose.get_container_ip("minio");
+    let hms_catalog_port = docker_compose.get_container_port("hive-metastore", HMS_CATALOG_PORT);
+    let minio_port = docker_compose.get_container_port("minio", MINIO_PORT);
 
-    let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
+    let read_port = format!("{}:{}", LOCALHOST, hms_catalog_port);
     loop {
         if !scan_port_addr(&read_port) {
             log::info!("Waiting for 1s hms catalog to ready...");
@@ -66,7 +66,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     let props = HashMap::from([
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}:{}", minio_ip, MINIO_PORT),
+            format!("http://{}:{}", LOCALHOST, minio_port),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
@@ -74,7 +74,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     ]);
 
     let config = HmsCatalogConfig::builder()
-        .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
+        .address(format!("{}:{}", LOCALHOST, hms_catalog_port))
         .thrift_transport(HmsThriftTransport::Buffered)
         .warehouse("s3a://warehouse/hive".to_string())
         .props(props)
