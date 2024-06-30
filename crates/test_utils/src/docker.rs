@@ -71,7 +71,9 @@ impl DockerCompose {
         let mut cmd = Command::new("docker");
         cmd.arg("inspect")
             .arg("-f")
-            .arg(format!("{{{{(index (index .NetworkSettings.Ports \"{inner_port}/tcp\") 0).HostPort}}}}"))
+            .arg(format!(
+                "{{{{(index (index .NetworkSettings.Ports \"{inner_port}/tcp\") 0).HostPort}}}}"
+            ))
             .arg(&container_name);
 
         get_cmd_output(cmd, format!("Get container ip of {container_name}"))
@@ -83,7 +85,10 @@ impl DockerCompose {
 
 impl Drop for DockerCompose {
     fn drop(&mut self) {
-        log::info!("Trying to stop docker compose project: {}", self.project_name);
+        log::info!(
+            "Trying to stop docker compose project: {}",
+            self.project_name
+        );
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 

@@ -49,7 +49,10 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
     docker_compose.run();
 
-    log::info!("Docker compose started for {}", docker_compose.project_name());
+    log::info!(
+        "Docker compose started for {}",
+        docker_compose.project_name()
+    );
 
     let glue_catalog_port = docker_compose.get_container_port("moto", GLUE_CATALOG_PORT);
     let minio_port = docker_compose.get_container_port("minio", MINIO_PORT);
