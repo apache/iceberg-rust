@@ -17,6 +17,8 @@
 
 use crate::cmd::{get_cmd_output, run_command};
 use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
 
 pub const LOCALHOST: &str = "localhost";
 
@@ -62,7 +64,11 @@ impl DockerCompose {
                 "Starting docker compose in {}, project name: {}",
                 self.docker_compose_dir, self.project_name
             ),
-        )
+        );
+
+        // It seems that too fast after starting the docker compose, the container is not ready yet,
+        // let's wait for a while.
+        sleep(Duration::from_secs(3));
     }
 
     /// Returns the mapped port of the container.
@@ -76,7 +82,7 @@ impl DockerCompose {
             ))
             .arg(&container_name);
 
-        get_cmd_output(cmd, format!("Get container ip of {container_name}"))
+        get_cmd_output(cmd, format!("Get container port of {container_name}"))
             .trim()
             .parse()
             .expect("Failed to parse container port to u16")
