@@ -103,7 +103,6 @@ pub struct TableMetadata {
     /// Tables can be configured to remove oldest metadata log entries and
     /// keep a fixed-size log of the most recent entries after a commit.
     pub(crate) metadata_log: Vec<MetadataLog>,
-
     /// A list of sort orders, stored as full sort order objects.
     pub(crate) sort_orders: HashMap<i64, SortOrderRef>,
     /// Default sort order id of the table. Note that this could be used by
@@ -864,13 +863,14 @@ pub(super) mod _serde {
     }
 }
 
-#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy, Default)]
 #[repr(u8)]
 /// Iceberg format version
 pub enum FormatVersion {
     /// Iceberg spec version 1
     V1 = 1u8,
     /// Iceberg spec version 2
+    #[default]
     V2 = 2u8,
 }
 
