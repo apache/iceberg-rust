@@ -46,23 +46,19 @@ impl ManifestEvaluator {
             return Ok(true);
         }
 
-        let mut evaluator = ManifestFilterVisitor::new(self, &manifest_file.partitions);
+        let mut evaluator = ManifestFilterVisitor::new(&manifest_file.partitions);
 
         visit(&mut evaluator, &self.partition_filter)
     }
 }
 
 struct ManifestFilterVisitor<'a> {
-    manifest_evaluator: &'a ManifestEvaluator,
     partitions: &'a Vec<FieldSummary>,
 }
 
 impl<'a> ManifestFilterVisitor<'a> {
-    fn new(manifest_evaluator: &'a ManifestEvaluator, partitions: &'a Vec<FieldSummary>) -> Self {
-        ManifestFilterVisitor {
-            manifest_evaluator,
-            partitions,
-        }
+    fn new(partitions: &'a Vec<FieldSummary>) -> Self {
+        ManifestFilterVisitor { partitions }
     }
 }
 

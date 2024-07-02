@@ -667,6 +667,13 @@ pub struct ListType {
     pub element_field: NestedFieldRef,
 }
 
+impl ListType {
+    /// Construct a list type with the given element field.
+    pub fn new(element_field: NestedFieldRef) -> Self {
+        Self { element_field }
+    }
+}
+
 /// Module for type serialization/deserialization.
 pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
@@ -780,6 +787,16 @@ pub struct MapType {
     pub key_field: NestedFieldRef,
     /// Field for value.
     pub value_field: NestedFieldRef,
+}
+
+impl MapType {
+    /// Construct a map type with the given key and value fields.
+    pub fn new(key_field: NestedFieldRef, value_field: NestedFieldRef) -> Self {
+        Self {
+            key_field,
+            value_field,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -20,4 +20,5 @@
 #![deny(missing_docs)]
 
 mod catalog;
+mod client;
 pub use catalog::*;

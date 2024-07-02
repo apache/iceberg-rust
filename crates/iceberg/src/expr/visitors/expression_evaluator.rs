@@ -47,7 +47,7 @@ impl ExpressionEvaluator {
     /// to see if this [`DataFile`] could possibly contain data that matches
     /// the scan's filter.
     pub(crate) fn eval(&self, data_file: &DataFile) -> Result<bool> {
-        let mut visitor = ExpressionEvaluatorVisitor::new(self, data_file.partition());
+        let mut visitor = ExpressionEvaluatorVisitor::new(data_file.partition());
 
         visit(&mut visitor, &self.partition_filter)
     }
@@ -58,19 +58,14 @@ impl ExpressionEvaluator {
 /// specifically for data file partitions.
 #[derive(Debug)]
 struct ExpressionEvaluatorVisitor<'a> {
-    /// Reference to an [`ExpressionEvaluator`].
-    expression_evaluator: &'a ExpressionEvaluator,
     /// Reference to a [`DataFile`]'s partition [`Struct`].
     partition: &'a Struct,
 }
 
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
-    fn new(expression_evaluator: &'a ExpressionEvaluator, partition: &'a Struct) -> Self {
-        Self {
-            expression_evaluator,
-            partition,
-        }
+    fn new(partition: &'a Struct) -> Self {
+        Self { partition }
     }
 }
 

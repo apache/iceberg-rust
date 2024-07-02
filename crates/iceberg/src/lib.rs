@@ -38,7 +38,6 @@ pub use catalog::TableIdent;
 pub use catalog::TableRequirement;
 pub use catalog::TableUpdate;
 
-#[allow(dead_code)]
 pub mod table;
 
 mod avro;
@@ -47,7 +46,6 @@ pub mod spec;
 
 pub mod scan;
 
-#[allow(dead_code)]
 pub mod expr;
 pub mod transaction;
 pub mod transform;

@@ -214,7 +214,6 @@ impl<'a> TableScanBuilder<'a> {
 
 /// Table scan.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct TableScan {
     snapshot: SnapshotRef,
     table_metadata: TableMetadataRef,
@@ -345,6 +344,11 @@ impl TableScan {
             return true;
         }
         false
+    }
+
+    /// Returns a reference to the column names of the table scan.
+    pub fn column_names(&self) -> &[String] {
+        &self.column_names
     }
 }
 
