@@ -18,11 +18,11 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/integrations/*",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/integrations/*",
+    "crates/test_utils",
 ]
 
 [workspace.package]
@@ -46,6 +46,7 @@ arrow-select = { version = "52" }
 arrow-string = { version = "52" }
 async-stream = "0.3.5"
 async-trait = "0.1"
+async-std = "1.12.0"
 aws-config = "1.1.8"
 aws-sdk-glue = "1.21.0"
 bimap = "0.6"
