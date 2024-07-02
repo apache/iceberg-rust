@@ -18,6 +18,7 @@
 //! Integration tests for glue catalog.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, Weak};
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -28,6 +29,7 @@ use iceberg_catalog_glue::{
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 const GLUE_CATALOG_PORT: u16 = 5000;
@@ -39,11 +41,13 @@ struct TestFixture {
     glue_catalog: GlueCatalog,
 }
 
-async fn set_test_fixture(func: &str) -> TestFixture {
+static TEST_FIXTURE: OnceLock<Mutex<Weak<TestFixture>>> = OnceLock::new();
+
+async fn start_dc(namespace: &str) -> TestFixture {
     set_up();
 
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{func}", module_path!())),
+        normalize_test_name(format!("{}_{namespace}", module_path!())),
         format!("{}/testdata/glue_catalog", env!("CARGO_MANIFEST_DIR")),
     );
 
@@ -92,6 +96,24 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     }
 }
 
+async fn lazy_reuse_dc() -> Arc<TestFixture> {
+    let mut guard = TEST_FIXTURE
+        .get_or_init(|| Mutex::new(Weak::new()))
+        .lock()
+        .await;
+
+    let maybe_tf = guard.upgrade();
+
+    if let Some(tf) = maybe_tf {
+        tf
+    } else {
+        let tf = Arc::new(start_dc("reuse").await);
+        *guard = Arc::downgrade(&tf);
+
+        tf
+    }
+}
+
 async fn set_test_namespace(fixture: &TestFixture, namespace: &NamespaceIdent) -> Result<()> {
     let properties = HashMap::new();
 
@@ -124,9 +146,9 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
-    let fixture = set_test_fixture("test_rename_table").await;
+    let fixture = lazy_reuse_dc().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
 
     fixture
         .glue_catalog
@@ -158,9 +180,9 @@ async fn test_rename_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
-    let fixture = set_test_fixture("test_table_exists").await;
+    let fixture = lazy_reuse_dc().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
 
     fixture
         .glue_catalog
@@ -189,9 +211,9 @@ async fn test_table_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
-    let fixture = set_test_fixture("test_drop_table").await;
+    let fixture = lazy_reuse_dc().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
 
     fixture
         .glue_catalog
@@ -217,9 +239,9 @@ async fn test_drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
-    let fixture = set_test_fixture("test_load_table").await;
+    let fixture = lazy_reuse_dc().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("my_database".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
 
     fixture
         .glue_catalog
@@ -248,8 +270,8 @@ async fn test_load_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_table() -> Result<()> {
-    let fixture = set_test_fixture("test_create_table").await;
-    let namespace = NamespaceIdent::new("my_database".to_string());
+    let fixture = lazy_reuse_dc().await;
+    let namespace = NamespaceIdent::new("test_create_table".to_string());
     set_test_namespace(&fixture, &namespace).await?;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
 
@@ -275,8 +297,8 @@ async fn test_create_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_tables() -> Result<()> {
-    let fixture = set_test_fixture("test_list_tables").await;
-    let namespace = NamespaceIdent::new("my_database".to_string());
+    let fixture = lazy_reuse_dc().await;
+    let namespace = NamespaceIdent::new("test_list_tables".to_string());
     set_test_namespace(&fixture, &namespace).await?;
 
     let expected = vec![];
@@ -289,8 +311,8 @@ async fn test_list_tables() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_drop_namespace").await;
-    let namespace = NamespaceIdent::new("my_database".to_string());
+    let fixture = lazy_reuse_dc().await;
+    let namespace = NamespaceIdent::new("test_drop_namespace".to_string());
     set_test_namespace(&fixture, &namespace).await?;
 
     let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
@@ -306,8 +328,8 @@ async fn test_drop_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_update_namespace").await;
-    let namespace = NamespaceIdent::new("my_database".into());
+    let fixture = lazy_reuse_dc().await;
+    let namespace = NamespaceIdent::new("test_update_namespace".into());
     set_test_namespace(&fixture, &namespace).await?;
 
     let before_update = fixture.glue_catalog.get_namespace(&namespace).await?;
@@ -332,9 +354,9 @@ async fn test_update_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_namespace_exists() -> Result<()> {
-    let fixture = set_test_fixture("test_namespace_exists").await;
+    let fixture = lazy_reuse_dc().await;
 
-    let namespace = NamespaceIdent::new("my_database".into());
+    let namespace = NamespaceIdent::new("test_namespace_exists".into());
 
     let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
     assert!(!exists);
@@ -349,9 +371,9 @@ async fn test_namespace_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_get_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_get_namespace").await;
+    let fixture = lazy_reuse_dc().await;
 
-    let namespace = NamespaceIdent::new("my_database".into());
+    let namespace = NamespaceIdent::new("test_get_namespace".into());
 
     let does_not_exist = fixture.glue_catalog.get_namespace(&namespace).await;
     assert!(does_not_exist.is_err());
@@ -368,10 +390,10 @@ async fn test_get_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_create_namespace").await;
+    let fixture = lazy_reuse_dc().await;
 
     let properties = HashMap::new();
-    let namespace = NamespaceIdent::new("my_database".into());
+    let namespace = NamespaceIdent::new("test_create_namespace".into());
 
     let expected = Namespace::new(namespace.clone());
 
@@ -387,7 +409,7 @@ async fn test_create_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = start_dc("test_list_namespace").await;
 
     let expected = vec![];
     let result = fixture.glue_catalog.list_namespaces(None).await?;
