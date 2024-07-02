@@ -17,10 +17,15 @@
 
 //! The module contains the file writer for parquet file format.
 
+use super::{
+    location_generator::{FileNameGenerator, LocationGenerator},
+    track_writer::TrackWriter,
+    FileWriter, FileWriterBuilder,
+};
 use crate::arrow::DEFAULT_MAP_FIELD_NAME;
-use std::{
-    collections::HashMap,
-    sync::{atomic::AtomicI64, Arc},
+use crate::spec::{
+    visit_schema, Datum, ListType, MapType, NestedFieldRef, PrimitiveLiteral, PrimitiveType,
+    Schema, SchemaRef, SchemaVisitor, StructType, Type,
 };
 use crate::ErrorKind;
 use crate::{io::FileIO, io::FileWrite, Result};
@@ -40,24 +45,18 @@ use parquet::data_type::{
 };
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::TypedStatistics;
-use parquet::{arrow::AsyncArrowWriter, arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter, format::FileMetaData};
+use parquet::{
+    arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter, arrow::AsyncArrowWriter,
+    format::FileMetaData,
+};
 use parquet::{
     data_type::{ByteArray, FixedLenByteArray},
     file::statistics::{from_thrift, Statistics},
 };
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{
-    collections::HashMap,
-    sync::{atomic::AtomicI64, Arc},
-};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicI64;
+use std::sync::Arc;
 use uuid::Uuid;
-
-use super::{
-    location_generator::{FileNameGenerator, LocationGenerator},
-    track_writer::TrackWriter,
-    FileWriter, FileWriterBuilder,
-};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone)]
@@ -602,6 +601,7 @@ impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use anyhow::Result;
@@ -621,8 +621,8 @@ mod tests {
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::NestedField;
-    use crate::spec::Struct;
+    use crate::spec::*;
+    use crate::spec::{PrimitiveLiteral, Struct};
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::tests::check_parquet_data_file;
