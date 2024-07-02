@@ -85,7 +85,7 @@ tokio = { version = "1", features = ["macros"] }
 typed-builder = "^0.18"
 url = "2"
 urlencoding = "2"
-uuid = "1.6.1"
+uuid = { version = "1.6.1", features = ["v7"] }
 volo-thrift = "0.10"
 hive_metastore = "0.1.0"
 tera = "1"

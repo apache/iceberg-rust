@@ -332,7 +332,7 @@ impl TableMetadataBuilder {
 
         let table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
-            table_uuid: Uuid::new_v4(),
+            table_uuid: Uuid::now_v7(),
             location: location.ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -474,7 +474,7 @@ pub(super) mod _serde {
 
     /// Helper to serialize and deserialize the format version.
     #[derive(Debug, PartialEq, Eq)]
-    pub(super) struct VersionNumber<const V: u8>;
+    pub(crate) struct VersionNumber<const V: u8>;
 
     impl Serialize for TableMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

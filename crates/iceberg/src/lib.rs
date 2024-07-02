@@ -37,6 +37,7 @@ pub use catalog::TableCreation;
 pub use catalog::TableIdent;
 pub use catalog::TableRequirement;
 pub use catalog::TableUpdate;
+pub use catalog::ViewCreation;
 
 pub mod table;
 

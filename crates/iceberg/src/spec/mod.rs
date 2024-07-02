@@ -27,6 +27,8 @@ mod sort;
 mod table_metadata;
 mod transform;
 mod values;
+mod view_metadata;
+mod view_version;
 
 pub use datatypes::*;
 pub use manifest::*;
@@ -38,3 +40,6 @@ pub use sort::*;
 pub use table_metadata::*;
 pub use transform::*;
 pub use values::*;
+pub use view_metadata::*;
+pub use view_version::*;
+// pub use view_metadata::*;
