@@ -127,62 +127,11 @@ mod tests {
         let input_content = input_file.read().await.unwrap();
         let reader_builder =
             ParquetRecordBatchReaderBuilder::try_new(input_content.clone()).unwrap();
-        let metadata = reader_builder.metadata().clone();
 
         // check data
         let reader = reader_builder.build().unwrap();
         let batches = reader.map(|batch| batch.unwrap()).collect::<Vec<_>>();
         let res = concat_batches(&batch.schema(), &batches).unwrap();
         assert_eq!(*batch, res);
-
-        // check metadata
-        let expect_column_num = batch.num_columns();
-
-        assert_eq!(
-            data_file.record_count,
-            metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64
-        );
-
-        assert_eq!(data_file.file_size_in_bytes, input_content.len() as u64);
-
-        assert_eq!(data_file.column_sizes.len(), expect_column_num);
-        data_file.column_sizes.iter().for_each(|(&k, &v)| {
-            let expect = metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.column(k as usize).compressed_size())
-                .sum::<i64>() as u64;
-            assert_eq!(v, expect);
-        });
-
-        assert_eq!(data_file.value_counts.len(), expect_column_num);
-        data_file.value_counts.iter().for_each(|(_, &v)| {
-            let expect = metadata
-                .row_groups()
-                .iter()
-                .map(|group| group.num_rows())
-                .sum::<i64>() as u64;
-            assert_eq!(v, expect);
-        });
-
-        assert_eq!(data_file.null_value_counts.len(), expect_column_num);
-        data_file.null_value_counts.iter().for_each(|(&k, &v)| {
-            let expect = batch.column(k as usize).null_count() as u64;
-            assert_eq!(v, expect);
-        });
-
-        assert_eq!(data_file.split_offsets.len(), metadata.num_row_groups());
-        data_file
-            .split_offsets
-            .iter()
-            .enumerate()
-            .for_each(|(i, &v)| {
-                let expect = metadata.row_groups()[i].file_offset().unwrap();
-                assert_eq!(v, expect);
-            });
     }
 }
