@@ -1196,7 +1196,7 @@ mod tests {
         (schema, record)
     }
 
-    fn table_schema_nested() -> Schema {
+    pub fn table_schema_nested() -> Schema {
         Schema::builder()
             .with_schema_id(1)
             .with_identifier_field_ids(vec![2])
