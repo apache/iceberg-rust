@@ -67,7 +67,12 @@ impl HttpClient {
 
     /// This API is testing only to assert the token.
     #[cfg(test)]
-    pub(crate) fn token(&self) -> Option<String> {
+    pub(crate) async fn token(&self) -> Option<String> {
+        let mut req = self
+            .request(Method::GET, &self.token_endpoint)
+            .build()
+            .unwrap();
+        self.authenticate(&mut req).await.ok();
         self.token.lock().unwrap().clone()
     }
 

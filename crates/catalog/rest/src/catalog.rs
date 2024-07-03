@@ -747,6 +747,7 @@ mod tests {
                 "expires_in": 86400
                 }"#,
             )
+            .expect(2)
             .create_async()
             .await
     }
@@ -767,12 +768,10 @@ mod tests {
                 .build(),
         );
 
+        let token = catalog.context().await.unwrap().client.token().await;
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(
-            catalog.context().await.unwrap().client.token(),
-            Some("ey000000000000".to_string())
-        );
+        assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
     #[tokio::test]
@@ -802,6 +801,7 @@ mod tests {
                 "expires_in": 86400
                 }"#,
             )
+            .expect(2)
             .create_async()
             .await;
 
@@ -814,12 +814,11 @@ mod tests {
                 .build(),
         );
 
+        let token = catalog.context().await.unwrap().client.token().await;
+
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(
-            catalog.context().await.unwrap().client.token(),
-            Some("ey000000000000".to_string())
-        );
+        assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
     #[tokio::test]
@@ -874,7 +873,7 @@ mod tests {
         let expected_headers = HeaderMap::from_iter([
             (
                 header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
+                HeaderValue::from_static("application/yaml"),
             ),
             (
                 HeaderName::from_static("x-client-version"),
@@ -915,12 +914,11 @@ mod tests {
                 .build(),
         );
 
+        let token = catalog.context().await.unwrap().client.token().await;
+
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(
-            catalog.context().await.unwrap().client.token(),
-            Some("ey000000000000".to_string())
-        );
+        assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
     #[tokio::test]
