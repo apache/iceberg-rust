@@ -27,7 +27,7 @@ async fn main() {
         .uri("http://localhost:8080".to_string())
         .build();
 
-    let catalog = RestCatalog::new(config).await.unwrap();
+    let catalog = RestCatalog::new(config);
 
     // ANCHOR: create_table
     let table_id = TableIdent::from_strs(["default", "t1"]).unwrap();
