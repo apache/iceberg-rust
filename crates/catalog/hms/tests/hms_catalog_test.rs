@@ -18,18 +18,21 @@
 //! Integration tests for hms catalog.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, Weak};
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{lazy_dc, DockerCompose};
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
 const MINIO_PORT: u16 = 9000;
+static SHARED_TEST_FIXTURE: OnceLock<Mutex<Weak<TestFixture>>> = OnceLock::new();
 type Result<T> = std::result::Result<T, iceberg::Error>;
 
 struct TestFixture {
@@ -37,7 +40,11 @@ struct TestFixture {
     hms_catalog: HmsCatalog,
 }
 
-async fn set_test_fixture(func: &str) -> TestFixture {
+async fn get_shared_test_fixture() -> Arc<TestFixture> {
+    lazy_dc(&SHARED_TEST_FIXTURE, || get_test_fixture("shared")).await
+}
+
+async fn get_test_fixture(func: &str) -> TestFixture {
     set_up();
 
     let docker_compose = DockerCompose::new(
@@ -85,6 +92,17 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     }
 }
 
+async fn set_test_namespace(fixture: &TestFixture, namespace: &NamespaceIdent) -> Result<()> {
+    let properties = HashMap::new();
+
+    fixture
+        .hms_catalog
+        .create_namespace(namespace, properties)
+        .await?;
+
+    Ok(())
+}
+
 fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
     let schema = Schema::builder()
         .with_schema_id(0)
@@ -106,9 +124,9 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 
 #[tokio::test]
 async fn test_rename_table() -> Result<()> {
-    let fixture = set_test_fixture("test_rename_table").await;
+    let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
 
     let table = fixture
         .hms_catalog
@@ -131,9 +149,9 @@ async fn test_rename_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_table_exists() -> Result<()> {
-    let fixture = set_test_fixture("test_table_exists").await;
+    let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
 
     let table = fixture
         .hms_catalog
@@ -149,9 +167,9 @@ async fn test_table_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_table() -> Result<()> {
-    let fixture = set_test_fixture("test_drop_table").await;
+    let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
 
     let table = fixture
         .hms_catalog
@@ -169,9 +187,9 @@ async fn test_drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_load_table() -> Result<()> {
-    let fixture = set_test_fixture("test_load_table").await;
+    let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
 
     let expected = fixture
         .hms_catalog
@@ -195,9 +213,9 @@ async fn test_load_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_table() -> Result<()> {
-    let fixture = set_test_fixture("test_create_table").await;
+    let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+    let namespace = Namespace::new(NamespaceIdent::new("test_create_table".into()));
 
     let result = fixture
         .hms_catalog
@@ -221,8 +239,8 @@ async fn test_create_table() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_tables() -> Result<()> {
-    let fixture = set_test_fixture("test_list_tables").await;
-    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let fixture = get_shared_test_fixture().await;
+    let ns = Namespace::new(NamespaceIdent::new("test_list_tables".into()));
     let result = fixture.hms_catalog.list_tables(ns.name()).await?;
 
     assert_eq!(result, vec![]);
@@ -244,7 +262,7 @@ async fn test_list_tables() -> Result<()> {
 
 #[tokio::test]
 async fn test_list_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = get_test_fixture("test_list_namespace").await;
 
     let expected_no_parent = vec![NamespaceIdent::new("default".into())];
     let result_no_parent = fixture.hms_catalog.list_namespaces(None).await?;
@@ -262,7 +280,7 @@ async fn test_list_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_create_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_create_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
     let properties = HashMap::from([
         ("comment".to_string(), "my_description".to_string()),
@@ -279,7 +297,7 @@ async fn test_create_namespace() -> Result<()> {
     ]);
 
     let ns = Namespace::with_properties(
-        NamespaceIdent::new("my_namespace".into()),
+        NamespaceIdent::new("test_create_namespace".into()),
         properties.clone(),
     );
 
@@ -295,9 +313,9 @@ async fn test_create_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_get_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_get_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
-    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let ns = Namespace::new(NamespaceIdent::new("test_get_namespace".into()));
     let properties = HashMap::from([
         ("location".to_string(), "s3a://warehouse/hive".to_string()),
         (
@@ -322,10 +340,10 @@ async fn test_get_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_namespace_exists() -> Result<()> {
-    let fixture = set_test_fixture("test_namespace_exists").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns_exists = Namespace::new(NamespaceIdent::new("default".into()));
-    let ns_not_exists = Namespace::new(NamespaceIdent::new("not_here".into()));
+    let ns_not_exists = Namespace::new(NamespaceIdent::new("test_namespace_exists".into()));
 
     let result_exists = fixture
         .hms_catalog
@@ -344,17 +362,18 @@ async fn test_namespace_exists() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_update_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
-    let ns = Namespace::new(NamespaceIdent::new("default".into()));
+    let ns = NamespaceIdent::new("test_update_namespace".into());
+    set_test_namespace(&fixture, &ns).await?;
     let properties = HashMap::from([("comment".to_string(), "my_update".to_string())]);
 
     fixture
         .hms_catalog
-        .update_namespace(ns.name(), properties)
+        .update_namespace(&ns, properties)
         .await?;
 
-    let db = fixture.hms_catalog.get_namespace(ns.name()).await?;
+    let db = fixture.hms_catalog.get_namespace(&ns).await?;
 
     assert_eq!(
         db.properties().get("comment"),
@@ -366,7 +385,7 @@ async fn test_update_namespace() -> Result<()> {
 
 #[tokio::test]
 async fn test_drop_namespace() -> Result<()> {
-    let fixture = set_test_fixture("test_drop_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns = Namespace::new(NamespaceIdent::new("delete_me".into()));
 

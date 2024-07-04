@@ -21,20 +21,27 @@ use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use iceberg_test_utils::docker::DockerCompose;
+use iceberg_test_utils::docker::{lazy_dc, DockerCompose};
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
+use tokio::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, Weak};
 use tokio::time::sleep;
 
 const REST_CATALOG_PORT: u16 = 8181;
+static SHARED_TEST_FIXTURE: OnceLock<Mutex<Weak<TestFixture>>> = OnceLock::new();
 
 struct TestFixture {
     _docker_compose: DockerCompose,
     rest_catalog: RestCatalog,
 }
 
-async fn set_test_fixture(func: &str) -> TestFixture {
+async fn get_shared_test_fixture() -> Arc<TestFixture> {
+    lazy_dc(&SHARED_TEST_FIXTURE, || get_test_fixture("shared")).await
+}
+
+async fn get_test_fixture(func: &str) -> TestFixture {
     set_up();
     let docker_compose = DockerCompose::new(
         normalize_test_name(format!("{}_{func}", module_path!())),
@@ -69,11 +76,11 @@ async fn set_test_fixture(func: &str) -> TestFixture {
 
 #[tokio::test]
 async fn test_get_non_exist_namespace() {
-    let fixture = set_test_fixture("test_get_non_exist_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
     let result = fixture
         .rest_catalog
-        .get_namespace(&NamespaceIdent::from_strs(["demo"]).unwrap())
+        .get_namespace(&NamespaceIdent::from_strs(["test_get_non_exist_namespace"]).unwrap())
         .await;
 
     assert!(result.is_err());
@@ -85,7 +92,7 @@ async fn test_get_non_exist_namespace() {
 
 #[tokio::test]
 async fn test_get_namespace() {
-    let fixture = set_test_fixture("test_get_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
@@ -116,10 +123,10 @@ async fn test_get_namespace() {
 
 #[tokio::test]
 async fn test_list_namespace() {
-    let fixture = set_test_fixture("test_list_namespace").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns1 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_namespace", "apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -127,7 +134,7 @@ async fn test_list_namespace() {
     );
 
     let ns2 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "macos"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_namespace", "apple", "macos"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "xuanwo".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -137,7 +144,7 @@ async fn test_list_namespace() {
     // Currently this namespace doesn't exist, so it should return error.
     assert!(fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace", "apple"]).unwrap()))
         .await
         .is_err());
 
@@ -156,7 +163,7 @@ async fn test_list_namespace() {
     // List namespace
     let mut nss = fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace", "apple"]).unwrap()))
         .await
         .unwrap();
     nss.sort();
@@ -167,10 +174,10 @@ async fn test_list_namespace() {
 
 #[tokio::test]
 async fn test_list_empty_namespace() {
-    let fixture = set_test_fixture("test_list_empty_namespace").await;
+    let fixture = get_test_fixture("test_list_empty_namespace").await;
 
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple"]).unwrap(),
+        NamespaceIdent::from_strs(["aa", "apple"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -194,7 +201,7 @@ async fn test_list_empty_namespace() {
     // List namespace
     let nss = fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["aa", "apple"]).unwrap()))
         .await
         .unwrap();
     assert!(nss.is_empty());
@@ -202,7 +209,7 @@ async fn test_list_empty_namespace() {
 
 #[tokio::test]
 async fn test_list_root_namespace() {
-    let fixture = set_test_fixture("test_list_root_namespace").await;
+    let fixture = get_test_fixture("test_list_root_namespace").await;
 
     let ns1 = Namespace::with_properties(
         NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
@@ -249,10 +256,10 @@ async fn test_list_root_namespace() {
 
 #[tokio::test]
 async fn test_create_table() {
-    let fixture = set_test_fixture("test_create_table").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["test_create_table", "apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -310,10 +317,10 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_update_table() {
-    let fixture = set_test_fixture("test_update_table").await;
+    let fixture = get_shared_test_fixture().await;
 
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["test_update_table", "apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
