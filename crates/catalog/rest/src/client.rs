@@ -109,7 +109,12 @@ impl HttpClient {
         }
 
         // Credential must exist here.
-        let (client_id, client_secret) = self.credential.as_ref().unwrap();
+        let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Credential must be provided for authentication",
+            )
+        })?;
 
         let mut params = HashMap::with_capacity(4);
         params.insert("grant_type", "client_credentials");
