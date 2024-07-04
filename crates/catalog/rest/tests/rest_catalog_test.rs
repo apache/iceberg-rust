@@ -59,7 +59,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
     let config = RestCatalogConfig::builder()
         .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
         .build();
-    let rest_catalog = RestCatalog::new(config).await.unwrap();
+    let rest_catalog = RestCatalog::new(config);
 
     TestFixture {
         _docker_compose: docker_compose,
