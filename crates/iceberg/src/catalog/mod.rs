@@ -30,7 +30,6 @@ use std::fmt::Debug;
 use std::mem::take;
 use std::ops::Deref;
 use typed_builder::TypedBuilder;
-use urlencoding::encode;
 use uuid::Uuid;
 
 /// The catalog API for Iceberg Rust.
@@ -123,9 +122,9 @@ impl NamespaceIdent {
         Self::from_vec(iter.into_iter().map(|s| s.to_string()).collect())
     }
 
-    /// Returns url encoded format.
-    pub fn encode_in_url(&self) -> String {
-        encode(&self.as_ref().join("\u{1F}")).to_string()
+    /// Returns a string for used in url.
+    pub fn to_url_string(&self) -> String {
+        self.as_ref().join("\u{001f}")
     }
 
     /// Returns inner strings.

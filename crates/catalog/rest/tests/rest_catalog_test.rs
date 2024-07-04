@@ -375,3 +375,38 @@ fn assert_map_contains(map1: &HashMap<String, String>, map2: &HashMap<String, St
         assert_eq!(map2.get(k).unwrap(), v);
     }
 }
+
+#[tokio::test]
+async fn test_list_empty_multi_level_namespace() {
+    let fixture = set_test_fixture("test_list_empty_multi_level_namespace").await;
+
+    let ns_apple = Namespace::with_properties(
+        NamespaceIdent::from_strs(["a_a", "apple"]).unwrap(),
+        HashMap::from([
+            ("owner".to_string(), "ray".to_string()),
+            ("community".to_string(), "apache".to_string()),
+        ]),
+    );
+
+    // Currently this namespace doesn't exist, so it should return error.
+    assert!(fixture
+        .rest_catalog
+        .list_namespaces(Some(ns_apple.name()))
+        .await
+        .is_err());
+
+    // Create namespaces
+    fixture
+        .rest_catalog
+        .create_namespace(ns_apple.name(), ns_apple.properties().clone())
+        .await
+        .unwrap();
+
+    // List namespace
+    let nss = fixture
+        .rest_catalog
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["a_a", "apple"]).unwrap()))
+        .await
+        .unwrap();
+    assert!(nss.is_empty());
+}
