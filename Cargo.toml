@@ -18,11 +18,11 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/integrations/*",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/integrations/*",
+    "crates/test_utils",
 ]
 
 [workspace.package]
@@ -81,7 +81,7 @@ serde_json = "^1.0"
 serde_repr = "0.1.16"
 serde_with = "3.4.0"
 tempfile = "3.8"
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", default-features = false }
 typed-builder = "^0.18"
 url = "2"
 urlencoding = "2"
