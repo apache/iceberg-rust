@@ -105,6 +105,7 @@ impl HttpClient {
                     .with_source(e)
                 })?,
             );
+            return Ok(());
         }
 
         // Credential must exist here.
