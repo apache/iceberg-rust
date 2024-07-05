@@ -74,7 +74,7 @@ async fn get_test_fixture(func: &str) -> TestFixture {
     }
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_get_non_exist_namespace() {
     let fixture = get_shared_test_fixture().await;
 
@@ -90,7 +90,7 @@ async fn test_get_non_exist_namespace() {
         .contains("Namespace does not exist"));
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_get_namespace() {
     let fixture = get_shared_test_fixture().await;
 
@@ -121,12 +121,12 @@ async fn test_get_namespace() {
     assert_map_contains(ns.properties(), created_ns.properties());
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_list_namespace() {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture("test_list_namespace").await;
 
     let ns1 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -134,7 +134,7 @@ async fn test_list_namespace() {
     );
 
     let ns2 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "apple", "macos"]).unwrap(),
+        NamespaceIdent::from_strs(["apple", "macos"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "xuanwo".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -144,7 +144,7 @@ async fn test_list_namespace() {
     // Currently this namespace doesn't exist, so it should return error.
     assert!(fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace", "apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
         .await
         .is_err());
 
@@ -163,7 +163,7 @@ async fn test_list_namespace() {
     // List namespace
     let mut nss = fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace", "apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
         .await
         .unwrap();
     nss.sort();
@@ -172,12 +172,12 @@ async fn test_list_namespace() {
     assert_eq!(&nss[1], ns2.name());
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_list_empty_namespace() {
     let fixture = get_test_fixture("test_list_empty_namespace").await;
 
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["aa", "apple"]).unwrap(),
+        NamespaceIdent::from_strs(["apple"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -201,13 +201,13 @@ async fn test_list_empty_namespace() {
     // List namespace
     let nss = fixture
         .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["aa", "apple"]).unwrap()))
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["apple"]).unwrap()))
         .await
         .unwrap();
     assert!(nss.is_empty());
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_list_root_namespace() {
     let fixture = get_test_fixture("test_list_root_namespace").await;
 
@@ -254,12 +254,12 @@ async fn test_list_root_namespace() {
     assert_eq!(&nss[1], &NamespaceIdent::from_strs(["google"]).unwrap());
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_create_table() {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture("test_create_table").await;
 
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_create_table", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -315,12 +315,12 @@ async fn test_create_table() {
         .is_unpartitioned());
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_update_table() {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture("test_update_table").await;
 
     let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_update_table", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),

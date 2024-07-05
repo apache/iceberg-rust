@@ -43,3 +43,4 @@ uuid = { workspace = true }
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
+tokio-shared-rt = { workspace = true }

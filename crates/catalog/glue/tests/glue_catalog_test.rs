@@ -129,7 +129,7 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
     Ok(creation)
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_rename_table() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -163,7 +163,7 @@ async fn test_rename_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_table_exists() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -194,7 +194,7 @@ async fn test_table_exists() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_drop_table() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -222,7 +222,7 @@ async fn test_drop_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_load_table() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -253,7 +253,7 @@ async fn test_load_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_create_table() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let namespace = NamespaceIdent::new("test_create_table".to_string());
@@ -280,7 +280,7 @@ async fn test_create_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_list_tables() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let namespace = NamespaceIdent::new("test_list_tables".to_string());
@@ -294,7 +294,7 @@ async fn test_list_tables() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_drop_namespace() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let namespace = NamespaceIdent::new("test_drop_namespace".to_string());
@@ -311,7 +311,7 @@ async fn test_drop_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_update_namespace() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
     let namespace = NamespaceIdent::new("test_update_namespace".into());
@@ -337,7 +337,7 @@ async fn test_update_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_namespace_exists() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
 
@@ -354,7 +354,7 @@ async fn test_namespace_exists() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_get_namespace() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
 
@@ -373,7 +373,7 @@ async fn test_get_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_create_namespace() -> Result<()> {
     let fixture = get_shared_test_fixture().await;
 
@@ -392,7 +392,7 @@ async fn test_create_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_shared_rt::test(shared)]
 async fn test_list_namespace() -> Result<()> {
     let fixture = get_test_fixture("test_list_namespace").await;
 
