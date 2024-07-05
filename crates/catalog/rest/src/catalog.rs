@@ -26,7 +26,6 @@ use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
-use urlencoding::encode;
 
 use crate::client::HttpClient;
 use crate::types::{
@@ -82,11 +81,11 @@ impl RestCatalogConfig {
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        self.url_prefixed(&["namespaces", &ns.encode_in_url()])
+        self.url_prefixed(&["namespaces", &ns.to_url_string()])
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
-        self.url_prefixed(&["namespaces", &ns.encode_in_url(), "tables"])
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "tables"])
     }
 
     fn rename_table_endpoint(&self) -> String {
@@ -96,9 +95,9 @@ impl RestCatalogConfig {
     fn table_endpoint(&self, table: &TableIdent) -> String {
         self.url_prefixed(&[
             "namespaces",
-            &table.namespace.encode_in_url(),
+            &table.namespace.to_url_string(),
             "tables",
-            encode(&table.name).as_ref(),
+            &table.name,
         ])
     }
 
@@ -320,7 +319,7 @@ impl Catalog for RestCatalog {
             self.context().await?.config.namespaces_endpoint(),
         );
         if let Some(ns) = parent {
-            request = request.query(&[("parent", ns.encode_in_url())]);
+            request = request.query(&[("parent", ns.to_url_string())]);
         }
 
         let resp = self
