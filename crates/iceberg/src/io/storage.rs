@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{FileIOBuilder, FsConfig, S3Config};
+use super::FileIOBuilder;
+#[cfg(feature = "storage-fs")]
+use super::FsConfig;
+#[cfg(feature = "storage-s3")]
+use super::S3Config;
 use crate::{Error, ErrorKind};
 use opendal::{Operator, Scheme};
 
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]
 pub(crate) enum Storage {
-    LocalFs {
-        config: FsConfig,
-    },
+    #[cfg(feature = "storage-fs")]
+    LocalFs { config: FsConfig },
+    #[cfg(feature = "storage-s3")]
     S3 {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
@@ -40,9 +44,11 @@ impl Storage {
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {
+            #[cfg(feature = "storage-fs")]
             Scheme::Fs => Ok(Self::LocalFs {
                 config: FsConfig::new(props),
             }),
+            #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
                 scheme_str,
                 config: S3Config::new(props),
@@ -73,6 +79,7 @@ impl Storage {
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
         match self {
+            #[cfg(feature = "storage-fs")]
             Storage::LocalFs { config } => {
                 let op = config.build(path)?;
 
@@ -82,6 +89,7 @@ impl Storage {
                     Ok((op, &path[1..]))
                 }
             }
+            #[cfg(feature = "storage-s3")]
             Storage::S3 { scheme_str, config } => {
                 let op = config.build(path)?;
                 let op_info = op.info();
@@ -97,6 +105,10 @@ impl Storage {
                     ))
                 }
             }
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "No storage service has been enabled",
+            )),
         }
     }
 

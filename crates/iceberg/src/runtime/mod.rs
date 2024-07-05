@@ -26,6 +26,8 @@ pub enum JoinHandle<T> {
     Tokio(tokio::task::JoinHandle<T>),
     #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     AsyncStd(async_std::task::JoinHandle<T>),
+    #[cfg(all(not(feature = "async-std"), not(feature = "tokio")))]
+    Unimplemented(Box<T>),
 }
 
 impl<T: Send + 'static> Future for JoinHandle<T> {
@@ -39,6 +41,8 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
                 .map(|h| h.expect("tokio spawned task failed")),
             #[cfg(all(feature = "async-std", not(feature = "tokio")))]
             JoinHandle::AsyncStd(handle) => Pin::new(handle).poll(cx),
+            #[cfg(all(not(feature = "async-std"), not(feature = "tokio")))]
+            JoinHandle::Unimplemented(_) => unimplemented!("no runtime has been enabled"),
         }
     }
 }
@@ -54,6 +58,9 @@ where
 
     #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     return JoinHandle::AsyncStd(async_std::task::spawn(f));
+
+    #[cfg(all(not(feature = "async-std"), not(feature = "tokio")))]
+    unimplemented!("no runtime has been enabled")
 }
 
 #[allow(dead_code)]
@@ -67,6 +74,9 @@ where
 
     #[cfg(all(feature = "async-std", not(feature = "tokio")))]
     return JoinHandle::AsyncStd(async_std::task::spawn_blocking(f));
+
+    #[cfg(all(not(feature = "async-std"), not(feature = "tokio")))]
+    unimplemented!("no runtime has been enabled")
 }
 
 #[cfg(test)]
