@@ -105,6 +105,7 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(all(not(feature = "storage-s3"), not(feature = "storage-fs")))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "No storage service has been enabled",
