@@ -43,6 +43,7 @@ impl FsConfig {
     ///
     /// fs always build from `/`
     pub fn build(&self, _: &str) -> Result<Operator> {
-        Ok(Operator::via_map(Scheme::Fs, HashMap::default())?)
+        let m = HashMap::from_iter([("root".to_string(), "/".to_string())]);
+        Ok(Operator::via_map(Scheme::Fs, m)?)
     }
 }
