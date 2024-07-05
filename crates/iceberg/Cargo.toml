@@ -56,12 +56,10 @@ bitvec = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
-either = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-log = { workspace = true }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
@@ -78,7 +76,6 @@ serde_with = { workspace = true }
 tokio = { workspace = true, optional = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
-urlencoding = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
