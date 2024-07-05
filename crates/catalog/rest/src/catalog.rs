@@ -26,7 +26,6 @@ use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
-use urlencoding::encode;
 
 use crate::client::HttpClient;
 use crate::types::{
@@ -98,7 +97,7 @@ impl RestCatalogConfig {
             "namespaces",
             &table.namespace.to_url_string(),
             "tables",
-            encode(&table.name).as_ref(),
+            &table.name,
         ])
     }
 
