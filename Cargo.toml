@@ -18,11 +18,11 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/integrations/*",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/integrations/*",
+    "crates/test_utils",
 ]
 
 [workspace.package]
@@ -62,7 +62,6 @@ iceberg = { version = "0.2.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
 iceberg-catalog-hms = { version = "0.2.0", path = "./crates/catalog/hms" }
 itertools = "0.13"
-lazy_static = "1"
 log = "^0.4"
 mockito = "^1"
 murmur3 = "0.5.2"
