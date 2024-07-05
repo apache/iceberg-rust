@@ -85,7 +85,7 @@ impl S3Config {
             )
         })?;
 
-        let mut m = HashMap::with_capacity(4);
+        let mut m = HashMap::with_capacity(5);
         m.insert("bucket".to_string(), bucket.to_string());
         m.insert("endpoint".to_string(), self.endpoint.clone());
         m.insert("access_key_id".to_string(), self.access_key_id.clone());
