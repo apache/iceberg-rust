@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use crate::spec::{
     visit_schema, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType
+    StructType,
 };
 use crate::{Error, ErrorKind, Result};
 use apache_avro::schema::{
@@ -272,15 +272,14 @@ fn avro_optional(avro_schema: AvroSchema) -> Result<AvroSchema> {
     ])?))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ensure_data_valid;
     use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
     use apache_avro::schema::{Namespace, UnionSchema};
     use apache_avro::Schema as AvroSchema;
     use std::fs::read_to_string;
-    use crate::ensure_data_valid;
 
     fn is_avro_optional(avro_schema: &AvroSchema) -> bool {
         match avro_schema {
@@ -360,17 +359,17 @@ mod tests {
             mut options: Vec<Option<Type>>,
         ) -> Result<Option<Type>> {
             ensure_data_valid!(
-            options.len() <= 2 && !options.is_empty(),
-            "Can't convert avro union type {:?} to iceberg.",
-            union
-        );
-
-            if options.len() > 1 {
-                ensure_data_valid!(
-                options[0].is_none(),
+                options.len() <= 2 && !options.is_empty(),
                 "Can't convert avro union type {:?} to iceberg.",
                 union
             );
+
+            if options.len() > 1 {
+                ensure_data_valid!(
+                    options[0].is_none(),
+                    "Can't convert avro union type {:?} to iceberg.",
+                    union
+                );
             }
 
             if options.len() == 1 {
@@ -387,7 +386,7 @@ mod tests {
                     item.unwrap(),
                     !is_avro_optional(item_schema),
                 )
-                    .into();
+                .into();
                 Ok(Some(Type::List(ListType { element_field })))
             } else {
                 Err(Error::new(
@@ -446,14 +445,12 @@ mod tests {
                         })?;
                         match logical_type {
                             UUID_LOGICAL_TYPE => Type::Primitive(PrimitiveType::Uuid),
-                            ty => {
-                                return Err(Error::new(
-                                    ErrorKind::FeatureUnsupported,
-                                    format!(
-                                        "Logical type {ty} is not support in iceberg primitive type.",
-                                    ),
-                                ))
-                            }
+                            ty => return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "Logical type {ty} is not support in iceberg primitive type.",
+                                ),
+                            )),
                         }
                     } else {
                         Type::Primitive(PrimitiveType::Fixed(fixed.size as u64))
