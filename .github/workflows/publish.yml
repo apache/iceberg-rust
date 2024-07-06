@@ -30,11 +30,14 @@ on:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       # Publish package one by one instead of flooding the registry
       max-parallel: 1
       matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
         # Order here is sensitive, as it will be used to determine the order of publishing
         package:
           - "crates/iceberg"
