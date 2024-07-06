@@ -89,7 +89,7 @@ impl SchemaProvider for IcebergSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.get(name).is_some()
+        self.tables.contains_key(name)
     }
 
     async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
