@@ -445,12 +445,14 @@ mod tests {
                         })?;
                         match logical_type {
                             UUID_LOGICAL_TYPE => Type::Primitive(PrimitiveType::Uuid),
-                            ty => return Err(Error::new(
-                                ErrorKind::FeatureUnsupported,
-                                format!(
+                            ty => {
+                                return Err(Error::new(
+                                    ErrorKind::FeatureUnsupported,
+                                    format!(
                                     "Logical type {ty} is not support in iceberg primitive type.",
                                 ),
-                            )),
+                                ))
+                            }
                         }
                     } else {
                         Type::Primitive(PrimitiveType::Fixed(fixed.size as u64))
