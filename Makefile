@@ -25,7 +25,7 @@ build:
 	cargo build --all-targets --all-features --workspace
 
 install-night-toolchain:
-	rustup toolchain install $(RUST_NIGHTLY_CHANNEL)
+	rustup toolchain install $(RUST_NIGHTLY_CHANNEL) -c rustfmt -c clippy
 
 check-fmt: install-night-toolchain
 	cargo +$(RUST_NIGHTLY_CHANNEL) fmt --all -- --check
