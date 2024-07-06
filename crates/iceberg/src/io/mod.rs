@@ -52,7 +52,11 @@ mod file_io;
 pub use file_io::*;
 
 mod storage;
+#[cfg(feature = "storage-s3")]
 mod storage_s3;
+#[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
+#[cfg(feature = "storage-fs")]
 mod storage_fs;
+#[cfg(feature = "storage-fs")]
 use storage_fs::*;
