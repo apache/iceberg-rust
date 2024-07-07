@@ -47,13 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.rust_min }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
-          toolchain: ${{ env.rust_min }}
+          rust-version: ${{ env.rust_min }}
 
-      - uses: Swatinem/rust-cache@v2
-        
       - name: Dryrun ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
         run: cargo publish --all-features --dry-run

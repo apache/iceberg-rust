@@ -42,24 +42,16 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
-      - name: Install Rust ${{ env.rust_nightly }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
-          toolchain: ${{ env.rust_nightly }}
+          rust-version: ${{ env.rust_nightly }}
 
       - name: Install cargo-sort
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: cargo-sort
-          version: '1.0.9'
+        run: make install-cargo-sort
 
       - name: Install taplo-cli
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: taplo-cli
-          version: '0.9.0'
-
-      - uses: Swatinem/rust-cache@v2
+        run: make install-taplo-cli
 
       - name: Cargo format
         run: make check-fmt
@@ -85,12 +77,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.rust_min }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
-          toolchain: ${{ env.rust_min }}
-
-      - uses: Swatinem/rust-cache@v2
+          rust-version: ${{ env.rust_min }}
 
       - name: Build
         run: make build
@@ -100,12 +90,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.rust_min }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
-          toolchain: ${{ env.rust_min }}
-
-      - uses: Swatinem/rust-cache@v2
+          rust-version: ${{ env.rust_min }}
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
