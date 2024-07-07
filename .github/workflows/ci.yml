@@ -29,6 +29,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+env:
+  rust_nightly: "nightly-2024-06-10"
+  rust_min: "1.77.1"
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -37,6 +41,25 @@ jobs:
 
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
+
+      - name: Install Rust ${{ env.rust_nightly }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_nightly }}
+
+      - name: Install cargo-sort
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-sort
+          version: '1.0.9'
+
+      - name: Install taplo-cli
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: taplo-cli
+          version: '0.9.0'
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Cargo format
         run: make check-fmt
@@ -61,13 +84,28 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_min }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_min }}
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Build
-        run: cargo build
+        run: make build
 
   unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_min }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_min }}
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace

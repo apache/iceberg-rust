@@ -19,26 +19,23 @@
 
 RUST_LOG = debug
 
-RUST_NIGHTLY_CHANNEL = nightly-2024-06-10
-
 build:
 	cargo build --all-targets --all-features --workspace
 
-install-night-toolchain:
-	rustup toolchain install $(RUST_NIGHTLY_CHANNEL) -c rustfmt -c clippy
+check-fmt:
+	cargo  fmt --all -- --check
 
-check-fmt: install-night-toolchain
-	cargo +$(RUST_NIGHTLY_CHANNEL) fmt --all -- --check
+check-clippy:
+	cargo  clippy --all-targets --all-features --workspace -- -D warnings
 
-check-clippy: install-night-toolchain
-	cargo +$(RUST_NIGHTLY_CHANNEL) clippy --all-targets --all-features --workspace -- -D warnings
+install-cargo-sort:
+	cargo install cargo-sort@1.0.9
 
-cargo-sort:
-	cargo install cargo-sort
+cargo-sort: install-cargo-sort
 	cargo sort -c -w
 
 install-taplo-cli:
-	cargo install taplo-cli --locked
+	cargo install taplo-cli@0.9.0
 
 fix-toml: install-taplo-cli
 	taplo fmt
