@@ -32,6 +32,10 @@ cargo-sort:
 	cargo install cargo-sort
 	cargo sort -c -w
 
+cargo-machete:
+	cargo install cargo-machete
+	cargo machete
+
 fix-toml:
 	cargo install taplo-cli --locked
 	taplo fmt

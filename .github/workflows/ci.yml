@@ -51,7 +51,7 @@ jobs:
         run: make cargo-sort
 
       - name: Cargo Machete
-        uses: bnjbvr/cargo-machete@v0.6.2
+        run: make cargo-machete
 
   build:
     runs-on: ${{ matrix.os }}
