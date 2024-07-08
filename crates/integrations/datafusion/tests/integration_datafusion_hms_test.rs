@@ -47,7 +47,7 @@ struct TestFixture {
 fn before_all() {
     let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}", module_path!())),
+        normalize_test_name(module_path!()),
         format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
     );
     docker_compose.run();

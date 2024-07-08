@@ -39,7 +39,7 @@ type Result<T> = std::result::Result<T, iceberg::Error>;
 fn before_all() {
     let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}", module_path!())),
+        normalize_test_name(module_path!()),
         format!("{}/testdata/hms_catalog", env!("CARGO_MANIFEST_DIR")),
     );
     docker_compose.run();
@@ -92,9 +92,7 @@ async fn get_catalog() -> HmsCatalog {
         .props(props)
         .build();
 
-    let hms_catalog = HmsCatalog::new(config).unwrap();
-
-    hms_catalog
+    HmsCatalog::new(config).unwrap()
 }
 
 async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) -> Result<()> {

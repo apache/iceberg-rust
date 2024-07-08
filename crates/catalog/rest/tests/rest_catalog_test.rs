@@ -36,7 +36,7 @@ static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 fn before_all() {
     let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}", module_path!())),
+        normalize_test_name(module_path!()),
         format!("{}/testdata/rest_catalog", env!("CARGO_MANIFEST_DIR")),
     );
     docker_compose.run();
@@ -71,9 +71,7 @@ async fn get_catalog() -> RestCatalog {
     let config = RestCatalogConfig::builder()
         .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
         .build();
-    let rest_catalog = RestCatalog::new(config);
-
-    rest_catalog
+    RestCatalog::new(config)
 }
 
 #[tokio::test]
@@ -126,7 +124,7 @@ async fn test_list_namespace() {
     let catalog = get_catalog().await;
 
     let ns1 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "apple", "ios"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_namespace", "ios"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -134,7 +132,7 @@ async fn test_list_namespace() {
     );
 
     let ns2 = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_namespace", "apple", "macos"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_namespace", "macos"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "xuanwo".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -160,16 +158,15 @@ async fn test_list_namespace() {
         .unwrap();
 
     // List namespace
-    let mut nss = catalog
+    let nss = catalog
         .list_namespaces(Some(
             &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap(),
         ))
         .await
         .unwrap();
-    nss.sort();
 
-    assert_eq!(&nss[0], ns1.name());
-    assert_eq!(&nss[1], ns2.name());
+    assert!(nss.contains(ns1.name()));
+    assert!(nss.contains(ns2.name()));
 }
 
 #[tokio::test]
@@ -198,9 +195,7 @@ async fn test_list_empty_namespace() {
 
     // List namespace
     let nss = catalog
-        .list_namespaces(Some(
-            &NamespaceIdent::from_strs(["test_list_empty_namespace"]).unwrap(),
-        ))
+        .list_namespaces(Some(ns_apple.name()))
         .await
         .unwrap();
     assert!(nss.is_empty());
@@ -245,12 +240,9 @@ async fn test_list_root_namespace() {
         .unwrap();
 
     // List namespace
-    let mut nss = catalog.list_namespaces(None).await.unwrap();
+    let nss = catalog.list_namespaces(None).await.unwrap();
     assert!(nss.contains(
-        &NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap()
-    ));
-    assert!(nss.contains(
-        &NamespaceIdent::from_strs(["test_list_root_namespace", "google", "android"]).unwrap()
+        &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
     ));
 }
 
@@ -381,10 +373,10 @@ fn assert_map_contains(map1: &HashMap<String, String>, map2: &HashMap<String, St
 
 #[tokio::test]
 async fn test_list_empty_multi_level_namespace() {
-    let fixture = set_test_fixture("test_list_empty_multi_level_namespace").await;
+    let catalog = get_catalog().await;
 
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["a_a", "apple"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"]).unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -392,23 +384,20 @@ async fn test_list_empty_multi_level_namespace() {
     );
 
     // Currently this namespace doesn't exist, so it should return error.
-    assert!(fixture
-        .rest_catalog
+    assert!(catalog
         .list_namespaces(Some(ns_apple.name()))
         .await
         .is_err());
 
     // Create namespaces
-    fixture
-        .rest_catalog
+    catalog
         .create_namespace(ns_apple.name(), ns_apple.properties().clone())
         .await
         .unwrap();
 
     // List namespace
-    let nss = fixture
-        .rest_catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["a_a", "apple"]).unwrap()))
+    let nss = catalog
+        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"]).unwrap()))
         .await
         .unwrap();
     assert!(nss.is_empty());

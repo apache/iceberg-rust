@@ -40,7 +40,7 @@ static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 fn before_all() {
     let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}", module_path!())),
+        normalize_test_name(module_path!()),
         format!("{}/testdata/glue_catalog", env!("CARGO_MANIFEST_DIR")),
     );
     docker_compose.run();
@@ -96,9 +96,7 @@ async fn get_catalog() -> GlueCatalog {
         .props(props.clone())
         .build();
 
-    let glue_catalog = GlueCatalog::new(config).await.unwrap();
-
-    glue_catalog
+    GlueCatalog::new(config).await.unwrap()
 }
 
 async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {
