@@ -241,9 +241,7 @@ async fn test_list_root_namespace() {
 
     // List namespace
     let nss = catalog.list_namespaces(None).await.unwrap();
-    assert!(nss.contains(
-        &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
-    ));
+    assert!(nss.contains(&NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()));
 }
 
 #[tokio::test]
@@ -376,7 +374,8 @@ async fn test_list_empty_multi_level_namespace() {
     let catalog = get_catalog().await;
 
     let ns_apple = Namespace::with_properties(
-        NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"]).unwrap(),
+        NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
+            .unwrap(),
         HashMap::from([
             ("owner".to_string(), "ray".to_string()),
             ("community".to_string(), "apache".to_string()),
@@ -397,7 +396,10 @@ async fn test_list_empty_multi_level_namespace() {
 
     // List namespace
     let nss = catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"]).unwrap()))
+        .list_namespaces(Some(
+            &NamespaceIdent::from_strs(["test_list_empty_multi_level_namespace", "a_a", "apple"])
+                .unwrap(),
+        ))
         .await
         .unwrap();
     assert!(nss.is_empty());
