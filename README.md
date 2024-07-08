@@ -57,6 +57,15 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg-catalog-rest link]: https://crates.io/crates/iceberg-catalog-rest
 [iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
 
+## Supported Rust Version
+
+Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version). The 
+current MSRV is 1.77.1. 
+
+Also, we use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
+and only MSRV is required.  
+
+
 ## Contribute
 
 Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). We are always open to people who want to use or contribute to it. Here are some ways to get involved.
