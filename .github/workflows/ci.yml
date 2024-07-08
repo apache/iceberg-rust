@@ -50,6 +50,12 @@ jobs:
       - name: Cargo sort
         run: make cargo-sort
 
+      - name: Cargo Machete
+        uses: bnjbvr/cargo-machete@main
+        with:
+          args: --with-metadata
+        continue-on-error: false
+
   build:
     runs-on: ${{ matrix.os }}
     strategy:
