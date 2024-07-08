@@ -30,8 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  rust_nightly: "nightly-2024-06-10"
-  rust_min: "1.77.1"
+  rust_msrv: "1.77.1"
 
 jobs:
   check:
@@ -41,11 +40,6 @@ jobs:
 
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
-
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ env.rust_nightly }}
 
       - name: Install cargo-sort
         run: make install-cargo-sort
@@ -80,7 +74,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_min }}
+          rust-version: ${{ env.rust_msrv }}
 
       - name: Build
         run: make build
@@ -93,7 +87,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_min }}
+          rust-version: ${{ env.rust_msrv }}
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace

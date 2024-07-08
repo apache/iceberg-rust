@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# This file is heavily inspired by
+#  [datafusion](https://github.com/apache/datafusion/blob/main/.github/actions/setup-builder/action.yaml).
 name: Prepare Rust Builder
 description: 'Prepare Rust Build Environment'
 inputs:
