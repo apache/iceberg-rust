@@ -63,11 +63,11 @@ fn after_all() {
 impl TestFixture {
     fn get_catalog(&self) -> HmsCatalog {
         let config = HmsCatalogConfig::builder()
-        .address(format!("{}:{}", self.hms_catalog_ip, HMS_CATALOG_PORT))
-        .thrift_transport(HmsThriftTransport::Buffered)
-        .warehouse("s3a://warehouse/hive".to_string())
-        .props(self.props.clone())
-        .build();
+            .address(format!("{}:{}", self.hms_catalog_ip, HMS_CATALOG_PORT))
+            .thrift_transport(HmsThriftTransport::Buffered)
+            .warehouse("s3a://warehouse/hive".to_string())
+            .props(self.props.clone())
+            .build();
 
         HmsCatalog::new(config).unwrap()
     }
@@ -79,7 +79,10 @@ async fn get_test_fixture() -> TestFixture {
     let (hms_catalog_ip, minio_ip) = {
         let guard = DOCKER_COMPOSE_ENV.read().unwrap();
         let docker_compose = guard.as_ref().unwrap();
-        (docker_compose.get_container_ip("hive-metastore"), docker_compose.get_container_ip("minio"))
+        (
+            docker_compose.get_container_ip("hive-metastore"),
+            docker_compose.get_container_ip("minio"),
+        )
     };
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
@@ -114,7 +117,7 @@ async fn get_test_fixture() -> TestFixture {
     TestFixture {
         hms_catalog,
         props,
-        hms_catalog_ip
+        hms_catalog_ip,
     }
 }
 

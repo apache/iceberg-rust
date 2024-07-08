@@ -143,7 +143,9 @@ async fn test_list_namespace() {
 
     // Currently this namespace doesn't exist, so it should return error.
     assert!(catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()))
+        .list_namespaces(Some(
+            &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()
+        ))
         .await
         .is_err());
 
@@ -159,7 +161,9 @@ async fn test_list_namespace() {
 
     // List namespace
     let mut nss = catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_namespace"]).unwrap()))
+        .list_namespaces(Some(
+            &NamespaceIdent::from_strs(["test_list_namespace"]).unwrap(),
+        ))
         .await
         .unwrap();
     nss.sort();
@@ -194,7 +198,9 @@ async fn test_list_empty_namespace() {
 
     // List namespace
     let nss = catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_empty_namespace"]).unwrap()))
+        .list_namespaces(Some(
+            &NamespaceIdent::from_strs(["test_list_empty_namespace"]).unwrap(),
+        ))
         .await
         .unwrap();
     assert!(nss.is_empty());
@@ -222,7 +228,9 @@ async fn test_list_root_namespace() {
 
     // Currently this namespace doesn't exist, so it should return error.
     assert!(catalog
-        .list_namespaces(Some(&NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()))
+        .list_namespaces(Some(
+            &NamespaceIdent::from_strs(["test_list_root_namespace"]).unwrap()
+        ))
         .await
         .is_err());
 
@@ -238,8 +246,12 @@ async fn test_list_root_namespace() {
 
     // List namespace
     let mut nss = catalog.list_namespaces(None).await.unwrap();
-    assert!(nss.contains(&NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap()));
-    assert!(nss.contains(&NamespaceIdent::from_strs(["test_list_root_namespace", "google", "android"]).unwrap()));
+    assert!(nss.contains(
+        &NamespaceIdent::from_strs(["test_list_root_namespace", "apple", "ios"]).unwrap()
+    ));
+    assert!(nss.contains(
+        &NamespaceIdent::from_strs(["test_list_root_namespace", "google", "android"]).unwrap()
+    ));
 }
 
 #[tokio::test]

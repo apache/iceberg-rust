@@ -58,7 +58,10 @@ async fn get_catalog() -> HmsCatalog {
     let (hms_catalog_ip, minio_ip) = {
         let guard = DOCKER_COMPOSE_ENV.read().unwrap();
         let docker_compose = guard.as_ref().unwrap();
-        (docker_compose.get_container_ip("hive-metastore"), docker_compose.get_container_ip("minio"))
+        (
+            docker_compose.get_container_ip("hive-metastore"),
+            docker_compose.get_container_ip("minio"),
+        )
     };
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
@@ -97,9 +100,7 @@ async fn get_catalog() -> HmsCatalog {
 async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) -> Result<()> {
     let properties = HashMap::new();
 
-    catalog
-        .create_namespace(namespace, properties)
-        .await?;
+    catalog.create_namespace(namespace, properties).await?;
 
     Ok(())
 }
@@ -130,15 +131,11 @@ async fn test_rename_table() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
     let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
 
-    catalog
-        .rename_table(table.identifier(), &dest)
-        .await?;
+    catalog.rename_table(table.identifier(), &dest).await?;
 
     let result = catalog.table_exists(&dest).await?;
 
@@ -154,9 +151,7 @@ async fn test_table_exists() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
     let result = catalog.table_exists(table.identifier()).await?;
 
@@ -172,9 +167,7 @@ async fn test_drop_table() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
     catalog.drop_table(table.identifier()).await?;
 
@@ -192,9 +185,7 @@ async fn test_load_table() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let expected = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let expected = catalog.create_table(namespace.name(), creation).await?;
 
     let result = catalog
         .load_table(&TableIdent::new(
@@ -217,9 +208,7 @@ async fn test_create_table() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_create_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let result = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let result = catalog.create_table(namespace.name(), creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
     assert!(result
@@ -245,9 +234,7 @@ async fn test_list_tables() -> Result<()> {
     assert_eq!(result, vec![]);
 
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-    catalog
-        .create_table(ns.name(), creation)
-        .await?;
+    catalog.create_table(ns.name(), creation).await?;
     let result = catalog.list_tables(ns.name()).await?;
 
     assert_eq!(
@@ -297,9 +284,7 @@ async fn test_create_namespace() -> Result<()> {
         properties.clone(),
     );
 
-    let result = catalog
-        .create_namespace(ns.name(), properties)
-        .await?;
+    let result = catalog.create_namespace(ns.name(), properties).await?;
 
     assert_eq!(result, ns);
 
@@ -340,12 +325,8 @@ async fn test_namespace_exists() -> Result<()> {
     let ns_exists = Namespace::new(NamespaceIdent::new("default".into()));
     let ns_not_exists = Namespace::new(NamespaceIdent::new("test_namespace_exists".into()));
 
-    let result_exists = catalog
-        .namespace_exists(ns_exists.name())
-        .await?;
-    let result_not_exists = catalog
-        .namespace_exists(ns_not_exists.name())
-        .await?;
+    let result_exists = catalog.namespace_exists(ns_exists.name()).await?;
+    let result_not_exists = catalog.namespace_exists(ns_not_exists.name()).await?;
 
     assert!(result_exists);
     assert!(!result_not_exists);
@@ -361,9 +342,7 @@ async fn test_update_namespace() -> Result<()> {
     set_test_namespace(&catalog, &ns).await?;
     let properties = HashMap::from([("comment".to_string(), "my_update".to_string())]);
 
-    catalog
-        .update_namespace(&ns, properties)
-        .await?;
+    catalog.update_namespace(&ns, properties).await?;
 
     let db = catalog.get_namespace(&ns).await?;
 
@@ -381,9 +360,7 @@ async fn test_drop_namespace() -> Result<()> {
 
     let ns = Namespace::new(NamespaceIdent::new("delete_me".into()));
 
-    catalog
-        .create_namespace(ns.name(), HashMap::new())
-        .await?;
+    catalog.create_namespace(ns.name(), HashMap::new()).await?;
 
     let result = catalog.namespace_exists(ns.name()).await?;
     assert!(result);

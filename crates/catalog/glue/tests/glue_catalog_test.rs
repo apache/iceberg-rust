@@ -59,7 +59,10 @@ async fn get_catalog() -> GlueCatalog {
     let (glue_catalog_ip, minio_ip) = {
         let guard = DOCKER_COMPOSE_ENV.read().unwrap();
         let docker_compose = guard.as_ref().unwrap();
-        (docker_compose.get_container_ip("moto"), docker_compose.get_container_ip("minio"))
+        (
+            docker_compose.get_container_ip("moto"),
+            docker_compose.get_container_ip("minio"),
+        )
     };
     let read_port = format!("{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT);
     loop {
@@ -100,9 +103,7 @@ async fn get_catalog() -> GlueCatalog {
 
 async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {
     let properties = HashMap::new();
-    catalog
-        .create_namespace(namespace, properties)
-        .await?;
+    catalog.create_namespace(namespace, properties).await?;
 
     Ok(())
 }
@@ -136,15 +137,11 @@ async fn test_rename_table() -> Result<()> {
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
     let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
 
-    catalog
-        .rename_table(table.identifier(), &dest)
-        .await?;
+    catalog.rename_table(table.identifier(), &dest).await?;
 
     let table = catalog.load_table(&dest).await?;
     assert_eq!(table.identifier(), &dest);
@@ -172,13 +169,9 @@ async fn test_table_exists() -> Result<()> {
     let exists = catalog.table_exists(&ident).await?;
     assert!(!exists);
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
-    let exists = catalog
-        .table_exists(table.identifier())
-        .await?;
+    let exists = catalog.table_exists(table.identifier()).await?;
 
     assert!(exists);
 
@@ -195,15 +188,11 @@ async fn test_drop_table() -> Result<()> {
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let table = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let table = catalog.create_table(namespace.name(), creation).await?;
 
     catalog.drop_table(table.identifier()).await?;
 
-    let result = catalog
-        .table_exists(table.identifier())
-        .await?;
+    let result = catalog.table_exists(table.identifier()).await?;
 
     assert!(!result);
 
@@ -220,9 +209,7 @@ async fn test_load_table() -> Result<()> {
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let expected = catalog
-        .create_table(namespace.name(), creation)
-        .await?;
+    let expected = catalog.create_table(namespace.name(), creation).await?;
 
     let result = catalog
         .load_table(&TableIdent::new(
@@ -245,9 +232,7 @@ async fn test_create_table() -> Result<()> {
     set_test_namespace(&catalog, &namespace).await?;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
 
-    let result = catalog
-        .create_table(&namespace, creation)
-        .await?;
+    let result = catalog.create_table(&namespace, creation).await?;
 
     assert_eq!(result.identifier().name(), "my_table");
     assert!(result
@@ -307,9 +292,7 @@ async fn test_update_namespace() -> Result<()> {
 
     let properties = HashMap::from([("description".to_string(), "my_update".to_string())]);
 
-    catalog
-        .update_namespace(&namespace, properties)
-        .await?;
+    catalog.update_namespace(&namespace, properties).await?;
 
     let after_update = catalog.get_namespace(&namespace).await?;
     let after_update = after_update.properties().get("description");
@@ -364,9 +347,7 @@ async fn test_create_namespace() -> Result<()> {
 
     let expected = Namespace::new(namespace.clone());
 
-    let result = catalog
-        .create_namespace(&namespace, properties)
-        .await?;
+    let result = catalog.create_namespace(&namespace, properties).await?;
 
     assert_eq!(result, expected);
 
