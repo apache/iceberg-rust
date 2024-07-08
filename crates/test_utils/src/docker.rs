@@ -19,36 +19,7 @@
 use tokio::sync::Mutex;
 
 use crate::cmd::{get_cmd_output, run_command};
-use std::{
-    future::Future,
-    process::Command,
-    sync::{Arc, OnceLock, Weak},
-};
-
-pub async fn lazy_dc<T, F, Fut>(
-    reuse_resource: &'static OnceLock<Mutex<Weak<T>>>,
-    init_func: F,
-) -> Arc<T>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = T>,
-{
-    let mut guard = reuse_resource
-        .get_or_init(|| Mutex::new(Weak::new()))
-        .lock()
-        .await;
-
-    let maybe_tf = guard.upgrade();
-
-    if let Some(tf) = maybe_tf {
-        tf
-    } else {
-        let tf = Arc::new(init_func().await);
-        *guard = Arc::downgrade(&tf);
-
-        tf
-    }
-}
+use std::process::Command;
 
 /// A utility to manage the lifecycle of `docker compose`.
 ///

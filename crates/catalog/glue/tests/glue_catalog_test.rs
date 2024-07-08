@@ -18,47 +18,49 @@
 //! Integration tests for glue catalog.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::RwLock;
 
+use ctor::{ctor, dtor};
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, Namespace, NamespaceIdent, Result, TableCreation, TableIdent};
 use iceberg_catalog_glue::{
     GlueCatalog, GlueCatalogConfig, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
-use iceberg_test_utils::docker::{DockerCompose, lazy_dc};
+use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 const GLUE_CATALOG_PORT: u16 = 5000;
 const MINIO_PORT: u16 = 9000;
-static SHARED_TEST_FIXTURE: OnceLock<Mutex<Weak<TestFixture>>> = OnceLock::new();
+static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 
-#[derive(Debug)]
-struct TestFixture {
-    _docker_compose: DockerCompose,
-    glue_catalog: GlueCatalog,
-}
-
-async fn get_shared_test_fixture() -> Arc<TestFixture> {
-    lazy_dc(&SHARED_TEST_FIXTURE, || get_test_fixture("shared")).await
-}
-
-async fn get_test_fixture(namespace: &str) -> TestFixture {
-    set_up();
-
+#[ctor]
+fn before_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{namespace}", module_path!())),
+        normalize_test_name(format!("{}", module_path!())),
         format!("{}/testdata/glue_catalog", env!("CARGO_MANIFEST_DIR")),
     );
-
     docker_compose.run();
+    guard.replace(docker_compose);
+}
 
-    let glue_catalog_ip = docker_compose.get_container_ip("moto");
-    let minio_ip = docker_compose.get_container_ip("minio");
+#[dtor]
+fn after_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+    guard.take();
+}
 
+async fn get_catalog() -> GlueCatalog {
+    set_up();
+
+    let (glue_catalog_ip, minio_ip) = {
+        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+        let docker_compose = guard.as_ref().unwrap();
+        (docker_compose.get_container_ip("moto"), docker_compose.get_container_ip("minio"))
+    };
     let read_port = format!("{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT);
     loop {
         if !scan_port_addr(&read_port) {
@@ -93,17 +95,12 @@ async fn get_test_fixture(namespace: &str) -> TestFixture {
 
     let glue_catalog = GlueCatalog::new(config).await.unwrap();
 
-    TestFixture {
-        _docker_compose: docker_compose,
-        glue_catalog,
-    }
+    glue_catalog
 }
 
-async fn set_test_namespace(fixture: &TestFixture, namespace: &NamespaceIdent) -> Result<()> {
+async fn set_test_namespace(catalog: &GlueCatalog, namespace: &NamespaceIdent) -> Result<()> {
     let properties = HashMap::new();
-
-    fixture
-        .glue_catalog
+    catalog
         .create_namespace(namespace, properties)
         .await?;
 
@@ -129,63 +126,57 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
     Ok(creation)
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_rename_table() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
 
-    fixture
-        .glue_catalog
+    catalog
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let table = fixture
-        .glue_catalog
+    let table = catalog
         .create_table(namespace.name(), creation)
         .await?;
 
     let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
 
-    fixture
-        .glue_catalog
+    catalog
         .rename_table(table.identifier(), &dest)
         .await?;
 
-    let table = fixture.glue_catalog.load_table(&dest).await?;
+    let table = catalog.load_table(&dest).await?;
     assert_eq!(table.identifier(), &dest);
 
     let src = TableIdent::new(namespace.name().clone(), "my_table".to_string());
 
-    let src_table_exists = fixture.glue_catalog.table_exists(&src).await?;
+    let src_table_exists = catalog.table_exists(&src).await?;
     assert!(!src_table_exists);
 
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_table_exists() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_table_exists".into()));
 
-    fixture
-        .glue_catalog
+    catalog
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
     let ident = TableIdent::new(namespace.name().clone(), "my_table".to_string());
 
-    let exists = fixture.glue_catalog.table_exists(&ident).await?;
+    let exists = catalog.table_exists(&ident).await?;
     assert!(!exists);
 
-    let table = fixture
-        .glue_catalog
+    let table = catalog
         .create_table(namespace.name(), creation)
         .await?;
 
-    let exists = fixture
-        .glue_catalog
+    let exists = catalog
         .table_exists(table.identifier())
         .await?;
 
@@ -194,26 +185,23 @@ async fn test_table_exists() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_drop_table() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_drop_table".into()));
 
-    fixture
-        .glue_catalog
+    catalog
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let table = fixture
-        .glue_catalog
+    let table = catalog
         .create_table(namespace.name(), creation)
         .await?;
 
-    fixture.glue_catalog.drop_table(table.identifier()).await?;
+    catalog.drop_table(table.identifier()).await?;
 
-    let result = fixture
-        .glue_catalog
+    let result = catalog
         .table_exists(table.identifier())
         .await?;
 
@@ -222,24 +210,21 @@ async fn test_drop_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_load_table() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
     let namespace = Namespace::new(NamespaceIdent::new("test_load_table".into()));
 
-    fixture
-        .glue_catalog
+    catalog
         .create_namespace(namespace.name(), HashMap::new())
         .await?;
 
-    let expected = fixture
-        .glue_catalog
+    let expected = catalog
         .create_table(namespace.name(), creation)
         .await?;
 
-    let result = fixture
-        .glue_catalog
+    let result = catalog
         .load_table(&TableIdent::new(
             namespace.name().clone(),
             "my_table".to_string(),
@@ -253,15 +238,14 @@ async fn test_load_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_create_table() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let namespace = NamespaceIdent::new("test_create_table".to_string());
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
 
-    let result = fixture
-        .glue_catalog
+    let result = catalog
         .create_table(&namespace, creation)
         .await?;
 
@@ -270,8 +254,7 @@ async fn test_create_table() -> Result<()> {
         .metadata_location()
         .is_some_and(|location| location.starts_with("s3a://warehouse/hive/metadata/00000-")));
     assert!(
-        fixture
-            .glue_catalog
+        catalog
             .file_io()
             .is_exist("s3a://warehouse/hive/metadata/")
             .await?
@@ -280,56 +263,55 @@ async fn test_create_table() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_list_tables() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let namespace = NamespaceIdent::new("test_list_tables".to_string());
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
 
     let expected = vec![];
-    let result = fixture.glue_catalog.list_tables(&namespace).await?;
+    let result = catalog.list_tables(&namespace).await?;
 
     assert_eq!(result, expected);
 
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_drop_namespace() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let namespace = NamespaceIdent::new("test_drop_namespace".to_string());
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
 
-    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    let exists = catalog.namespace_exists(&namespace).await?;
     assert!(exists);
 
-    fixture.glue_catalog.drop_namespace(&namespace).await?;
+    catalog.drop_namespace(&namespace).await?;
 
-    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    let exists = catalog.namespace_exists(&namespace).await?;
     assert!(!exists);
 
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_update_namespace() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
     let namespace = NamespaceIdent::new("test_update_namespace".into());
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
 
-    let before_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let before_update = catalog.get_namespace(&namespace).await?;
     let before_update = before_update.properties().get("description");
 
     assert_eq!(before_update, None);
 
     let properties = HashMap::from([("description".to_string(), "my_update".to_string())]);
 
-    fixture
-        .glue_catalog
+    catalog
         .update_namespace(&namespace, properties)
         .await?;
 
-    let after_update = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let after_update = catalog.get_namespace(&namespace).await?;
     let after_update = after_update.properties().get("description");
 
     assert_eq!(after_update, Some("my_update".to_string()).as_ref());
@@ -337,35 +319,35 @@ async fn test_update_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_namespace_exists() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
 
     let namespace = NamespaceIdent::new("test_namespace_exists".into());
 
-    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    let exists = catalog.namespace_exists(&namespace).await?;
     assert!(!exists);
 
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
 
-    let exists = fixture.glue_catalog.namespace_exists(&namespace).await?;
+    let exists = catalog.namespace_exists(&namespace).await?;
     assert!(exists);
 
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_get_namespace() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
 
     let namespace = NamespaceIdent::new("test_get_namespace".into());
 
-    let does_not_exist = fixture.glue_catalog.get_namespace(&namespace).await;
+    let does_not_exist = catalog.get_namespace(&namespace).await;
     assert!(does_not_exist.is_err());
 
-    set_test_namespace(&fixture, &namespace).await?;
+    set_test_namespace(&catalog, &namespace).await?;
 
-    let result = fixture.glue_catalog.get_namespace(&namespace).await?;
+    let result = catalog.get_namespace(&namespace).await?;
     let expected = Namespace::new(namespace);
 
     assert_eq!(result, expected);
@@ -373,17 +355,16 @@ async fn test_get_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_create_namespace() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let catalog = get_catalog().await;
 
     let properties = HashMap::new();
     let namespace = NamespaceIdent::new("test_create_namespace".into());
 
     let expected = Namespace::new(namespace.clone());
 
-    let result = fixture
-        .glue_catalog
+    let result = catalog
         .create_namespace(&namespace, properties)
         .await?;
 
@@ -392,20 +373,15 @@ async fn test_create_namespace() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_list_namespace() -> Result<()> {
-    let fixture = get_test_fixture("test_list_namespace").await;
+    let catalog = get_catalog().await;
 
-    let expected = vec![];
-    let result = fixture.glue_catalog.list_namespaces(None).await?;
-    assert_eq!(result, expected);
+    let namespace = NamespaceIdent::new("test_list_namespace".to_string());
+    set_test_namespace(&catalog, &namespace).await?;
 
-    let namespace = NamespaceIdent::new("my_database".to_string());
-    set_test_namespace(&fixture, &namespace).await?;
-
-    let expected = vec![namespace];
-    let result = fixture.glue_catalog.list_namespaces(None).await?;
-    assert_eq!(result, expected);
+    let result = catalog.list_namespaces(None).await?;
+    assert!(result.contains(&namespace));
 
     Ok(())
 }

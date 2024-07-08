@@ -18,8 +18,9 @@
 //! Integration tests for Iceberg Datafusion with Hive Metastore.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, RwLock};
 
+use ctor::{ctor, dtor};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
@@ -27,21 +28,36 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_hms::{HmsCatalog, HmsCatalogConfig, HmsThriftTransport};
 use iceberg_datafusion::IcebergCatalogProvider;
-use iceberg_test_utils::docker::{lazy_dc, DockerCompose};
+use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
 const MINIO_PORT: u16 = 9000;
-static SHARED_TEST_FIXTURE: OnceLock<Mutex<Weak<TestFixture>>> = OnceLock::new();
+static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 
 struct TestFixture {
-    _docker_compose: DockerCompose,
     hms_catalog: HmsCatalog,
     props: HashMap<String, String>,
     hms_catalog_ip: String,
+}
+
+#[ctor]
+fn before_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+    let docker_compose = DockerCompose::new(
+        normalize_test_name(format!("{}", module_path!())),
+        format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
+    );
+    docker_compose.run();
+    guard.replace(docker_compose);
+}
+
+#[dtor]
+fn after_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+    guard.take();
 }
 
 impl TestFixture {
@@ -57,22 +73,14 @@ impl TestFixture {
     }
 }
 
-async fn get_shared_test_fixture() -> Arc<TestFixture> {
-    lazy_dc(&SHARED_TEST_FIXTURE, || get_test_fixture("shared")).await
-}
-
-async fn get_test_fixture(func: &str) -> TestFixture {
+async fn get_test_fixture() -> TestFixture {
     set_up();
 
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{func}", module_path!())),
-        format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
-    );
-
-    docker_compose.run();
-
-    let hms_catalog_ip = docker_compose.get_container_ip("hive-metastore");
-    let minio_ip = docker_compose.get_container_ip("minio");
+    let (hms_catalog_ip, minio_ip) = {
+        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+        let docker_compose = guard.as_ref().unwrap();
+        (docker_compose.get_container_ip("hive-metastore"), docker_compose.get_container_ip("minio"))
+    };
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
     loop {
@@ -104,7 +112,6 @@ async fn get_test_fixture(func: &str) -> TestFixture {
     let hms_catalog = HmsCatalog::new(config).unwrap();
 
     TestFixture {
-        _docker_compose: docker_compose,
         hms_catalog,
         props,
         hms_catalog_ip
@@ -130,9 +137,9 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
     Ok(creation)
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_provider_get_table_schema() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture().await;
 
     let namespace = NamespaceIdent::new("default".to_string());
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -165,9 +172,9 @@ async fn test_provider_get_table_schema() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_provider_list_table_names() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture().await;
 
     let namespace = NamespaceIdent::new("default".to_string());
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
@@ -194,9 +201,9 @@ async fn test_provider_list_table_names() -> Result<()> {
     Ok(())
 }
 
-#[tokio_shared_rt::test(shared)]
+#[tokio::test]
 async fn test_provider_list_schema_names() -> Result<()> {
-    let fixture = get_shared_test_fixture().await;
+    let fixture = get_test_fixture().await;
     set_table_creation("default", "my_table")?;
 
     let client = Arc::new(fixture.get_catalog());
