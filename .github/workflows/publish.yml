@@ -21,12 +21,10 @@ on:
   push:
     tags:
       - '*'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/publish.yml"
   workflow_dispatch:
+
+env:
+  rust_msrv: "1.77.1"
 
 jobs:
   publish:
@@ -42,9 +40,11 @@ jobs:
           - "crates/catalog/rest"
     steps:
       - uses: actions/checkout@v4
-      - name: Dryrun ${{ matrix.package }}
-        working-directory: ${{ matrix.package }}
-        run: cargo publish --all-features --dry-run
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
 
       - name: Publish ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
