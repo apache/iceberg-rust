@@ -43,5 +43,6 @@ uuid = { workspace = true }
 volo-thrift = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
