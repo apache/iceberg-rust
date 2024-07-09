@@ -26,10 +26,8 @@ repository = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-async-trait = { workspace = true }
 env_logger = { workspace = true }
 log = "0.4.20"
-tokio = { workspace = true }
 
 [features]
 tests = []

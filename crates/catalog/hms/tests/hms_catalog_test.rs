@@ -129,7 +129,7 @@ async fn test_rename_table() -> Result<()> {
     let namespace = Namespace::new(NamespaceIdent::new("test_rename_table".into()));
     set_test_namespace(&catalog, namespace.name()).await?;
 
-    let table = catalog.create_table(namespace.name(), creation).await?;
+    let table: iceberg::table::Table = catalog.create_table(namespace.name(), creation).await?;
 
     let dest = TableIdent::new(namespace.name().clone(), "my_table_rename".to_string());
 
