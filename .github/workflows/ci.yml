@@ -50,6 +50,9 @@ jobs:
       - name: Cargo sort
         run: make cargo-sort
 
+      - name: Cargo Machete
+        run: make cargo-machete
+
   build:
     runs-on: ${{ matrix.os }}
     strategy:

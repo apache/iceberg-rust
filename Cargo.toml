@@ -84,7 +84,6 @@ tempfile = "3.8"
 tokio = { version = "1", default-features = false }
 typed-builder = "^0.18"
 url = "2"
-urlencoding = "2"
 uuid = "1.6.1"
 volo-thrift = "0.10"
 hive_metastore = "0.1.0"
