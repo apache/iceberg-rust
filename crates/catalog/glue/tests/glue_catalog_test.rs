@@ -362,5 +362,8 @@ async fn test_list_namespace() -> Result<()> {
     let result = catalog.list_namespaces(None).await?;
     assert!(result.contains(&namespace));
 
+    let empty_result = catalog.list_namespaces(Some(&namespace)).await?;
+    assert!(empty_result.is_empty());
+
     Ok(())
 }
