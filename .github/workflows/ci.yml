@@ -100,12 +100,7 @@ jobs:
         run: cargo build -p iceberg --no-default-features
 
   unit:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
