@@ -18,11 +18,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/catalog/*",
-    "crates/examples",
-    "crates/iceberg",
-    "crates/integrations/*",
-    "crates/test_utils",
+  "crates/catalog/*",
+  "crates/examples",
+  "crates/iceberg",
+  "crates/integrations/*",
+  "crates/test_utils",
 ]
 
 [workspace.package]
@@ -53,6 +53,7 @@ bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.5"
 chrono = "0.4.34"
+ctor = "0.2.8"
 derive_builder = "0.20.0"
 either = "1"
 env_logger = "0.11.0"
@@ -62,7 +63,6 @@ iceberg = { version = "0.2.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
 iceberg-catalog-hms = { version = "0.2.0", path = "./crates/catalog/hms" }
 itertools = "0.13"
-lazy_static = "1"
 log = "^0.4"
 mockito = "^1"
 murmur3 = "0.5.2"
@@ -85,7 +85,6 @@ tempfile = "3.8"
 tokio = { version = "1", default-features = false }
 typed-builder = "^0.18"
 url = "2"
-urlencoding = "2"
 uuid = "1.6.1"
 volo-thrift = "0.10"
 hive_metastore = "0.1.0"

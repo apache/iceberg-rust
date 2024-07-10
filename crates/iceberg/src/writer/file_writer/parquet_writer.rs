@@ -627,9 +627,6 @@ mod tests {
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::tests::check_parquet_data_file;
 
-    #[derive(Clone)]
-    struct TestLocationGen;
-
     fn schema_for_all_type() -> Schema {
         Schema::builder()
             .with_schema_id(1)

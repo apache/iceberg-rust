@@ -29,6 +29,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+env:
+  rust_msrv: "1.77.1"
+
 jobs:
   check:
     runs-on: ${{ matrix.os }}
@@ -43,6 +46,12 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
+      - name: Install cargo-sort
+        run: make install-cargo-sort
+
+      - name: Install taplo-cli
+        run: make install-taplo-cli
+
       - name: Cargo format
         run: make check-fmt
 
@@ -55,6 +64,8 @@ jobs:
       - name: Cargo sort
         run: make cargo-sort
 
+      - name: Cargo Machete
+        run: make cargo-machete
 
   build:
     runs-on: ${{ matrix.os }}
@@ -66,8 +77,27 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
+
       - name: Build
-        run: cargo build
+        run: make build
+
+  build_with_no_default_features:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build -p iceberg --no-default-features
 
   unit:
     runs-on: ${{ matrix.os }}
@@ -78,6 +108,11 @@ jobs:
           - macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace

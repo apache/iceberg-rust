@@ -17,89 +17,71 @@
   ~ under the License.
 -->
 
-# Apache Iceberg Rust
+# Apache Iceberg™ Rust
 
-Native Rust implementation of [Apache Iceberg](https://iceberg.apache.org/).
 
-## Roadmap
 
-### Catalog
+Rust implementation of [Apache Iceberg™](https://iceberg.apache.org/).
 
-| Catalog Type | Status      |
-| ------------ | ----------- |
-| Rest         | Done        |
-| Hive         | Done        |
-| Sql          | In Progress |
-| Glue         | Done        |
-| DynamoDB     | Not Started |
+Working on [v0.3.0 Release Milestone](https://github.com/apache/iceberg-rust/milestone/2)
 
-### FileIO
+## Components
 
-| FileIO Type | Status      |
-| ----------- | ----------- |
-| S3          | Done        |
-| Local File  | Done        |
-| GCS         | Not Started |
-| HDFS        | Not Started |
+The Apache Iceberg Rust project is composed of the following components:
 
-Our `FileIO` is powered by [Apache OpenDAL](https://github.com/apache/opendal), so it would be quite easy to
-expand to other service.
+| Name                   | Release                                                    | Docs                                                 |
+|------------------------|------------------------------------------------------------|------------------------------------------------------|
+| [iceberg]              | [![iceberg image]][iceberg link]                           | [![docs release]][iceberg release docs]              |
+| [iceberg-datafusion]   | -                                                          | -                                                    |
+| [iceberg-catalog-glue] | -                                                          | -                                                    |
+| [iceberg-catalog-hms]  | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]   | [![docs release]][iceberg-catalog-hms release docs]  |
+| [iceberg-catalog-rest] | [![iceberg-catalog-rest image]][iceberg-catalog-rest link] | [![docs release]][iceberg-catalog-rest release docs] |
 
-### Table API
+[docs release]: https://img.shields.io/badge/docs-release-blue
+[iceberg]: crates/iceberg/README.md
+[iceberg image]: https://img.shields.io/crates/v/iceberg.svg
+[iceberg link]: https://crates.io/crates/iceberg
+[iceberg release docs]: https://docs.rs/iceberg
 
-#### Reader
+[iceberg-datafusion]: crates/integrations/datafusion/README.md
 
-| Feature                                                    | Status      |
-| ---------------------------------------------------------- | ----------- |
-| File based task planning                                   | Done        |
-| Size based task planning                                   | Not started |
-| Filter pushdown(manifest evaluation, partition prunning)   | In Progress |
-| Apply deletions, including equality and position deletions | Not started |
-| Read into arrow record batch                               | In Progress |
-| Parquet file support                                       | Done        |
-| ORC file support                                           | Not started |
+[iceberg-catalog-glue]: crates/catalog/glue/README.md
 
-#### Writer
+[iceberg-catalog-hms]: crates/catalog/hms/README.md
+[iceberg-catalog-hms image]: https://img.shields.io/crates/v/iceberg-catalog-hms.svg
+[iceberg-catalog-hms link]: https://crates.io/crates/iceberg-catalog-hms
+[iceberg-catalog-hms release docs]: https://docs.rs/iceberg-catalog-hms
 
-| Feature                  | Status      |
-| ------------------------ | ----------- |
-| Data writer              | Not started |
-| Equality deletion writer | Not started |
-| Position deletion writer | Not started |
-| Partitioned writer       | Not started |
-| Upsert writer            | Not started |
-| Parquet file support     | Not started |
-| ORC file support         | Not started |
+[iceberg-catalog-rest]: crates/catalog/rest/README.md
+[iceberg-catalog-rest image]: https://img.shields.io/crates/v/iceberg-catalog-rest.svg
+[iceberg-catalog-rest link]: https://crates.io/crates/iceberg-catalog-rest
+[iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
 
-#### Transaction
+## Supported Rust Version
 
-| Feature               | Status      |
-| --------------------- | ----------- |
-| Schema evolution      | Not started |
-| Update partition spec | Not started |
-| Update properties     | Not started |
-| Replace sort order    | Not started |
-| Update location       | Not started |
-| Append files          | Not started |
-| Rewrite files         | Not started |
-| Rewrite manifests     | Not started |
-| Overwrite files       | Not started |
-| Row level updates     | Not started |
-| Replace partitions    | Not started |
-| Snapshot management   | Not started |
+Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version). The 
+current MSRV is 1.77.1. 
 
-### Integrations
+Also, we use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
+and only MSRV is required.  
 
-We will add integrations with other rust based data systems, such as polars, datafusion, etc.
 
 ## Contribute
 
-Iceberg is an active open-source project. We are always open to people who want to use it or contribute to it. Here are some ways to go.
+Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). We are always open to people who want to use or contribute to it. Here are some ways to get involved.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
-- Discuss at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](<mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)>) / [unsubscribe](<mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)>) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
-- Talk to community directly at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
+- Discuss
+  at [dev mailing list](mailto:dev@iceberg.apache.org) ([subscribe](<mailto:dev-subscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20subscribe)>) / [unsubscribe](<mailto:dev-unsubscribe@iceberg.apache.org?subject=(send%20this%20email%20to%20unsubscribe)>) / [archives](https://lists.apache.org/list.html?dev@iceberg.apache.org))
+- Talk to the community directly
+  at [Slack #rust channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A).
+
+The Apache Iceberg community is built on the principles described in the [Apache Way](https://www.apache.org/theapacheway/index.html) and all who engage with the community are expected to be respectful, open, come with the best interests of the community in mind, and abide by the Apache Foundation [Code of Conduct](https://www.apache.org/foundation/policies/conduct.html).
+## Users
+
+- [Databend](https://github.com/datafuselabs/databend/): An open-source cloud data warehouse that serves as a cost-effective alternative to Snowflake.
+- [iceberg-catalog](https://github.com/hansetag/iceberg-catalog): A Rust implementation of the Iceberg REST Catalog specification.
 
 ## License
 

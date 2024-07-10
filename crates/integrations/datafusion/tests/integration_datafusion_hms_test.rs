@@ -18,8 +18,9 @@
 //! Integration tests for Iceberg Datafusion with Hive Metastore.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use ctor::{ctor, dtor};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
@@ -34,24 +35,55 @@ use tokio::time::sleep;
 
 const HMS_CATALOG_PORT: u16 = 9083;
 const MINIO_PORT: u16 = 9000;
+static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 
 struct TestFixture {
-    _docker_compose: DockerCompose,
     hms_catalog: HmsCatalog,
+    props: HashMap<String, String>,
+    hms_catalog_ip: String,
 }
 
-async fn set_test_fixture(func: &str) -> TestFixture {
-    set_up();
-
+#[ctor]
+fn before_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
     let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{func}", module_path!())),
+        normalize_test_name(module_path!()),
         format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
     );
-
     docker_compose.run();
+    guard.replace(docker_compose);
+}
 
-    let hms_catalog_ip = docker_compose.get_container_ip("hive-metastore");
-    let minio_ip = docker_compose.get_container_ip("minio");
+#[dtor]
+fn after_all() {
+    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+    guard.take();
+}
+
+impl TestFixture {
+    fn get_catalog(&self) -> HmsCatalog {
+        let config = HmsCatalogConfig::builder()
+            .address(format!("{}:{}", self.hms_catalog_ip, HMS_CATALOG_PORT))
+            .thrift_transport(HmsThriftTransport::Buffered)
+            .warehouse("s3a://warehouse/hive".to_string())
+            .props(self.props.clone())
+            .build();
+
+        HmsCatalog::new(config).unwrap()
+    }
+}
+
+async fn get_test_fixture() -> TestFixture {
+    set_up();
+
+    let (hms_catalog_ip, minio_ip) = {
+        let guard = DOCKER_COMPOSE_ENV.read().unwrap();
+        let docker_compose = guard.as_ref().unwrap();
+        (
+            docker_compose.get_container_ip("hive-metastore"),
+            docker_compose.get_container_ip("minio"),
+        )
+    };
 
     let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
     loop {
@@ -77,15 +109,24 @@ async fn set_test_fixture(func: &str) -> TestFixture {
         .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
         .thrift_transport(HmsThriftTransport::Buffered)
         .warehouse("s3a://warehouse/hive".to_string())
-        .props(props)
+        .props(props.clone())
         .build();
 
     let hms_catalog = HmsCatalog::new(config).unwrap();
 
     TestFixture {
-        _docker_compose: docker_compose,
         hms_catalog,
+        props,
+        hms_catalog_ip,
     }
+}
+
+async fn set_test_namespace(catalog: &HmsCatalog, namespace: &NamespaceIdent) -> Result<()> {
+    let properties = HashMap::new();
+
+    catalog.create_namespace(namespace, properties).await?;
+
+    Ok(())
 }
 
 fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
@@ -109,24 +150,24 @@ fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<Ta
 
 #[tokio::test]
 async fn test_provider_get_table_schema() -> Result<()> {
-    let fixture = set_test_fixture("test_provider_get_table_schema").await;
+    let fixture = get_test_fixture().await;
+    let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
+    set_test_namespace(&fixture.hms_catalog, &namespace).await?;
 
-    let namespace = NamespaceIdent::new("default".to_string());
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-
     fixture
         .hms_catalog
         .create_table(&namespace, creation)
         .await?;
 
-    let client = Arc::new(fixture.hms_catalog);
+    let client = Arc::new(fixture.get_catalog());
     let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
 
     let ctx = SessionContext::new();
     ctx.register_catalog("hive", catalog);
 
     let provider = ctx.catalog("hive").unwrap();
-    let schema = provider.schema("default").unwrap();
+    let schema = provider.schema("test_provider_get_table_schema").unwrap();
 
     let table = schema.table("my_table").await.unwrap().unwrap();
     let table_schema = table.schema();
@@ -144,24 +185,24 @@ async fn test_provider_get_table_schema() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_table_names() -> Result<()> {
-    let fixture = set_test_fixture("test_provider_list_table_names").await;
+    let fixture = get_test_fixture().await;
+    let namespace = NamespaceIdent::new("test_provider_list_table_names".to_string());
+    set_test_namespace(&fixture.hms_catalog, &namespace).await?;
 
-    let namespace = NamespaceIdent::new("default".to_string());
     let creation = set_table_creation("s3a://warehouse/hive", "my_table")?;
-
     fixture
         .hms_catalog
         .create_table(&namespace, creation)
         .await?;
 
-    let client = Arc::new(fixture.hms_catalog);
+    let client = Arc::new(fixture.get_catalog());
     let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
 
     let ctx = SessionContext::new();
     ctx.register_catalog("hive", catalog);
 
     let provider = ctx.catalog("hive").unwrap();
-    let schema = provider.schema("default").unwrap();
+    let schema = provider.schema("test_provider_list_table_names").unwrap();
 
     let expected = vec!["my_table"];
     let result = schema.table_names();
@@ -173,10 +214,12 @@ async fn test_provider_list_table_names() -> Result<()> {
 
 #[tokio::test]
 async fn test_provider_list_schema_names() -> Result<()> {
-    let fixture = set_test_fixture("test_provider_list_schema_names").await;
-    set_table_creation("default", "my_table")?;
+    let fixture = get_test_fixture().await;
+    let namespace = NamespaceIdent::new("test_provider_list_schema_names".to_string());
+    set_test_namespace(&fixture.hms_catalog, &namespace).await?;
 
-    let client = Arc::new(fixture.hms_catalog);
+    set_table_creation("test_provider_list_schema_names", "my_table")?;
+    let client = Arc::new(fixture.get_catalog());
     let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
 
     let ctx = SessionContext::new();
@@ -184,10 +227,11 @@ async fn test_provider_list_schema_names() -> Result<()> {
 
     let provider = ctx.catalog("hive").unwrap();
 
-    let expected = vec!["default"];
+    let expected = ["default", "test_provider_list_schema_names"];
     let result = provider.schema_names();
 
-    assert_eq!(result, expected);
-
+    assert!(expected
+        .iter()
+        .all(|item| result.contains(&item.to_string())));
     Ok(())
 }
