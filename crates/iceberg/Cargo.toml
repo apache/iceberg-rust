@@ -61,6 +61,7 @@ fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 murmur3 = { workspace = true }
+num_cpus = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
