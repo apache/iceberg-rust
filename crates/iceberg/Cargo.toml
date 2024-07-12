@@ -78,6 +78,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
