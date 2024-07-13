@@ -668,6 +668,10 @@ pub enum BoundPredicate {
     Set(SetExpression<BoundReference>),
 }
 
+/// Newtype to prevent accidentally confusing predicates that are bound to a partition with ones that are bound to a schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PartitionBoundPredicate(pub(crate) BoundPredicate);
+
 impl Display for BoundPredicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

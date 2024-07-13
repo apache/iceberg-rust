@@ -17,13 +17,13 @@
 
 use fnv::FnvHashSet;
 
+use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::PartitionBoundPredicate;
 use crate::{
     expr::{BoundPredicate, BoundReference},
     spec::{DataFile, Datum, PrimitiveLiteral, Struct},
     Error, ErrorKind, Result,
 };
-
-use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 
 /// Evaluates a [`DataFile`]'s partition [`Struct`] to check
 /// if the partition tuples match the given [`BoundPredicate`].
@@ -33,12 +33,12 @@ use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 #[derive(Debug)]
 pub(crate) struct ExpressionEvaluator {
     /// The provided partition filter.
-    partition_filter: BoundPredicate,
+    partition_filter: PartitionBoundPredicate,
 }
 
 impl ExpressionEvaluator {
     /// Creates a new [`ExpressionEvaluator`].
-    pub(crate) fn new(partition_filter: BoundPredicate) -> Self {
+    pub(crate) fn new(partition_filter: PartitionBoundPredicate) -> Self {
         Self { partition_filter }
     }
 
@@ -49,7 +49,7 @@ impl ExpressionEvaluator {
     pub(crate) fn eval(&self, data_file: &DataFile) -> Result<bool> {
         let mut visitor = ExpressionEvaluatorVisitor::new(data_file.partition());
 
-        visit(&mut visitor, &self.partition_filter)
+        visit(&mut visitor, &self.partition_filter.0)
     }
 }
 
@@ -253,6 +253,8 @@ mod tests {
     use fnv::FnvHashSet;
     use predicate::SetExpression;
 
+    use super::ExpressionEvaluator;
+    use crate::expr::PartitionBoundPredicate;
     use crate::{
         expr::{
             predicate, visitors::inclusive_projection::InclusiveProjection, BinaryExpression, Bind,
@@ -265,8 +267,6 @@ mod tests {
         },
         Result,
     };
-
-    use super::ExpressionEvaluator;
 
     fn create_schema_and_partition_spec(
         r#type: PrimitiveType,
@@ -298,7 +298,7 @@ mod tests {
         partition_spec: PartitionSpecRef,
         predicate: &BoundPredicate,
         case_sensitive: bool,
-    ) -> Result<BoundPredicate> {
+    ) -> Result<PartitionBoundPredicate> {
         let partition_type = partition_spec.partition_type(schema)?;
         let partition_fields = partition_type.fields().to_owned();
 
@@ -314,7 +314,7 @@ mod tests {
             .rewrite_not()
             .bind(Arc::new(partition_schema), case_sensitive)?;
 
-        Ok(partition_filter)
+        Ok(PartitionBoundPredicate(partition_filter))
     }
 
     fn create_expression_evaluator(

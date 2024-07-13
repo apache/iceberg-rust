@@ -22,7 +22,7 @@ use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::expr::{Bind, BoundPredicate, PartitionBoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{
@@ -229,7 +229,7 @@ impl TableScan {
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
         let (sender, receiver) = channel(CHANNEL_BUFFER_SIZE);
 
-        let mut context = FileScanStreamContext::new(
+        let context = FileScanStreamContext::new(
             self.schema.clone(),
             self.snapshot.clone(),
             self.table_metadata.clone(),
@@ -319,11 +319,11 @@ impl FileScanStreamContext {
         })
     }
 
-    async fn run(&mut self, manifest_list: ManifestList) -> Result<()> {
+    async fn run(mut self, manifest_list: ManifestList) -> Result<()> {
         let file_io = self.file_io.clone();
         let sender = self.sender.clone();
 
-        // This whole Vec-and-for-loop approach feels sub-optimally structured.
+        // This whole Vec-and-for-loop approach feels suboptimally structured.
         // I've tried structuring this in multiple ways but run into
         // issues with ownership. Ideally I'd like to structure this
         // with a functional programming approach: extracting
@@ -349,25 +349,30 @@ impl FileScanStreamContext {
         // 2
         let mut filtered_manifest_files2 = vec![];
         for manifest_file in filtered_manifest_files {
-            if !self.apply_evaluator(manifest_file)? {
+            let (passed, partition_filter) = self.apply_evaluator(manifest_file)?;
+            if !passed {
                 continue;
             }
 
-            filtered_manifest_files2.push(manifest_file);
+            filtered_manifest_files2.push((manifest_file, partition_filter));
         }
 
         // 3
-        let filtered_manifest_files = filtered_manifest_files2.into_iter().map(|manifest_file| {
-            Ok(ManifestFileProcessingContext {
-                manifest_file,
-                file_io: file_io.clone(),
-                sender: sender.clone(),
-                filter: &self.bound_filter,
-                expression_evaluator_cache: self.expression_evaluator_cache.clone(),
-                schema: self.schema.clone(),
-                field_ids: self.field_ids.clone(),
-            })
-        });
+        let filtered_manifest_files =
+            filtered_manifest_files2
+                .into_iter()
+                .map(|(manifest_file, partition_filter)| {
+                    Ok(ManifestFileProcessingContext {
+                        manifest_file,
+                        file_io: file_io.clone(),
+                        sender: sender.clone(),
+                        partition_filter,
+                        data_filter: &self.bound_filter,
+                        expression_evaluator_cache: self.expression_evaluator_cache.clone(),
+                        schema: self.schema.clone(),
+                        field_ids: self.field_ids.clone(),
+                    })
+                });
 
         futures::stream::iter(filtered_manifest_files)
             .try_for_each_concurrent(
@@ -381,7 +386,10 @@ impl FileScanStreamContext {
         manifest_file.content == ManifestContentType::Data
     }
 
-    fn apply_evaluator(&mut self, manifest_file: &ManifestFile) -> Result<bool> {
+    fn apply_evaluator(
+        &mut self,
+        manifest_file: &ManifestFile,
+    ) -> Result<(bool, Option<PartitionBoundPredicate>)> {
         if let Some(ref filter) = self.bound_filter {
             let partition_spec_id = manifest_file.partition_spec_id;
 
@@ -398,11 +406,13 @@ impl FileScanStreamContext {
                 .get(partition_spec_id, partition_filter);
 
             if !manifest_evaluator.eval(manifest_file)? {
-                return Ok(false);
+                return Ok((false, None));
             }
+
+            return Ok((true, Some(partition_filter.clone())));
         }
 
-        Ok(true)
+        Ok((true, None))
     }
 
     async fn process_manifest_file(mut ctx: ManifestFileProcessingContext<'_>) -> Result<()> {
@@ -414,7 +424,13 @@ impl FileScanStreamContext {
 
             Self::reject_unsupported_manifest_entry_content_types(manifest_entry)?;
 
-            if let Some(bound_predicate) = ctx.filter {
+            if let Some(data_filter) = ctx.data_filter {
+                let Some(ref partition_filter) = ctx.partition_filter else {
+                    panic!(
+                        "partition_filter expected to always be present if data filter is present"
+                    );
+                };
+
                 // Apply ExpressionEvaluator
                 {
                     let mut expression_evaluator_cache = ctx.expression_evaluator_cache.lock();
@@ -427,18 +443,15 @@ impl FileScanStreamContext {
                         format!("Could not get a reference to the ExpressionEvaluatorCache: {}", e)
                     )
                             })?
-                            .get(ctx.manifest_file.partition_spec_id, bound_predicate);
+                            .get(ctx.manifest_file.partition_spec_id, partition_filter);
                     if !expression_evaluator.eval(manifest_entry.data_file())? {
                         return Ok(());
                     }
                 }
 
                 // reject any manifest entries whose data file's metrics don't match the filter.
-                if !InclusiveMetricsEvaluator::eval(
-                    bound_predicate,
-                    manifest_entry.data_file(),
-                    false,
-                )? {
+                if !InclusiveMetricsEvaluator::eval(data_filter, manifest_entry.data_file(), false)?
+                {
                     return Ok(());
                 }
             }
@@ -447,7 +460,7 @@ impl FileScanStreamContext {
                 .send(Ok(Self::manifest_entry_to_file_scan_task(
                     manifest_entry,
                     ctx.field_ids.clone(),
-                    ctx.filter.clone(),
+                    ctx.data_filter.clone(),
                     ctx.schema.clone(),
                 )))
                 .await?;
@@ -493,16 +506,17 @@ struct ManifestFileProcessingContext<'a> {
     manifest_file: &'a ManifestFile,
     file_io: FileIO,
     sender: Sender<Result<FileScanTask>>,
-    filter: &'a Option<BoundPredicate>,
+    data_filter: &'a Option<BoundPredicate>,
+    partition_filter: Option<PartitionBoundPredicate>,
     expression_evaluator_cache: Arc<Mutex<ExpressionEvaluatorCache>>,
     schema: SchemaRef,
     field_ids: Vec<i32>,
 }
 
-/// Manages the caching of [`BoundPredicate`] objects
+/// Manages the caching of [`PartitionBoundPredicate`] objects
 /// for [`PartitionSpec`]s based on partition spec id.
 #[derive(Debug)]
-struct PartitionFilterCache(HashMap<i32, BoundPredicate>);
+struct PartitionFilterCache(HashMap<i32, PartitionBoundPredicate>);
 
 impl PartitionFilterCache {
     /// Creates a new [`PartitionFilterCache`]
@@ -520,7 +534,7 @@ impl PartitionFilterCache {
         schema: SchemaRef,
         case_sensitive: bool,
         filter: &BoundPredicate,
-    ) -> Result<&BoundPredicate> {
+    ) -> Result<&PartitionBoundPredicate> {
         match self.0.entry(spec_id) {
             Entry::Occupied(e) => Ok(e.into_mut()),
             Entry::Vacant(e) => {
@@ -548,7 +562,7 @@ impl PartitionFilterCache {
                     .rewrite_not()
                     .bind(partition_schema.clone(), case_sensitive)?;
 
-                Ok(e.insert(partition_filter))
+                Ok(e.insert(PartitionBoundPredicate(partition_filter)))
             }
         }
     }
@@ -568,7 +582,11 @@ impl ManifestEvaluatorCache {
 
     /// Retrieves a [`ManifestEvaluator`] from the cache
     /// or computes it if not present.
-    fn get(&mut self, spec_id: i32, partition_filter: &BoundPredicate) -> &mut ManifestEvaluator {
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_filter: &PartitionBoundPredicate,
+    ) -> &mut ManifestEvaluator {
         self.0
             .entry(spec_id)
             .or_insert(ManifestEvaluator::new(partition_filter.clone()))
@@ -589,7 +607,11 @@ impl ExpressionEvaluatorCache {
 
     /// Retrieves a [`ExpressionEvaluator`] from the cache
     /// or computes it if not present.
-    fn get(&mut self, spec_id: i32, partition_filter: &BoundPredicate) -> &mut ExpressionEvaluator {
+    fn get(
+        &mut self,
+        spec_id: i32,
+        partition_filter: &PartitionBoundPredicate,
+    ) -> &mut ExpressionEvaluator {
         self.0
             .entry(spec_id)
             .or_insert(ExpressionEvaluator::new(partition_filter.clone()))
