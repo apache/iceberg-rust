@@ -675,7 +675,7 @@ pub struct FieldSummary {
 /// [ManifestFileV1] and [ManifestFileV2] are internal struct that are only used for serialization and deserialization.
 pub(super) mod _serde {
     use crate::{
-        spec::{Datum, PrimitiveLiteral, PrimitiveType, StructType},
+        spec::{Datum, PrimitiveType, StructType},
         Error,
     };
     pub use serde_bytes::ByteBuf;
@@ -965,8 +965,8 @@ pub(super) mod _serde {
                     .map(|v| FieldSummary {
                         contains_null: v.contains_null,
                         contains_nan: v.contains_nan,
-                        lower_bound: v.lower_bound.map(|v| PrimitiveLiteral::from(v).into()),
-                        upper_bound: v.upper_bound.map(|v| PrimitiveLiteral::from(v).into()),
+                        lower_bound: v.lower_bound.map(|v| v.to_bytes()),
+                        upper_bound: v.upper_bound.map(|v| v.to_bytes()),
                     })
                     .collect(),
             )
