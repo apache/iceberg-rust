@@ -382,7 +382,9 @@ impl Datum {
         Datum { r#type, literal }
     }
 
-    /// Create iceberg value from bytes
+    /// Create iceberg value from bytes.
+    ///
+    /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
     pub fn try_from_bytes(bytes: &[u8], data_type: PrimitiveType) -> Result<Self> {
         let literal = match data_type {
             PrimitiveType::Boolean => {
@@ -422,6 +424,34 @@ impl Datum {
             } => todo!(),
         };
         Ok(Datum::new(data_type, literal))
+    }
+
+    /// Convert the value to bytes
+    ///
+    /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
+    pub fn to_bytes(&self) -> ByteBuf {
+        match &self.literal {
+            PrimitiveLiteral::Boolean(val) => {
+                if *val {
+                    ByteBuf::from([1u8])
+                } else {
+                    ByteBuf::from([0u8])
+                }
+            }
+            PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
+            PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
+            PrimitiveLiteral::Fixed(val) => ByteBuf::from(val.as_slice()),
+            PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
+            PrimitiveLiteral::Decimal(_) => todo!(),
+        }
     }
 
     /// Creates a boolean value.
@@ -1448,78 +1478,6 @@ impl Literal {
     }
 }
 
-impl From<PrimitiveLiteral> for ByteBuf {
-    fn from(value: PrimitiveLiteral) -> Self {
-        match value {
-            PrimitiveLiteral::Boolean(val) => {
-                if val {
-                    ByteBuf::from([1u8])
-                } else {
-                    ByteBuf::from([0u8])
-                }
-            }
-            PrimitiveLiteral::Int(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
-            PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
-            PrimitiveLiteral::Fixed(val) => ByteBuf::from(val),
-            PrimitiveLiteral::Binary(val) => ByteBuf::from(val),
-            PrimitiveLiteral::Decimal(_) => todo!(),
-        }
-    }
-}
-
-impl From<Literal> for ByteBuf {
-    fn from(value: Literal) -> Self {
-        match value {
-            Literal::Primitive(val) => val.into(),
-            _ => unimplemented!(),
-        }
-    }
-}
-
-impl From<PrimitiveLiteral> for Vec<u8> {
-    fn from(value: PrimitiveLiteral) -> Self {
-        match value {
-            PrimitiveLiteral::Boolean(val) => {
-                if val {
-                    Vec::from([1u8])
-                } else {
-                    Vec::from([0u8])
-                }
-            }
-            PrimitiveLiteral::Int(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Long(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Float(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Double(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Date(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Time(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamp(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamptz(val) => Vec::from(val.to_le_bytes()),
-            PrimitiveLiteral::String(val) => Vec::from(val.as_bytes()),
-            PrimitiveLiteral::UUID(val) => Vec::from(val.as_u128().to_be_bytes()),
-            PrimitiveLiteral::Fixed(val) => val,
-            PrimitiveLiteral::Binary(val) => val,
-            PrimitiveLiteral::Decimal(_) => todo!(),
-        }
-    }
-}
-
-impl From<Literal> for Vec<u8> {
-    fn from(value: Literal) -> Self {
-        match value {
-            Literal::Primitive(val) => val.into(),
-            _ => unimplemented!(),
-        }
-    }
-}
-
 /// The partition struct stores the tuple of partition values for each file.
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
@@ -1622,21 +1580,9 @@ impl FromIterator<Option<Literal>> for Struct {
 }
 
 impl Literal {
-    /// Create iceberg value from bytes
-    pub fn try_from_bytes(bytes: &[u8], data_type: &Type) -> Result<Self> {
-        match data_type {
-            Type::Primitive(primitive_type) => {
-                let datum = Datum::try_from_bytes(bytes, primitive_type.clone())?;
-                Ok(Literal::Primitive(datum.literal))
-            }
-            _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
-                "Converting bytes to non-primitive types is not supported.",
-            )),
-        }
-    }
-
     /// Create iceberg value from a json value
+    ///
+    /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
     pub fn try_from_json(value: JsonValue, data_type: &Type) -> Result<Option<Self>> {
         match data_type {
             Type::Primitive(primitive) => match (primitive, value) {
@@ -2714,23 +2660,27 @@ mod tests {
         assert_eq!(parsed_json_value, raw_json_value);
     }
 
-    fn check_avro_bytes_serde(input: Vec<u8>, expected_literal: Literal, expected_type: &Type) {
+    fn check_avro_bytes_serde(
+        input: Vec<u8>,
+        expected_datum: Datum,
+        expected_type: &PrimitiveType,
+    ) {
         let raw_schema = r#""bytes""#;
         let schema = apache_avro::Schema::parse_str(raw_schema).unwrap();
 
         let bytes = ByteBuf::from(input);
-        let literal = Literal::try_from_bytes(&bytes, expected_type).unwrap();
-        assert_eq!(literal, expected_literal);
+        let datum = Datum::try_from_bytes(&bytes, expected_type.clone()).unwrap();
+        assert_eq!(datum, expected_datum);
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        writer.append_ser(ByteBuf::from(literal)).unwrap();
+        writer.append_ser(datum.to_bytes()).unwrap();
         let encoded = writer.into_inner().unwrap();
         let reader = apache_avro::Reader::with_schema(&schema, &*encoded).unwrap();
 
         for record in reader {
             let result = apache_avro::from_value::<ByteBuf>(&record.unwrap()).unwrap();
-            let desered_literal = Literal::try_from_bytes(&result, expected_type).unwrap();
-            assert_eq!(desered_literal, expected_literal);
+            let desered_datum = Datum::try_from_bytes(&result, expected_type.clone()).unwrap();
+            assert_eq!(desered_datum, expected_datum);
         }
     }
 
@@ -2999,66 +2949,42 @@ mod tests {
     fn avro_bytes_boolean() {
         let bytes = vec![1u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::Boolean(true)),
-            &Type::Primitive(PrimitiveType::Boolean),
-        );
+        check_avro_bytes_serde(bytes, Datum::bool(true), &PrimitiveType::Boolean);
     }
 
     #[test]
     fn avro_bytes_int() {
         let bytes = vec![32u8, 0u8, 0u8, 0u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::Int(32)),
-            &Type::Primitive(PrimitiveType::Int),
-        );
+        check_avro_bytes_serde(bytes, Datum::int(32), &PrimitiveType::Int);
     }
 
     #[test]
     fn avro_bytes_long() {
         let bytes = vec![32u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::Long(32)),
-            &Type::Primitive(PrimitiveType::Long),
-        );
+        check_avro_bytes_serde(bytes, Datum::long(32), &PrimitiveType::Long);
     }
 
     #[test]
     fn avro_bytes_float() {
         let bytes = vec![0u8, 0u8, 128u8, 63u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
-            &Type::Primitive(PrimitiveType::Float),
-        );
+        check_avro_bytes_serde(bytes, Datum::float(1.0), &PrimitiveType::Float);
     }
 
     #[test]
     fn avro_bytes_double() {
         let bytes = vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 240u8, 63u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
-            &Type::Primitive(PrimitiveType::Double),
-        );
+        check_avro_bytes_serde(bytes, Datum::double(1.0), &PrimitiveType::Double);
     }
 
     #[test]
     fn avro_bytes_string() {
         let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
 
-        check_avro_bytes_serde(
-            bytes,
-            Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
-            &Type::Primitive(PrimitiveType::String),
-        );
+        check_avro_bytes_serde(bytes, Datum::string("iceberg"), &PrimitiveType::String);
     }
 
     #[test]

@@ -1203,13 +1203,11 @@ impl std::fmt::Display for DataFileFormat {
 mod _serde {
     use std::collections::HashMap;
 
-    use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize, Serialize};
     use serde_with::serde_as;
 
     use crate::spec::Datum;
     use crate::spec::Literal;
-    use crate::spec::PrimitiveLiteral;
     use crate::spec::RawLiteral;
     use crate::spec::Schema;
     use crate::spec::Struct;
@@ -1333,12 +1331,8 @@ mod _serde {
                 value_counts: Some(to_i64_entry(value.value_counts)?),
                 null_value_counts: Some(to_i64_entry(value.null_value_counts)?),
                 nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
-                lower_bounds: Some(to_bytes_entry(
-                    value.lower_bounds.into_iter().map(|(k, v)| (k, v.into())),
-                )),
-                upper_bounds: Some(to_bytes_entry(
-                    value.upper_bounds.into_iter().map(|(k, v)| (k, v.into())),
-                )),
+                lower_bounds: Some(to_bytes_entry(value.lower_bounds)),
+                upper_bounds: Some(to_bytes_entry(value.upper_bounds)),
                 key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
                 split_offsets: Some(value.split_offsets),
                 equality_ids: Some(value.equality_ids),
@@ -1442,11 +1436,11 @@ mod _serde {
         Ok(m)
     }
 
-    fn to_bytes_entry(v: impl IntoIterator<Item = (i32, PrimitiveLiteral)>) -> Vec<BytesEntry> {
+    fn to_bytes_entry(v: impl IntoIterator<Item = (i32, Datum)>) -> Vec<BytesEntry> {
         v.into_iter()
             .map(|e| BytesEntry {
                 key: e.0,
-                value: Into::<ByteBuf>::into(e.1),
+                value: e.1.to_bytes(),
             })
             .collect()
     }
@@ -1906,8 +1900,7 @@ mod tests {
                         partition: Struct::from_iter(
                             vec![
                                 Some(
-                                    Literal::try_from_bytes(&[120], &Type::Primitive(PrimitiveType::String))
-                                        .unwrap()
+                                    Literal::string("x"),
                                 ),
                             ]
                                 .into_iter()
