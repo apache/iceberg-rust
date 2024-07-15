@@ -41,6 +41,7 @@ services:
   hive-metastore:
     image: iceberg-hive-metastore
     build: ./hms_catalog/
+    platform: ${DOCKER_DEFAULT_PLATFORM}
     expose:
       - 9083
     environment:
