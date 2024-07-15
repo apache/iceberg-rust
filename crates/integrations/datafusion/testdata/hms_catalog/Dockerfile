@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM openjdk:8-jre-slim AS build
+FROM --platform=$BUILDPLATFORM openjdk:8-jre-slim AS build
 
 RUN apt-get update -qq && apt-get -qq -y install curl
 

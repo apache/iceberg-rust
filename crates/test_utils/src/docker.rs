@@ -39,9 +39,22 @@ impl DockerCompose {
         self.project_name.as_str()
     }
 
+    fn get_os_arch() -> String {
+        let mut cmd = Command::new("docker");
+        cmd.arg("info")
+            .arg("--format")
+            .arg("{{.OSType}}/{{.Architecture}}");
+
+        get_cmd_output(cmd, "Get os arch".to_string())
+            .trim()
+            .to_string()
+    }
+
     pub fn run(&self) {
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
+
+        cmd.env("DOCKER_DEFAULT_PLATFORM", Self::get_os_arch());
 
         cmd.args(vec![
             "compose",
