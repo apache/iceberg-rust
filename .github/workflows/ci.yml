@@ -67,9 +67,6 @@ jobs:
       - name: Cargo Machete
         run: make cargo-machete
 
-      - name: Install Cargo Nextest
-        run: make install-cargo-nextest
-
   build:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -111,6 +108,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
+      - name: Install Cargo Nextest
+        run: make install-cargo-nextest
 
       - name: Test
         run: cargo nextest run --no-fail-fast --all-targets --all-features --workspace
