@@ -35,6 +35,9 @@ cargo-sort: install-cargo-sort
 install-cargo-machete:
 	cargo install cargo-machete
 
+install-cargo-nextest:
+	cargo install cargo-nextest
+
 cargo-machete: install-cargo-machete
 	cargo machete
 
@@ -52,8 +55,8 @@ check: check-fmt check-clippy cargo-sort check-toml cargo-machete
 doc-test:
 	cargo test --no-fail-fast --doc --all-features --workspace
 
-unit-test: doc-test
-	cargo test --no-fail-fast --lib --all-features --workspace
+unit-test: doc-test install-cargo-nextest 
+	cargo nextest run --no-fail-fast --lib --all-features --workspace
 
-test: doc-test
-	cargo test --no-fail-fast --all-targets --all-features --workspace
+test: doc-test install-cargo-nextest
+	cargo nextest run --no-fail-fast --all-targets --all-features --workspace
