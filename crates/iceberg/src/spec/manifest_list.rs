@@ -79,6 +79,11 @@ impl ManifestList {
     pub fn entries(&self) -> &[ManifestFile] {
         &self.entries
     }
+
+    /// Take ownership of the entries in the manifest list, consuming it
+    pub fn consume_entries(self) -> Box<dyn Iterator<Item = ManifestFile>> {
+        Box::new(self.entries.into_iter())
+    }
 }
 
 /// A manifest list writer.
