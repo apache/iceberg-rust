@@ -289,8 +289,8 @@ impl ManifestWriter {
             avro_writer.append(value)?;
         }
 
-        let length = avro_writer.flush()?;
         let content = avro_writer.into_inner()?;
+        let length = content.len();
         self.output.write(Bytes::from(content)).await?;
 
         let partition_summary =
