@@ -16,12 +16,11 @@
 // under the License.
 
 use async_trait::async_trait;
-use futures::{AsyncReadExt, AsyncWriteExt};
-use sqlx::any::AnyPoolOptions;
 use sqlx::{
-    any::{install_default_drivers, AnyRow},
-    AnyPool, Row,
+    any::{install_default_drivers, AnyPoolOptions, AnyRow},
+    Any, AnyPool, Execute, Row,
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use iceberg::{
@@ -71,6 +70,14 @@ pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
     fileio: FileIO,
+    backend: DatabaseType,
+}
+
+#[derive(Debug, PartialEq)]
+enum DatabaseType {
+    PostgreSQL,
+    MySQL,
+    SQLite,
 }
 
 impl SqlCatalog {
@@ -100,6 +107,15 @@ impl SqlCatalog {
             .connect(&config.uri)
             .await
             .map_err(from_sqlx_error)?;
+
+        let conn = pool.acquire().await.map_err(from_sqlx_error)?;
+
+        let db_type = match conn.backend_name() {
+            "PostgreSQL" => DatabaseType::PostgreSQL,
+            "MySQL" => DatabaseType::MySQL,
+            "SQLite" => DatabaseType::SQLite,
+            _ => DatabaseType::SQLite,
+        };
 
         sqlx::query(
             &("create table if not exists ".to_string()
@@ -160,7 +176,34 @@ impl SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
             fileio: file_io,
+            backend: db_type,
         })
+    }
+    /// handle postgres doing things differently
+    pub async fn execute_statement(
+        &self,
+        query: &String,
+        args: Vec<Option<&String>>,
+    ) -> Result<Vec<AnyRow>> {
+        let query_with_placeholders: Cow<str> = if self.backend == DatabaseType::PostgreSQL {
+            let mut query = query.clone();
+            for i in 0..args.len() {
+                query = query.replacen("?", &format!("${}", i + 1), 1);
+            }
+            Cow::Owned(query)
+        } else {
+            Cow::Borrowed(&query)
+        };
+
+        let mut sqlx_query = sqlx::query(&query_with_placeholders);
+        for arg in args {
+            sqlx_query = sqlx_query.bind(arg);
+        }
+
+        sqlx_query
+            .fetch_all(&self.connection)
+            .await
+            .map_err(from_sqlx_error)
     }
 }
 
@@ -198,37 +241,28 @@ impl Catalog for SqlCatalog {
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let name = &self.name;
+        let base_query = "select distinct ".to_string()
+            + NAMESPACE_NAME
+            + " from "
+            + NAMESPACE_PROPERTIES_TABLE_NAME
+            + " where "
+            + CATALOG_NAME
+            + " = ?";
+
         let rows = match parent {
-            None => sqlx::query(
-                &("select distinct ".to_string()
-                    + NAMESPACE_NAME
-                    + " from "
-                    + NAMESPACE_PROPERTIES_TABLE_NAME
-                    + " where "
-                    + CATALOG_NAME
-                    + " = ?;"),
-            )
-            .bind(name)
-            .fetch_all(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?,
-            Some(parent) => sqlx::query(
-                &("select distinct ".to_string()
-                    + NAMESPACE_NAME
-                    + " from "
-                    + NAMESPACE_PROPERTIES_TABLE_NAME
-                    + " where "
-                    + CATALOG_NAME
-                    + " = ? and  "
-                    + NAMESPACE_NAME
-                    + "table_namespace like ?%;"),
-            )
-            .bind(name)
-            .bind(parent.join("."))
-            .fetch_all(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?,
+            None => {
+                self.execute_statement(&base_query, vec![Some(&name.to_string())])
+                    .await?
+            }
+            Some(parent) => {
+                self.execute_statement(
+                    &(base_query + " and " + TABLE_NAMESPACE + " like ?%"),
+                    vec![Some(&name.to_string()), Some(&parent.join("."))],
+                )
+                .await?
+            }
         };
+
         let iter = rows.iter().map(|row| row.try_get::<String, _>(0));
 
         Ok(iter
@@ -262,23 +296,28 @@ impl Catalog for SqlCatalog {
                 + ", "
                 + NAMESPACE_PROPERTY_VALUE
                 + ") values (?, ?, ?, ?);";
-            sqlx::query(&query_string)
-                .bind(&catalog_name)
-                .bind(&namespace)
-                .bind(&None::<String>)
-                .bind(&None::<String>)
-                .execute(&self.connection)
-                .await
-                .map_err(from_sqlx_error)?;
+
+            self.execute_statement(
+                &query_string,
+                vec![
+                    Some(&catalog_name),
+                    Some(&namespace),
+                    None::<&String>,
+                    None::<&String>,
+                ],
+            )
+            .await?;
             for (key, value) in properties.iter() {
-                sqlx::query(&query_string)
-                    .bind(&catalog_name)
-                    .bind(&namespace)
-                    .bind(&key)
-                    .bind(&value)
-                    .execute(&self.connection)
-                    .await
-                    .map_err(from_sqlx_error)?;
+                self.execute_statement(
+                    &query_string,
+                    vec![
+                        Some(&catalog_name),
+                        Some(&namespace),
+                        Some(&key.to_string()),
+                        Some(&value.to_string()),
+                    ],
+                )
+                .await?;
             }
         }
 
@@ -308,34 +347,33 @@ impl Catalog for SqlCatalog {
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let name = self.name.clone();
         let namespace = namespace.join(".");
-        let rows = sqlx::query(
-            &("select ".to_string()
-                + TABLE_NAMESPACE
-                + ", "
-                + TABLE_NAME
-                + ", "
-                + METADATA_LOCATION_PROP
-                + ", "
-                + PREVIOUS_METADATA_LOCATION_PROP
-                + " from "
-                + CATALOG_TABLE_VIEW_NAME
-                + " where "
-                + CATALOG_NAME
-                + " = ? and "
-                + TABLE_NAMESPACE
-                + " = ? and ("
-                + RECORD_TYPE
-                + " = '"
-                + TABLE_RECORD_TYPE
-                + "' or "
-                + RECORD_TYPE
-                + " is null);"),
-        )
-        .bind(&name)
-        .bind(&namespace)
-        .fetch_all(&self.connection)
-        .await
-        .map_err(from_sqlx_error)?;
+        let rows = self
+            .execute_statement(
+                &("select ".to_string()
+                    + TABLE_NAMESPACE
+                    + ", "
+                    + TABLE_NAME
+                    + ", "
+                    + METADATA_LOCATION_PROP
+                    + ", "
+                    + PREVIOUS_METADATA_LOCATION_PROP
+                    + " from "
+                    + CATALOG_TABLE_VIEW_NAME
+                    + " where "
+                    + CATALOG_NAME
+                    + " = ? and "
+                    + TABLE_NAMESPACE
+                    + " = ? and ("
+                    + RECORD_TYPE
+                    + " = '"
+                    + TABLE_RECORD_TYPE
+                    + "' or "
+                    + RECORD_TYPE
+                    + " is null);"),
+                vec![Some(&name), Some(&namespace)],
+            )
+            .await?;
+
         let iter = rows.iter().map(query_map);
 
         Ok(iter
@@ -354,52 +392,8 @@ impl Catalog for SqlCatalog {
         let catalog_name = self.name.clone();
         let namespace = identifier.namespace().join(".");
         let name = identifier.name().to_string();
-        let rows = sqlx::query(
-            &("select ".to_string()
-                + TABLE_NAMESPACE
-                + ", "
-                + TABLE_NAME
-                + ", "
-                + METADATA_LOCATION_PROP
-                + ", "
-                + PREVIOUS_METADATA_LOCATION_PROP
-                + " from "
-                + CATALOG_TABLE_VIEW_NAME
-                + " where "
-                + CATALOG_NAME
-                + " = ? and "
-                + TABLE_NAMESPACE
-                + " = ? and "
-                + TABLE_NAME
-                + " = ? and ("
-                + RECORD_TYPE
-                + " = '"
-                + TABLE_RECORD_TYPE
-                + "' or "
-                + RECORD_TYPE
-                + " is null);"),
-        )
-        .bind(&catalog_name)
-        .bind(&namespace)
-        .bind(&name)
-        .fetch_all(&self.connection)
-        .await
-        .map_err(from_sqlx_error)?;
-        let mut iter = rows.iter().map(query_map);
-
-        Ok(iter.next().is_some())
-    }
-
-    async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
-        todo!()
-    }
-
-    async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
-        let metadata_location = {
-            let catalog_name = self.name.clone();
-            let namespace = identifier.namespace().encode_in_url();
-            let name = identifier.name().to_string();
-            let row = sqlx::query(
+        let rows = self
+            .execute_statement(
                 &("select ".to_string()
                     + TABLE_NAMESPACE
                     + ", "
@@ -423,23 +417,58 @@ impl Catalog for SqlCatalog {
                     + "' or "
                     + RECORD_TYPE
                     + " is null);"),
+                vec![Some(&catalog_name), Some(&namespace), Some(&name)],
             )
-            .bind(&catalog_name)
-            .bind(&namespace)
-            .bind(&name)
-            .fetch_one(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?;
-            let row = query_map(&row).map_err(from_sqlx_error)?;
+            .await?;
+        let mut iter = rows.iter().map(query_map);
 
+        Ok(iter.next().is_some())
+    }
+
+    async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
+        todo!()
+    }
+
+    async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
+        let metadata_location = {
+            let catalog_name = self.name.clone();
+            let namespace = identifier.namespace().encode_in_url();
+            let name = identifier.name().to_string();
+            let row = self
+                .execute_statement(
+                    &("select ".to_string()
+                        + TABLE_NAMESPACE
+                        + ", "
+                        + TABLE_NAME
+                        + ", "
+                        + METADATA_LOCATION_PROP
+                        + ", "
+                        + PREVIOUS_METADATA_LOCATION_PROP
+                        + " from "
+                        + CATALOG_TABLE_VIEW_NAME
+                        + " where "
+                        + CATALOG_NAME
+                        + " = ? and "
+                        + TABLE_NAMESPACE
+                        + " = ? and "
+                        + TABLE_NAME
+                        + " = ? and ("
+                        + RECORD_TYPE
+                        + " = '"
+                        + TABLE_RECORD_TYPE
+                        + "' or "
+                        + RECORD_TYPE
+                        + " is null);"),
+                    vec![Some(&catalog_name), Some(&namespace), Some(&name)],
+                )
+                .await?;
+            assert_eq!(row.len(), 1, "expected only one row from load_table query");
+            let row = query_map(&row[0]).map_err(from_sqlx_error)?;
             row.metadata_location
         };
         let file = self.fileio.new_input(&metadata_location)?;
-
-        let mut json = String::new();
-        file.reader().await?.read_to_string(&mut json).await?;
-
-        let metadata: TableMetadata = serde_json::from_str(&json)?;
+        let metadata_content = file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
         let table = Table::builder()
             .file_io(self.fileio.clone())
@@ -468,17 +497,16 @@ impl Catalog for SqlCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
 
         let file = self.fileio.new_output(&metadata_location)?;
-        file.writer()
-            .await?
-            .write_all(&serde_json::to_vec(&metadata)?)
-            .await?;
+
+        file.write(serde_json::to_vec(&metadata)?.into()).await?;
+
         {
             let catalog_name = self.name.clone();
             let namespace = namespace.encode_in_url();
             let name = name.clone();
             let metadata_location = metadata_location.to_string();
 
-            sqlx::query(
+            self.execute_statement(
                 &("insert into ".to_string()
                     + CATALOG_TABLE_VIEW_NAME
                     + " ("
@@ -490,14 +518,14 @@ impl Catalog for SqlCatalog {
                     + ", "
                     + METADATA_LOCATION_PROP
                     + ") values (?, ?, ?, ?);"),
+                vec![
+                    Some(&catalog_name),
+                    Some(&namespace),
+                    Some(&name),
+                    Some(&metadata_location),
+                ],
             )
-            .bind(&catalog_name)
-            .bind(&namespace)
-            .bind(&name)
-            .bind(&metadata_location)
-            .execute(&self.connection)
-            .await
-            .map_err(from_sqlx_error)?;
+            .await?;
         }
 
         Ok(Table::builder()
