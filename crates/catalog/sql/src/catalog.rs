@@ -313,8 +313,8 @@ impl Catalog for SqlCatalog {
                     vec![
                         Some(&catalog_name),
                         Some(&namespace),
-                        Some(&key.to_string()),
-                        Some(&value.to_string()),
+                        Some(&key),
+                        Some(&value),
                     ],
                 )
                 .await?;
