@@ -864,7 +864,7 @@ pub(super) mod _serde {
     }
 }
 
-#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq, Clone, Copy, Hash)]
 #[repr(u8)]
 /// Iceberg format version
 pub enum FormatVersion {

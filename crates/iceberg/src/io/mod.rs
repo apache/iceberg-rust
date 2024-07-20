@@ -56,7 +56,9 @@ mod storage;
 mod storage_s3;
 #[cfg(feature = "storage-s3")]
 pub use storage_s3::*;
+pub(crate) mod object_cache;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
+
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;

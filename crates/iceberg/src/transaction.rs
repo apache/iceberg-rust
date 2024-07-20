@@ -232,6 +232,7 @@ mod tests {
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
             .build()
+            .unwrap()
     }
 
     fn make_v2_table() -> Table {
@@ -250,6 +251,7 @@ mod tests {
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
             .build()
+            .unwrap()
     }
 
     #[test]

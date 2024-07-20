@@ -370,14 +370,12 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        let table = Table::builder()
+        Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Loads a table from the Hive Metastore and constructs a `Table` object
@@ -408,7 +406,7 @@ impl Catalog for HmsCatalog {
         let metadata_content = self.file_io.new_input(&metadata_location)?.read().await?;
         let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
-        let table = Table::builder()
+        Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -416,9 +414,7 @@ impl Catalog for HmsCatalog {
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Asynchronously drops a table from the database.

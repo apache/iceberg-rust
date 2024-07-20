@@ -380,14 +380,12 @@ impl Catalog for GlueCatalog {
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
-        let table = Table::builder()
+        Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Loads a table from the Glue Catalog and constructs a `Table` object
@@ -431,7 +429,7 @@ impl Catalog for GlueCatalog {
                 let metadata_content = input_file.read().await?;
                 let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
-                let table = Table::builder()
+                Table::builder()
                     .file_io(self.file_io())
                     .metadata_location(metadata_location)
                     .metadata(metadata)
@@ -439,9 +437,7 @@ impl Catalog for GlueCatalog {
                         NamespaceIdent::new(db_name),
                         table_name.to_owned(),
                     ))
-                    .build();
-
-                Ok(table)
+                    .build()
             }
         }
     }
