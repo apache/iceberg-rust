@@ -88,6 +88,19 @@ impl DockerCompose {
             .trim()
             .to_string()
     }
+
+    pub fn get_host_port(&self, service_name: impl AsRef<str>) -> String {
+        let container_name = format!("{}-{}-1", self.project_name, service_name.as_ref());
+        let mut cmd = Command::new("docker");
+        cmd.arg("inspect")
+            .arg("-f")
+            .arg("{{ (index (index .NetworkSettings.Ports \"9000/tcp\") 0).HostPort }}")
+            .arg(&container_name);
+
+        get_cmd_output(cmd, format!("Get host port for {container_name}"))
+            .trim()
+            .to_string()
+    }
 }
 
 impl Drop for DockerCompose {
