@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use sqlx::{
     any::{install_default_drivers, AnyPoolOptions, AnyRow},
-    Any, AnyPool, Execute, Row,
+    Any, AnyPool, Column, Execute, Row, TypeInfo,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -234,6 +234,21 @@ fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
     })
 }
 
+#[derive(Debug)]
+struct NamespaceRef {
+    namespace_name: String,
+    namespace_prop_key: String,
+    namespace_prop_value: String,
+}
+
+fn query_map_namespace(row: &AnyRow) -> std::result::Result<NamespaceRef, sqlx::Error> {
+    Ok(NamespaceRef {
+        namespace_name: row.try_get(0)?,
+        namespace_prop_key: row.try_get(1)?,
+        namespace_prop_value: row.try_get(2)?,
+    })
+}
+
 #[async_trait]
 impl Catalog for SqlCatalog {
     async fn list_namespaces(
@@ -241,13 +256,10 @@ impl Catalog for SqlCatalog {
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let name = &self.name;
-        let base_query = "select distinct ".to_string()
-            + NAMESPACE_NAME
-            + " from "
-            + NAMESPACE_PROPERTIES_TABLE_NAME
-            + " where "
-            + CATALOG_NAME
-            + " = ?";
+        let base_query = format!(
+            "select distinct {} from {} where {} = ?",
+            NAMESPACE_NAME, NAMESPACE_PROPERTIES_TABLE_NAME, CATALOG_NAME
+        );
 
         let rows = match parent {
             None => {
@@ -285,17 +297,14 @@ impl Catalog for SqlCatalog {
             let catalog_name = self.name.clone();
             let namespace = namespace.encode_in_url();
 
-            let query_string = "insert into ".to_string()
-                + NAMESPACE_PROPERTIES_TABLE_NAME
-                + " ("
-                + CATALOG_NAME
-                + ", "
-                + NAMESPACE_NAME
-                + ", "
-                + NAMESPACE_PROPERTY_KEY
-                + ", "
-                + NAMESPACE_PROPERTY_VALUE
-                + ") values (?, ?, ?, ?);";
+            let query_string = format!(
+                "insert into {} ({}, {}, {}, {}) values (?, ?, ?, ?);",
+                NAMESPACE_PROPERTIES_TABLE_NAME,
+                CATALOG_NAME,
+                NAMESPACE_NAME,
+                NAMESPACE_PROPERTY_KEY,
+                NAMESPACE_PROPERTY_VALUE
+            );
 
             self.execute_statement(
                 &query_string,
@@ -324,8 +333,30 @@ impl Catalog for SqlCatalog {
         Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
-    async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
-        todo!()
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        let catalog_name = self.name.clone();
+        let rows = self
+            .execute_statement(
+                &format!(
+                    "select {}, {}, {} from {} where {} = ? and {} = ?",
+                    NAMESPACE_NAME,
+                    NAMESPACE_PROPERTY_KEY,
+                    NAMESPACE_PROPERTY_VALUE,
+                    NAMESPACE_PROPERTIES_TABLE_NAME,
+                    CATALOG_NAME,
+                    NAMESPACE_NAME
+                ),
+                vec![Some(&catalog_name), Some(&namespace.join("."))],
+            )
+            .await?;
+
+        let properties: HashMap<String, String> = rows
+            .iter()
+            .filter_map(|row| query_map_namespace(row).ok())
+            .map(|ns| (ns.namespace_prop_key, ns.namespace_prop_value))
+            .collect();
+
+        Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
     async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
@@ -349,27 +380,17 @@ impl Catalog for SqlCatalog {
         let namespace = namespace.join(".");
         let rows = self
             .execute_statement(
-                &("select ".to_string()
-                    + TABLE_NAMESPACE
-                    + ", "
-                    + TABLE_NAME
-                    + ", "
-                    + METADATA_LOCATION_PROP
-                    + ", "
-                    + PREVIOUS_METADATA_LOCATION_PROP
-                    + " from "
-                    + CATALOG_TABLE_VIEW_NAME
-                    + " where "
-                    + CATALOG_NAME
-                    + " = ? and "
-                    + TABLE_NAMESPACE
-                    + " = ? and ("
-                    + RECORD_TYPE
-                    + " = '"
-                    + TABLE_RECORD_TYPE
-                    + "' or "
-                    + RECORD_TYPE
-                    + " is null);"),
+                &format!("select {}, {}, {}, {} from {} where {} = ? and {} = ? and ({} = '{}' or {} is null)", 
+                    TABLE_NAMESPACE,
+                    TABLE_NAME,
+                    METADATA_LOCATION_PROP,
+                    PREVIOUS_METADATA_LOCATION_PROP,
+                    CATALOG_TABLE_VIEW_NAME,
+                    CATALOG_NAME,
+                    TABLE_NAMESPACE,
+                    RECORD_TYPE,
+                    TABLE_RECORD_TYPE,
+                    RECORD_TYPE),
                 vec![Some(&name), Some(&namespace)],
             )
             .await?;
@@ -394,29 +415,18 @@ impl Catalog for SqlCatalog {
         let name = identifier.name().to_string();
         let rows = self
             .execute_statement(
-                &("select ".to_string()
-                    + TABLE_NAMESPACE
-                    + ", "
-                    + TABLE_NAME
-                    + ", "
-                    + METADATA_LOCATION_PROP
-                    + ", "
-                    + PREVIOUS_METADATA_LOCATION_PROP
-                    + " from "
-                    + CATALOG_TABLE_VIEW_NAME
-                    + " where "
-                    + CATALOG_NAME
-                    + " = ? and "
-                    + TABLE_NAMESPACE
-                    + " = ? and "
-                    + TABLE_NAME
-                    + " = ? and ("
-                    + RECORD_TYPE
-                    + " = '"
-                    + TABLE_RECORD_TYPE
-                    + "' or "
-                    + RECORD_TYPE
-                    + " is null);"),
+                &format!("select {}, {}, {}, {} from {} where {} = ? and {} = ? and {} = ? and ({} = '{}' or {} is null);", 
+                    TABLE_NAMESPACE,
+                    TABLE_NAME,
+                    METADATA_LOCATION_PROP,
+                    PREVIOUS_METADATA_LOCATION_PROP,
+                    CATALOG_TABLE_VIEW_NAME,
+                    CATALOG_NAME,
+                    TABLE_NAMESPACE,
+                    TABLE_NAME,
+                    RECORD_TYPE,
+                    TABLE_RECORD_TYPE,
+                    RECORD_TYPE),
                 vec![Some(&catalog_name), Some(&namespace), Some(&name)],
             )
             .await?;
@@ -436,29 +446,19 @@ impl Catalog for SqlCatalog {
             let name = identifier.name().to_string();
             let row = self
                 .execute_statement(
-                    &("select ".to_string()
-                        + TABLE_NAMESPACE
-                        + ", "
-                        + TABLE_NAME
-                        + ", "
-                        + METADATA_LOCATION_PROP
-                        + ", "
-                        + PREVIOUS_METADATA_LOCATION_PROP
-                        + " from "
-                        + CATALOG_TABLE_VIEW_NAME
-                        + " where "
-                        + CATALOG_NAME
-                        + " = ? and "
-                        + TABLE_NAMESPACE
-                        + " = ? and "
-                        + TABLE_NAME
-                        + " = ? and ("
-                        + RECORD_TYPE
-                        + " = '"
-                        + TABLE_RECORD_TYPE
-                        + "' or "
-                        + RECORD_TYPE
-                        + " is null);"),
+                    &format!("select {}, {}, {}, {} FROM {} where {} = ? and {} = ? and {} = ? and ({} = '{}' or {} is null)", 
+                        TABLE_NAMESPACE,
+                        TABLE_NAME,
+                        METADATA_LOCATION_PROP,
+                        PREVIOUS_METADATA_LOCATION_PROP,
+                        CATALOG_TABLE_VIEW_NAME,
+                        CATALOG_NAME,
+                        TABLE_NAMESPACE,
+                        TABLE_NAME,
+                        RECORD_TYPE,
+                        TABLE_RECORD_TYPE,
+                        RECORD_TYPE
+                    ),
                     vec![Some(&catalog_name), Some(&namespace), Some(&name)],
                 )
                 .await?;
@@ -507,17 +507,14 @@ impl Catalog for SqlCatalog {
             let metadata_location = metadata_location.to_string();
 
             self.execute_statement(
-                &("insert into ".to_string()
-                    + CATALOG_TABLE_VIEW_NAME
-                    + " ("
-                    + CATALOG_NAME
-                    + ", "
-                    + TABLE_NAMESPACE
-                    + ", "
-                    + TABLE_NAME
-                    + ", "
-                    + METADATA_LOCATION_PROP
-                    + ") values (?, ?, ?, ?);"),
+                &format!(
+                    "insert into {} ({}, {}, {}, {}) values (?, ?, ?, ?)",
+                    CATALOG_TABLE_VIEW_NAME,
+                    CATALOG_NAME,
+                    TABLE_NAMESPACE,
+                    TABLE_NAME,
+                    METADATA_LOCATION_PROP
+                ),
                 vec![
                     Some(&catalog_name),
                     Some(&namespace),
@@ -536,8 +533,74 @@ impl Catalog for SqlCatalog {
             .build())
     }
 
-    async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
-        todo!()
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        let source_namespace = &src.namespace.encode_in_url();
+        let source_table = &src.name;
+
+        let destination_namespace = &dest.namespace.encode_in_url();
+        let destination_table = &dest.name;
+
+        let src_table_exist = self.table_exists(src).await;
+        let dst_table_exist = self.table_exists(dest).await;
+
+        let _pre_rename_check = match src_table_exist {
+            Ok(res) => {
+                if res {
+                    match dst_table_exist {
+                        Ok(dst_res) => {
+                            if dst_res {
+                                Err(Error::new(
+                                    ErrorKind::Unexpected,
+                                    "failed to rename table as destination already exists",
+                                ))
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+                    }
+                } else {
+                    Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "failed to rename table as source does not exist",
+                    ))
+                }
+            }
+            Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+        }?;
+
+        let query = format!(
+            "update {} set {} = ?, {} = ? where {} = ? and {} = ?",
+            CATALOG_TABLE_VIEW_NAME, TABLE_NAMESPACE, TABLE_NAME, TABLE_NAMESPACE, TABLE_NAME
+        );
+
+        self.execute_statement(
+            &query,
+            vec![
+                Some(destination_namespace),
+                Some(destination_table),
+                Some(source_namespace),
+                Some(source_table),
+            ],
+        )
+        .await?;
+
+        let src_table_exist = self.table_exists(src).await;
+        let dst_table_exist = self.table_exists(dest).await;
+
+        match src_table_exist {
+            Ok(src_res) => match dst_table_exist {
+                Ok(dst_res) => {
+                    if !src_res && dst_res {
+                        Ok(())
+                    } else {
+                        Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
+                    }
+                }
+                Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+            },
+            Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+        }
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
