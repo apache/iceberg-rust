@@ -359,8 +359,26 @@ impl Catalog for SqlCatalog {
         Ok(Namespace::with_properties(namespace.clone(), properties))
     }
 
-    async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
-        todo!()
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+        let catalog_name = self.name.clone();
+        let namespace = namespace.join(".");
+        let rows = self
+            .execute_statement(
+                &format!(
+                    "select {}, {}, {} from {} where {} = ? and {} = ?",
+                    NAMESPACE_NAME,
+                    NAMESPACE_PROPERTY_KEY,
+                    NAMESPACE_PROPERTY_VALUE,
+                    NAMESPACE_PROPERTIES_TABLE_NAME,
+                    CATALOG_NAME,
+                    NAMESPACE_NAME
+                ),
+                vec![Some(&catalog_name), Some(&namespace)],
+            )
+            .await?;
+        let mut iter = rows.iter().map(query_map_namespace);
+
+        Ok(iter.next().is_some())
     }
 
     async fn update_namespace(
@@ -371,8 +389,39 @@ impl Catalog for SqlCatalog {
         todo!()
     }
 
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        let existence = self.namespace_exists(namespace).await?;
+        if existence {
+            if let Ok(tbls) = self.list_tables(namespace).await {
+                if tbls.len() > 0 {
+                    Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!("unable to drop namespace it contains {} tables", tbls.len()),
+                    ))
+                } else {
+                    self.execute_statement(
+                        &format!(
+                            "delete from {} where {} = ? and {} = ?",
+                            NAMESPACE_PROPERTIES_TABLE_NAME, CATALOG_NAME, NAMESPACE_NAME
+                        ),
+                        vec![Some(&self.name.clone()), Some(&namespace.join("."))],
+                    )
+                    .await?;
+
+                    Ok(())
+                }
+            } else {
+                Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "unable to drop namespace",
+                ))
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "unable to drop namespace as it does not exist",
+            ))
+        }
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
