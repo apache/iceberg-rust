@@ -27,6 +27,7 @@ use crate::cmd::{get_cmd_output, get_cmd_output_result, run_command};
 pub struct DockerCompose {
     project_name: String,
     docker_compose_dir: String,
+    is_persistent: bool,
 }
 
 impl DockerCompose {
@@ -34,7 +35,13 @@ impl DockerCompose {
         Self {
             project_name: project_name.to_string(),
             docker_compose_dir: docker_compose_dir.to_string(),
+            is_persistent: false,
         }
+    }
+
+    pub fn with_persistence(mut self, is_persistent: bool) -> Self {
+        self.is_persistent = is_persistent;
+        self
     }
 
     pub fn project_name(&self) -> &str {
@@ -114,6 +121,10 @@ impl DockerCompose {
 
 impl Drop for DockerCompose {
     fn drop(&mut self) {
+        if self.is_persistent {
+            return;
+        }
+
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 

@@ -50,7 +50,7 @@ check-toml: install-taplo-cli
 check: check-fmt check-clippy cargo-sort check-toml cargo-machete
 
 doc-test:
-	cargo test --no-fail-fast --doc --all-features --workspace
+	cargo test --no-fail-fast --doc --lib --examples '*' --tests '*' --workspace
 
 unit-test: doc-test
 	cargo test --no-fail-fast --lib --all-features --workspace

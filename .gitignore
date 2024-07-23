@@ -26,3 +26,6 @@ dist/*
 *.pyc
 *.whl
 *.tar.gz
+
+crates/iceberg/testdata/performance/raw_data/*
+crates/iceberg/testdata/performance/warehouse
