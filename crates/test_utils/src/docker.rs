@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cmd::{get_cmd_output, get_cmd_output_dont_panic, run_command};
 use std::process::Command;
-
-use crate::cmd::{get_cmd_output, run_command};
 
 /// A utility to manage the lifecycle of `docker compose`.
 ///
@@ -40,15 +39,28 @@ impl DockerCompose {
         self.project_name.as_str()
     }
 
+    // docker/podman do not consistently place OSArch in the same json path across OS and versions
+    // below function tries two common places then gives up
     fn get_os_arch() -> String {
         let mut cmd = Command::new("docker");
         cmd.arg("info")
             .arg("--format")
             .arg("{{.OSType}}/{{.Architecture}}");
 
-        get_cmd_output(cmd, "Get os arch".to_string())
-            .trim()
-            .to_string()
+        let result = get_cmd_output_dont_panic(cmd, "Get os arch".to_string());
+        match result {
+            Ok(value) => value.trim().to_string(),
+            Err(_err) => {
+                let mut alt_cmd = Command::new("docker");
+                alt_cmd
+                    .arg("info")
+                    .arg("--format")
+                    .arg("{{.Version.OsArch}}");
+                get_cmd_output(alt_cmd, "Get os arch".to_string())
+                    .trim()
+                    .to_string()
+            }
+        }
     }
 
     pub fn run(&self) {

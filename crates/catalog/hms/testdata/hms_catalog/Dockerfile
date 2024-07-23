@@ -15,8 +15,6 @@
 
 FROM --platform=$BUILDPLATFORM openjdk:8-jre-slim AS build
 
-ARG BUILDPLATFORM
-
 RUN apt-get update -qq && apt-get -qq -y install curl
 
 ENV AWSSDK_VERSION=2.20.18
