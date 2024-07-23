@@ -504,8 +504,15 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
+        let config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(self.user_config.props.clone().into_iter())
+            .collect();
+
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), resp.config)
+            .load_file_io(resp.metadata_location.as_deref(), Some(config))
             .await?;
 
         let table = Table::builder()
@@ -542,8 +549,15 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
+        let config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(self.user_config.props.clone().into_iter())
+            .collect();
+
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), resp.config)
+            .load_file_io(resp.metadata_location.as_deref(), Some(config))
             .await?;
 
         let table_builder = Table::builder()
