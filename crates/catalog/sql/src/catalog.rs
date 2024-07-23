@@ -118,51 +118,33 @@ impl SqlCatalog {
         };
 
         sqlx::query(
-            &("create table if not exists ".to_string()
-                + CATALOG_TABLE_VIEW_NAME
-                + " ("
-                + CATALOG_NAME
-                + " varchar(255) not null,"
-                + TABLE_NAMESPACE
-                + " varchar(255) not null,"
-                + TABLE_NAME
-                + " varchar(255) not null,"
-                + METADATA_LOCATION_PROP
-                + " varchar(255),"
-                + PREVIOUS_METADATA_LOCATION_PROP
-                + " varchar(255),"
-                + RECORD_TYPE
-                + " varchar(5), primary key ("
-                + CATALOG_NAME
-                + ", "
-                + TABLE_NAMESPACE
-                + ", "
-                + TABLE_NAME
-                + ")
-                );"),
+            &format!("create table if not exists {} ({} varchar(255) not null, {} varchar(255) not null, {} varchar(255) not null, {} varchar(255), {} varchar(255), {} varchar(5), primary key ({}, {}, {}))", 
+            CATALOG_TABLE_VIEW_NAME,
+            CATALOG_NAME,
+            TABLE_NAMESPACE,
+            TABLE_NAME,
+            METADATA_LOCATION_PROP,
+            PREVIOUS_METADATA_LOCATION_PROP,
+            RECORD_TYPE,
+            CATALOG_NAME,
+            TABLE_NAMESPACE,
+            TABLE_NAME),
         )
         .execute(&pool)
         .await
         .map_err(from_sqlx_error)?;
 
         sqlx::query(
-            &("create table if not exists ".to_owned()
-                + NAMESPACE_PROPERTIES_TABLE_NAME
-                + " ( "
-                + CATALOG_NAME
-                + " varchar(255) not null, "
-                + NAMESPACE_NAME
-                + " varchar(255) not null, "
-                + NAMESPACE_PROPERTY_KEY
-                + " varchar(255),  "
-                + NAMESPACE_PROPERTY_VALUE
-                + " varchar(255), primary key ("
-                + CATALOG_NAME
-                + ", "
-                + NAMESPACE_NAME
-                + ", "
-                + NAMESPACE_PROPERTY_KEY
-                + ") );"),
+            &format!("create table if not exists {} ({} varchar(255) not null, {} varchar(255) not null, {} varchar(255), {} varchar(255), primary key ({}, {}, {}))",
+            NAMESPACE_PROPERTIES_TABLE_NAME,
+            CATALOG_NAME,
+            NAMESPACE_NAME,
+            NAMESPACE_PROPERTY_KEY,
+            NAMESPACE_PROPERTY_VALUE,
+            CATALOG_NAME,
+            NAMESPACE_NAME,
+            NAMESPACE_PROPERTY_KEY)
+
         )
         .execute(&pool)
         .await
@@ -217,20 +199,23 @@ struct TableRef {
 
 fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
     Ok(TableRef {
-        table_namespace: row.try_get(0)?,
-        table_name: row.try_get(1)?,
-        metadata_location: row.try_get(2)?,
-        _previous_metadata_location: row.try_get::<String, _>(3).map(Some).or_else(|err| {
-            if let sqlx::Error::ColumnDecode {
-                index: _,
-                source: _,
-            } = err
-            {
-                Ok(None)
-            } else {
-                Err(err)
-            }
-        })?,
+        table_namespace: row.try_get(TABLE_NAMESPACE)?,
+        table_name: row.try_get(TABLE_NAME)?,
+        metadata_location: row.try_get(METADATA_LOCATION_PROP)?,
+        _previous_metadata_location: row
+            .try_get::<String, _>(PREVIOUS_METADATA_LOCATION_PROP)
+            .map(Some)
+            .or_else(|err| {
+                if let sqlx::Error::ColumnDecode {
+                    index: _,
+                    source: _,
+                } = err
+                {
+                    Ok(None)
+                } else {
+                    Err(err)
+                }
+            })?,
     })
 }
 
@@ -242,8 +227,8 @@ struct NamespacePropRef {
 
 fn query_map_namespace(row: &AnyRow) -> std::result::Result<NamespacePropRef, sqlx::Error> {
     Ok(NamespacePropRef {
-        namespace_prop_key: row.try_get(1)?,
-        namespace_prop_value: row.try_get(2)?,
+        namespace_prop_key: row.try_get(NAMESPACE_PROPERTY_KEY)?,
+        namespace_prop_value: row.try_get(NAMESPACE_PROPERTY_VALUE)?,
     })
 }
 
@@ -304,27 +289,30 @@ impl Catalog for SqlCatalog {
                 NAMESPACE_PROPERTY_VALUE
             );
 
-            self.execute_statement(
-                &query_string,
-                vec![
-                    Some(&catalog_name),
-                    Some(&namespace),
-                    None::<&String>,
-                    None::<&String>,
-                ],
-            )
-            .await?;
-            for (key, value) in properties.iter() {
+            if properties.is_empty() {
                 self.execute_statement(
                     &query_string,
                     vec![
                         Some(&catalog_name),
                         Some(&namespace),
-                        Some(&key),
-                        Some(&value),
+                        None::<&String>,
+                        None::<&String>,
                     ],
                 )
                 .await?;
+            } else {
+                for (key, value) in properties.iter() {
+                    self.execute_statement(
+                        &query_string,
+                        vec![
+                            Some(&catalog_name),
+                            Some(&namespace),
+                            Some(&key),
+                            Some(&value),
+                        ],
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -381,10 +369,65 @@ impl Catalog for SqlCatalog {
 
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<()> {
-        todo!()
+        let catalog_name = self.name.clone();
+        let namespace_name = namespace.join(".");
+        let exists = self.namespace_exists(namespace).await?;
+        if !exists {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "cannot update namespace that does not exist",
+            ))
+        } else {
+            let current_nsp = self.get_namespace(namespace).await?;
+            let current_props = current_nsp.properties();
+
+            for (key, value) in properties {
+                if current_props.contains_key(&key) {
+                    self.execute_statement(
+                        &format!(
+                            "update {} set {} = ?, {} = ? where {} = ? and {} = ? and {} = ?",
+                            NAMESPACE_PROPERTIES_TABLE_NAME,
+                            NAMESPACE_PROPERTY_KEY,
+                            NAMESPACE_PROPERTY_VALUE,
+                            NAMESPACE_PROPERTY_KEY,
+                            CATALOG_NAME,
+                            NAMESPACE_NAME
+                        ),
+                        vec![
+                            Some(&key),
+                            Some(&value),
+                            Some(&key),
+                            Some(&catalog_name),
+                            Some(&namespace_name),
+                        ],
+                    )
+                    .await?;
+                } else {
+                    self.execute_statement(
+                        &format!(
+                            "insert into {} ({}, {}, {}, {}) values (?, ?, ?, ?)",
+                            NAMESPACE_PROPERTIES_TABLE_NAME,
+                            CATALOG_NAME,
+                            NAMESPACE_NAME,
+                            NAMESPACE_PROPERTY_KEY,
+                            NAMESPACE_PROPERTY_VALUE
+                        ),
+                        vec![
+                            Some(&catalog_name),
+                            Some(&namespace_name),
+                            Some(&key),
+                            Some(&value),
+                        ],
+                    )
+                    .await?;
+                }
+            }
+
+            Ok(())
+        }
     }
 
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
@@ -394,7 +437,10 @@ impl Catalog for SqlCatalog {
                 if tbls.len() > 0 {
                     Err(Error::new(
                         ErrorKind::Unexpected,
-                        format!("unable to drop namespace it contains {} tables", tbls.len()),
+                        format!(
+                            "unable to drop namespace as it contains {} tables",
+                            tbls.len()
+                        ),
                     ))
                 } else {
                     self.execute_statement(
@@ -603,7 +649,7 @@ impl Catalog for SqlCatalog {
         let src_table_exist = self.table_exists(src).await;
         let dst_table_exist = self.table_exists(dest).await;
 
-        let _pre_rename_check = match src_table_exist {
+        match src_table_exist {
             Ok(res) => {
                 if res {
                     match dst_table_exist {
@@ -665,10 +711,6 @@ impl Catalog for SqlCatalog {
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         todo!()
-        // let table_ident = commit.identifier();
-        // let requirements = commit.take_requirements();
-        // let updates = commit.take_updates();
-        // let table = self.load_table(table_ident).await?;
     }
 }
 
@@ -678,7 +720,7 @@ pub mod tests {
 
     use iceberg::{
         spec::{NestedField, PrimitiveType, Schema, Type},
-        Catalog, NamespaceIdent, TableCreation, TableIdent,
+        Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent,
     };
     use tempfile::TempDir;
 
@@ -706,9 +748,10 @@ pub mod tests {
         let catalog = SqlCatalog::new(config).await.unwrap();
 
         let namespace = NamespaceIdent::new("test".to_owned());
+        let mut props = HashMap::from([("test_prop".to_string(), "test_prop_value".to_string())]);
 
         catalog
-            .create_namespace(&namespace, HashMap::new())
+            .create_namespace(&namespace, props.clone())
             .await
             .unwrap();
 
@@ -749,13 +792,58 @@ pub mod tests {
             .expect("Failed to list namespaces");
         assert_eq!(namespaces[0].encode_in_url(), "test");
 
+        let test_namespace = catalog
+            .get_namespace(&namespace)
+            .await
+            .expect("Failed to get namespace");
+
+        assert_eq!(
+            test_namespace,
+            Namespace::with_properties(namespace.clone(), props.clone())
+        );
+
+        props.insert("test_prop2".to_string(), "test_prop_value2".to_string());
+
+        catalog
+            .update_namespace(&namespace, props.clone())
+            .await
+            .unwrap();
+
+        let test_namespace = catalog
+            .get_namespace(&namespace)
+            .await
+            .expect("Failed to get namespace");
+
+        assert_eq!(
+            test_namespace,
+            Namespace::with_properties(namespace.clone(), props.clone())
+        );
+
         //load table points to a /var location - check why
 
         let table = catalog.load_table(&identifier).await.unwrap();
 
         assert!(table.metadata().location().ends_with("/warehouse/table1"));
 
-        //tear down the database and tables
+        catalog.drop_table(&identifier).await.unwrap();
+
+        let exists = catalog
+            .table_exists(&identifier)
+            .await
+            .expect("Table doesn't exist");
+
+        assert!(!exists);
+
+        catalog.drop_namespace(&namespace).await.unwrap();
+
+        let nsp_exists = catalog
+            .namespace_exists(&namespace)
+            .await
+            .expect("Namespace doesn't exist");
+
+        assert!(!nsp_exists);
+
+        // tear down the database and tables
         sqlx::Sqlite::drop_database(sql_lite_uri).await.unwrap();
     }
 }
