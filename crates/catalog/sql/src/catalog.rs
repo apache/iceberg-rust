@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use sqlx::{
     any::{install_default_drivers, AnyPoolOptions, AnyRow},
-    Any, AnyPool, Column, Execute, Row, TypeInfo,
+    AnyPool, Row,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -235,15 +235,13 @@ fn query_map(row: &AnyRow) -> std::result::Result<TableRef, sqlx::Error> {
 }
 
 #[derive(Debug)]
-struct NamespaceRef {
-    namespace_name: String,
+struct NamespacePropRef {
     namespace_prop_key: String,
     namespace_prop_value: String,
 }
 
-fn query_map_namespace(row: &AnyRow) -> std::result::Result<NamespaceRef, sqlx::Error> {
-    Ok(NamespaceRef {
-        namespace_name: row.try_get(0)?,
+fn query_map_namespace(row: &AnyRow) -> std::result::Result<NamespacePropRef, sqlx::Error> {
+    Ok(NamespacePropRef {
         namespace_prop_key: row.try_get(1)?,
         namespace_prop_value: row.try_get(2)?,
     })
@@ -484,8 +482,21 @@ impl Catalog for SqlCatalog {
         Ok(iter.next().is_some())
     }
 
-    async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
-        todo!()
+    async fn drop_table(&self, identifier: &TableIdent) -> Result<()> {
+        let catalog_name = self.name.clone();
+        let namespace = identifier.namespace().encode_in_url();
+        let name = identifier.name.to_string();
+
+        self.execute_statement(
+            &format!(
+                "delete from {} where {} = ? and {} = ? and {} = ?",
+                CATALOG_TABLE_VIEW_NAME, CATALOG_NAME, TABLE_NAMESPACE, TABLE_NAME
+            ),
+            vec![Some(&catalog_name), Some(&namespace), Some(&name)],
+        )
+        .await?;
+
+        Ok(())
     }
 
     async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
@@ -654,6 +665,10 @@ impl Catalog for SqlCatalog {
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         todo!()
+        // let table_ident = commit.identifier();
+        // let requirements = commit.take_requirements();
+        // let updates = commit.take_updates();
+        // let table = self.load_table(table_ident).await?;
     }
 }
 
