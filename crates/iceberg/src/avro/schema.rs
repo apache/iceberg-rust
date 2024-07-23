@@ -258,10 +258,22 @@ pub(crate) fn avro_fixed_schema(len: usize, logical_type: Option<&str>) -> Resul
 }
 
 pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<AvroSchema> {
+    // Avro decimal logical type annotates Avro bytes _or_ fixed types.
+    // https://avro.apache.org/docs/1.11.1/specification/_print/#decimal
+    // Iceberg spec: Stored as _fixed_ using the minimum number of bytes for the given precision.
+    // https://iceberg.apache.org/spec/#avro
     Ok(AvroSchema::Decimal(DecimalSchema {
         precision,
         scale,
-        inner: Box::new(AvroSchema::Bytes),
+        inner: Box::new(AvroSchema::Fixed(FixedSchema {
+            // Name is not restricted by the spec.
+            // Refer to iceberg-python https://github.com/apache/iceberg-python/blob/d8bc1ca9af7957ce4d4db99a52c701ac75db7688/pyiceberg/utils/schema_conversion.py#L574-L582
+            name: Name::new(&format!("decimal_{precision}_{scale}")).unwrap(),
+            aliases: None,
+            doc: None,
+            size: crate::spec::Type::decimal_required_bytes(precision as u32)? as usize,
+            attributes: Default::default(),
+        })),
     }))
 }
 
