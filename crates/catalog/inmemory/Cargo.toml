@@ -29,13 +29,13 @@ license = { workspace = true }
 keywords = ["iceberg", "inmemory", "catalog"]
 
 [dependencies]
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 tempfile = { workspace = true }
-async-lock = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
