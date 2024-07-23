@@ -58,8 +58,7 @@ impl NamespaceState {
     fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> Result<&NamespaceState> {
         let mut acc_name_parts = vec![];
         let mut namespace_state = self;
-        let mut remaining = namespace_ident.into_iter();
-        while let Some(next_name) = remaining.next() {
+        for next_name in namespace_ident.iter() {
             acc_name_parts.push(next_name);
             match namespace_state.namespaces.get(next_name) {
                 None => {
@@ -82,8 +81,7 @@ impl NamespaceState {
     ) -> Result<&mut NamespaceState> {
         let mut acc_name_parts = vec![];
         let mut namespace_state = self;
-        let mut remaining = namespace_ident.into_iter();
-        while let Some(next_name) = remaining.next() {
+        for next_name in namespace_ident.iter() {
             acc_name_parts.push(next_name);
             match namespace_state.namespaces.get_mut(next_name) {
                 None => {
@@ -124,10 +122,7 @@ impl NamespaceState {
 
     // Returns any top-level namespaces
     pub(crate) fn list_top_level_namespaces(&self) -> Vec<&String> {
-        self.namespaces
-            .keys()
-            .map(|namespace_name| namespace_name)
-            .collect_vec()
+        self.namespaces.keys().collect_vec()
     }
 
     // Returns any namespaces nested under the given namespace or an error if the given namespace does not exist
@@ -139,7 +134,6 @@ impl NamespaceState {
             .get_namespace(namespace_ident)?
             .namespaces
             .keys()
-            .map(|namespace_name| namespace_name)
             .collect_vec();
 
         Ok(nested_namespace_names)
@@ -222,8 +216,8 @@ impl NamespaceState {
         new_properties: HashMap<String, String>,
     ) -> Result<()> {
         let properties = self.get_mut_properties(namespace_ident)?;
-
-        Ok(*properties = new_properties)
+        *properties = new_properties;
+        Ok(())
     }
 
     // Returns the list of table names under the given namespace
@@ -232,7 +226,6 @@ impl NamespaceState {
             .get_namespace(namespace_ident)?
             .table_metadata_locations
             .keys()
-            .map(|table_name| table_name)
             .collect_vec();
 
         Ok(table_names)
@@ -253,7 +246,7 @@ impl NamespaceState {
         let namespace = self.get_namespace(table_ident.namespace())?;
 
         match namespace.table_metadata_locations.get(table_ident.name()) {
-            None => no_such_table_err(&table_ident),
+            None => no_such_table_err(table_ident),
             Some(table_metadadata_location) => Ok(table_metadadata_location),
         }
     }
@@ -289,7 +282,7 @@ impl NamespaceState {
             .table_metadata_locations
             .remove(table_ident.name())
         {
-            None => no_such_table_err(&table_ident),
+            None => no_such_table_err(table_ident),
             Some(_) => Ok(()),
         }
     }
