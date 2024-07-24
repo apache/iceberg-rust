@@ -31,7 +31,6 @@ use iceberg::Result;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
 };
-use tempfile::TempDir;
 
 use crate::namespace_state::NamespaceState;
 
@@ -40,14 +39,16 @@ use crate::namespace_state::NamespaceState;
 pub struct InMemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
+    default_table_root_location: String,
 }
 
 impl InMemoryCatalog {
     /// Creates an in-memory catalog.
-    pub fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO, default_table_root_location: String) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::new()),
             file_io,
+            default_table_root_location,
         }
     }
 }
@@ -197,15 +198,22 @@ impl Catalog for InMemoryCatalog {
             let (table_creation, location) = match table_creation.location.clone() {
                 Some(location) => (table_creation, location),
                 None => {
-                    let tmp_dir = TempDir::new()?;
-                    let location = tmp_dir.path().to_str().unwrap().to_string();
+                    let location = format!(
+                        "{}/{}/{}",
+                        self.default_table_root_location,
+                        table_ident.namespace().join("/"),
+                        table_ident.name()
+                    );
+
                     let new_table_creation = TableCreation {
                         location: Some(location.clone()),
                         ..table_creation
                     };
+
                     (new_table_creation, location)
                 }
             };
+
             let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
             let metadata_location = create_metadata_location(&location, 0)?;
 
@@ -289,17 +297,21 @@ impl Catalog for InMemoryCatalog {
 #[cfg(test)]
 mod tests {
     use iceberg::io::FileIOBuilder;
+    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
-
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use tempfile::TempDir;
 
     use super::*;
 
     fn new_inmemory_catalog() -> impl Catalog {
+        let tmp_dir = TempDir::new().unwrap();
+        let default_table_root_location = tmp_dir.path().to_str().unwrap().to_string();
+
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        InMemoryCatalog::new(file_io)
+
+        InMemoryCatalog::new(file_io, default_table_root_location)
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
