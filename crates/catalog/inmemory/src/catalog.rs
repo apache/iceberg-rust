@@ -18,7 +18,7 @@
 //! This module contains in-memory catalog implementation.
 
 use async_lock::Mutex;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use itertools::Itertools;
 use std::collections::HashMap;
@@ -44,15 +44,11 @@ pub struct InMemoryCatalog {
 
 impl InMemoryCatalog {
     /// Creates an in-memory catalog.
-    pub fn new() -> Result<Self> {
-        let root_namespace_state = NamespaceState::new();
-        let file_io = FileIOBuilder::new_fs_io().build()?;
-        let inmemory_catalog = Self {
-            root_namespace_state: Mutex::new(root_namespace_state),
+    pub fn new(file_io: FileIO) -> Self {
+        Self {
+            root_namespace_state: Mutex::new(NamespaceState::new()),
             file_io,
-        };
-
-        Ok(inmemory_catalog)
+        }
     }
 }
 
@@ -292,6 +288,7 @@ impl Catalog for InMemoryCatalog {
 
 #[cfg(test)]
 mod tests {
+    use iceberg::io::FileIOBuilder;
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
@@ -301,7 +298,8 @@ mod tests {
     use super::*;
 
     fn new_inmemory_catalog() -> impl Catalog {
-        InMemoryCatalog::new().unwrap()
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        InMemoryCatalog::new(file_io)
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {

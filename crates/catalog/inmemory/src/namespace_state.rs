@@ -20,7 +20,7 @@ use itertools::Itertools;
 use std::collections::HashMap;
 
 // Represents the state of a namespace
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct NamespaceState {
     // Properties of this namespace
     properties: HashMap<String, String>,
