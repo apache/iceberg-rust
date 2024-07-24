@@ -328,7 +328,7 @@ mod test {
             ],
             trans_types: vec![
                 (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
+                (Primitive(Date), Some(Primitive(Date))),
                 (
                     Primitive(Decimal {
                         precision: 8,
@@ -342,8 +342,8 @@ mod test {
                 (Primitive(StringType), None),
                 (Primitive(Uuid), None),
                 (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (Primitive(Timestamp), Some(Primitive(Date))),
+                (Primitive(Timestamptz), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,
@@ -378,7 +378,7 @@ mod test {
             ],
             trans_types: vec![
                 (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
+                (Primitive(Date), Some(Primitive(Date))),
                 (
                     Primitive(Decimal {
                         precision: 8,
@@ -392,8 +392,8 @@ mod test {
                 (Primitive(StringType), None),
                 (Primitive(Uuid), None),
                 (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (Primitive(Timestamp), Some(Primitive(Date))),
+                (Primitive(Timestamptz), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,
@@ -428,7 +428,7 @@ mod test {
             ],
             trans_types: vec![
                 (Primitive(Binary), None),
-                (Primitive(Date), Some(Primitive(Int))),
+                (Primitive(Date), Some(Primitive(Date))),
                 (
                     Primitive(Decimal {
                         precision: 8,
@@ -442,8 +442,8 @@ mod test {
                 (Primitive(StringType), None),
                 (Primitive(Uuid), None),
                 (Primitive(Time), None),
-                (Primitive(Timestamp), Some(Primitive(Int))),
-                (Primitive(Timestamptz), Some(Primitive(Int))),
+                (Primitive(Timestamp), Some(Primitive(Date))),
+                (Primitive(Timestamptz), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,

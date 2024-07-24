@@ -375,7 +375,7 @@ mod tests {
             NestedField::optional(
                 partition_spec.fields[0].field_id,
                 &partition_spec.fields[0].name,
-                Type::Primitive(crate::spec::PrimitiveType::Int)
+                Type::Primitive(crate::spec::PrimitiveType::Date)
             )
         );
         assert_eq!(

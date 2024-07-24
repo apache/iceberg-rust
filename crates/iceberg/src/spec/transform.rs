@@ -199,7 +199,7 @@ impl Transform {
                     match p {
                         PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
-                        | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Int)),
+                        | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Date)),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!("{input_type} is not a valid input type of {self} transform",),
