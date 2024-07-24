@@ -17,7 +17,7 @@
 
 //! This module contains in-memory catalog implementation.
 
-use async_lock::Mutex;
+use futures::lock::Mutex;
 use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use itertools::Itertools;
