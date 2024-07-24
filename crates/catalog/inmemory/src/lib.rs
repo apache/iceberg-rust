@@ -18,7 +18,6 @@
 //! Iceberg in-memory Catalog API implementation.
 
 #![deny(missing_docs)]
-#![feature(map_try_insert)]
 
 mod catalog;
 mod namespace_state;

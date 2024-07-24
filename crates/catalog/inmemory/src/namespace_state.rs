@@ -17,7 +17,7 @@
 
 use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 
 // Represents the state of a namespace
 #[derive(Debug, Clone, Default)]
@@ -153,22 +153,25 @@ impl NamespaceState {
         let (parent_namespace_state, child_namespace_name) =
             self.get_mut_parent_namespace_of(namespace_ident)?;
 
-        match parent_namespace_state.namespaces.try_insert(
-            child_namespace_name,
-            NamespaceState {
-                properties,
-                namespaces: HashMap::new(),
-                table_metadata_locations: HashMap::new(),
-            },
-        ) {
-            Err(_) => Err(Error::new(
+        match parent_namespace_state
+            .namespaces
+            .entry(child_namespace_name)
+        {
+            hash_map::Entry::Occupied(_) => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
                     "Cannot create namespace {:?}. Namespace already exists",
                     namespace_ident
                 ),
             )),
-            Ok(_) => Ok(()),
+            hash_map::Entry::Vacant(entry) => {
+                let _ = entry.insert(NamespaceState {
+                    properties,
+                    namespaces: HashMap::new(),
+                    table_metadata_locations: HashMap::new(),
+                });
+                Ok(())
+            }
         }
     }
 
@@ -261,16 +264,19 @@ impl NamespaceState {
 
         match namespace
             .table_metadata_locations
-            .try_insert(table_ident.name().to_string(), metadata_location)
+            .entry(table_ident.name().to_string())
         {
-            Err(_) => Err(Error::new(
+            hash_map::Entry::Occupied(_) => Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
-                    "Cannot insert table {:?} as it already exists.",
+                    "Cannot insert table {:?}. Table already exists.",
                     table_ident
                 ),
             )),
-            Ok(_) => Ok(()),
+            hash_map::Entry::Vacant(entry) => {
+                let _ = entry.insert(metadata_location);
+                Ok(())
+            }
         }
     }
 

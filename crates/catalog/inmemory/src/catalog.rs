@@ -1501,7 +1501,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "Unexpected => Cannot insert table {:? } as it already exists.",
+                "Unexpected => Cannot insert table {:? }. Table already exists.",
                 &dst_table_ident
             ),
         );
