@@ -39,16 +39,14 @@ use crate::namespace_state::NamespaceState;
 pub struct InMemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
-    default_table_root_location: String,
 }
 
 impl InMemoryCatalog {
     /// Creates an in-memory catalog.
-    pub fn new(file_io: FileIO, default_table_root_location: String) -> Self {
+    pub fn new(file_io: FileIO) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::new()),
             file_io,
-            default_table_root_location,
         }
     }
 }
@@ -169,8 +167,7 @@ impl Catalog for InMemoryCatalog {
             Some(location) => (table_creation, location),
             None => {
                 let location = format!(
-                    "{}/{}/{}",
-                    self.default_table_root_location,
+                    "{}/{}",
                     table_ident.namespace().join("/"),
                     table_ident.name()
                 );
@@ -281,12 +278,8 @@ mod tests {
     use super::*;
 
     fn new_inmemory_catalog() -> impl Catalog {
-        let tmp_dir = TempDir::new().unwrap();
-        let default_table_root_location = tmp_dir.path().to_str().unwrap().to_string();
-
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-
-        InMemoryCatalog::new(file_io, default_table_root_location)
+        InMemoryCatalog::new(file_io)
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -319,12 +312,16 @@ mod tests {
     }
 
     async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
+        let tmp_dir = TempDir::new().unwrap();
+        let location = tmp_dir.path().to_str().unwrap().to_string();
+
         let _ = catalog
             .create_table(
                 &table_ident.namespace,
                 TableCreation::builder()
                     .name(table_ident.name().into())
                     .schema(simple_table_schema())
+                    .location(location)
                     .build(),
             )
             .await
@@ -972,37 +969,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_without_location() {
-        let catalog = new_inmemory_catalog();
-        let namespace_ident = NamespaceIdent::new("a".into());
-        create_namespace(&catalog, &namespace_ident).await;
-
-        let table_name = "tbl1";
-        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
-
-        assert_table_eq(
-            &catalog
-                .create_table(
-                    &namespace_ident,
-                    TableCreation::builder()
-                        .name(table_name.into())
-                        .schema(simple_table_schema())
-                        .build(),
-                )
-                .await
-                .unwrap(),
-            &expected_table_ident,
-            &simple_table_schema(),
-        );
-
-        assert_table_eq(
-            &catalog.load_table(&expected_table_ident).await.unwrap(),
-            &expected_table_ident,
-            &simple_table_schema(),
-        )
-    }
-
-    #[tokio::test]
     async fn test_create_table_with_location() {
         let tmp_dir = TempDir::new().unwrap();
         let catalog = new_inmemory_catalog();
@@ -1054,6 +1020,9 @@ mod tests {
         let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
         create_table(&catalog, &table_ident).await;
 
+        let tmp_dir = TempDir::new().unwrap();
+        let location = tmp_dir.path().to_str().unwrap().to_string();
+
         assert_eq!(
             catalog
                 .create_table(
@@ -1061,6 +1030,7 @@ mod tests {
                     TableCreation::builder()
                         .name(table_name.into())
                         .schema(simple_table_schema())
+                        .location(location)
                         .build()
                 )
                 .await
