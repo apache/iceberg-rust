@@ -20,12 +20,17 @@ use opendal::{Operator, Scheme};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
+/// Property root location
+pub const ROOT_LOCATION: &str = "root";
+
 /// # TODO
 ///
 /// opendal has a plan to introduce native config support.
 /// We manually parse the config here and those code will be finally removed.
 #[derive(Default, Clone)]
-pub(crate) struct FsConfig {}
+pub(crate) struct FsConfig {
+    root_location: String,
+}
 
 impl Debug for FsConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -35,15 +40,20 @@ impl Debug for FsConfig {
 
 impl FsConfig {
     /// Decode from iceberg props.
-    pub fn new(_: HashMap<String, String>) -> Self {
-        Self::default()
+    pub fn new(m: HashMap<String, String>) -> Self {
+        let root_location = match m.get(ROOT_LOCATION) {
+            Some(root_location) => root_location.clone(),
+            None => "/".to_string(),
+        };
+
+        Self { root_location }
     }
 
-    /// Build new opendal operator from give path.
+    /// Build new opendal operator from given path.
     ///
-    /// fs always build from `/`
+    /// fs builds from `/` by default
     pub fn build(&self, _: &str) -> Result<Operator> {
-        let m = HashMap::from_iter([("root".to_string(), "/".to_string())]);
+        let m = HashMap::from_iter([(ROOT_LOCATION.to_string(), self.root_location.clone())]);
         Ok(Operator::via_map(Scheme::Fs, m)?)
     }
 }

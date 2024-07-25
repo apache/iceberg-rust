@@ -39,16 +39,14 @@ use crate::namespace_state::NamespaceState;
 pub struct InMemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
-    default_table_root_location: String,
 }
 
 impl InMemoryCatalog {
     /// Creates an in-memory catalog.
-    pub fn new(file_io: FileIO, default_table_root_location: String) -> Self {
+    pub fn new(file_io: FileIO) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::new()),
             file_io,
-            default_table_root_location,
         }
     }
 }
@@ -169,8 +167,7 @@ impl Catalog for InMemoryCatalog {
             Some(location) => (table_creation, location),
             None => {
                 let location = format!(
-                    "{}/{}/{}",
-                    self.default_table_root_location,
+                    "{}/{}",
                     table_ident.namespace().join("/"),
                     table_ident.name()
                 );
@@ -272,6 +269,7 @@ impl Catalog for InMemoryCatalog {
 #[cfg(test)]
 mod tests {
     use iceberg::io::FileIOBuilder;
+    use iceberg::io::ROOT_LOCATION;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use std::collections::HashSet;
     use std::hash::Hash;
@@ -282,11 +280,13 @@ mod tests {
 
     fn new_inmemory_catalog() -> impl Catalog {
         let tmp_dir = TempDir::new().unwrap();
-        let default_table_root_location = tmp_dir.path().to_str().unwrap().to_string();
+        let root_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIOBuilder::new_fs_io()
+            .with_prop(ROOT_LOCATION, root_location)
+            .build()
+            .unwrap();
 
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-
-        InMemoryCatalog::new(file_io, default_table_root_location)
+        InMemoryCatalog::new(file_io)
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -999,7 +999,7 @@ mod tests {
             &catalog.load_table(&expected_table_ident).await.unwrap(),
             &expected_table_ident,
             &simple_table_schema(),
-        )
+        );
     }
 
     #[tokio::test]
