@@ -53,30 +53,6 @@ impl InMemoryCatalog {
     }
 }
 
-/// Create metadata location from `location` and `version`
-fn create_metadata_location(location: impl AsRef<str>, version: i32) -> Result<String> {
-    if version < 0 {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Table metadata version: '{}' must be a non-negative integer",
-                version
-            ),
-        ))
-    } else {
-        let version = format!("{:0>5}", version);
-        let id = Uuid::new_v4();
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            location.as_ref(),
-            version,
-            id
-        );
-
-        Ok(metadata_location)
-    }
-}
-
 #[async_trait]
 impl Catalog for InMemoryCatalog {
     /// List namespaces inside the Catalog.
@@ -87,11 +63,15 @@ impl Catalog for InMemoryCatalog {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
         match maybe_parent {
-            None => Ok(root_namespace_state
-                .list_top_level_namespaces()
-                .into_iter()
-                .map(|str| NamespaceIdent::new(str.to_string()))
-                .collect_vec()),
+            None => {
+                let namespaces = root_namespace_state
+                    .list_top_level_namespaces()
+                    .into_iter()
+                    .map(|str| NamespaceIdent::new(str.to_string()))
+                    .collect_vec();
+
+                Ok(namespaces)
+            }
             Some(parent_namespace_ident) => {
                 let namespaces = root_namespace_state
                     .list_namespaces_under(parent_namespace_ident)?
@@ -184,55 +164,49 @@ impl Catalog for InMemoryCatalog {
 
         let table_name = table_creation.name.clone();
         let table_ident = TableIdent::new(namespace_ident.clone(), table_name);
-        let table_exists = root_namespace_state.table_exists(&table_ident)?;
 
-        if table_exists {
-            Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Cannot create table {:?}. Table already exists",
-                    &table_ident
-                ),
-            ))
-        } else {
-            let (table_creation, location) = match table_creation.location.clone() {
-                Some(location) => (table_creation, location),
-                None => {
-                    let location = format!(
-                        "{}/{}/{}",
-                        self.default_table_root_location,
-                        table_ident.namespace().join("/"),
-                        table_ident.name()
-                    );
+        let (table_creation, location) = match table_creation.location.clone() {
+            Some(location) => (table_creation, location),
+            None => {
+                let location = format!(
+                    "{}/{}/{}",
+                    self.default_table_root_location,
+                    table_ident.namespace().join("/"),
+                    table_ident.name()
+                );
 
-                    let new_table_creation = TableCreation {
-                        location: Some(location.clone()),
-                        ..table_creation
-                    };
+                let new_table_creation = TableCreation {
+                    location: Some(location.clone()),
+                    ..table_creation
+                };
 
-                    (new_table_creation, location)
-                }
-            };
+                (new_table_creation, location)
+            }
+        };
 
-            let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
-            let metadata_location = create_metadata_location(&location, 0)?;
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+        let metadata_location = format!(
+            "{}/metadata/{}-{}.metadata.json",
+            &location,
+            0,
+            Uuid::new_v4()
+        );
 
-            self.file_io
-                .new_output(&metadata_location)?
-                .write(serde_json::to_vec(&metadata)?.into())
-                .await?;
+        self.file_io
+            .new_output(&metadata_location)?
+            .write(serde_json::to_vec(&metadata)?.into())
+            .await?;
 
-            root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
+        root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
-            let table = Table::builder()
-                .file_io(self.file_io.clone())
-                .metadata_location(metadata_location)
-                .metadata(metadata)
-                .identifier(table_ident)
-                .build();
+        let table = Table::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(table_ident)
+            .build();
 
-            Ok(table)
-        }
+        Ok(table)
     }
 
     /// Load table from the catalog.
@@ -282,6 +256,7 @@ impl Catalog for InMemoryCatalog {
         new_root_namespace_state.remove_existing_table(src_table_ident)?;
         new_root_namespace_state.insert_new_table(dst_table_ident, metadata_location)?;
         *root_namespace_state = new_root_namespace_state;
+
         Ok(())
     }
 
@@ -604,7 +579,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "Unexpected => Cannot create namespace {:?}. Namespace already exists",
+                "Unexpected => Cannot create namespace {:?}. Namespace already exists.",
                 &namespace_ident
             )
         );
@@ -1092,7 +1067,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "Unexpected => Cannot create table {:?}. Table already exists",
+                "Unexpected => Cannot create table {:?}. Table already exists.",
                 &table_ident
             )
         );
@@ -1513,7 +1488,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "Unexpected => Cannot insert table {:? }. Table already exists.",
+                "Unexpected => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
         );
