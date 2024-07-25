@@ -18,6 +18,7 @@
 //! Integration tests for rest catalog.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
@@ -59,18 +60,14 @@ async fn get_catalog() -> RestCatalog {
         docker_compose.get_container_ip("rest")
     };
 
-    let read_port = format!("{}:{}", rest_catalog_ip, REST_CATALOG_PORT);
-    loop {
-        if !scan_port_addr(&read_port) {
-            log::info!("Waiting for 1s rest catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
-        } else {
-            break;
-        }
+    let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
+    while !scan_port_addr(rest_socket_addr) {
+        log::info!("Waiting for 1s rest catalog to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
     }
 
     let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
+        .uri(format!("http://{}", rest_socket_addr.to_string()))
         .build();
     RestCatalog::new(config)
 }

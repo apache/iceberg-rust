@@ -17,6 +17,7 @@
 
 //! Integration tests for FileIO S3.
 
+use std::net::SocketAddr;
 use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
@@ -26,6 +27,7 @@ use iceberg::io::{
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 
+const MINIO_PORT: u16 = 9000;
 static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 
 #[ctor]
@@ -51,11 +53,11 @@ async fn get_file_io() -> FileIO {
     let guard = DOCKER_COMPOSE_ENV.read().unwrap();
     let docker_compose = guard.as_ref().unwrap();
     let container_ip = docker_compose.get_container_ip("minio");
-    let read_port = format!("{}:{}", container_ip, 9000);
+    let minio_socket_addr = SocketAddr::new(container_ip, MINIO_PORT);
 
     FileIOBuilder::new("s3")
         .with_props(vec![
-            (S3_ENDPOINT, format!("http://{}", read_port)),
+            (S3_ENDPOINT, format!("http://{}", minio_socket_addr)),
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
