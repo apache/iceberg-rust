@@ -91,7 +91,7 @@ impl Storage {
             Storage::Memory { config } => {
                 let op = config.build(path)?;
 
-                if let Some(stripped) = path.strip_prefix("file:/") {
+                if let Some(stripped) = path.strip_prefix("memory:/") {
                     Ok((op, stripped))
                 } else {
                     Ok((op, &path[1..]))

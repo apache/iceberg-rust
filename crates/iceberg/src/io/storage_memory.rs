@@ -35,7 +35,7 @@ impl MemoryConfig {
         Self::default()
     }
 
-    /// Build new opendal operator from give path.
+    /// Build new opendal operator from given path.
     pub fn build(&self, _: &str) -> Result<Operator> {
         let m = HashMap::new();
         Ok(Operator::via_map(Scheme::Memory, m)?)
