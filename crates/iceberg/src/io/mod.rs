@@ -59,4 +59,4 @@ pub use storage_s3::*;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
 #[cfg(feature = "storage-fs")]
-pub use storage_fs::*;
+use storage_fs::*;
