@@ -69,7 +69,13 @@ impl RestCatalogConfig {
     }
 
     pub(crate) fn get_token_endpoint(&self) -> String {
-        if let Some(auth_url) = self.props.get("rest.authorization-url") {
+        if let Some(oauth2_uri) = self.props.get("oauth2-server-uri") {
+            oauth2_uri.to_string()
+        } else if let Some(auth_url) = self.props.get("rest.authorization-url") {
+            log::warn!(
+                "'rest.authorization-url' is deprecated and will be removed in version 0.4.0. \
+                 Please use 'oauth2-server-uri' instead."
+            );
             auth_url.to_string()
         } else {
             [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
@@ -891,7 +897,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_oauth_with_auth_url() {
+    async fn test_oauth_with_deprecated_auth_url() {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
 
@@ -903,6 +909,36 @@ mod tests {
         props.insert("credential".to_string(), "client1:secret1".to_string());
         props.insert(
             "rest.authorization-url".to_string(),
+            format!("{}{}", auth_server.url(), auth_server_path).to_string(),
+        );
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let token = catalog.context().await.unwrap().client.token().await;
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        assert_eq!(token, Some("ey000000000000".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_oauth_with_oauth2_server_uri() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let mut auth_server = Server::new_async().await;
+        let auth_server_path = "/some/path";
+        let oauth_mock = create_oauth_mock_with_path(&mut auth_server, auth_server_path).await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+        props.insert(
+            "oauth2-server-uri".to_string(),
             format!("{}{}", auth_server.url(), auth_server_path).to_string(),
         );
 
