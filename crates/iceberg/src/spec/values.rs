@@ -26,19 +26,21 @@ use std::hash::Hash;
 use std::ops::Index;
 use std::str::FromStr;
 
+pub use _serde::RawLiteral;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
-use serde::de::{self, MapAccess};
+use serde::de::{
+    MapAccess, {self},
+};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
-pub use _serde::RawLiteral;
-
+use super::datatypes::{PrimitiveType, Type};
 use crate::error::Result;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
@@ -46,8 +48,6 @@ use crate::spec::values::timestamp::microseconds_to_datetime;
 use crate::spec::values::timestamptz::microseconds_to_datetimetz;
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::{ensure_data_valid, Error, ErrorKind};
-
-use super::datatypes::{PrimitiveType, Type};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -154,9 +154,7 @@ impl<'de> Deserialize<'de> for Datum {
             }
 
             fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-            where
-                A: serde::de::SeqAccess<'de>,
-            {
+            where A: serde::de::SeqAccess<'de> {
                 let r#type = seq
                     .next_element::<PrimitiveType>()?
                     .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
@@ -175,9 +173,7 @@ impl<'de> Deserialize<'de> for Datum {
             }
 
             fn visit_map<V>(self, mut map: V) -> std::result::Result<Datum, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
+            where V: MapAccess<'de> {
                 let mut raw_primitive: Option<RawLiteral> = None;
                 let mut r#type: Option<PrimitiveType> = None;
                 while let Some(key) = map.next_key()? {
@@ -458,11 +454,14 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::bool(true);
     ///
     /// assert_eq!(format!("{}", t), "true".to_string());
-    /// assert_eq!(Literal::from(t), Literal::Primitive(PrimitiveLiteral::Boolean(true)));
+    /// assert_eq!(
+    ///     Literal::from(t),
+    ///     Literal::Primitive(PrimitiveLiteral::Boolean(true))
+    /// );
     /// ```
     pub fn bool<T: Into<bool>>(t: T) -> Self {
         Self {
@@ -476,11 +475,14 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::bool_from_str("false").unwrap();
     ///
     /// assert_eq!(&format!("{}", t), "false");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(false)), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Boolean(false)),
+    ///     t.into()
+    /// );
     /// ```
     pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let v = s.as_ref().parse::<bool>().map_err(|e| {
@@ -493,7 +495,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::int(23i8);
     ///
     /// assert_eq!(&format!("{}", t), "23");
@@ -510,7 +512,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::long(24i8);
     ///
     /// assert_eq!(&format!("{t}"), "24");
@@ -527,12 +529,15 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
-    /// let t = Datum::float( 32.1f32 );
+    /// let t = Datum::float(32.1f32);
     ///
     /// assert_eq!(&format!("{t}"), "32.1");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))),
+    ///     t.into()
+    /// );
     /// ```
     pub fn float<T: Into<f32>>(t: T) -> Self {
         Self {
@@ -545,12 +550,15 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
-    /// let t = Datum::double( 32.1f64 );
+    /// let t = Datum::double(32.1f64);
     ///
     /// assert_eq!(&format!("{t}"), "32.1");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))),
+    ///     t.into()
+    /// );
     /// ```
     pub fn double<T: Into<f64>>(t: T) -> Self {
         Self {
@@ -563,8 +571,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    ///
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// // 2 days after 1970-01-01
     /// let t = Datum::date(2);
     ///
@@ -584,7 +591,7 @@ impl Datum {
     ///
     /// Example
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::date_from_str("1970-01-05").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-05");
@@ -609,7 +616,7 @@ impl Datum {
     /// Example:
     ///
     ///```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::date_from_ymd(1970, 1, 5).unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-05");
@@ -633,13 +640,13 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let micro_secs = {
     ///     1 * 3600 * 1_000_000 + // 1 hour
     ///     2 * 60 * 1_000_000 +   // 2 minutes
     ///     1 * 1_000_000 + // 1 second
-    ///     888999  // microseconds
-    ///  };
+    ///     888999 // microseconds
+    /// };
     ///
     /// let t = Datum::time_micros(micro_secs).unwrap();
     ///
@@ -683,7 +690,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::time_from_str("01:02:01.888999777").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "01:02:01.888999");
@@ -706,8 +713,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    ///
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "22:15:33.000111");
@@ -726,7 +732,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamp_micros(1000);
     ///
@@ -744,14 +749,14 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamp_from_datetime(
     ///     NaiveDate::from_ymd_opt(1992, 3, 1)
     ///         .unwrap()
     ///         .and_hms_micro_opt(1, 2, 3, 88)
-    ///         .unwrap());
+    ///         .unwrap(),
+    /// );
     ///
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
@@ -767,7 +772,7 @@ impl Datum {
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::timestamp_from_str("1992-03-01T01:02:03.000088").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
@@ -785,7 +790,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamptz_micros(1000);
     ///
@@ -802,7 +806,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use chrono::{TimeZone, Utc};
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamptz_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
@@ -821,7 +824,7 @@ impl Datum {
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::timestamptz_from_str("1992-03-01T01:02:03.000088+08:00").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1992-02-29 17:02:03.000088 UTC");
@@ -856,8 +859,8 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use uuid::uuid;
     /// use iceberg::spec::Datum;
+    /// use uuid::uuid;
     /// let t = Datum::uuid(uuid!("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8"));
     ///
     /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
@@ -874,7 +877,7 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Datum};
+    /// use iceberg::spec::Datum;
     /// let t = Datum::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
@@ -895,7 +898,7 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::fixed(vec![1u8, 2u8]);
     ///
     /// assert_eq!(&format!("{t}"), "0102");
@@ -930,9 +933,9 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
+    /// use iceberg::spec::Datum;
     /// use itertools::assert_equal;
     /// use rust_decimal::Decimal;
-    /// use iceberg::spec::Datum;
     /// let t = Datum::decimal_from_str("123.45").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "123.45");
@@ -950,8 +953,8 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use rust_decimal::Decimal;
     /// use iceberg::spec::Datum;
+    /// use rust_decimal::Decimal;
     ///
     /// let t = Datum::decimal(Decimal::new(123, 2)).unwrap();
     ///
@@ -1194,11 +1197,14 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use ordered_float::OrderedFloat;
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
-    /// let t = Literal::float( 32.1f32 );
+    /// use ordered_float::OrderedFloat;
+    /// let t = Literal::float(32.1f32);
     ///
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t);
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))),
+    ///     t
+    /// );
     /// ```
     pub fn float<T: Into<f32>>(t: T) -> Self {
         Self::Primitive(PrimitiveLiteral::Float(OrderedFloat(t.into())))
@@ -1208,11 +1214,14 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use ordered_float::OrderedFloat;
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
-    /// let t = Literal::double( 32.1f64 );
+    /// use ordered_float::OrderedFloat;
+    /// let t = Literal::double(32.1f64);
     ///
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t);
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))),
+    ///     t
+    /// );
     /// ```
     pub fn double<T: Into<f64>>(t: T) -> Self {
         Self::Primitive(PrimitiveLiteral::Double(OrderedFloat(t.into())))
@@ -1296,7 +1305,7 @@ impl Literal {
     ///     1 * 3600 * 1_000_000 + // 1 hour
     ///     2 * 60 * 1_000_000 +   // 2 minutes
     ///     1 * 1_000_000 + // 1 second
-    ///     888999  // microseconds
+    ///     888999 // microseconds
     /// };
     /// assert_eq!(Literal::time(micro_secs), t);
     /// ```
@@ -1318,7 +1327,6 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    ///
     /// use iceberg::spec::Literal;
     /// let t = Literal::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
@@ -1365,10 +1373,13 @@ impl Literal {
     /// let t = Literal::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
     ///
     /// let t2 = {
-    ///  let date = NaiveDate::from_ymd_opt(2012, 12, 12).unwrap();
-    ///  let time = NaiveTime::from_hms_micro_opt(12, 12, 12, 889900).unwrap();
-    ///  let dt = NaiveDateTime::new(date, time);
-    ///  Literal::timestamp_from_datetime(DateTime::<FixedOffset>::from_local(dt, FixedOffset::west_opt(4 * 3600).unwrap()))
+    ///     let date = NaiveDate::from_ymd_opt(2012, 12, 12).unwrap();
+    ///     let time = NaiveTime::from_hms_micro_opt(12, 12, 12, 889900).unwrap();
+    ///     let dt = NaiveDateTime::new(date, time);
+    ///     Literal::timestamp_from_datetime(DateTime::<FixedOffset>::from_local(
+    ///         dt,
+    ///         FixedOffset::west_opt(4 * 3600).unwrap(),
+    ///     ))
     /// };
     ///
     /// assert_eq!(t, t2);
@@ -1405,8 +1416,8 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use uuid::Uuid;
     /// use iceberg::spec::Literal;
+    /// use uuid::Uuid;
     /// let t1 = Literal::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
     /// let t2 = Literal::uuid(Uuid::from_u128_le(0xd8d7d6d5d4d3d2d1c2c1b2b1a4a3a2a1));
     ///
@@ -1463,8 +1474,8 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use rust_decimal::Decimal;
     /// use iceberg::spec::Literal;
+    /// use rust_decimal::Decimal;
     /// let t1 = Literal::decimal(12345);
     /// let t2 = Literal::decimal_from_str("123.45").unwrap();
     ///
@@ -1941,8 +1952,7 @@ mod timestamp {
 }
 
 mod timestamptz {
-    use chrono::DateTime;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
@@ -1956,21 +1966,15 @@ mod timestamptz {
 }
 
 mod _serde {
-    use serde::{
-        de::Visitor,
-        ser::{SerializeMap, SerializeSeq, SerializeStruct},
-        Deserialize, Serialize,
-    };
+    use serde::de::Visitor;
+    use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
+    use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
-    use serde_derive::Deserialize as DeserializeDerive;
-    use serde_derive::Serialize as SerializeDerive;
-
-    use crate::{
-        spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME},
-        Error, ErrorKind,
-    };
+    use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
 
     use super::{Literal, Map, PrimitiveLiteral};
+    use crate::spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME};
+    use crate::{Error, ErrorKind};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -2013,9 +2017,7 @@ mod _serde {
 
     impl Serialize for Record {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let len = self.required.len() + self.optional.len();
             let mut record = serializer.serialize_struct("", len)?;
             for (k, v) in &self.required {
@@ -2036,9 +2038,7 @@ mod _serde {
 
     impl Serialize for List {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let mut seq = serializer.serialize_seq(Some(self.list.len()))?;
             for value in &self.list {
                 if self.required {
@@ -2063,9 +2063,7 @@ mod _serde {
 
     impl Serialize for StringMap {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let mut map = serializer.serialize_map(Some(self.raw.len()))?;
             for (k, v) in &self.raw {
                 if self.required {
@@ -2087,9 +2085,7 @@ mod _serde {
 
     impl<'de> Deserialize<'de> for RawLiteralEnum {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
+        where D: serde::Deserializer<'de> {
             struct RawLiteralVisitor;
             impl<'de> Visitor<'de> for RawLiteralVisitor {
                 type Value = RawLiteralEnum;
@@ -2099,80 +2095,58 @@ mod _serde {
                 }
 
                 fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Boolean(v))
                 }
 
                 fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Int(v))
                 }
 
                 fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Long(v))
                 }
 
                 /// Used in json
                 fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Long(v as i64))
                 }
 
                 fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Float(v))
                 }
 
                 fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Double(v))
                 }
 
                 fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Bytes(ByteBuf::from(v)))
                 }
 
                 fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_unit<E>(self) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Null)
                 }
 
                 fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-                where
-                    A: serde::de::MapAccess<'de>,
-                {
+                where A: serde::de::MapAccess<'de> {
                     let mut required = Vec::new();
                     while let Some(key) = map.next_key::<String>()? {
                         let value = map.next_value::<RawLiteralEnum>()?;
@@ -2185,9 +2159,7 @@ mod _serde {
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                where
-                    A: serde::de::SeqAccess<'de>,
-                {
+                where A: serde::de::SeqAccess<'de> {
                     let mut list = Vec::new();
                     while let Some(value) = seq.next_element::<RawLiteralEnum>()? {
                         list.push(Some(value));
@@ -2635,17 +2607,13 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use apache_avro::{to_value, types::Value};
-
-    use crate::{
-        avro::schema_to_avro_schema,
-        spec::{
-            datatypes::{ListType, MapType, NestedField, StructType},
-            Schema,
-        },
-    };
+    use apache_avro::to_value;
+    use apache_avro::types::Value;
 
     use super::*;
+    use crate::avro::schema_to_avro_schema;
+    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
+    use crate::spec::Schema;
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();

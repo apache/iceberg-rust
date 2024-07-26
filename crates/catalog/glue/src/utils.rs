@@ -18,15 +18,14 @@
 use std::collections::HashMap;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
-use aws_sdk_glue::{
-    config::Credentials,
-    types::{Database, DatabaseInput, StorageDescriptor, TableInput},
-};
+use aws_sdk_glue::config::Credentials;
+use aws_sdk_glue::types::{Database, DatabaseInput, StorageDescriptor, TableInput};
 use iceberg::spec::TableMetadata;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use uuid::Uuid;
 
-use crate::{error::from_aws_build_error, schema::GlueSchemaBuilder};
+use crate::error::from_aws_build_error;
+use crate::schema::GlueSchemaBuilder;
 
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";
@@ -286,15 +285,13 @@ macro_rules! with_catalog_id {
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_glue::{config::ProvideCredentials, types::Column};
-    use iceberg::{
-        spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type},
-        Namespace, Result, TableCreation,
-    };
-
-    use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
+    use aws_sdk_glue::config::ProvideCredentials;
+    use aws_sdk_glue::types::Column;
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type};
+    use iceberg::{Namespace, Result, TableCreation};
 
     use super::*;
+    use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
 
     fn create_metadata(schema: Schema) -> Result<TableMetadata> {
         let table_creation = TableCreation::builder()

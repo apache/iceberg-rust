@@ -16,13 +16,13 @@
 // under the License.
 
 //! Table API for Apache Iceberg
+use typed_builder::TypedBuilder;
+
 use crate::arrow::ArrowReaderBuilder;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
-use crate::Result;
-use crate::TableIdent;
-use typed_builder::TypedBuilder;
+use crate::{Result, TableIdent};
 
 /// Table represents a table in the catalog.
 #[derive(TypedBuilder, Debug, Clone)]
@@ -88,14 +88,20 @@ impl Table {
 /// # use iceberg::TableIdent;
 /// # async fn example() {
 /// let metadata_file_location = "s3://bucket_name/path/to/metadata.json";
-/// let file_io = FileIO::from_path(&metadata_file_location).unwrap().build().unwrap();
+/// let file_io = FileIO::from_path(&metadata_file_location)
+///     .unwrap()
+///     .build()
+///     .unwrap();
 /// let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
-/// let static_table = StaticTable::from_metadata_file(&metadata_file_location, static_identifier, file_io).await.unwrap();
+/// let static_table =
+///     StaticTable::from_metadata_file(&metadata_file_location, static_identifier, file_io)
+///         .await
+///         .unwrap();
 /// let snapshot_id = static_table
-/// .metadata()
-/// .current_snapshot()
-/// .unwrap()
-/// .snapshot_id();
+///     .metadata()
+///     .current_snapshot()
+///     .unwrap()
+///     .snapshot_id();
 /// # }
 /// ```
 pub struct StaticTable(Table);

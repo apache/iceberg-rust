@@ -16,25 +16,25 @@
 // under the License.
 
 //! Manifest for Iceberg.
-use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
+use std::cmp::min;
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
-use super::UNASSIGNED_SEQUENCE_NUMBER;
+use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
+use bytes::Bytes;
+use serde_json::to_vec;
+use typed_builder::TypedBuilder;
+
+use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 use super::{
     Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
-    SchemaId, Struct, INITIAL_SEQUENCE_NUMBER,
+    SchemaId, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
-use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
-use bytes::Bytes;
-use serde_json::to_vec;
-use std::cmp::min;
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
-use typed_builder::TypedBuilder;
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -325,13 +325,11 @@ mod _const_schema {
     use apache_avro::Schema as AvroSchema;
     use once_cell::sync::Lazy;
 
-    use crate::{
-        avro::schema_to_avro_schema,
-        spec::{
-            ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
-        },
-        Error,
+    use crate::avro::schema_to_avro_schema;
+    use crate::spec::{
+        ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,
     };
+    use crate::Error;
 
     static STATUS: Lazy<NestedFieldRef> = {
         Lazy::new(|| {
@@ -1206,17 +1204,9 @@ mod _serde {
     use serde_derive::{Deserialize, Serialize};
     use serde_with::serde_as;
 
-    use crate::spec::Datum;
-    use crate::spec::Literal;
-    use crate::spec::RawLiteral;
-    use crate::spec::Schema;
-    use crate::spec::Struct;
-    use crate::spec::StructType;
-    use crate::spec::Type;
-    use crate::Error;
-    use crate::ErrorKind;
-
     use super::ManifestEntry;
+    use crate::spec::{Datum, Literal, RawLiteral, Schema, Struct, StructType, Type};
+    use crate::{Error, ErrorKind};
 
     #[derive(Serialize, Deserialize)]
     pub(super) struct ManifestEntryV2 {
@@ -1478,15 +1468,16 @@ mod _serde {
 
     #[cfg(test)]
     mod tests {
-        use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
         use std::collections::HashMap;
+
+        use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
 
         #[test]
         fn test_parse_negative_manifest_entry() {
-            let entries = vec![
-                I64Entry { key: 1, value: -1 },
-                I64Entry { key: 2, value: 3 },
-            ];
+            let entries = vec![I64Entry { key: 1, value: -1 }, I64Entry {
+                key: 2,
+                value: 3,
+            }];
 
             let ret = parse_i64_entry(entries).unwrap();
 
@@ -1499,18 +1490,13 @@ mod _serde {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
 
     use tempfile::TempDir;
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::Literal;
-    use crate::spec::NestedField;
-    use crate::spec::PrimitiveType;
-    use crate::spec::Struct;
-    use crate::spec::Transform;
-    use crate::spec::Type;
-    use std::sync::Arc;
+    use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
     #[tokio::test]
     async fn test_parse_manifest_v2_unpartition() {

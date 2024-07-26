@@ -17,14 +17,15 @@
 
 //! This module contains transaction api.
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::mem::discriminant;
+
 use crate::error::Result;
 use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::mem::discriminant;
 
 /// Table transaction.
 pub struct Transaction<'a> {
@@ -207,14 +208,15 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::BufReader;
+
     use crate::io::FileIO;
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::{TableIdent, TableRequirement, TableUpdate};
-    use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::BufReader;
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(

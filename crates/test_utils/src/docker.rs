@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cmd::{get_cmd_output, run_command};
 use std::process::Command;
+
+use crate::cmd::{get_cmd_output, run_command};
 
 /// A utility to manage the lifecycle of `docker compose`.
 ///

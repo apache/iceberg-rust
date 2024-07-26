@@ -17,12 +17,11 @@
 
 //! This module contains the location generator and file name generator for generating path of data file.
 
-use std::sync::{atomic::AtomicU64, Arc};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
-use crate::{
-    spec::{DataFileFormat, TableMetadata},
-    Error, ErrorKind, Result,
-};
+use crate::spec::{DataFileFormat, TableMetadata};
+use crate::{Error, ErrorKind, Result};
 
 /// `LocationGenerator` used to generate the location of data file.
 pub trait LocationGenerator: Clone + Send + 'static {
@@ -132,14 +131,11 @@ pub(crate) mod test {
 
     use uuid::Uuid;
 
-    use crate::{
-        spec::{FormatVersion, TableMetadata},
-        writer::file_writer::location_generator::{
-            FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
-        },
-    };
-
     use super::LocationGenerator;
+    use crate::spec::{FormatVersion, TableMetadata};
+    use crate::writer::file_writer::location_generator::{
+        FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
+    };
 
     #[derive(Clone)]
     pub(crate) struct MockLocationGenerator {

@@ -18,11 +18,6 @@
 //! Conversion between iceberg and avro schema.
 use std::collections::BTreeMap;
 
-use crate::spec::{
-    visit_schema, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType,
-};
-use crate::{Error, ErrorKind, Result};
 use apache_avro::schema::{
     DecimalSchema, FixedSchema, Name, RecordField as AvroRecordField, RecordFieldOrder,
     RecordSchema, UnionSchema,
@@ -30,6 +25,12 @@ use apache_avro::schema::{
 use apache_avro::Schema as AvroSchema;
 use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
+
+use crate::spec::{
+    visit_schema, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
+    StructType,
+};
+use crate::{Error, ErrorKind, Result};
 
 const FILED_ID_PROP: &str = "field-id";
 const UUID_BYTES: usize = 16;
@@ -286,12 +287,14 @@ fn avro_optional(avro_schema: AvroSchema) -> Result<AvroSchema> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::read_to_string;
+
+    use apache_avro::schema::{Namespace, UnionSchema};
+    use apache_avro::Schema as AvroSchema;
+
     use super::*;
     use crate::ensure_data_valid;
     use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
-    use apache_avro::schema::{Namespace, UnionSchema};
-    use apache_avro::Schema as AvroSchema;
-    use std::fs::read_to_string;
 
     fn is_avro_optional(avro_schema: &AvroSchema) -> bool {
         match avro_schema {

@@ -17,6 +17,16 @@
 
 //! Table scan api.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow_array::RecordBatch;
+use async_stream::try_stream;
+use futures::stream::BoxStream;
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
+
 use crate::arrow::ArrowReaderBuilder;
 use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
@@ -30,14 +40,6 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
-use arrow_array::RecordBatch;
-use async_stream::try_stream;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-use serde::{Deserialize, Serialize};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
@@ -528,6 +530,20 @@ impl FileScanTask {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::fs::File;
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+    use futures::{stream, TryStreamExt};
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
+    use tempfile::TempDir;
+    use tera::{Context, Tera};
+    use uuid::Uuid;
+
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
@@ -540,18 +556,6 @@ mod tests {
     };
     use crate::table::Table;
     use crate::TableIdent;
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-    use futures::{stream, TryStreamExt};
-    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
-    use parquet::basic::Compression;
-    use parquet::file::properties::WriterProperties;
-    use std::collections::HashMap;
-    use std::fs;
-    use std::fs::File;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-    use tera::{Context, Tera};
-    use uuid::Uuid;
 
     struct TableTestFixture {
         table_location: String,

@@ -17,6 +17,9 @@
 
 //! Integration tests for rest catalog.
 
+use std::collections::HashMap;
+use std::sync::RwLock;
+
 use ctor::{ctor, dtor};
 use iceberg::spec::{FormatVersion, NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
@@ -25,8 +28,6 @@ use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
-use std::collections::HashMap;
-use std::sync::RwLock;
 use tokio::time::sleep;
 
 const REST_CATALOG_PORT: u16 = 8181;

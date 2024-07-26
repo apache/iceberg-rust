@@ -17,9 +17,7 @@
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Display;
-use std::fmt::Formatter;
+use std::fmt::{Debug, Display, Formatter};
 
 /// Result that is a wrapper of `Result<T, iceberg::Error>`
 pub type Result<T> = std::result::Result<T, Error>;

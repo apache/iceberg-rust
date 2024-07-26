@@ -142,7 +142,8 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::{spec::Schema, Result};
+    use iceberg::spec::Schema;
+    use iceberg::Result;
 
     use super::*;
 

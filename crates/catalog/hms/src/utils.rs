@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
-use iceberg::{spec::Schema, Error, ErrorKind, Namespace, NamespaceIdent, Result};
+use iceberg::spec::Schema;
+use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
 use pilota::{AHashMap, FastStr};
-use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::schema::HiveSchemaBuilder;
@@ -336,10 +338,8 @@ fn get_current_time() -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::{
-        spec::{NestedField, PrimitiveType, Type},
-        Namespace, NamespaceIdent,
-    };
+    use iceberg::spec::{NestedField, PrimitiveType, Type};
+    use iceberg::{Namespace, NamespaceIdent};
 
     use super::*;
 

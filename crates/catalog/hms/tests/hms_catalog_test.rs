@@ -235,10 +235,10 @@ async fn test_list_tables() -> Result<()> {
     catalog.create_table(ns.name(), creation).await?;
     let result = catalog.list_tables(ns.name()).await?;
 
-    assert_eq!(
-        result,
-        vec![TableIdent::new(ns.name().clone(), "my_table".to_string())]
-    );
+    assert_eq!(result, vec![TableIdent::new(
+        ns.name().clone(),
+        "my_table".to_string()
+    )]);
 
     Ok(())
 }

@@ -17,10 +17,12 @@
 
 //! This module contains the writer for data file format supported by iceberg: parquet, orc.
 
-use super::CurrentFileStatus;
-use crate::{spec::DataFileBuilder, Result};
 use arrow_array::RecordBatch;
 use futures::Future;
+
+use super::CurrentFileStatus;
+use crate::spec::DataFileBuilder;
+use crate::Result;
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};

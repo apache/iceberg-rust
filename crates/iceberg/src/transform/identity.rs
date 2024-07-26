@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
 use arrow_array::ArrayRef;
 
 use super::TransformFunction;
+use crate::Result;
 
 /// Return identity array.
 #[derive(Debug)]
@@ -40,11 +40,9 @@ mod test {
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
         Timestamptz, Uuid,
     };
-    use crate::spec::StructType;
     use crate::spec::Type::{Primitive, Struct};
+    use crate::spec::{NestedField, StructType, Transform};
     use crate::transform::test::TestTransformFixture;
-
-    use crate::spec::{NestedField, Transform};
 
     #[test]
     fn test_identity_transform() {

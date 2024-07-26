@@ -23,10 +23,11 @@ pub use term::*;
 pub(crate) mod accessor;
 mod predicate;
 pub(crate) mod visitors;
+use std::fmt::{Display, Formatter};
+
 pub use predicate::*;
 
 use crate::spec::SchemaRef;
-use std::fmt::{Display, Formatter};
 
 /// Predicate operators used in expressions.
 ///

@@ -17,12 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde_derive::{Deserialize, Serialize};
-
 use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
 };
+use serde_derive::{Deserialize, Serialize};
 
 pub(super) const OK: u16 = 200u16;
 pub(super) const NO_CONTENT: u16 = 204u16;

@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use opendal::{Operator, Scheme};
+
 use super::FileIOBuilder;
 #[cfg(feature = "storage-fs")]
 use super::FsConfig;
 #[cfg(feature = "storage-s3")]
 use super::S3Config;
 use crate::{Error, ErrorKind};
-use opendal::{Operator, Scheme};
 
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]
@@ -72,7 +73,6 @@ impl Storage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    ///
     pub(crate) fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,

@@ -17,13 +17,13 @@
 
 //! This module provide `DataFileWriter`.
 
-use crate::spec::{DataContentType, DataFile, Struct};
-use crate::writer::file_writer::FileWriter;
-use crate::writer::CurrentFileStatus;
-use crate::writer::{file_writer::FileWriterBuilder, IcebergWriter, IcebergWriterBuilder};
-use crate::Result;
 use arrow_array::RecordBatch;
 use itertools::Itertools;
+
+use crate::spec::{DataContentType, DataFile, Struct};
+use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use crate::Result;
 
 /// Builder for `DataFileWriter`.
 #[derive(Clone)]
@@ -110,25 +110,19 @@ impl<B: FileWriterBuilder> CurrentFileStatus for DataFileWriter<B> {
 mod test {
     use std::sync::Arc;
 
-    use crate::{
-        spec::{DataContentType, Schema, Struct},
-        Result,
-    };
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
-    use crate::{
-        io::FileIOBuilder,
-        spec::DataFileFormat,
-        writer::{
-            base_writer::data_file_writer::{DataFileWriterBuilder, DataFileWriterConfig},
-            file_writer::{
-                location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
-                ParquetWriterBuilder,
-            },
-            IcebergWriter, IcebergWriterBuilder,
-        },
+    use crate::io::FileIOBuilder;
+    use crate::spec::{DataContentType, DataFileFormat, Schema, Struct};
+    use crate::writer::base_writer::data_file_writer::{
+        DataFileWriterBuilder, DataFileWriterConfig,
     };
+    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+    use crate::Result;
 
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {

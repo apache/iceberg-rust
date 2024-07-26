@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use iceberg::{Catalog, NamespaceIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() {

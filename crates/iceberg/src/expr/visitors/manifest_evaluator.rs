@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fnv::FnvHashSet;
+
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, FieldSummary, ManifestFile, PrimitiveLiteral, Type};
-use crate::Result;
-use crate::{Error, ErrorKind};
-use fnv::FnvHashSet;
+use crate::{Error, ErrorKind, Result};
 
 /// Evaluates a [`ManifestFile`] to see if the partition summaries
 /// match a provided [`BoundPredicate`].
@@ -418,6 +418,11 @@ impl ManifestFilterVisitor<'_> {
 
 #[cfg(test)]
 mod test {
+    use std::ops::Not;
+    use std::sync::Arc;
+
+    use fnv::FnvHashSet;
+
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
     use crate::expr::{
         BinaryExpression, Bind, Predicate, PredicateOperator, Reference, SetExpression,
@@ -428,9 +433,6 @@ mod test {
         SchemaRef, Type,
     };
     use crate::Result;
-    use fnv::FnvHashSet;
-    use std::ops::Not;
-    use std::sync::Arc;
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;

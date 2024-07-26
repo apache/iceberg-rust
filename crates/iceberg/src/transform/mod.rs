@@ -17,11 +17,10 @@
 
 //! Transform function used to compute partition values.
 
-use crate::{
-    spec::{Datum, Transform},
-    Error, ErrorKind, Result,
-};
 use arrow_array::ArrayRef;
+
+use crate::spec::{Datum, Transform};
+use crate::{Error, ErrorKind, Result};
 
 mod bucket;
 mod identity;
@@ -72,16 +71,15 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
     use crate::expr::accessor::StructAccessor;
-    use crate::spec::PrimitiveType;
-    use crate::{
-        expr::{
-            BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
-        },
-        spec::{Datum, NestedField, NestedFieldRef, Transform, Type},
-        Result,
+    use crate::expr::{
+        BinaryExpression, BoundPredicate, BoundReference, PredicateOperator, SetExpression,
     };
-    use std::{collections::HashSet, sync::Arc};
+    use crate::spec::{Datum, NestedField, NestedFieldRef, PrimitiveType, Transform, Type};
+    use crate::Result;
 
     /// A utitily struct, test fixture
     /// used for testing the projection on `Transform`

@@ -23,8 +23,9 @@ use fnv::FnvHashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::expr::accessor::{StructAccessor, StructAccessorRef};
-use crate::expr::Bind;
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
+use crate::expr::{
+    BinaryExpression, Bind, Predicate, PredicateOperator, SetExpression, UnaryExpression,
+};
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
 use crate::{Error, ErrorKind};
 
@@ -56,7 +57,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").less_than(Datum::long(10));
@@ -76,7 +76,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").less_than_or_equal_to(Datum::long(10));
@@ -96,7 +95,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").greater_than(Datum::long(10));
@@ -116,7 +114,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").greater_than_or_equal_to(Datum::long(10));
@@ -136,7 +133,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").equal_to(Datum::long(10));
@@ -152,7 +148,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").not_equal_to(Datum::long(10));
@@ -168,7 +163,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").starts_with(Datum::string("foo"));
@@ -188,7 +182,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     ///
@@ -209,7 +202,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").is_nan();
@@ -225,7 +217,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").is_not_nan();
@@ -241,7 +232,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").is_null();
@@ -257,7 +247,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
     /// let expr = Reference::new("a").is_not_null();
@@ -273,7 +262,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
@@ -295,7 +283,6 @@ impl Reference {
     /// # Example
     ///
     /// ```rust
-    ///
     /// use fnv::FnvHashSet;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;

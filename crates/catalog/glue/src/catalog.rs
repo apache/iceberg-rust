@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::fmt::Debug;
+
 use async_trait::async_trait;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::FileIO;
@@ -24,8 +27,6 @@ use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use std::{collections::HashMap, fmt::Debug};
-
 use typed_builder::TypedBuilder;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};

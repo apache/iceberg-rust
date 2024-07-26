@@ -17,14 +17,15 @@
 
 /*!
  * Partitioning
-*/
-use serde::{Deserialize, Serialize};
+ */
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
+use super::transform::Transform;
+use super::{NestedField, Schema, StructType};
 use crate::{Error, ErrorKind};
-
-use super::{transform::Transform, NestedField, Schema, StructType};
 
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
@@ -137,9 +138,8 @@ impl UnboundPartitionSpec {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::Type;
-
     use super::*;
+    use crate::spec::Type;
 
     #[test]
     fn test_partition_spec() {

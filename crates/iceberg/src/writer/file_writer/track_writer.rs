@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::atomic::AtomicI64;
+use std::sync::Arc;
+
 use bytes::Bytes;
-use std::sync::{atomic::AtomicI64, Arc};
 
 use crate::io::FileWrite;
 use crate::Result;
