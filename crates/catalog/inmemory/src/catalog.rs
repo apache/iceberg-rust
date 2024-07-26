@@ -53,7 +53,7 @@ impl InMemoryCatalog {
 
 #[async_trait]
 impl Catalog for InMemoryCatalog {
-    /// List namespaces inside the Catalog.
+    /// List namespaces inside the catalog.
     async fn list_namespaces(
         &self,
         maybe_parent: Option<&NamespaceIdent>,

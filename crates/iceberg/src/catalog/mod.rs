@@ -35,7 +35,7 @@ use uuid::Uuid;
 /// The catalog API for Iceberg Rust.
 #[async_trait]
 pub trait Catalog: Debug + Sync + Send {
-    /// List namespaces inside the Catalog.
+    /// List namespaces inside the catalog.
     async fn list_namespaces(&self, parent: Option<&NamespaceIdent>)
         -> Result<Vec<NamespaceIdent>>;
 
