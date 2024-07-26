@@ -47,6 +47,11 @@ jobs:
       - name: Copy asf file
         run: cp .asf.yaml ./website/book/.asf.yaml
 
+      - name: Build API docs
+        run: |
+          cargo doc --no-deps --workspace --all-features
+          cp -r target/doc ./website/book/api
+
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4.0.0
         if: github.event_name == 'push' && github.ref_name == 'main'
