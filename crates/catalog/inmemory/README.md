@@ -17,11 +17,11 @@
   ~ under the License.
 -->
 
-# Apache Iceberg In-Memory Catalog Official Native Rust Implementation
+# Apache Iceberg Memory Catalog Official Native Rust Implementation
 
-[![crates.io](https://img.shields.io/crates/v/iceberg-catalog-inmemory.svg)](https://crates.io/crates/iceberg-catalog-inmemory)
-[![docs.rs](https://img.shields.io/docsrs/iceberg-catalog-inmemory.svg)](https://docs.rs/iceberg/latest/iceberg-catalog-inmemory/)
+[![crates.io](https://img.shields.io/crates/v/iceberg-catalog-memory.svg)](https://crates.io/crates/iceberg-catalog-memory)
+[![docs.rs](https://img.shields.io/docsrs/iceberg-catalog-memory.svg)](https://docs.rs/iceberg/latest/iceberg-catalog-memory/)
 
-This crate contains the official Native Rust implementation of Apache Iceberg In-Memory Catalog.
+This crate contains the official Native Rust implementation of Apache Iceberg Memory Catalog.
 
-See the [API documentation](https://docs.rs/iceberg-catalog-inmemory/latest) for examples and the full API.
+See the [API documentation](https://docs.rs/iceberg-catalog-memory/latest) for examples and the full API.

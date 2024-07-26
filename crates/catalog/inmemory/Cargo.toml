@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-inmemory"
+name = "iceberg-catalog-memory"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Rust In-Memory Catalog API"
+description = "Apache Iceberg Rust Memory Catalog API"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "inmemory", "catalog"]
+keywords = ["iceberg", "memory", "catalog"]
 
 [dependencies]
 async-trait = { workspace = true }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg in-memory Catalog API implementation.
+//! Iceberg memory Catalog API implementation.
 
 #![deny(missing_docs)]
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains in-memory catalog implementation.
+//! This module contains memory catalog implementation.
 
 use futures::lock::Mutex;
 use iceberg::io::FileIO;
@@ -34,15 +34,15 @@ use iceberg::{
 
 use crate::namespace_state::NamespaceState;
 
-/// In-memory catalog implementation.
+/// Memory catalog implementation.
 #[derive(Debug)]
-pub struct InMemoryCatalog {
+pub struct MemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
 }
 
-impl InMemoryCatalog {
-    /// Creates an in-memory catalog.
+impl MemoryCatalog {
+    /// Creates an memory catalog.
     pub fn new(file_io: FileIO) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
@@ -52,7 +52,7 @@ impl InMemoryCatalog {
 }
 
 #[async_trait]
-impl Catalog for InMemoryCatalog {
+impl Catalog for MemoryCatalog {
     /// List namespaces inside the catalog.
     async fn list_namespaces(
         &self,
@@ -261,7 +261,7 @@ impl Catalog for InMemoryCatalog {
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            "In-memory catalog does not currently support updating tables.",
+            "MemoryCatalog does not currently support updating tables.",
         ))
     }
 }
@@ -277,9 +277,9 @@ mod tests {
 
     use super::*;
 
-    fn new_inmemory_catalog() -> impl Catalog {
+    fn new_memory_catalog() -> impl Catalog {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        InMemoryCatalog::new(file_io)
+        MemoryCatalog::new(file_io)
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -376,14 +376,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_empty_vector() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![]);
     }
 
     #[tokio::test]
     async fn test_list_namespaces_returns_single_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("abc".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -395,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_multiple_namespaces() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("a".into());
         let namespace_ident_2 = NamespaceIdent::new("b".into());
         create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
@@ -408,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_only_top_level_namespaces() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("a".into());
         let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_3 = NamespaceIdent::new("b".into());
@@ -426,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_no_namespaces_under_parent() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("a".into());
         let namespace_ident_2 = NamespaceIdent::new("b".into());
         create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
@@ -442,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_namespace_under_parent() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("a".into());
         let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_3 = NamespaceIdent::new("c".into());
@@ -468,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_namespaces_returns_multiple_namespaces_under_parent() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("a".to_string());
         let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "a"]).unwrap();
         let namespace_ident_3 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
@@ -503,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_namespace_exists_returns_false() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -515,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_namespace_exists_returns_true() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -524,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_namespace_with_empty_properties() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
 
         assert_eq!(
@@ -543,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_namespace_with_properties() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("abc".into());
 
         let mut properties: HashMap<String, String> = HashMap::new();
@@ -565,7 +565,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_namespace_throws_error_if_namespace_already_exists() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -589,7 +589,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let parent_namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &parent_namespace_ident).await;
 
@@ -611,7 +611,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_deeply_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -634,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_nested_namespace_throws_error_if_top_level_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let nested_namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
 
@@ -656,7 +656,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_deeply_nested_namespace_throws_error_if_intermediate_namespace_doesnt_exist(
     ) {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let namespace_ident_a = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident_a).await;
@@ -691,7 +691,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("abc".into());
 
         let mut properties: HashMap<String, String> = HashMap::new();
@@ -709,7 +709,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -722,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_deeply_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
@@ -744,7 +744,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_namespace_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         create_namespace(&catalog, &NamespaceIdent::new("a".into())).await;
 
         let non_existent_namespace_ident = NamespaceIdent::new("b".into());
@@ -763,7 +763,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("abc".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -783,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -804,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_deeply_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
@@ -834,7 +834,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_namespace_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         create_namespace(&catalog, &NamespaceIdent::new("abc".into())).await;
 
         let non_existent_namespace_ident = NamespaceIdent::new("def".into());
@@ -853,7 +853,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("abc".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -864,7 +864,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -881,7 +881,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_deeply_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
@@ -915,7 +915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_namespace_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let non_existent_namespace_ident = NamespaceIdent::new("abc".into());
         assert_eq!(
@@ -933,7 +933,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_namespace_throws_error_if_nested_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         create_namespace(&catalog, &NamespaceIdent::new("a".into())).await;
 
         let non_existent_namespace_ident =
@@ -953,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dropping_a_namespace_also_drops_namespaces_nested_under_that_one() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -971,7 +971,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_table_with_location() {
         let tmp_dir = TempDir::new().unwrap();
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -1013,7 +1013,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_table_throws_error_if_table_with_same_name_already_exists() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
         let table_name = "tbl1";
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_returns_empty_vector() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_returns_a_single_table() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -1069,7 +1069,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_returns_multiple_tables() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -1085,7 +1085,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_returns_tables_from_correct_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_1 = NamespaceIdent::new("n1".into());
         let namespace_ident_2 = NamespaceIdent::new("n2".into());
         create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
@@ -1112,7 +1112,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_returns_table_under_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tables_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let non_existent_namespace_ident = NamespaceIdent::new("n1".into());
 
@@ -1147,7 +1147,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_table() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
@@ -1158,7 +1158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_table_drops_table_under_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -1176,7 +1176,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_table_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let non_existent_namespace_ident = NamespaceIdent::new("n1".into());
         let non_existent_table_ident =
@@ -1197,7 +1197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_table_throws_error_if_table_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
 
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_exists_returns_true() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
@@ -1229,7 +1229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_exists_returns_false() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let non_existent_table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
@@ -1242,7 +1242,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_exists_under_nested_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
@@ -1261,7 +1261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_exists_throws_error_if_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let non_existent_namespace_ident = NamespaceIdent::new("n1".into());
         let non_existent_table_ident =
@@ -1282,7 +1282,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_in_same_namespace() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let src_table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_across_namespaces() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let src_namespace_ident = NamespaceIdent::new("a".into());
         let dst_namespace_ident = NamespaceIdent::new("b".into());
         create_namespaces(&catalog, &vec![&src_namespace_ident, &dst_namespace_ident]).await;
@@ -1328,7 +1328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_src_table_is_same_as_dst_table() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let table_ident = TableIdent::new(namespace_ident.clone(), "tbl".into());
@@ -1347,7 +1347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_across_nested_namespaces() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
         let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
@@ -1377,7 +1377,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_throws_error_if_src_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
 
         let non_existent_src_namespace_ident = NamespaceIdent::new("n1".into());
         let src_table_ident =
@@ -1402,7 +1402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_throws_error_if_dst_namespace_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let src_namespace_ident = NamespaceIdent::new("n1".into());
         let src_table_ident = TableIdent::new(src_namespace_ident.clone(), "tbl1".into());
         create_namespace(&catalog, &src_namespace_ident).await;
@@ -1426,7 +1426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_throws_error_if_src_table_doesnt_exist() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let src_table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
@@ -1444,7 +1444,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_table_throws_error_if_dst_table_already_exists() {
-        let catalog = new_inmemory_catalog();
+        let catalog = new_memory_catalog();
         let namespace_ident = NamespaceIdent::new("n1".into());
         create_namespace(&catalog, &namespace_ident).await;
         let src_table_ident = TableIdent::new(namespace_ident.clone(), "tbl1".into());
