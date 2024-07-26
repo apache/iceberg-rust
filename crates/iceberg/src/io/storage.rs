@@ -18,6 +18,8 @@
 use super::FileIOBuilder;
 #[cfg(feature = "storage-fs")]
 use super::FsConfig;
+#[cfg(feature = "storage-memory")]
+use super::MemoryConfig;
 #[cfg(feature = "storage-s3")]
 use super::S3Config;
 use crate::{Error, ErrorKind};
@@ -26,6 +28,8 @@ use opendal::{Operator, Scheme};
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]
 pub(crate) enum Storage {
+    #[cfg(feature = "storage-memory")]
+    Memory { config: MemoryConfig },
     #[cfg(feature = "storage-fs")]
     LocalFs { config: FsConfig },
     #[cfg(feature = "storage-s3")]
@@ -44,6 +48,10 @@ impl Storage {
         let scheme = Self::parse_scheme(&scheme_str)?;
 
         match scheme {
+            #[cfg(feature = "storage-memory")]
+            Scheme::Memory => Ok(Self::Memory {
+                config: MemoryConfig::new(props),
+            }),
             #[cfg(feature = "storage-fs")]
             Scheme::Fs => Ok(Self::LocalFs {
                 config: FsConfig::new(props),
@@ -72,13 +80,22 @@ impl Storage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    ///
     pub(crate) fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
         match self {
+            #[cfg(feature = "storage-memory")]
+            Storage::Memory { config } => {
+                let op = config.build(path)?;
+
+                if let Some(stripped) = path.strip_prefix("memory:/") {
+                    Ok((op, stripped))
+                } else {
+                    Ok((op, &path[1..]))
+                }
+            }
             #[cfg(feature = "storage-fs")]
             Storage::LocalFs { config } => {
                 let op = config.build(path)?;
@@ -116,6 +133,7 @@ impl Storage {
     /// Parse scheme.
     fn parse_scheme(scheme: &str) -> crate::Result<Scheme> {
         match scheme {
+            "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
             s => Ok(s.parse::<Scheme>()?),

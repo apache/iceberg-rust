@@ -478,10 +478,10 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
-    /// use std::ops::Bound::Unbounded;
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
+    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
@@ -505,10 +505,10 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
-    /// use std::ops::Bound::Unbounded;
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
+    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
@@ -534,12 +534,14 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
-    /// use std::ops::Bound::Unbounded;
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::{LogicalExpression, Predicate, Reference};
     /// use iceberg::spec::Datum;
+    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
-    /// let expr2 = Reference::new("b").less_than(Datum::long(5)).and(Reference::new("c").less_than(Datum::long(10)));
+    /// let expr2 = Reference::new("b")
+    ///     .less_than(Datum::long(5))
+    ///     .and(Reference::new("c").less_than(Datum::long(10)));
     ///
     /// let result = expr1.negate();
     /// assert_eq!(&format!("{result}"), "a >= 10");
@@ -632,16 +634,16 @@ impl Not for Predicate {
     /// # Example
     ///     
     ///```rust
-    ///use std::ops::Bound::Unbounded;
-    ///use iceberg::expr::BoundPredicate::Unary;
-    ///use iceberg::expr::Reference;
-    ///use iceberg::spec::Datum;
-    ///let expr1 = Reference::new("a").less_than(Datum::long(10));
-    ///     
-    ///let expr = !expr1;
-    ///     
-    ///assert_eq!(&format!("{expr}"), "NOT (a < 10)");
-    ///```
+    /// use iceberg::expr::BoundPredicate::Unary;
+    /// use iceberg::expr::Reference;
+    /// use iceberg::spec::Datum;
+    /// use std::ops::Bound::Unbounded;
+    /// let expr1 = Reference::new("a").less_than(Datum::long(10));
+    ///
+    /// let expr = !expr1;
+    ///
+    /// assert_eq!(&format!("{expr}"), "NOT (a < 10)");
+    /// ```
     fn not(self) -> Self::Output {
         Predicate::Not(LogicalExpression::new([Box::new(self)]))
     }

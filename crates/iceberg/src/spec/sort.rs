@@ -17,7 +17,7 @@
 
 /*!
  * Sorting
-*/
+ */
 use crate::error::Result;
 use crate::spec::Schema;
 use crate::{Error, ErrorKind};
