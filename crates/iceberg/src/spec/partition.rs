@@ -17,7 +17,7 @@
 
 /*!
  * Partitioning
-*/
+ */
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use typed_builder::TypedBuilder;

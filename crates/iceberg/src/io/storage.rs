@@ -80,7 +80,6 @@ impl Storage {
     ///
     /// * An [`opendal::Operator`] instance used to operate on file.
     /// * Relative path to the root uri of [`opendal::Operator`].
-    ///
     pub(crate) fn create_operator<'a>(
         &self,
         path: &'a impl AsRef<str>,

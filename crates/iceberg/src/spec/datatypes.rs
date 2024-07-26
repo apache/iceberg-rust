@@ -17,7 +17,7 @@
 
 /*!
  * Data Types
-*/
+ */
 use crate::ensure_data_valid;
 use crate::error::Result;
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};

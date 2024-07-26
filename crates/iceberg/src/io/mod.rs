@@ -20,23 +20,41 @@
 //! # How to build `FileIO`
 //!
 //! We provided a `FileIOBuilder` to build `FileIO` from scratch. For example:
+//!
 //! ```rust
 //! use iceberg::io::{FileIOBuilder, S3_REGION};
+//! use iceberg::Result;
 //!
+//! # fn test() -> Result<()> {
+//! // Build a memory file io.
+//! let file_io = FileIOBuilder::new("memory").build()?;
+//! // Build an fs file io.
+//! let file_io = FileIOBuilder::new("fs").build()?;
+//! // Build an s3 file io.
 //! let file_io = FileIOBuilder::new("s3")
 //!     .with_prop(S3_REGION, "us-east-1")
-//!     .build()
-//!     .unwrap();
+//!     .build()?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Or you can pass a path to ask `FileIO` to infer schema for you:
+//!
 //! ```rust
 //! use iceberg::io::{FileIO, S3_REGION};
-//! let file_io = FileIO::from_path("s3://bucket/a")
-//!     .unwrap()
+//! use iceberg::Result;
+//!
+//! # fn test() -> Result<()> {
+//! // Build a memory file io.
+//! let file_io = FileIO::from_path("memory:///")?.build()?;
+//! // Build an fs file io.
+//! let file_io = FileIO::from_path("fs:///tmp")?.build()?;
+//! // Build an s3 file io.
+//! let file_io = FileIO::from_path("s3://bucket/a")?
 //!     .with_prop(S3_REGION, "us-east-1")
-//!     .build()
-//!     .unwrap();
+//!     .build()?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # How to use `FileIO`

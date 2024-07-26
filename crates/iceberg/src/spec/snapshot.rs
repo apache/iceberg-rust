@@ -17,7 +17,7 @@
 
 /*!
  * Snapshots
-*/
+ */
 use crate::error::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};

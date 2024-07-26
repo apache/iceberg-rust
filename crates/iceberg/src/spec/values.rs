@@ -458,11 +458,14 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::bool(true);
     ///
     /// assert_eq!(format!("{}", t), "true".to_string());
-    /// assert_eq!(Literal::from(t), Literal::Primitive(PrimitiveLiteral::Boolean(true)));
+    /// assert_eq!(
+    ///     Literal::from(t),
+    ///     Literal::Primitive(PrimitiveLiteral::Boolean(true))
+    /// );
     /// ```
     pub fn bool<T: Into<bool>>(t: T) -> Self {
         Self {
@@ -476,11 +479,14 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::bool_from_str("false").unwrap();
     ///
     /// assert_eq!(&format!("{}", t), "false");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Boolean(false)), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Boolean(false)),
+    ///     t.into()
+    /// );
     /// ```
     pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let v = s.as_ref().parse::<bool>().map_err(|e| {
@@ -493,7 +499,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::int(23i8);
     ///
     /// assert_eq!(&format!("{}", t), "23");
@@ -510,7 +516,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::long(24i8);
     ///
     /// assert_eq!(&format!("{t}"), "24");
@@ -527,12 +533,15 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
-    /// let t = Datum::float( 32.1f32 );
+    /// let t = Datum::float(32.1f32);
     ///
     /// assert_eq!(&format!("{t}"), "32.1");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))),
+    ///     t.into()
+    /// );
     /// ```
     pub fn float<T: Into<f32>>(t: T) -> Self {
         Self {
@@ -545,12 +554,15 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// use ordered_float::OrderedFloat;
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
-    /// let t = Datum::double( 32.1f64 );
+    /// let t = Datum::double(32.1f64);
     ///
     /// assert_eq!(&format!("{t}"), "32.1");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t.into());
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))),
+    ///     t.into()
+    /// );
     /// ```
     pub fn double<T: Into<f64>>(t: T) -> Self {
         Self {
@@ -563,8 +575,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    ///
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// // 2 days after 1970-01-01
     /// let t = Datum::date(2);
     ///
@@ -584,7 +595,7 @@ impl Datum {
     ///
     /// Example
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::date_from_str("1970-01-05").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-05");
@@ -609,7 +620,7 @@ impl Datum {
     /// Example:
     ///
     ///```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::date_from_ymd(1970, 1, 5).unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-05");
@@ -633,13 +644,13 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let micro_secs = {
     ///     1 * 3600 * 1_000_000 + // 1 hour
     ///     2 * 60 * 1_000_000 +   // 2 minutes
     ///     1 * 1_000_000 + // 1 second
-    ///     888999  // microseconds
-    ///  };
+    ///     888999 // microseconds
+    /// };
     ///
     /// let t = Datum::time_micros(micro_secs).unwrap();
     ///
@@ -683,7 +694,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::time_from_str("01:02:01.888999777").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "01:02:01.888999");
@@ -706,8 +717,7 @@ impl Datum {
     ///
     /// Example:
     /// ```rust
-    ///
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "22:15:33.000111");
@@ -726,7 +736,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamp_micros(1000);
     ///
@@ -744,14 +753,14 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamp_from_datetime(
     ///     NaiveDate::from_ymd_opt(1992, 3, 1)
     ///         .unwrap()
     ///         .and_hms_micro_opt(1, 2, 3, 88)
-    ///         .unwrap());
+    ///         .unwrap(),
+    /// );
     ///
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
@@ -767,7 +776,7 @@ impl Datum {
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::timestamp_from_str("1992-03-01T01:02:03.000088").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
@@ -785,7 +794,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamptz_micros(1000);
     ///
@@ -802,7 +810,6 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    ///
     /// use chrono::{TimeZone, Utc};
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamptz_from_datetime(Utc.timestamp_opt(1000, 0).unwrap());
@@ -821,7 +828,7 @@ impl Datum {
     ///
     /// ```rust
     /// use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-    /// use iceberg::spec::{Literal, Datum};
+    /// use iceberg::spec::{Datum, Literal};
     /// let t = Datum::timestamptz_from_str("1992-03-01T01:02:03.000088+08:00").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "1992-02-29 17:02:03.000088 UTC");
@@ -856,8 +863,8 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use uuid::uuid;
     /// use iceberg::spec::Datum;
+    /// use uuid::uuid;
     /// let t = Datum::uuid(uuid!("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8"));
     ///
     /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
@@ -874,7 +881,7 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Datum};
+    /// use iceberg::spec::Datum;
     /// let t = Datum::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
@@ -895,7 +902,7 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use iceberg::spec::{Literal, PrimitiveLiteral, Datum};
+    /// use iceberg::spec::{Datum, Literal, PrimitiveLiteral};
     /// let t = Datum::fixed(vec![1u8, 2u8]);
     ///
     /// assert_eq!(&format!("{t}"), "0102");
@@ -930,9 +937,9 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
+    /// use iceberg::spec::Datum;
     /// use itertools::assert_equal;
     /// use rust_decimal::Decimal;
-    /// use iceberg::spec::Datum;
     /// let t = Datum::decimal_from_str("123.45").unwrap();
     ///
     /// assert_eq!(&format!("{t}"), "123.45");
@@ -950,8 +957,8 @@ impl Datum {
     /// Example:
     ///
     /// ```rust
-    /// use rust_decimal::Decimal;
     /// use iceberg::spec::Datum;
+    /// use rust_decimal::Decimal;
     ///
     /// let t = Datum::decimal(Decimal::new(123, 2)).unwrap();
     ///
@@ -1194,11 +1201,14 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use ordered_float::OrderedFloat;
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
-    /// let t = Literal::float( 32.1f32 );
+    /// use ordered_float::OrderedFloat;
+    /// let t = Literal::float(32.1f32);
     ///
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))), t);
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(32.1))),
+    ///     t
+    /// );
     /// ```
     pub fn float<T: Into<f32>>(t: T) -> Self {
         Self::Primitive(PrimitiveLiteral::Float(OrderedFloat(t.into())))
@@ -1208,11 +1218,14 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    /// use ordered_float::OrderedFloat;
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
-    /// let t = Literal::double( 32.1f64 );
+    /// use ordered_float::OrderedFloat;
+    /// let t = Literal::double(32.1f64);
     ///
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))), t);
+    /// assert_eq!(
+    ///     Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(32.1))),
+    ///     t
+    /// );
     /// ```
     pub fn double<T: Into<f64>>(t: T) -> Self {
         Self::Primitive(PrimitiveLiteral::Double(OrderedFloat(t.into())))
@@ -1296,7 +1309,7 @@ impl Literal {
     ///     1 * 3600 * 1_000_000 + // 1 hour
     ///     2 * 60 * 1_000_000 +   // 2 minutes
     ///     1 * 1_000_000 + // 1 second
-    ///     888999  // microseconds
+    ///     888999 // microseconds
     /// };
     /// assert_eq!(Literal::time(micro_secs), t);
     /// ```
@@ -1318,7 +1331,6 @@ impl Literal {
     ///
     /// Example:
     /// ```rust
-    ///
     /// use iceberg::spec::Literal;
     /// let t = Literal::time_from_hms_micro(22, 15, 33, 111).unwrap();
     ///
@@ -1365,10 +1377,13 @@ impl Literal {
     /// let t = Literal::timestamp_from_str("2012-12-12 12:12:12.8899-04:00").unwrap();
     ///
     /// let t2 = {
-    ///  let date = NaiveDate::from_ymd_opt(2012, 12, 12).unwrap();
-    ///  let time = NaiveTime::from_hms_micro_opt(12, 12, 12, 889900).unwrap();
-    ///  let dt = NaiveDateTime::new(date, time);
-    ///  Literal::timestamp_from_datetime(DateTime::<FixedOffset>::from_local(dt, FixedOffset::west_opt(4 * 3600).unwrap()))
+    ///     let date = NaiveDate::from_ymd_opt(2012, 12, 12).unwrap();
+    ///     let time = NaiveTime::from_hms_micro_opt(12, 12, 12, 889900).unwrap();
+    ///     let dt = NaiveDateTime::new(date, time);
+    ///     Literal::timestamp_from_datetime(DateTime::<FixedOffset>::from_local(
+    ///         dt,
+    ///         FixedOffset::west_opt(4 * 3600).unwrap(),
+    ///     ))
     /// };
     ///
     /// assert_eq!(t, t2);
@@ -1405,8 +1420,8 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use uuid::Uuid;
     /// use iceberg::spec::Literal;
+    /// use uuid::Uuid;
     /// let t1 = Literal::uuid_from_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap();
     /// let t2 = Literal::uuid(Uuid::from_u128_le(0xd8d7d6d5d4d3d2d1c2c1b2b1a4a3a2a1));
     ///
@@ -1463,8 +1478,8 @@ impl Literal {
     /// Example:
     ///
     /// ```rust
-    /// use rust_decimal::Decimal;
     /// use iceberg::spec::Literal;
+    /// use rust_decimal::Decimal;
     /// let t1 = Literal::decimal(12345);
     /// let t2 = Literal::decimal_from_str("123.45").unwrap();
     ///

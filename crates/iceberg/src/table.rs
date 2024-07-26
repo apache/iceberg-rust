@@ -88,14 +88,20 @@ impl Table {
 /// # use iceberg::TableIdent;
 /// # async fn example() {
 /// let metadata_file_location = "s3://bucket_name/path/to/metadata.json";
-/// let file_io = FileIO::from_path(&metadata_file_location).unwrap().build().unwrap();
+/// let file_io = FileIO::from_path(&metadata_file_location)
+///     .unwrap()
+///     .build()
+///     .unwrap();
 /// let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
-/// let static_table = StaticTable::from_metadata_file(&metadata_file_location, static_identifier, file_io).await.unwrap();
+/// let static_table =
+///     StaticTable::from_metadata_file(&metadata_file_location, static_identifier, file_io)
+///         .await
+///         .unwrap();
 /// let snapshot_id = static_table
-/// .metadata()
-/// .current_snapshot()
-/// .unwrap()
-/// .snapshot_id();
+///     .metadata()
+///     .current_snapshot()
+///     .unwrap()
+///     .snapshot_id();
 /// # }
 /// ```
 pub struct StaticTable(Table);
