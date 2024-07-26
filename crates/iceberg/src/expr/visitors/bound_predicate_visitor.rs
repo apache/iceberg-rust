@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fnv::FnvHashSet;
+
 use crate::expr::{BoundPredicate, BoundReference, PredicateOperator};
 use crate::spec::Datum;
 use crate::Result;
-use fnv::FnvHashSet;
 
 /// A visitor for [`BoundPredicate`]s. Visits in post-order.
 pub trait BoundPredicateVisitor {
@@ -228,15 +229,17 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+    use std::sync::Arc;
+
+    use fnv::FnvHashSet;
+
     use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
     use crate::expr::{
         BinaryExpression, Bind, BoundPredicate, BoundReference, Predicate, PredicateOperator,
         Reference, SetExpression, UnaryExpression,
     };
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
-    use fnv::FnvHashSet;
-    use std::ops::Not;
-    use std::sync::Arc;
 
     struct TestEvaluator {}
     impl BoundPredicateVisitor for TestEvaluator {

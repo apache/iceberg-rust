@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, pin::Pin, sync::Arc};
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::error::Result as DFResult;
-
-use datafusion::{
-    arrow::{array::RecordBatch, datatypes::SchemaRef as ArrowSchemaRef},
-    execution::{SendableRecordBatchStream, TaskContext},
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        stream::RecordBatchStreamAdapter, DisplayAs, ExecutionMode, ExecutionPlan, Partitioning,
-        PlanProperties,
-    },
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use futures::{Stream, TryStreamExt};
 use iceberg::table::Table;

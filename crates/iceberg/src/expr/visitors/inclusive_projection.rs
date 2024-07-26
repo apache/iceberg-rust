@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
+use fnv::FnvHashSet;
+
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference, Predicate};
 use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::Error;
-use fnv::FnvHashSet;
-use std::collections::HashMap;
 
 pub(crate) struct InclusiveProjection {
     partition_spec: PartitionSpecRef,
@@ -228,12 +230,13 @@ impl BoundPredicateVisitor for InclusiveProjection {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{
         Datum, NestedField, PartitionField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
     };
-    use std::sync::Arc;
 
     fn build_test_schema() -> Schema {
         Schema::builder()

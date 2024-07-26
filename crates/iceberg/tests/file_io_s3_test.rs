@@ -17,13 +17,14 @@
 
 //! Integration tests for FileIO S3.
 
+use std::sync::RwLock;
+
 use ctor::{ctor, dtor};
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
-use std::sync::RwLock;
 
 static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 

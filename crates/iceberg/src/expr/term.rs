@@ -23,8 +23,9 @@ use fnv::FnvHashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::expr::accessor::{StructAccessor, StructAccessorRef};
-use crate::expr::Bind;
-use crate::expr::{BinaryExpression, Predicate, PredicateOperator, SetExpression, UnaryExpression};
+use crate::expr::{
+    BinaryExpression, Bind, Predicate, PredicateOperator, SetExpression, UnaryExpression,
+};
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
 use crate::{Error, ErrorKind};
 

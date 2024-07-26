@@ -24,12 +24,9 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 
 use std::collections::HashMap;
 
-use iceberg::{
-    spec::{visit_schema, PrimitiveType, SchemaVisitor, TableMetadata},
-    Error, ErrorKind, Result,
-};
-
 use aws_sdk_glue::types::Column;
+use iceberg::spec::{visit_schema, PrimitiveType, SchemaVisitor, TableMetadata};
+use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
 
@@ -188,10 +185,8 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::{
-        spec::{Schema, TableMetadataBuilder},
-        TableCreation,
-    };
+    use iceberg::spec::{Schema, TableMetadataBuilder};
+    use iceberg::TableCreation;
 
     use super::*;
 

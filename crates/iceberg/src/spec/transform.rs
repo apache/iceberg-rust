@@ -17,6 +17,13 @@
 
 //! Transforms in iceberg.
 
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
+use fnv::FnvHashSet;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::{Datum, PrimitiveLiteral};
 use crate::error::{Error, Result};
 use crate::expr::{
     BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
@@ -25,12 +32,6 @@ use crate::expr::{
 use crate::spec::datatypes::{PrimitiveType, Type};
 use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
-use fnv::FnvHashSet;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
-use super::{Datum, PrimitiveLiteral};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.
@@ -664,18 +665,14 @@ impl FromStr for Transform {
 
 impl Serialize for Transform {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    where S: Serializer {
         serializer.serialize_str(format!("{self}").as_str())
     }
 }
 
 impl<'de> Deserialize<'de> for Transform {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         let s = String::deserialize(deserializer)?;
         s.parse().map_err(<D::Error as serde::de::Error>::custom)
     }

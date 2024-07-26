@@ -15,20 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
-use datafusion::{
-    arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    datasource::{TableProvider, TableType},
-    execution::context,
-    logical_expr::Expr,
-    physical_plan::ExecutionPlan,
-};
-use iceberg::{
-    arrow::schema_to_arrow_schema, table::Table, Catalog, NamespaceIdent, Result, TableIdent,
-};
+use datafusion::execution::context;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_plan::ExecutionPlan;
+use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::table::Table;
+use iceberg::{Catalog, NamespaceIdent, Result, TableIdent};
 
 use crate::physical_plan::scan::IcebergTableScan;
 

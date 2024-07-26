@@ -17,46 +17,36 @@
 
 //! The module contains the file writer for parquet file format.
 
-use super::{
-    location_generator::{FileNameGenerator, LocationGenerator},
-    track_writer::TrackWriter,
-    FileWriter, FileWriterBuilder,
-};
-use crate::arrow::DEFAULT_MAP_FIELD_NAME;
-use crate::spec::{
-    visit_schema, Datum, ListType, MapType, NestedFieldRef, PrimitiveLiteral, PrimitiveType,
-    Schema, SchemaRef, SchemaVisitor, StructType, Type,
-};
-use crate::ErrorKind;
-use crate::{io::FileIO, io::FileWrite, Result};
-use crate::{
-    io::OutputFile,
-    spec::{DataFileBuilder, DataFileFormat},
-    writer::CurrentFileStatus,
-    Error,
-};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicI64;
+use std::sync::Arc;
+
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
+use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::arrow::AsyncArrowWriter;
 use parquet::data_type::{
-    BoolType, ByteArrayType, DataType as ParquetDataType, DoubleType, FixedLenByteArrayType,
-    FloatType, Int32Type, Int64Type,
+    BoolType, ByteArray, ByteArrayType, DataType as ParquetDataType, DoubleType, FixedLenByteArray,
+    FixedLenByteArrayType, FloatType, Int32Type, Int64Type,
 };
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::TypedStatistics;
-use parquet::{
-    arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter, arrow::AsyncArrowWriter,
-    format::FileMetaData,
-};
-use parquet::{
-    data_type::{ByteArray, FixedLenByteArray},
-    file::statistics::{from_thrift, Statistics},
-};
-use std::collections::HashMap;
-use std::sync::atomic::AtomicI64;
-use std::sync::Arc;
+use parquet::file::statistics::{from_thrift, Statistics, TypedStatistics};
+use parquet::format::FileMetaData;
 use uuid::Uuid;
+
+use super::location_generator::{FileNameGenerator, LocationGenerator};
+use super::track_writer::TrackWriter;
+use super::{FileWriter, FileWriterBuilder};
+use crate::arrow::DEFAULT_MAP_FIELD_NAME;
+use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::spec::{
+    visit_schema, DataFileBuilder, DataFileFormat, Datum, ListType, MapType, NestedFieldRef,
+    PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
+};
+use crate::writer::CurrentFileStatus;
+use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone)]
@@ -606,23 +596,17 @@ mod tests {
 
     use anyhow::Result;
     use arrow_array::types::Int64Type;
-    use arrow_array::ArrayRef;
-    use arrow_array::BooleanArray;
-    use arrow_array::Int32Array;
-    use arrow_array::Int64Array;
-    use arrow_array::ListArray;
-    use arrow_array::RecordBatch;
-    use arrow_array::StructArray;
-    use arrow_schema::DataType;
-    use arrow_schema::SchemaRef as ArrowSchemaRef;
+    use arrow_array::{
+        ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
+    };
+    use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
 
     use super::*;
     use crate::io::FileIOBuilder;
-    use crate::spec::*;
-    use crate::spec::{PrimitiveLiteral, Struct};
+    use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::tests::check_parquet_data_file;
@@ -966,10 +950,9 @@ mod tests {
                 ordered,
             )
         }) as ArrayRef;
-        let to_write = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![col0, col1, col2, col3, col4, col5],
-        )
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            col0, col1, col2, col3, col4, col5,
+        ])
         .unwrap();
 
         // write data
@@ -1141,13 +1124,9 @@ mod tests {
             )
             .unwrap(),
         ) as ArrayRef;
-        let to_write = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12,
-                col13,
-            ],
-        )
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
+        ])
         .unwrap();
 
         // write data

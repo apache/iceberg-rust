@@ -17,13 +17,10 @@
 
 use fnv::FnvHashSet;
 
-use crate::{
-    expr::{BoundPredicate, BoundReference},
-    spec::{DataFile, Datum, PrimitiveLiteral, Struct},
-    Error, ErrorKind, Result,
-};
-
 use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::{BoundPredicate, BoundReference};
+use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
+use crate::{Error, ErrorKind, Result};
 
 /// Evaluates a [`DataFile`]'s partition [`Struct`] to check
 /// if the partition tuples match the given [`BoundPredicate`].
@@ -248,25 +245,23 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     use fnv::FnvHashSet;
     use predicate::SetExpression;
 
-    use crate::{
-        expr::{
-            predicate, visitors::inclusive_projection::InclusiveProjection, BinaryExpression, Bind,
-            BoundPredicate, Predicate, PredicateOperator, Reference, UnaryExpression,
-        },
-        spec::{
-            DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionField,
-            PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform,
-            Type,
-        },
-        Result,
-    };
-
     use super::ExpressionEvaluator;
+    use crate::expr::visitors::inclusive_projection::InclusiveProjection;
+    use crate::expr::{
+        predicate, BinaryExpression, Bind, BoundPredicate, Predicate, PredicateOperator, Reference,
+        UnaryExpression,
+    };
+    use crate::spec::{
+        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionField,
+        PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+    };
+    use crate::Result;
 
     fn create_schema_and_partition_spec(
         r#type: PrimitiveType,

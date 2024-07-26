@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Result;
-use opendal::{Operator, Scheme};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+
+use opendal::{Operator, Scheme};
+
+use crate::Result;
 
 /// # TODO
 ///

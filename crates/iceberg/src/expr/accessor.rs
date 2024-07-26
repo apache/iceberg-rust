@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
+
+use serde_derive::{Deserialize, Serialize};
 
 use crate::spec::{Datum, Literal, PrimitiveType, Struct};
 use crate::{Error, ErrorKind, Result};

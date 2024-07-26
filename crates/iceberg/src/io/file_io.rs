@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::storage::Storage;
-use crate::{Error, ErrorKind, Result};
-use bytes::Bytes;
-use opendal::Operator;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+
+use bytes::Bytes;
+use opendal::Operator;
 use url::Url;
+
+use super::storage::Storage;
+use crate::{Error, ErrorKind, Result};
 
 /// FileIO implementation, used to manipulate files in underlying storage.
 ///
@@ -326,13 +328,12 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::Write;
-
-    use std::{fs::File, path::Path};
+    use std::path::Path;
 
     use futures::io::AllowStdIo;
     use futures::AsyncReadExt;
-
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};

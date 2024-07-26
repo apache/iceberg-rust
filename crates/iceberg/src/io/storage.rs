@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use opendal::{Operator, Scheme};
+
 use super::FileIOBuilder;
 #[cfg(feature = "storage-fs")]
 use super::FsConfig;
@@ -23,7 +25,6 @@ use super::MemoryConfig;
 #[cfg(feature = "storage-s3")]
 use super::S3Config;
 use crate::{Error, ErrorKind};
-use opendal::{Operator, Scheme};
 
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]

@@ -40,18 +40,14 @@ pub struct LogicalExpression<T, const N: usize> {
 
 impl<T: Serialize, const N: usize> Serialize for LogicalExpression<T, N> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+    where S: serde::Serializer {
         self.inputs.serialize(serializer)
     }
 }
 
 impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for LogicalExpression<T, N> {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
+    where D: serde::Deserializer<'de> {
         let inputs = Vec::<Box<T>>::deserialize(deserializer)?;
         Ok(LogicalExpression::new(
             array_init::from_iter(inputs.into_iter()).ok_or_else(|| {
@@ -85,8 +81,7 @@ impl<T, const N: usize> LogicalExpression<T, N> {
 }
 
 impl<T: Bind, const N: usize> Bind for LogicalExpression<T, N>
-where
-    T::Bound: Sized,
+where T::Bound: Sized
 {
     type Bound = LogicalExpression<T::Bound, N>;
 
@@ -478,10 +473,11 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
+    /// use std::ops::Bound::Unbounded;
+    ///
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
@@ -505,10 +501,11 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
+    /// use std::ops::Bound::Unbounded;
+    ///
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr2 = Reference::new("b").less_than(Datum::long(20));
@@ -534,10 +531,11 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
+    /// use std::ops::Bound::Unbounded;
+    ///
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::{LogicalExpression, Predicate, Reference};
     /// use iceberg::spec::Datum;
-    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     /// let expr2 = Reference::new("b")
     ///     .less_than(Datum::long(5))
@@ -587,9 +585,10 @@ impl Predicate {
     /// # Example
     ///
     /// ```rust
+    /// use std::ops::Not;
+    ///
     /// use iceberg::expr::{LogicalExpression, Predicate, Reference};
     /// use iceberg::spec::Datum;
-    /// use std::ops::Not;
     ///
     /// let expression = Reference::new("a").less_than(Datum::long(5)).not();
     /// let result = expression.rewrite_not();
@@ -634,10 +633,11 @@ impl Not for Predicate {
     /// # Example
     ///     
     ///```rust
+    /// use std::ops::Bound::Unbounded;
+    ///
     /// use iceberg::expr::BoundPredicate::Unary;
     /// use iceberg::expr::Reference;
     /// use iceberg::spec::Datum;
-    /// use std::ops::Bound::Unbounded;
     /// let expr1 = Reference::new("a").less_than(Datum::long(10));
     ///
     /// let expr = !expr1;
@@ -707,10 +707,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
-    use crate::expr::Reference;
-    use crate::expr::{Bind, BoundPredicate};
-    use crate::spec::Datum;
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::expr::{Bind, BoundPredicate, Reference};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     #[test]
     fn test_logical_or_rewrite_not() {

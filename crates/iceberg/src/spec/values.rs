@@ -26,19 +26,21 @@ use std::hash::Hash;
 use std::ops::Index;
 use std::str::FromStr;
 
+pub use _serde::RawLiteral;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use ordered_float::OrderedFloat;
 use rust_decimal::Decimal;
-use serde::de::{self, MapAccess};
+use serde::de::{
+    MapAccess, {self},
+};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use uuid::Uuid;
 
-pub use _serde::RawLiteral;
-
+use super::datatypes::{PrimitiveType, Type};
 use crate::error::Result;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
@@ -46,8 +48,6 @@ use crate::spec::values::timestamp::microseconds_to_datetime;
 use crate::spec::values::timestamptz::microseconds_to_datetimetz;
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::{ensure_data_valid, Error, ErrorKind};
-
-use super::datatypes::{PrimitiveType, Type};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -154,9 +154,7 @@ impl<'de> Deserialize<'de> for Datum {
             }
 
             fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-            where
-                A: serde::de::SeqAccess<'de>,
-            {
+            where A: serde::de::SeqAccess<'de> {
                 let r#type = seq
                     .next_element::<PrimitiveType>()?
                     .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
@@ -175,9 +173,7 @@ impl<'de> Deserialize<'de> for Datum {
             }
 
             fn visit_map<V>(self, mut map: V) -> std::result::Result<Datum, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
+            where V: MapAccess<'de> {
                 let mut raw_primitive: Option<RawLiteral> = None;
                 let mut r#type: Option<PrimitiveType> = None;
                 while let Some(key) = map.next_key()? {
@@ -1956,8 +1952,7 @@ mod timestamp {
 }
 
 mod timestamptz {
-    use chrono::DateTime;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
 
     pub(crate) fn datetimetz_to_microseconds(time: &DateTime<Utc>) -> i64 {
         time.timestamp_micros()
@@ -1971,21 +1966,15 @@ mod timestamptz {
 }
 
 mod _serde {
-    use serde::{
-        de::Visitor,
-        ser::{SerializeMap, SerializeSeq, SerializeStruct},
-        Deserialize, Serialize,
-    };
+    use serde::de::Visitor;
+    use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
+    use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
-    use serde_derive::Deserialize as DeserializeDerive;
-    use serde_derive::Serialize as SerializeDerive;
-
-    use crate::{
-        spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME},
-        Error, ErrorKind,
-    };
+    use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
 
     use super::{Literal, Map, PrimitiveLiteral};
+    use crate::spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME};
+    use crate::{Error, ErrorKind};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -2028,9 +2017,7 @@ mod _serde {
 
     impl Serialize for Record {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let len = self.required.len() + self.optional.len();
             let mut record = serializer.serialize_struct("", len)?;
             for (k, v) in &self.required {
@@ -2051,9 +2038,7 @@ mod _serde {
 
     impl Serialize for List {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let mut seq = serializer.serialize_seq(Some(self.list.len()))?;
             for value in &self.list {
                 if self.required {
@@ -2078,9 +2063,7 @@ mod _serde {
 
     impl Serialize for StringMap {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             let mut map = serializer.serialize_map(Some(self.raw.len()))?;
             for (k, v) in &self.raw {
                 if self.required {
@@ -2102,9 +2085,7 @@ mod _serde {
 
     impl<'de> Deserialize<'de> for RawLiteralEnum {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
+        where D: serde::Deserializer<'de> {
             struct RawLiteralVisitor;
             impl<'de> Visitor<'de> for RawLiteralVisitor {
                 type Value = RawLiteralEnum;
@@ -2114,80 +2095,58 @@ mod _serde {
                 }
 
                 fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Boolean(v))
                 }
 
                 fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Int(v))
                 }
 
                 fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Long(v))
                 }
 
                 /// Used in json
                 fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Long(v as i64))
                 }
 
                 fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Float(v))
                 }
 
                 fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Double(v))
                 }
 
                 fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Bytes(ByteBuf::from(v)))
                 }
 
                 fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::String(v.to_string()))
                 }
 
                 fn visit_unit<E>(self) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
+                where E: serde::de::Error {
                     Ok(RawLiteralEnum::Null)
                 }
 
                 fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-                where
-                    A: serde::de::MapAccess<'de>,
-                {
+                where A: serde::de::MapAccess<'de> {
                     let mut required = Vec::new();
                     while let Some(key) = map.next_key::<String>()? {
                         let value = map.next_value::<RawLiteralEnum>()?;
@@ -2200,9 +2159,7 @@ mod _serde {
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                where
-                    A: serde::de::SeqAccess<'de>,
-                {
+                where A: serde::de::SeqAccess<'de> {
                     let mut list = Vec::new();
                     while let Some(value) = seq.next_element::<RawLiteralEnum>()? {
                         list.push(Some(value));
@@ -2650,17 +2607,13 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use apache_avro::{to_value, types::Value};
-
-    use crate::{
-        avro::schema_to_avro_schema,
-        spec::{
-            datatypes::{ListType, MapType, NestedField, StructType},
-            Schema,
-        },
-    };
+    use apache_avro::to_value;
+    use apache_avro::types::Value;
 
     use super::*;
+    use crate::avro::schema_to_avro_schema;
+    use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
+    use crate::spec::Schema;
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();

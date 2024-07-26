@@ -17,12 +17,9 @@
 
 //! Conversion between Arrow schema and Iceberg schema.
 
-use crate::error::Result;
-use crate::spec::{
-    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
-};
-use crate::{Error, ErrorKind};
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use arrow_array::types::{validate_decimal_precision_and_scale, Decimal128Type};
 use arrow_array::{
     BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
@@ -32,8 +29,13 @@ use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use rust_decimal::prelude::ToPrimitive;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::error::Result;
+use crate::spec::{
+    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
+    SchemaVisitor, StructType, Type,
+};
+use crate::{Error, ErrorKind};
 
 /// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
 pub(crate) const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
@@ -639,14 +641,13 @@ impl TryFrom<&crate::spec::Schema> for ArrowSchema {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::spec::Schema;
-    use arrow_schema::DataType;
-    use arrow_schema::Field;
-    use arrow_schema::Schema as ArrowSchema;
-    use arrow_schema::TimeUnit;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+
+    use super::*;
+    use crate::spec::Schema;
 
     fn arrow_schema_for_arrow_schema_to_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![

@@ -17,20 +17,22 @@
 
 //! Catalog API for Apache Iceberg
 
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::mem::take;
+use std::ops::Deref;
+
+use async_trait::async_trait;
+use serde_derive::{Deserialize, Serialize};
+use typed_builder::TypedBuilder;
+use uuid::Uuid;
+
 use crate::spec::{
     FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
     UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
-use async_trait::async_trait;
-use serde_derive::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::mem::take;
-use std::ops::Deref;
-use typed_builder::TypedBuilder;
-use uuid::Uuid;
 
 /// The catalog API for Iceberg Rust.
 #[async_trait]
@@ -439,17 +441,19 @@ impl TableUpdate {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fmt::Debug;
+
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+    use uuid::uuid;
+
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
         TableMetadataBuilder, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
-    use serde::de::DeserializeOwned;
-    use serde::Serialize;
-    use std::collections::HashMap;
-    use std::fmt::Debug;
-    use uuid::uuid;
 
     #[test]
     fn test_create_table_id() {

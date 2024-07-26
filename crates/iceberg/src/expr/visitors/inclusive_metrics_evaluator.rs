@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fnv::FnvHashSet;
+
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind};
-use fnv::FnvHashSet;
 
 const IN_PREDICATE_LIMIT: usize = 200;
 const ROWS_MIGHT_MATCH: crate::Result<bool> = Ok(true);
@@ -478,6 +479,12 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::ops::Not;
+    use std::sync::Arc;
+
+    use fnv::FnvHashSet;
+
     use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
     use crate::expr::PredicateOperator::{
         Eq, GreaterThan, GreaterThanOrEq, In, IsNan, IsNull, LessThan, LessThanOrEq, NotEq, NotIn,
@@ -491,10 +498,6 @@ mod test {
         DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionField,
         PartitionSpec, PrimitiveType, Schema, Struct, Transform, Type,
     };
-    use fnv::FnvHashSet;
-    use std::collections::HashMap;
-    use std::ops::Not;
-    use std::sync::Arc;
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;

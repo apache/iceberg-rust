@@ -16,13 +16,13 @@
 // under the License.
 
 //! Table API for Apache Iceberg
+use typed_builder::TypedBuilder;
+
 use crate::arrow::ArrowReaderBuilder;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
-use crate::Result;
-use crate::TableIdent;
-use typed_builder::TypedBuilder;
+use crate::{Result, TableIdent};
 
 /// Table represents a table in the catalog.
 #[derive(TypedBuilder, Debug, Clone)]

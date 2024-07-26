@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::catalog::schema::SchemaProvider;
+use datafusion::datasource::TableProvider;
 use datafusion::error::Result as DFResult;
-use datafusion::{catalog::schema::SchemaProvider, datasource::TableProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 

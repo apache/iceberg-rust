@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::io::storage::redact_secret;
-use crate::{Error, ErrorKind, Result};
-use opendal::{Operator, Scheme};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+
+use opendal::{Operator, Scheme};
 use url::Url;
+
+use crate::io::storage::redact_secret;
+use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
 /// S3 endpoint.

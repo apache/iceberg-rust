@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::types::{ErrorResponse, TokenResponse, OK};
-use crate::RestCatalogConfig;
-use iceberg::Result;
-use iceberg::{Error, ErrorKind};
-use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
-use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Mutex;
+
+use iceberg::{Error, ErrorKind, Result};
+use reqwest::header::HeaderMap;
+use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
+use serde::de::DeserializeOwned;
+
+use crate::types::{ErrorResponse, TokenResponse, OK};
+use crate::RestCatalogConfig;
 
 pub(crate) struct HttpClient {
     client: Client,

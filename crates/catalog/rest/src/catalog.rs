@@ -21,8 +21,16 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use iceberg::io::FileIO;
+use iceberg::table::Table;
+use iceberg::{
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
+};
 use itertools::Itertools;
-use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, {self},
+};
 use reqwest::{Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
@@ -32,12 +40,6 @@ use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
     RenameTableRequest, NO_CONTENT, OK,
-};
-use iceberg::io::FileIO;
-use iceberg::table::Table;
-use iceberg::Result;
-use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -670,6 +672,10 @@ impl Catalog for RestCatalog {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::sync::Arc;
+
     use chrono::{TimeZone, Utc};
     use iceberg::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
@@ -679,9 +685,6 @@ mod tests {
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
-    use std::fs::File;
-    use std::io::BufReader;
-    use std::sync::Arc;
     use uuid::uuid;
 
     use super::*;

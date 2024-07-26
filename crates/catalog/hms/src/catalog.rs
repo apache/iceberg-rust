@@ -15,29 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::from_thrift_error;
-use crate::error::{from_io_error, from_thrift_exception};
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::net::ToSocketAddrs;
 
-use super::utils::*;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use hive_metastore::ThriftHiveMetastoreClient;
-use hive_metastore::ThriftHiveMetastoreClientBuilder;
-use hive_metastore::ThriftHiveMetastoreGetDatabaseException;
-use hive_metastore::ThriftHiveMetastoreGetTableException;
+use hive_metastore::{
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+};
 use iceberg::io::FileIO;
-use iceberg::spec::TableMetadata;
-use iceberg::spec::TableMetadataBuilder;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::net::ToSocketAddrs;
 use typed_builder::TypedBuilder;
 use volo_thrift::MaybeException;
+
+use super::utils::*;
+use crate::error::{from_io_error, from_thrift_error, from_thrift_exception};
 
 /// Which variant of the thrift transport to communicate with HMS
 /// See: <https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport>

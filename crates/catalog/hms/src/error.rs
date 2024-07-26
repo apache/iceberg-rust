@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use anyhow::anyhow;
-use iceberg::{Error, ErrorKind};
 use std::fmt::Debug;
 use std::io;
+
+use anyhow::anyhow;
+use iceberg::{Error, ErrorKind};
 use volo_thrift::MaybeException;
 
 /// Format a thrift error into iceberg error.

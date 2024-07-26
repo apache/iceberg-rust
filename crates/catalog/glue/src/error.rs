@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use anyhow::anyhow;
 use std::fmt::Debug;
 
+use anyhow::anyhow;
 use iceberg::{Error, ErrorKind};
 
 /// Format AWS SDK error into iceberg error
 pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> Error
-where
-    T: Debug,
-{
+where T: Debug {
     Error::new(
         ErrorKind::Unexpected,
         "Operation failed for hitting aws skd error".to_string(),

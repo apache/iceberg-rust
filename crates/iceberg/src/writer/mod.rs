@@ -48,8 +48,10 @@
 pub mod base_writer;
 pub mod file_writer;
 
-use crate::{spec::DataFile, Result};
 use arrow_array::RecordBatch;
+
+use crate::spec::DataFile;
+use crate::Result;
 
 type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
@@ -97,12 +99,9 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    use crate::{
-        io::FileIO,
-        spec::{DataFile, DataFileFormat},
-    };
-
     use super::IcebergWriter;
+    use crate::io::FileIO;
+    use crate::spec::{DataFile, DataFileFormat};
 
     // This function is used to guarantee the trait can be used as a object safe trait.
     async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {

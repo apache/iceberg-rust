@@ -18,24 +18,23 @@
 //! Defines the [table metadata](https://iceberg.apache.org/spec/#table-metadata).
 //! The main struct here is [TableMetadataV2] which defines the data for a table.
 
-use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::{collections::HashMap, sync::Arc};
-use uuid::Uuid;
-
-use super::{
-    snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
-};
-use super::{PartitionSpec, SortOrder};
+use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
+use chrono::{DateTime, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
+use uuid::Uuid;
 
+use super::snapshot::{Snapshot, SnapshotReference, SnapshotRetention};
+use super::{
+    PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrder, SortOrderRef,
+};
 use crate::error::Result;
 use crate::{Error, ErrorKind, TableCreation};
-use chrono::{DateTime, TimeZone, Utc};
 
 static MAIN_BRANCH: &str = "main";
 static DEFAULT_SPEC_ID: i32 = 0;
@@ -262,14 +261,11 @@ impl TableMetadata {
                 s.snapshot_id = snapshot.snapshot_id();
             })
             .or_insert_with(|| {
-                SnapshotReference::new(
-                    snapshot.snapshot_id(),
-                    SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                )
+                SnapshotReference::new(snapshot.snapshot_id(), SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                })
             });
 
         self.snapshot_log.push(snapshot.log());
@@ -377,26 +373,28 @@ pub(super) mod _serde {
     /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
     /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
     /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
+    /// This is a helper module that defines types to help with serialization/deserialization.
+    /// For deserialization the input first gets read into either the [TableMetadataV1] or [TableMetadataV2] struct
+    /// and then converted into the [TableMetadata] struct. Serialization works the other way around.
+    /// [TableMetadataV1] and [TableMetadataV2] are internal struct that are only used for serialization and deserialization.
+    use std::sync::Arc;
 
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::{Snapshot, EMPTY_SNAPSHOT_ID};
-    use crate::{
-        spec::{
-            schema::_serde::{SchemaV1, SchemaV2},
-            snapshot::_serde::{SnapshotV1, SnapshotV2},
-            PartitionField, PartitionSpec, Schema, SnapshotReference, SnapshotRetention, SortOrder,
-        },
-        Error, ErrorKind,
-    };
-
     use super::{
         FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
         DEFAULT_SPEC_ID, MAIN_BRANCH,
     };
+    use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
+    use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
+    use crate::spec::{
+        PartitionField, PartitionSpec, Schema, Snapshot, SnapshotReference, SnapshotRetention,
+        SortOrder, EMPTY_SNAPSHOT_ID,
+    };
+    use crate::{Error, ErrorKind};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -478,9 +476,7 @@ pub(super) mod _serde {
 
     impl Serialize for TableMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             // we must do a clone here
             let table_metadata_enum: TableMetadataEnum =
                 self.clone().try_into().map_err(serde::ser::Error::custom)?;
@@ -491,18 +487,14 @@ pub(super) mod _serde {
 
     impl<const V: u8> Serialize for VersionNumber<V> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             serializer.serialize_u8(V)
         }
     }
 
     impl<'de, const V: u8> Deserialize<'de> for VersionNumber<V> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
+        where D: serde::Deserializer<'de> {
             let value = u8::deserialize(deserializer)?;
             if value == V {
                 Ok(VersionNumber::<V>)
@@ -597,17 +589,14 @@ pub(super) mod _serde {
                 default_sort_order_id: value.default_sort_order_id,
                 refs: value.refs.unwrap_or_else(|| {
                     if let Some(snapshot_id) = current_snapshot_id {
-                        HashMap::from_iter(vec![(
-                            MAIN_BRANCH.to_string(),
-                            SnapshotReference {
-                                snapshot_id,
-                                retention: SnapshotRetention::Branch {
-                                    min_snapshots_to_keep: None,
-                                    max_snapshot_age_ms: None,
-                                    max_ref_age_ms: None,
-                                },
+                        HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
+                            snapshot_id,
+                            retention: SnapshotRetention::Branch {
+                                min_snapshots_to_keep: None,
+                                max_snapshot_age_ms: None,
+                                max_ref_age_ms: None,
                             },
-                        )])
+                        })])
                     } else {
                         HashMap::new()
                     }
@@ -705,17 +694,14 @@ pub(super) mod _serde {
                     None => HashMap::new(),
                 },
                 default_sort_order_id: value.default_sort_order_id.unwrap_or(DEFAULT_SORT_ORDER_ID),
-                refs: HashMap::from_iter(vec![(
-                    MAIN_BRANCH.to_string(),
-                    SnapshotReference {
-                        snapshot_id: value.current_snapshot_id.unwrap_or_default(),
-                        retention: SnapshotRetention::Branch {
-                            min_snapshots_to_keep: None,
-                            max_snapshot_age_ms: None,
-                            max_ref_age_ms: None,
-                        },
+                refs: HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
+                    snapshot_id: value.current_snapshot_id.unwrap_or_default(),
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
                     },
-                )]),
+                })]),
             })
         }
     }
@@ -924,23 +910,22 @@ impl SnapshotLog {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, sync::Arc};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::sync::Arc;
 
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
-    use pretty_assertions::assert_eq;
-
-    use crate::{
-        spec::{
-            table_metadata::TableMetadata, NestedField, NullOrder, Operation, PartitionField,
-            PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-            SortDirection, SortField, SortOrder, Summary, Transform, Type,
-        },
-        TableCreation,
-    };
-
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use crate::spec::table_metadata::TableMetadata;
+    use crate::spec::{
+        NestedField, NullOrder, Operation, PartitionField, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+        Summary, Transform, Type,
+    };
+    use crate::TableCreation;
 
     fn check_table_metadata_serde(json: &str, expected_type: TableMetadata) {
         let desered_type: TableMetadata = serde_json::from_str(json).unwrap();
@@ -1378,17 +1363,14 @@ mod tests {
                 },
             ],
             metadata_log: Vec::new(),
-            refs: HashMap::from_iter(vec![(
-                "main".to_string(),
-                SnapshotReference {
-                    snapshot_id: 3055729675574597004,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
+            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
+                snapshot_id: 3055729675574597004,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
                 },
-            )]),
+            })]),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -1529,17 +1511,14 @@ mod tests {
             properties: HashMap::new(),
             snapshot_log: vec![],
             metadata_log: Vec::new(),
-            refs: HashMap::from_iter(vec![(
-                "main".to_string(),
-                SnapshotReference {
-                    snapshot_id: -1,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
+            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
+                snapshot_id: -1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
                 },
-            )]),
+            })]),
         };
 
         check_table_metadata_serde(&metadata, expected);
