@@ -18,19 +18,18 @@
 /*!
  * Snapshots
  */
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use _serde::SnapshotV2;
+use crate::error::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
-use crate::error::Result;
 use crate::io::FileIO;
 use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
 use crate::{Error, ErrorKind};
+use _serde::SnapshotV2;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
@@ -201,9 +200,10 @@ pub(super) mod _serde {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{Operation, Snapshot, Summary};
     use crate::spec::SchemaId;
     use crate::Error;
+
+    use super::{Operation, Snapshot, Summary};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -358,12 +358,10 @@ pub enum SnapshotRetention {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
 
-    use chrono::{TimeZone, Utc};
-
-    use crate::spec::snapshot::_serde::SnapshotV1;
-    use crate::spec::snapshot::{Operation, Snapshot, Summary};
+    use crate::spec::snapshot::{Operation, Snapshot, Summary, _serde::SnapshotV1};
 
     #[test]
     fn schema() {

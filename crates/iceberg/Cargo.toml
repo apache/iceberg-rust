@@ -29,9 +29,10 @@ license = { workspace = true }
 keywords = ["iceberg"]
 
 [features]
-default = ["storage-fs", "storage-s3", "tokio"]
-storage-all = ["storage-fs", "storage-s3"]
+default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3"]
 
+storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
 
