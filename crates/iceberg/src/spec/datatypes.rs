@@ -18,19 +18,21 @@
 /*!
  * Data Types
  */
-use crate::ensure_data_valid;
-use crate::error::Result;
-use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
+use std::collections::HashMap;
+use std::convert::identity;
+use std::fmt;
+use std::ops::Index;
+use std::sync::{Arc, OnceLock};
+
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
-use std::convert::identity;
-use std::sync::Arc;
-use std::sync::OnceLock;
-use std::{collections::HashMap, fmt, ops::Index};
 
 use super::values::Literal;
+use crate::ensure_data_valid;
+use crate::error::Result;
+use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 
 /// Field name for list type.
 pub(crate) const LIST_FILED_NAME: &str = "element";
@@ -234,9 +236,7 @@ pub enum PrimitiveType {
 
 impl Serialize for Type {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    where S: Serializer {
         let type_serde = _serde::SerdeType::from(self);
         type_serde.serialize(serializer)
     }
@@ -244,9 +244,7 @@ impl Serialize for Type {
 
 impl<'de> Deserialize<'de> for Type {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         let type_serde = _serde::SerdeType::deserialize(deserializer)?;
         Ok(Type::from(type_serde))
     }
@@ -254,9 +252,7 @@ impl<'de> Deserialize<'de> for Type {
 
 impl<'de> Deserialize<'de> for PrimitiveType {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         let s = String::deserialize(deserializer)?;
         if s.starts_with("decimal") {
             deserialize_decimal(s.into_deserializer())
@@ -270,9 +266,7 @@ impl<'de> Deserialize<'de> for PrimitiveType {
 
 impl Serialize for PrimitiveType {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    where S: Serializer {
         match self {
             PrimitiveType::Decimal { precision, scale } => {
                 serialize_decimal(precision, scale, serializer)
@@ -284,9 +278,7 @@ impl Serialize for PrimitiveType {
 }
 
 fn deserialize_decimal<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
     let (precision, scale) = s
         .trim_start_matches(r"decimal(")
@@ -312,9 +304,7 @@ where
 }
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let fixed = String::deserialize(deserializer)?
         .trim_start_matches(r"fixed[")
         .trim_end_matches(']')
@@ -327,9 +317,7 @@ where
 }
 
 fn serialize_fixed<S>(value: &u64, serializer: S) -> std::result::Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
+where S: Serializer {
     serializer.serialize_str(&format!("fixed[{value}]"))
 }
 
@@ -371,9 +359,7 @@ pub struct StructType {
 
 impl<'de> Deserialize<'de> for StructType {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "lowercase")]
         enum Field {
@@ -391,9 +377,7 @@ impl<'de> Deserialize<'de> for StructType {
             }
 
             fn visit_map<V>(self, mut map: V) -> std::result::Result<StructType, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
+            where V: MapAccess<'de> {
                 let mut fields = None;
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -675,12 +659,14 @@ impl ListType {
 
 /// Module for type serialization/deserialization.
 pub(super) mod _serde {
+    use std::borrow::Cow;
+
+    use serde_derive::{Deserialize, Serialize};
+
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
-    use serde_derive::{Deserialize, Serialize};
-    use std::borrow::Cow;
 
     /// List type for serialization and deserialization
     #[derive(Serialize, Deserialize)]
@@ -803,9 +789,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
-    use crate::spec::values::PrimitiveLiteral;
-
     use super::*;
+    use crate::spec::values::PrimitiveLiteral;
 
     fn check_type_serde(json: &str, expected_type: Type) {
         let desered_type: Type = serde_json::from_str(json).unwrap();

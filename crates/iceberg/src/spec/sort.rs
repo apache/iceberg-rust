@@ -18,16 +18,17 @@
 /*!
  * Sorting
  */
-use crate::error::Result;
-use crate::spec::Schema;
-use crate::{Error, ErrorKind};
 use core::fmt;
-use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
+use crate::error::Result;
+use crate::spec::Schema;
+use crate::{Error, ErrorKind};
 
 /// Reference to [`SortOrder`].
 pub type SortOrderRef = Arc<SortOrder>;
