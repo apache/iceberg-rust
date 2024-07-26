@@ -65,15 +65,6 @@ fn table_already_exists_err<T>(table_ident: &TableIdent) -> Result<T> {
 }
 
 impl NamespaceState {
-    // Creates a new namespace state
-    pub(crate) fn new() -> Self {
-        Self {
-            properties: HashMap::new(),
-            namespaces: HashMap::new(),
-            table_metadata_locations: HashMap::new(),
-        }
-    }
-
     // Returns the state of the given namespace or an error if doesn't exist
     fn get_namespace(&self, namespace_ident: &NamespaceIdent) -> Result<&NamespaceState> {
         let mut acc_name_parts = vec![];

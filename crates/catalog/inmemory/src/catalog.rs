@@ -45,7 +45,7 @@ impl InMemoryCatalog {
     /// Creates an in-memory catalog.
     pub fn new(file_io: FileIO) -> Self {
         Self {
-            root_namespace_state: Mutex::new(NamespaceState::new()),
+            root_namespace_state: Mutex::new(NamespaceState::default()),
             file_io,
         }
     }
