@@ -163,26 +163,24 @@ impl UnboundPartitionSpec {
 /// Create valid partition specs for a given schema.
 #[derive(Debug, Default)]
 pub struct PartitionSpecBuilder {
-    spec_id: i32,
+    spec_id: Option<i32>,
     last_assigned_field_id: i32,
-    fields: Vec<PartitionField>,
+    fields: Vec<UnboundPartitionField>,
 }
 
 impl PartitionSpecBuilder {
     pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
+    // Default partition spec id is only used for building `PartitionSpec`.
+    // When building unbound partition specs, the spec id is not set by default.
+    pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
     /// Create a new partition spec builder with the given schema.
     pub fn new() -> Self {
         Self {
-            spec_id: 0,
+            spec_id: None,
             fields: vec![],
             last_assigned_field_id: Self::UNPARTITIONED_LAST_ASSIGNED_ID,
         }
-    }
-
-    /// Accessor to the current last assigned field id.
-    pub fn last_assigned_field_id(&self) -> i32 {
-        self.last_assigned_field_id
     }
 
     /// Set the last assigned field id for the partition spec.
@@ -194,7 +192,7 @@ impl PartitionSpecBuilder {
 
     /// Set the spec id for the partition spec.
     pub fn with_spec_id(mut self, spec_id: i32) -> Self {
-        self.spec_id = spec_id;
+        self.spec_id = Some(spec_id);
         self
     }
 
@@ -204,32 +202,19 @@ impl PartitionSpecBuilder {
         self.check_for_redundant_partitions(field.source_id, &field.transform)?;
         self.check_partition_id_unique(field.field_id)?;
 
-        self.fields.push(field);
+        self.fields.push(field.to_unbound());
         Ok(self)
     }
 
     /// Add a new partition field to the partition spec.
-    /// Field ID is auto assigned if not set.
+    /// Field ID is auto assigned if not set on `build()`.
+    /// On `build_unbound()` the field ID is not auto assigned.
     pub fn with_unbound_partition_field(mut self, field: UnboundPartitionField) -> Result<Self> {
         self.check_name_set_and_unique(&field.name)?;
         self.check_for_redundant_partitions(field.source_id, &field.transform)?;
         if let Some(partition_id) = field.partition_id {
             self.check_partition_id_unique(partition_id)?;
         }
-
-        let partition_id = if let Some(partition_id) = field.partition_id {
-            self.last_assigned_field_id = std::cmp::max(self.last_assigned_field_id, partition_id);
-            partition_id
-        } else {
-            self.increment_and_get_next_field_id()?
-        };
-
-        let field = PartitionField {
-            source_id: field.source_id,
-            field_id: partition_id,
-            name: field.name,
-            transform: field.transform,
-        };
 
         self.fields.push(field);
         Ok(self)
@@ -260,26 +245,20 @@ impl PartitionSpecBuilder {
     /// Build the unbound partition spec.
     pub fn build_unbound(self) -> UnboundPartitionSpec {
         UnboundPartitionSpec {
-            spec_id: Some(self.spec_id),
-            fields: self.fields.into_iter().map(|f| f.to_unbound()).collect(),
+            spec_id: self.spec_id,
+            fields: self.fields,
         }
     }
 
     /// Build a bound partition spec with the given schema.
     pub fn build(self, schema: &Schema) -> Result<PartitionSpec> {
-        let mut fields = Vec::with_capacity(self.fields.len());
-        for field in self.fields {
-            Self::check_name_does_not_collide_with_schema(&field, schema)?;
-            Self::check_transform_compatibility(&field, schema)?;
-            fields.push(PartitionField {
-                source_id: field.source_id,
-                field_id: field.field_id,
-                name: field.name,
-                transform: field.transform,
-            });
+        let fields = Self::set_field_ids(self.fields, self.last_assigned_field_id);
+        for field in &fields {
+            Self::check_name_does_not_collide_with_schema(field, schema)?;
+            Self::check_transform_compatibility(field, schema)?;
         }
         Ok(PartitionSpec {
-            spec_id: self.spec_id,
+            spec_id: self.spec_id.unwrap_or(Self::DEFAULT_PARTITION_SPEC_ID),
             fields,
         })
     }
@@ -287,10 +266,48 @@ impl PartitionSpecBuilder {
     /// Build a partition spec without validating it against a schema.
     /// This can lead to invalid partition specs. Use with caution.
     pub fn build_unchecked(self) -> PartitionSpec {
+        let fields = Self::set_field_ids(self.fields, self.last_assigned_field_id);
         PartitionSpec {
-            spec_id: self.spec_id,
-            fields: self.fields,
+            spec_id: self.spec_id.unwrap_or(Self::DEFAULT_PARTITION_SPEC_ID),
+            fields,
         }
+    }
+
+    fn set_field_ids(
+        fields: Vec<UnboundPartitionField>,
+        last_assigned_field_id: i32,
+    ) -> Vec<PartitionField> {
+        let mut last_assigned_field_id = last_assigned_field_id;
+        // Already assigned partition ids. If we see one of these during iteration,
+        // we skip it.
+        let assigned_ids = fields
+            .iter()
+            .filter_map(|f| f.partition_id)
+            .collect::<std::collections::HashSet<_>>();
+
+        fields
+            .into_iter()
+            .map(|field| {
+                let partition_id = if let Some(partition_id) = field.partition_id {
+                    last_assigned_field_id = std::cmp::max(last_assigned_field_id, partition_id);
+                    partition_id
+                } else {
+                    // ToDo: Should we take care of overflow or accept wrap?
+                    last_assigned_field_id += 1;
+                    while assigned_ids.contains(&last_assigned_field_id) {
+                        last_assigned_field_id += 1;
+                    }
+                    last_assigned_field_id
+                };
+
+                PartitionField {
+                    source_id: field.source_id,
+                    field_id: partition_id,
+                    name: field.name,
+                    transform: field.transform,
+                }
+            })
+            .collect()
     }
 
     /// Ensure that the partition name is unique among the partition fields and is not empty.
@@ -313,7 +330,7 @@ impl PartitionSpecBuilder {
 
     /// Check field / partition_id unique within the partition spec if set
     fn check_partition_id_unique(&self, field_id: i32) -> Result<()> {
-        if self.fields.iter().any(|f| f.field_id == field_id) {
+        if self.fields.iter().any(|f| f.partition_id == Some(field_id)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -429,17 +446,6 @@ impl PartitionSpecBuilder {
         }
 
         Ok(())
-    }
-
-    fn increment_and_get_next_field_id(&mut self) -> Result<i32> {
-        if self.last_assigned_field_id == i32::MAX {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot assign more partition fields. Field id overflow.",
-            ));
-        }
-        self.last_assigned_field_id += 1;
-        Ok(self.last_assigned_field_id)
     }
 
     fn partition_names(&self) -> std::collections::HashSet<&str> {
