@@ -352,6 +352,7 @@ pub(crate) fn timestamp_ms_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>> {
         )),
         chrono::LocalResult::None => Err(Error::new(ErrorKind::Unexpected, "Invalid timestamp")),
     }
+    .map_err(|e| e.with_context("timestamp value", timestamp_ms.to_string()))
 }
 
 /// Helper macro to check arguments.
