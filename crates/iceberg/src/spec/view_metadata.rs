@@ -34,7 +34,7 @@ use crate::error::Result;
 
 use _serde::ViewMetadataEnum;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
@@ -53,12 +53,12 @@ pub struct ViewMetadata {
     /// The view's base location; used to create metadata file locations
     pub(crate) location: String,
     /// ID of the current version of the view (version-id)
-    pub current_version_id: i64,
+    pub(crate) current_version_id: i64,
     /// A list of known versions of the view
-    pub versions: HashMap<i64, ViewVersionRef>,
+    pub(crate) versions: HashMap<i64, ViewVersionRef>,
     /// A list of version log entries with the timestamp and version-id for every
     /// change to current-version-id
-    pub version_log: Vec<ViewVersionLog>,
+    pub(crate) version_log: Vec<ViewVersionLog>,
     /// A list of schemas, stored as objects with schema-id.
     pub(crate) schemas: HashMap<i32, SchemaRef>,
     /// A string to string map of view properties.
@@ -219,15 +219,36 @@ impl ViewMetadataBuilder {
 /// A log of when each snapshot was made.
 pub struct ViewVersionLog {
     /// ID that current-version-id was set to
-    pub version_id: i64,
+    version_id: i64,
     /// Timestamp when the view's current-version-id was updated (ms from epoch)
-    pub timestamp_ms: i64,
+    timestamp_ms: i64,
 }
 
 impl ViewVersionLog {
-    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
-    pub fn timestamp(self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    #[inline]
+    /// Creates a new view version log.
+    pub fn new(version_id: i64, timestamp: i64) -> Self {
+        Self {
+            version_id,
+            timestamp_ms: timestamp,
+        }
+    }
+
+    /// Returns the version id.
+    #[inline]
+    pub fn version_id(&self) -> i64 {
+        self.version_id
+    }
+
+    /// Returns the timestamp in milliseconds from epoch.
+    #[inline]
+    pub fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
+    }
+
+    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision.
+    pub fn timestamp(self) -> MappedLocalTime<DateTime<Utc>> {
+        Utc.timestamp_millis_opt(self.timestamp_ms)
     }
 }
 
@@ -450,6 +471,26 @@ mod tests {
         serde_json::from_str(&metadata).unwrap()
     }
 
+    fn new_view_version(id: i64, schema_id: i32, sql: &str) -> ViewVersion {
+        ViewVersion::builder()
+            .with_version_id(id)
+            .with_timestamp_ms(chrono::Utc::now().timestamp_millis())
+            .with_default_catalog("prod".to_string().into())
+            .with_default_namespace(NamespaceIdent::from_vec(vec!["default".to_string()]).unwrap())
+            .with_summary(HashMap::from_iter(vec![(
+                "user".to_string(),
+                "some-user".to_string(),
+            )]))
+            .with_representations(vec![ViewRepresentation::SqlViewRepresentation(
+                crate::spec::SqlViewRepresentation {
+                    sql: sql.to_string(),
+                    dialect: "spark".to_string(),
+                },
+            )])
+            .with_schema_id(schema_id)
+            .build()
+    }
+
     #[test]
     fn test_view_data_v1() {
         let data = r#"
@@ -557,7 +598,7 @@ mod tests {
     #[test]
     fn test_view_builder_from_view_creation() {
         let representations = ViewRepresentationsBuilder::new()
-            .add_sql_representation("Select 1".to_string(), "spark".to_string())
+            .add_or_overwrite_sql_representation("Select 1".to_string(), "spark".to_string())
             .build();
         let creation = ViewCreation::builder()
             .location("s3://bucket/warehouse/default.db/event_agg".to_string())
@@ -584,10 +625,78 @@ mod tests {
 
     #[test]
     fn test_view_builder_from_view_metadata() {
-        let metadata = get_test_view_metadata("ViewMetadataV2Valid.json");
+        let metadata = get_test_view_metadata("ViewMetadataV1Valid.json");
         let metadata_builder = ViewMetadataBuilder::new(metadata);
         let uuid = Uuid::new_v4();
         let metadata = metadata_builder.assign_uuid(uuid).unwrap().build().unwrap();
         assert_eq!(metadata.uuid(), uuid);
+    }
+
+    #[test]
+    fn test_view_metadata_v1_unsupported_version() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataUnsupportedVersion.json")
+                .unwrap();
+
+        let desered: Result<ViewMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum ViewMetadataEnum"
+        )
+    }
+
+    #[test]
+    fn test_view_metadata_v1_version_not_found() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataV1CurrentVersionNotFound.json")
+                .unwrap();
+
+        let desered: Result<ViewMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "DataInvalid => No version exists with the current version id 2."
+        )
+    }
+
+    #[test]
+    fn test_view_metadata_v1_schema_not_found() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataV1SchemaNotFound.json").unwrap();
+
+        let desered: Result<ViewMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "DataInvalid => No schema exists with the schema id 2."
+        )
+    }
+
+    #[test]
+    fn test_view_metadata_v1_missing_schema_for_version() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataV1MissingSchema.json").unwrap();
+
+        let desered: Result<ViewMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum ViewMetadataEnum"
+        )
+    }
+
+    #[test]
+    fn test_view_metadata_v1_missing_current_version() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataV1MissingCurrentVersion.json")
+                .unwrap();
+
+        let desered: Result<ViewMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum ViewMetadataEnum"
+        )
     }
 }

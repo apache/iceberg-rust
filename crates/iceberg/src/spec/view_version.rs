@@ -19,7 +19,7 @@
  * View Versions!
 */
 use crate::error::Result;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -71,8 +71,14 @@ impl ViewVersion {
 
     /// Get the timestamp of when the view version was created
     #[inline]
-    pub fn timestamp(&self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    pub fn timestamp(&self) -> MappedLocalTime<DateTime<Utc>> {
+        Utc.timestamp_millis_opt(self.timestamp_ms)
+    }
+
+    /// Get the timestamp of when the view version was created in milliseconds since epoch
+    #[inline]
+    pub fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
     }
 
     /// Get summary of the view version
@@ -114,10 +120,7 @@ impl ViewVersion {
     }
 
     pub(crate) fn log(&self) -> ViewVersionLog {
-        ViewVersionLog {
-            timestamp_ms: self.timestamp_ms,
-            version_id: self.version_id,
-        }
+        ViewVersionLog::new(self.version_id, self.timestamp_ms)
     }
 }
 
@@ -134,14 +137,27 @@ impl ViewRepresentationsBuilder {
     }
 
     /// Add a representation to the list.
-    pub fn add_representation(mut self, representation: ViewRepresentation) -> Self {
+    ///
+    /// SQL representations dialects must be unique. If a representation with the same
+    /// dialect already exists, it will be overwritten.
+    pub fn add_or_overwrite_representation(mut self, representation: ViewRepresentation) -> Self {
+        let dialect = match &representation {
+            ViewRepresentation::SqlViewRepresentation(sql) => &sql.dialect,
+        };
+        self.0.retain(|r| {
+            let ViewRepresentation::SqlViewRepresentation(sql) = r;
+            sql.dialect != *dialect
+        });
         self.0.push(representation);
         self
     }
 
     /// Add a SQL representation to the list.
-    pub fn add_sql_representation(self, sql: String, dialect: String) -> Self {
-        self.add_representation(ViewRepresentation::SqlViewRepresentation(
+    ///
+    /// SQL representations dialects must be unique. If a representation with the same
+    /// dialect already exists, it will be overwritten.
+    pub fn add_or_overwrite_sql_representation(self, sql: String, dialect: String) -> Self {
+        self.add_or_overwrite_representation(ViewRepresentation::SqlViewRepresentation(
             SqlViewRepresentation { sql, dialect },
         ))
     }
@@ -162,6 +178,7 @@ impl Default for ViewRepresentationsBuilder {
 #[serde(tag = "type")]
 /// View definitions can be represented in multiple ways.
 /// Representations are documented ways to express a view definition.
+// ToDo: Make unique per Dialect
 pub enum ViewRepresentation {
     #[serde(rename = "sql")]
     /// The SQL representation stores the view definition as a SQL SELECT,
@@ -270,7 +287,7 @@ mod tests {
 
         assert_eq!(result.version_id(), 1);
         assert_eq!(
-            result.timestamp(),
+            result.timestamp().unwrap(),
             Utc.timestamp_millis_opt(1573518431292).unwrap()
         );
         assert_eq!(result.schema_id(), 1);
@@ -293,6 +310,38 @@ mod tests {
         assert_eq!(
             result.default_namespace.inner(),
             vec!["default".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_duplicate_sql_dialects() {
+        let mut builder = super::ViewRepresentationsBuilder::new();
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 1".to_string(), "trino".to_string());
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 2".to_string(), "spark".to_string());
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 3".to_string(), "trino".to_string());
+
+        let representations = builder.build();
+        assert_eq!(representations.len(), 2);
+        assert_eq!(
+            representations
+                .iter()
+                .filter(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(_)))
+                .count(),
+            2
+        );
+        let trino_rep = representations
+            .iter()
+            .find(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(sql) if sql.dialect == "trino"))
+            .unwrap();
+        assert_eq!(
+            trino_rep,
+            &super::ViewRepresentation::SqlViewRepresentation(super::SqlViewRepresentation {
+                sql: "SELECT 3".to_string(),
+                dialect: "trino".to_string()
+            })
         );
     }
 }
