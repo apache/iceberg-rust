@@ -98,6 +98,7 @@ impl Table {
 /// .snapshot_id();
 /// # }
 /// ```
+#[derive(Debug, Clone)]
 pub struct StaticTable(Table);
 
 impl StaticTable {
@@ -138,9 +139,9 @@ impl StaticTable {
         self.0.metadata_ref()
     }
 
-    /// Consumes the `StaticTable` and return it as a `Table`    
-    /// Please use this method carefully as the Table it returns remains detached from a catalog     
-    /// and can't be used to perform modifications on the table.     
+    /// Consumes the `StaticTable` and return it as a `Table`
+    /// Please use this method carefully as the Table it returns remains detached from a catalog
+    /// and can't be used to perform modifications on the table.
     pub fn into_table(self) -> Table {
         self.0
     }
