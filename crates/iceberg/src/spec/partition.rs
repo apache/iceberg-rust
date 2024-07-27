@@ -364,9 +364,13 @@ impl PartitionSpecBuilder {
 
     /// For a single source-column transformations must be unique.
     fn check_for_redundant_partitions(&self, source_id: i32, transform: &Transform) -> Result<()> {
-        let collision = self.fields.iter().find(|f| {
-            f.source_id == source_id && f.transform.dedup_name() == transform.dedup_name()
-        });
+        let collision = self
+            .fields
+            .iter()
+            // ToDo: Should we compare transform.deduped_name instead?
+            // If so, deduped_name might be bugged, as it returns "time" for "day" and "month" and "year" transforms.
+            // If we switch to deduped_name here, we would not support year & month & day partitions on the same column.
+            .find(|f| f.source_id == source_id && &f.transform == transform);
 
         if let Some(collision) = collision {
             Err(Error::new(
@@ -1078,23 +1082,20 @@ mod tests {
         // Valid
         PartitionSpec::builder()
             .with_spec_id(1)
-            .with_unbound_fields(
-                vec![
-                    UnboundPartitionField {
-                        source_id: 1,
-                        partition_id: None,
-                        name: "id_bucket".to_string(),
-                        transform: Transform::Bucket(16),
-                    },
-                    UnboundPartitionField {
-                        source_id: 2,
-                        partition_id: None,
-                        name: "name".to_string(),
-                        transform: Transform::Identity,
-                    },
-                ]
-                .into_iter(),
-            )
+            .with_unbound_fields(vec![
+                UnboundPartitionField {
+                    source_id: 1,
+                    partition_id: None,
+                    name: "id_bucket".to_string(),
+                    transform: Transform::Bucket(16),
+                },
+                UnboundPartitionField {
+                    source_id: 2,
+                    partition_id: None,
+                    name: "name".to_string(),
+                    transform: Transform::Identity,
+                },
+            ])
             .unwrap()
             .build(&schema)
             .unwrap();
@@ -1102,23 +1103,20 @@ mod tests {
         // Invalid
         PartitionSpec::builder()
             .with_spec_id(1)
-            .with_unbound_fields(
-                vec![
-                    UnboundPartitionField {
-                        source_id: 1,
-                        partition_id: None,
-                        name: "id_bucket".to_string(),
-                        transform: Transform::Bucket(16),
-                    },
-                    UnboundPartitionField {
-                        source_id: 4,
-                        partition_id: None,
-                        name: "name".to_string(),
-                        transform: Transform::Identity,
-                    },
-                ]
-                .into_iter(),
-            )
+            .with_unbound_fields(vec![
+                UnboundPartitionField {
+                    source_id: 1,
+                    partition_id: None,
+                    name: "id_bucket".to_string(),
+                    transform: Transform::Bucket(16),
+                },
+                UnboundPartitionField {
+                    source_id: 4,
+                    partition_id: None,
+                    name: "name".to_string(),
+                    transform: Transform::Identity,
+                },
+            ])
             .unwrap()
             .build(&schema)
             .unwrap_err();
@@ -1168,5 +1166,44 @@ mod tests {
             .unwrap()
             .build(&schema)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_build_multiple_time_partitons() {
+        let schema = Schema::builder()
+            .with_fields(vec![NestedField::required(
+                1,
+                "ts",
+                Type::Primitive(crate::spec::PrimitiveType::Timestamp),
+            )
+            .into()])
+            .build()
+            .unwrap();
+
+        PartitionSpec::builder()
+            .with_spec_id(1)
+            .with_unbound_partition_field(UnboundPartitionField {
+                source_id: 1,
+                partition_id: None,
+                name: "ts_year".to_string(),
+                transform: Transform::Year,
+            })
+            .unwrap()
+            .with_unbound_partition_field(UnboundPartitionField {
+                source_id: 1,
+                partition_id: None,
+                name: "ts_month".to_string(),
+                transform: Transform::Month,
+            })
+            .unwrap()
+            .with_unbound_partition_field(UnboundPartitionField {
+                source_id: 1,
+                partition_id: None,
+                name: "ts_day".to_string(),
+                transform: Transform::Day,
+            })
+            .unwrap()
+            .build(&schema)
+            .unwrap();
     }
 }
