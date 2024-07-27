@@ -138,15 +138,6 @@ impl ViewMetadata {
         &self.properties
     }
 
-    /// Append view version to view
-    pub fn append_version(&mut self, view_version: ViewVersion) {
-        self.current_version_id = view_version.version_id();
-
-        self.version_log.push(view_version.log());
-        self.versions
-            .insert(view_version.version_id(), Arc::new(view_version));
-    }
-
     /// Returns view history.
     #[inline]
     pub fn history(&self) -> &[ViewVersionLog] {
