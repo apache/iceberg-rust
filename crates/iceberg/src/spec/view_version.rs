@@ -119,16 +119,64 @@ impl ViewVersion {
         r
     }
 
+    /// Retrieve the history log entry for this view version.
+    #[allow(dead_code)]
     pub(crate) fn log(&self) -> ViewVersionLog {
         ViewVersionLog::new(self.version_id, self.timestamp_ms)
     }
 }
 
 /// A list of view representations.
-pub type ViewRepresentations = Vec<ViewRepresentation>;
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct ViewRepresentations(Vec<ViewRepresentation>);
+
+impl ViewRepresentations {
+    #[inline]
+    /// Turn these representations into a builder.
+    /// Use this method to modify the representations.
+    pub fn into_builder(self) -> ViewRepresentationsBuilder {
+        ViewRepresentationsBuilder(self.0)
+    }
+
+    #[inline]
+    /// Create a new builder for the representations.
+    pub fn builder() -> ViewRepresentationsBuilder {
+        ViewRepresentationsBuilder::new()
+    }
+
+    #[inline]
+    /// Get the number of representations
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    /// Check if there are no representations
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+// Iterator for ViewRepresentations
+impl IntoIterator for ViewRepresentations {
+    type Item = ViewRepresentation;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a ViewRepresentations {
+    type Item = &'a ViewRepresentation;
+    type IntoIter = std::slice::Iter<'a, ViewRepresentation>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 
 /// A builder for [`ViewRepresentations`].
-pub struct ViewRepresentationsBuilder(ViewRepresentations);
+pub struct ViewRepresentationsBuilder(Vec<ViewRepresentation>);
 
 impl ViewRepresentationsBuilder {
     /// Create a new builder.
@@ -164,7 +212,7 @@ impl ViewRepresentationsBuilder {
 
     /// Build the list of representations.
     pub fn build(self) -> ViewRepresentations {
-        self.0
+        ViewRepresentations(self.0)
     }
 }
 
@@ -207,7 +255,7 @@ pub(super) mod _serde {
 
     use crate::catalog::NamespaceIdent;
 
-    use super::{ViewRepresentation, ViewVersion};
+    use super::{ViewRepresentation, ViewRepresentations, ViewVersion};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -230,7 +278,7 @@ pub(super) mod _serde {
                 schema_id: v1.schema_id,
                 timestamp_ms: v1.timestamp_ms,
                 summary: v1.summary,
-                representations: v1.representations,
+                representations: ViewRepresentations(v1.representations),
                 default_catalog: v1.default_catalog,
                 default_namespace: v1.default_namespace,
             }
@@ -244,7 +292,7 @@ pub(super) mod _serde {
                 schema_id: v1.schema_id,
                 timestamp_ms: v1.timestamp_ms,
                 summary: v1.summary,
-                representations: v1.representations,
+                representations: v1.representations.0,
                 default_catalog: v1.default_catalog,
                 default_namespace: v1.default_namespace,
             }
@@ -254,7 +302,10 @@ pub(super) mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::view_version::{ViewVersion, _serde::ViewVersionV1};
+    use crate::spec::{
+        view_version::{ViewVersion, _serde::ViewVersionV1},
+        ViewRepresentations,
+    };
     use chrono::{TimeZone, Utc};
 
     #[test]
@@ -299,13 +350,13 @@ mod tests {
             map
         });
         assert_eq!(result.representations(), &{
-            vec![super::ViewRepresentation::SqlViewRepresentation(
-                super::SqlViewRepresentation {
-                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+            ViewRepresentations::builder()
+                .add_or_overwrite_sql_representation(
+                    "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
                         .to_string(),
-                    dialect: "spark".to_string(),
-                },
-            )]
+                    "spark".to_string(),
+                )
+                .build()
         });
         assert_eq!(
             result.default_namespace.inner(),
@@ -327,18 +378,19 @@ mod tests {
         assert_eq!(representations.len(), 2);
         assert_eq!(
             representations
-                .iter()
+                .clone()
+                .into_iter()
                 .filter(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(_)))
                 .count(),
             2
         );
         let trino_rep = representations
-            .iter()
+            .into_iter()
             .find(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(sql) if sql.dialect == "trino"))
             .unwrap();
         assert_eq!(
             trino_rep,
-            &super::ViewRepresentation::SqlViewRepresentation(super::SqlViewRepresentation {
+            super::ViewRepresentation::SqlViewRepresentation(super::SqlViewRepresentation {
                 sql: "SELECT 3".to_string(),
                 dialect: "trino".to_string()
             })

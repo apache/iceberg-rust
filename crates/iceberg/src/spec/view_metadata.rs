@@ -170,7 +170,7 @@ impl ViewMetadataBuilder {
         let version = ViewVersion::builder()
             .with_default_catalog(default_catalog)
             .with_default_namespace(default_namespace)
-            .with_representations(representations.into_iter().collect::<Vec<_>>())
+            .with_representations(representations)
             .with_schema_id(schema.schema_id())
             .with_summary(summary)
             .with_timestamp_ms(Utc::now().timestamp_millis())
@@ -437,7 +437,7 @@ mod tests {
 
     use crate::{
         spec::{
-            NestedField, PrimitiveType, Schema, Type, ViewMetadata, ViewRepresentation,
+            NestedField, PrimitiveType, Schema, Type, ViewMetadata, ViewRepresentations,
             ViewRepresentationsBuilder, ViewVersion,
         },
         NamespaceIdent, ViewCreation,
@@ -525,13 +525,15 @@ mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(vec![ViewRepresentation::SqlViewRepresentation(
-                crate::spec::SqlViewRepresentation {
-                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                        .to_string(),
-                    dialect: "spark".to_string(),
-                },
-            )])
+            .with_representations(
+                ViewRepresentations::builder()
+                    .add_or_overwrite_sql_representation(
+                        "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                            .to_string(),
+                        "spark".to_string(),
+                    )
+                    .build(),
+            )
             .build();
 
         let expected = ViewMetadata {

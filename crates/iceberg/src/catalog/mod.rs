@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
-    UnboundPartitionSpec, ViewRepresentation,
+    UnboundPartitionSpec, ViewRepresentations,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -447,7 +447,7 @@ pub struct ViewCreation {
     /// The view's base location; used to create metadata file locations
     pub location: String,
     /// Representations for the view.
-    pub representations: Vec<ViewRepresentation>,
+    pub representations: ViewRepresentations,
     /// The schema of the view.
     pub schema: Schema,
     /// The properties of the view.
