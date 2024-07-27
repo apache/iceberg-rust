@@ -39,7 +39,7 @@ use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
 
-pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 0;
+pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 1;
 
 #[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
 #[serde(try_from = "ViewMetadataEnum", into = "ViewMetadataEnum")]
@@ -592,7 +592,7 @@ mod tests {
             metadata.location(),
             "s3://bucket/warehouse/default.db/event_agg"
         );
-        assert_eq!(metadata.current_version_id(), 0);
+        assert_eq!(metadata.current_version_id(), 1);
         assert_eq!(metadata.versions().count(), 1);
         assert_eq!(metadata.schemas_iter().count(), 1);
         assert_eq!(metadata.properties().len(), 0);
