@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn no_duplicate_sql_dialects() {
+    fn no_duplicate_sql_dialects_override() {
         let mut builder = super::ViewRepresentationsBuilder::new();
         builder = builder
             .add_or_overwrite_sql_representation("SELECT 1".to_string(), "trino".to_string());
@@ -453,5 +453,25 @@ mod tests {
                 dialect: "TrInO".to_string()
             })
         );
+    }
+
+    #[test]
+    fn test_no_duplicate_sql_dialects_fail() {
+        let mut builder = super::ViewRepresentationsBuilder::new();
+        builder = builder
+            .add_sql_representation("SELECT 1".to_string(), "trino".to_string())
+            .unwrap();
+        let result = builder.add_sql_representation("SELECT 2".to_string(), "trino".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_no_duplicate_sql_dialects_fail_case_insensitive() {
+        let mut builder = super::ViewRepresentationsBuilder::new();
+        builder = builder
+            .add_sql_representation("SELECT 1".to_string(), "trino".to_string())
+            .unwrap();
+        let result = builder.add_sql_representation("SELECT 2".to_string(), "Trino".to_string());
+        assert!(result.is_err());
     }
 }
