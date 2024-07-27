@@ -170,7 +170,7 @@ impl IntoIterator for ViewRepresentations {
 pub enum ViewRepresentation {
     #[serde(rename = "sql")]
     /// The SQL representation stores the view definition as a SQL SELECT,
-    SqlViewRepresentation(SqlViewRepresentation),
+    Sql(SqlViewRepresentation),
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -242,7 +242,7 @@ pub(super) mod _serde {
 
 impl From<SqlViewRepresentation> for ViewRepresentation {
     fn from(sql: SqlViewRepresentation) -> Self {
-        ViewRepresentation::SqlViewRepresentation(sql)
+        ViewRepresentation::Sql(sql)
     }
 }
 
@@ -297,7 +297,7 @@ mod tests {
         });
         assert_eq!(
             result.representations().to_owned(),
-            ViewRepresentations(vec![super::ViewRepresentation::SqlViewRepresentation(
+            ViewRepresentations(vec![super::ViewRepresentation::Sql(
                 super::SqlViewRepresentation {
                     sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
                         .to_string(),
