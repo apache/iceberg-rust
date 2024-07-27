@@ -439,8 +439,8 @@ mod tests {
 
     use crate::{
         spec::{
-            NestedField, PrimitiveType, Schema, Type, ViewMetadata, ViewRepresentations,
-            ViewRepresentationsBuilder, ViewVersion,
+            NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
+            ViewRepresentations, ViewVersion,
         },
         NamespaceIdent, ViewCreation,
     };
@@ -527,15 +527,12 @@ mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(
-                ViewRepresentations::builder()
-                    .add_or_overwrite_sql_representation(
-                        "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                            .to_string(),
-                        "spark".to_string(),
-                    )
-                    .build(),
-            )
+            .with_representations(ViewRepresentations(vec![SqlViewRepresentation {
+                sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                    .to_string(),
+                dialect: "spark".to_string(),
+            }
+            .into()]))
             .build();
 
         let expected = ViewMetadata {
@@ -572,9 +569,12 @@ mod tests {
 
     #[test]
     fn test_view_builder_from_view_creation() {
-        let representations = ViewRepresentationsBuilder::new()
-            .add_or_overwrite_sql_representation("Select 1".to_string(), "spark".to_string())
-            .build();
+        let representations = ViewRepresentations(vec![SqlViewRepresentation {
+            sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                .to_string(),
+            dialect: "spark".to_string(),
+        }
+        .into()]);
         let creation = ViewCreation::builder()
             .location("s3://bucket/warehouse/default.db/event_agg".to_string())
             .name("view".to_string())
@@ -629,15 +629,12 @@ mod tests {
                 ("engineVersion".to_string(), "3.3.2".to_string()),
                 ("engine-name".to_string(), "Spark".to_string()),
             ]))
-            .with_representations(
-                ViewRepresentations::builder()
-                    .add_or_overwrite_sql_representation(
-                        "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                            .to_string(),
-                        "spark".to_string(),
-                    )
-                    .build(),
-            )
+            .with_representations(ViewRepresentations(vec![SqlViewRepresentation {
+                sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                    .to_string(),
+                dialect: "spark".to_string(),
+            }
+            .into()]))
             .build();
 
         let expected = ViewMetadata {
