@@ -74,8 +74,18 @@ impl ViewVersion {
 
     /// Get the timestamp of when the view version was created
     #[inline]
-    pub fn timestamp(&self) -> MappedLocalTime<DateTime<Utc>> {
-        Utc.timestamp_millis_opt(self.timestamp_ms)
+    pub fn timestamp(&self) -> Result<DateTime<Utc>> {
+        match Utc.timestamp_millis_opt(self.timestamp_ms) {
+            MappedLocalTime::Single(t) => Ok(t),
+            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Ambiguous timestamp in view version",
+            )),
+            MappedLocalTime::None => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Invalid timestamp in view version",
+            )),
+        }
     }
 
     /// Get the timestamp of when the view version was created in milliseconds since epoch
