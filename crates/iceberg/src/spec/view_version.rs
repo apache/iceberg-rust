@@ -34,13 +34,16 @@ use _serde::ViewVersionV1;
 /// Reference to [`ViewVersion`].
 pub type ViewVersionRef = Arc<ViewVersion>;
 
+/// Alias for the integer type used for view version ids.
+pub type ViewVersionId = i32;
+
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypedBuilder)]
 #[serde(from = "ViewVersionV1", into = "ViewVersionV1")]
 #[builder(field_defaults(setter(prefix = "with_")))]
 /// A view versions represents the definition of a view at a specific point in time.
 pub struct ViewVersion {
     /// A unique long ID
-    version_id: i64,
+    version_id: ViewVersionId,
     /// ID of the schema for the view version
     schema_id: SchemaId,
     /// Timestamp when the version was created (ms from epoch)
@@ -59,7 +62,7 @@ pub struct ViewVersion {
 impl ViewVersion {
     /// Get the version id of this view version.
     #[inline]
-    pub fn version_id(&self) -> i64 {
+    pub fn version_id(&self) -> ViewVersionId {
         self.version_id
     }
 
@@ -286,7 +289,7 @@ pub(super) mod _serde {
     #[serde(rename_all = "kebab-case")]
     /// Defines the structure of a v1 view version for serialization/deserialization
     pub(crate) struct ViewVersionV1 {
-        pub version_id: i64,
+        pub version_id: i32,
         pub schema_id: i32,
         pub timestamp_ms: i64,
         pub summary: std::collections::HashMap<String, String>,

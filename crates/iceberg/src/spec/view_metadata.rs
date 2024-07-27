@@ -26,7 +26,7 @@ use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
 use super::{
-    view_version::{ViewVersion, ViewVersionRef},
+    view_version::{ViewVersion, ViewVersionId, ViewVersionRef},
     SchemaId, SchemaRef,
 };
 use crate::catalog::ViewCreation;
@@ -38,6 +38,8 @@ use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
+
+pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 0;
 
 #[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
 #[serde(try_from = "ViewMetadataEnum", into = "ViewMetadataEnum")]
@@ -53,9 +55,9 @@ pub struct ViewMetadata {
     /// The view's base location; used to create metadata file locations
     pub(crate) location: String,
     /// ID of the current version of the view (version-id)
-    pub(crate) current_version_id: i64,
+    pub(crate) current_version_id: ViewVersionId,
     /// A list of known versions of the view
-    pub(crate) versions: HashMap<i64, ViewVersionRef>,
+    pub(crate) versions: HashMap<ViewVersionId, ViewVersionRef>,
     /// A list of version log entries with the timestamp and version-id for every
     /// change to current-version-id
     pub(crate) version_log: Vec<ViewVersionLog>,
@@ -88,7 +90,7 @@ impl ViewMetadata {
 
     /// Returns the current version id.
     #[inline]
-    pub fn current_version_id(&self) -> i64 {
+    pub fn current_version_id(&self) -> ViewVersionId {
         self.current_version_id
     }
 
@@ -100,7 +102,7 @@ impl ViewMetadata {
 
     /// Lookup a view version by id.
     #[inline]
-    pub fn version_by_id(&self, version_id: i64) -> Option<&ViewVersionRef> {
+    pub fn version_by_id(&self, version_id: ViewVersionId) -> Option<&ViewVersionRef> {
         self.versions.get(&version_id)
     }
 
@@ -166,7 +168,7 @@ impl ViewMetadataBuilder {
             default_namespace,
             summary,
         } = view_creation;
-        let initial_version_id = super::INITIAL_SEQUENCE_NUMBER;
+        let initial_version_id = super::INITIAL_VIEW_VERSION_ID;
         let version = ViewVersion::builder()
             .with_default_catalog(default_catalog)
             .with_default_namespace(default_namespace)
@@ -210,7 +212,7 @@ impl ViewMetadataBuilder {
 /// A log of when each snapshot was made.
 pub struct ViewVersionLog {
     /// ID that current-version-id was set to
-    version_id: i64,
+    version_id: ViewVersionId,
     /// Timestamp when the view's current-version-id was updated (ms from epoch)
     timestamp_ms: i64,
 }
@@ -218,7 +220,7 @@ pub struct ViewVersionLog {
 impl ViewVersionLog {
     #[inline]
     /// Creates a new view version log.
-    pub fn new(version_id: i64, timestamp: i64) -> Self {
+    pub fn new(version_id: ViewVersionId, timestamp: i64) -> Self {
         Self {
             version_id,
             timestamp_ms: timestamp,
@@ -227,7 +229,7 @@ impl ViewVersionLog {
 
     /// Returns the version id.
     #[inline]
-    pub fn version_id(&self) -> i64 {
+    pub fn version_id(&self) -> ViewVersionId {
         self.version_id
     }
 
@@ -260,7 +262,7 @@ pub(super) mod _serde {
         Error, ErrorKind,
     };
 
-    use super::{ViewFormatVersion, ViewVersionLog};
+    use super::{ViewFormatVersion, ViewVersionId, ViewVersionLog};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -275,7 +277,7 @@ pub(super) mod _serde {
         pub format_version: VersionNumber<1>,
         pub(super) view_uuid: Uuid,
         pub(super) location: String,
-        pub(super) current_version_id: i64,
+        pub(super) current_version_id: ViewVersionId,
         pub(super) versions: Vec<ViewVersionV1>,
         pub(super) version_log: Vec<ViewVersionLog>,
         pub(super) schemas: Vec<SchemaV2>,
