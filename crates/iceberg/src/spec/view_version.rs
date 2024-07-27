@@ -37,7 +37,7 @@ pub type ViewVersionRef = Arc<ViewVersion>;
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypedBuilder)]
 #[serde(from = "ViewVersionV1", into = "ViewVersionV1")]
 #[builder(field_defaults(setter(prefix = "with_")))]
-/// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
+/// A view versions represents the definition of a view at a specific point in time.
 pub struct ViewVersion {
     /// A unique long ID
     version_id: i64,

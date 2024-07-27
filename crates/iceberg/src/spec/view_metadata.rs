@@ -16,7 +16,7 @@
 // under the License.
 
 //! Defines the [view metadata](https://iceberg.apache.org/view-spec/#view-metadata).
-//! The main struct here is [ViewMetadata] which defines the data for a table.
+//! The main struct here is [ViewMetadata] which defines the data for a view.
 
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -129,7 +129,7 @@ impl ViewMetadata {
     pub fn current_schema(&self) -> &SchemaRef {
         let schema_id = self.current_version().schema_id();
         self.schema_by_id(schema_id)
-            .expect("Current schema id set, but not found in table metadata")
+            .expect("Current schema id set, but not found in view metadata")
     }
 
     /// Returns properties of the view.
@@ -158,12 +158,12 @@ impl ViewMetadata {
 pub struct ViewMetadataBuilder(ViewMetadata);
 
 impl ViewMetadataBuilder {
-    /// Creates a new view metadata builder from the given table metadata.
+    /// Creates a new view metadata builder from the given view metadata.
     pub fn new(origin: ViewMetadata) -> Self {
         Self(origin)
     }
 
-    /// Creates a new view metadata builder from the given table creation.
+    /// Creates a new view metadata builder from the given view creation.
     pub fn from_view_creation(view_creation: ViewCreation) -> Result<Self> {
         let ViewCreation {
             location,
@@ -213,7 +213,7 @@ impl ViewMetadataBuilder {
         Ok(self)
     }
 
-    /// Returns the new table metadata after changes.
+    /// Returns the new view metadata after changes.
     pub fn build(self) -> Result<ViewMetadata> {
         Ok(self.0)
     }
@@ -263,7 +263,7 @@ pub(super) mod _serde {
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
-    /// Defines the structure of a v2 table metadata for serialization/deserialization
+    /// Defines the structure of a v1 view metadata for serialization/deserialization
     pub(super) struct ViewMetadataV1 {
         pub format_version: VersionNumber<1>,
         pub(super) view_uuid: Uuid,
@@ -593,11 +593,11 @@ mod tests {
     }
 
     #[test]
-    fn test_view_builder_from_table_metadata() {
+    fn test_view_builder_from_view_metadata() {
         let metadata = get_test_view_metadata("ViewMetadataV2Valid.json");
         let metadata_builder = ViewMetadataBuilder::new(metadata);
         let uuid = Uuid::new_v4();
-        let table_metadata = metadata_builder.assign_uuid(uuid).unwrap().build().unwrap();
-        assert_eq!(table_metadata.uuid(), uuid);
+        let metadata = metadata_builder.assign_uuid(uuid).unwrap().build().unwrap();
+        assert_eq!(metadata.uuid(), uuid);
     }
 }
