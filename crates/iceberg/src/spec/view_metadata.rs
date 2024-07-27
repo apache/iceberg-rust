@@ -471,26 +471,6 @@ mod tests {
         serde_json::from_str(&metadata).unwrap()
     }
 
-    fn new_view_version(id: i64, schema_id: i32, sql: &str) -> ViewVersion {
-        ViewVersion::builder()
-            .with_version_id(id)
-            .with_timestamp_ms(chrono::Utc::now().timestamp_millis())
-            .with_default_catalog("prod".to_string().into())
-            .with_default_namespace(NamespaceIdent::from_vec(vec!["default".to_string()]).unwrap())
-            .with_summary(HashMap::from_iter(vec![(
-                "user".to_string(),
-                "some-user".to_string(),
-            )]))
-            .with_representations(vec![ViewRepresentation::SqlViewRepresentation(
-                crate::spec::SqlViewRepresentation {
-                    sql: sql.to_string(),
-                    dialect: "spark".to_string(),
-                },
-            )])
-            .with_schema_id(schema_id)
-            .build()
-    }
-
     #[test]
     fn test_view_data_v1() {
         let data = r#"
