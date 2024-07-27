@@ -599,7 +599,69 @@ mod tests {
     }
 
     #[test]
-    fn test_view_builder_from_view_metadata() {
+    fn test_view_metadata_v1_file_valid() {
+        let metadata =
+            fs::read_to_string("testdata/view_metadata/ViewMetadataV1Valid.json").unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                Arc::new(
+                    NestedField::optional(1, "event_count", Type::Primitive(PrimitiveType::Int))
+                        .with_doc("Count of events"),
+                ),
+                Arc::new(NestedField::optional(
+                    2,
+                    "event_date",
+                    Type::Primitive(PrimitiveType::Date),
+                )),
+            ])
+            .build()
+            .unwrap();
+
+        let version = ViewVersion::builder()
+            .with_version_id(1)
+            .with_timestamp_ms(1573518431292)
+            .with_schema_id(1)
+            .with_default_catalog("prod".to_string().into())
+            .with_default_namespace(NamespaceIdent::from_vec(vec!["default".to_string()]).unwrap())
+            .with_summary(HashMap::from_iter(vec![
+                ("engineVersion".to_string(), "3.3.2".to_string()),
+                ("engine-name".to_string(), "Spark".to_string()),
+            ]))
+            .with_representations(
+                ViewRepresentations::builder()
+                    .add_or_overwrite_sql_representation(
+                        "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                            .to_string(),
+                        "spark".to_string(),
+                    )
+                    .build(),
+            )
+            .build();
+
+        let expected = ViewMetadata {
+            format_version: ViewFormatVersion::V1,
+            view_uuid: Uuid::parse_str("fa6506c3-7681-40c8-86dc-e36561f83385").unwrap(),
+            location: "s3://bucket/warehouse/default.db/event_agg".to_string(),
+            current_version_id: 1,
+            versions: HashMap::from_iter(vec![(1, Arc::new(version))]),
+            version_log: vec![ViewVersionLog {
+                timestamp_ms: 1573518431292,
+                version_id: 1,
+            }],
+            schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
+            properties: HashMap::from_iter(vec![(
+                "comment".to_string(),
+                "Daily event counts".to_string(),
+            )]),
+        };
+
+        check_view_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_view_builder_assign_uuid() {
         let metadata = get_test_view_metadata("ViewMetadataV1Valid.json");
         let metadata_builder = ViewMetadataBuilder::new(metadata);
         let uuid = Uuid::new_v4();
