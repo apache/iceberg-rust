@@ -190,7 +190,7 @@ pub(super) mod _serde {
     /// This is a helper module that defines types to help with serialization/deserialization.
     /// For deserialization the input first gets read into the [`ViewVersionV1`] struct.
     /// and then converted into the [Snapshot] struct. Serialization works the other way around.
-    /// [SnapshotV1] and [SnapshotV2] are internal struct that are only used for serialization and deserialization.
+    /// [ViewVersionV1] are internal struct that are only used for serialization and deserialization.
     use serde::{Deserialize, Serialize};
 
     use crate::catalog::NamespaceIdent;
