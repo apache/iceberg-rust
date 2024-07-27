@@ -24,7 +24,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
-use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use super::snapshot::{Snapshot, SnapshotReference, SnapshotRetention};
 use super::{
     PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrder, SortOrderRef,
 };
-use crate::error::Result;
+use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind, TableCreation};
 
 static MAIN_BRANCH: &str = "main";
@@ -144,17 +144,7 @@ impl TableMetadata {
     /// Returns last updated time.
     #[inline]
     pub fn last_updated_timestamp(&self) -> Result<DateTime<Utc>> {
-        match Utc.timestamp_millis_opt(self.last_updated_ms) {
-            MappedLocalTime::Single(t) => Ok(t),
-            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Ambiguous timestamp in table metadata last updated",
-            )),
-            MappedLocalTime::None => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Invalid timestamp in table metadata last updated",
-            )),
-        }
+        timestamp_ms_to_utc(self.last_updated_ms)
     }
 
     /// Returns last updated time in milliseconds.
@@ -920,17 +910,7 @@ pub struct SnapshotLog {
 impl SnapshotLog {
     /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
     pub fn timestamp(self) -> Result<DateTime<Utc>> {
-        match Utc.timestamp_millis_opt(self.timestamp_ms) {
-            MappedLocalTime::Single(t) => Ok(t),
-            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Ambiguous timestamp in snapshot log",
-            )),
-            MappedLocalTime::None => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Invalid timestamp in snapshot log",
-            )),
-        }
+        timestamp_ms_to_utc(self.timestamp_ms)
     }
 
     /// Returns the timestamp in milliseconds
