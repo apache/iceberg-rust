@@ -268,7 +268,8 @@ mod tests {
         let partition_spec = PartitionSpec::builder()
             .with_spec_id(1)
             .with_fields(vec![])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let arc_schema = Arc::new(schema);
@@ -304,7 +305,8 @@ mod tests {
                 .field_id(1)
                 .transform(Transform::Identity)
                 .build()])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let arc_schema = Arc::new(schema);
@@ -352,7 +354,8 @@ mod tests {
                     .transform(Transform::Day)
                     .build(),
             ])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let arc_schema = Arc::new(schema);
@@ -386,7 +389,8 @@ mod tests {
                 .field_id(3)
                 .transform(Transform::Truncate(4))
                 .build()])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let arc_schema = Arc::new(schema);
@@ -423,7 +427,8 @@ mod tests {
                 .field_id(1)
                 .transform(Transform::Bucket(7))
                 .build()])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let arc_schema = Arc::new(schema);

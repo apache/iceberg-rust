@@ -1664,7 +1664,8 @@ mod test {
                 .field_id(1)
                 .transform(Transform::Identity)
                 .build()])
-            .build()
+            .unwrap()
+            .build(&table_schema_ref)
             .unwrap();
         let partition_spec_ref = Arc::new(partition_spec);
         (table_schema_ref, partition_spec_ref)

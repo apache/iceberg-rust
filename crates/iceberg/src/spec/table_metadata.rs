@@ -1016,8 +1016,8 @@ mod tests {
                 source_id: 4,
                 field_id: 1000,
             })
-            .build()
-            .unwrap();
+            .unwrap()
+            .build_unchecked();
 
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
@@ -1175,7 +1175,8 @@ mod tests {
                 source_id: 1,
                 field_id: 1000,
             })
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1288,7 +1289,8 @@ mod tests {
                 source_id: 1,
                 field_id: 1000,
             })
-            .build()
+            .unwrap()
+            .build(&schema1)
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1410,7 +1412,8 @@ mod tests {
                 source_id: 1,
                 field_id: 1000,
             })
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1489,7 +1492,8 @@ mod tests {
                 source_id: 1,
                 field_id: 1000,
             })
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         let expected = TableMetadata {

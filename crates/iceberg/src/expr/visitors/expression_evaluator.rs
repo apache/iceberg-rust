@@ -282,7 +282,8 @@ mod tests {
                 .field_id(1)
                 .transform(Transform::Identity)
                 .build()])
-            .build()
+            .unwrap()
+            .build(&schema)
             .unwrap();
 
         Ok((Arc::new(schema), Arc::new(spec)))
