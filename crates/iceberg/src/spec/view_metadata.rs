@@ -18,23 +18,21 @@
 //! Defines the [view metadata](https://iceberg.apache.org/view-spec/#view-metadata).
 //! The main struct here is [ViewMetadata] which defines the data for a view.
 
-use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::{collections::HashMap, sync::Arc};
-use uuid::Uuid;
-
-use super::{
-    view_version::{ViewVersion, ViewVersionId, ViewVersionRef},
-    SchemaId, SchemaRef,
-};
-use crate::catalog::ViewCreation;
-use crate::error::Result;
+use std::sync::Arc;
 
 use _serde::ViewMetadataEnum;
-
 use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
+use uuid::Uuid;
+
+use super::view_version::{ViewVersion, ViewVersionId, ViewVersionRef};
+use super::{SchemaId, SchemaRef};
+use crate::catalog::ViewCreation;
+use crate::error::Result;
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
@@ -255,14 +253,12 @@ pub(super) mod _serde {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    use crate::spec::table_metadata::_serde::VersionNumber;
-    use crate::spec::ViewVersion;
-    use crate::{
-        spec::{schema::_serde::SchemaV2, view_version::_serde::ViewVersionV1, ViewMetadata},
-        Error, ErrorKind,
-    };
-
     use super::{ViewFormatVersion, ViewVersionId, ViewVersionLog};
+    use crate::spec::schema::_serde::SchemaV2;
+    use crate::spec::table_metadata::_serde::VersionNumber;
+    use crate::spec::view_version::_serde::ViewVersionV1;
+    use crate::spec::{ViewMetadata, ViewVersion};
+    use crate::{Error, ErrorKind};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -286,9 +282,7 @@ pub(super) mod _serde {
 
     impl Serialize for ViewMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        where S: serde::Serializer {
             // we must do a clone here
             let metadata_enum: ViewMetadataEnum =
                 self.clone().try_into().map_err(serde::ser::Error::custom)?;
@@ -430,22 +424,20 @@ impl Display for ViewFormatVersion {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, sync::Arc};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::sync::Arc;
 
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
-    use pretty_assertions::assert_eq;
-
-    use crate::{
-        spec::{
-            NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
-            ViewRepresentations, ViewVersion,
-        },
-        NamespaceIdent, ViewCreation,
-    };
-
     use super::{ViewFormatVersion, ViewMetadataBuilder, ViewVersionLog};
+    use crate::spec::{
+        NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
+        ViewRepresentations, ViewVersion,
+    };
+    use crate::{NamespaceIdent, ViewCreation};
 
     fn check_view_metadata_serde(json: &str, expected_type: ViewMetadata) {
         let desered_type: ViewMetadata = serde_json::from_str(json).unwrap();

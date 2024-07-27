@@ -17,19 +17,20 @@
 
 /*!
  * View Versions!
-*/
-use crate::error::{timestamp_ms_to_utc, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+ */
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use _serde::ViewVersionV1;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::view_metadata::ViewVersionLog;
 use crate::catalog::NamespaceIdent;
+use crate::error::{timestamp_ms_to_utc, Result};
 use crate::spec::{SchemaId, SchemaRef, ViewMetadata};
 use crate::{Error, ErrorKind};
-use _serde::ViewVersionV1;
 
 /// Reference to [`ViewVersion`].
 pub type ViewVersionRef = Arc<ViewVersion>;
@@ -193,9 +194,8 @@ pub(super) mod _serde {
     /// [ViewVersionV1] are internal struct that are only used for serialization and deserialization.
     use serde::{Deserialize, Serialize};
 
-    use crate::catalog::NamespaceIdent;
-
     use super::{ViewRepresentation, ViewRepresentations, ViewVersion};
+    use crate::catalog::NamespaceIdent;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "kebab-case")]
@@ -248,11 +248,11 @@ impl From<SqlViewRepresentation> for ViewRepresentation {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::{
-        view_version::{ViewVersion, _serde::ViewVersionV1},
-        ViewRepresentations,
-    };
     use chrono::{TimeZone, Utc};
+
+    use crate::spec::view_version::ViewVersion;
+    use crate::spec::view_version::_serde::ViewVersionV1;
+    use crate::spec::ViewRepresentations;
 
     #[test]
     fn view_version() {
