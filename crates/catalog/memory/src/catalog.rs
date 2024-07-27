@@ -344,8 +344,8 @@ mod tests {
         let expected_partition_spec = PartitionSpec::builder()
             .with_spec_id(0)
             .with_fields(vec![])
-            .build()
-            .unwrap();
+            .unwrap()
+            .build_unchecked();
 
         assert_eq!(
             metadata

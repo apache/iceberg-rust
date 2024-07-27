@@ -46,12 +46,12 @@ pub struct PartitionField {
 
 impl PartitionField {
     /// To unbound partition field
-    pub fn to_unbound(&self) -> UnboundPartitionField {
+    pub fn to_unbound(self) -> UnboundPartitionField {
         UnboundPartitionField {
             source_id: self.source_id,
             partition_id: Some(self.field_id),
-            name: self.name.clone(),
-            transform: self.transform.clone(),
+            name: self.name,
+            transform: self.transform,
         }
     }
 }
