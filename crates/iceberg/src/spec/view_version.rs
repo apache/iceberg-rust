@@ -186,7 +186,7 @@ impl ViewRepresentationsBuilder {
 
     /// Add a representation to the list.
     ///
-    /// SQL representations dialects must be unique. If a representation with the same
+    /// SQL representations dialects must be unique (case insensitive). If a representation with the same
     /// dialect already exists, it will be overwritten.
     pub fn add_or_overwrite_representation(mut self, representation: ViewRepresentation) -> Self {
         let dialect = match &representation {
@@ -194,7 +194,7 @@ impl ViewRepresentationsBuilder {
         };
         self.0.retain(|r| {
             let ViewRepresentation::SqlViewRepresentation(sql) = r;
-            sql.dialect != *dialect
+            !sql.dialect.eq_ignore_ascii_case(dialect)
         });
         self.0.push(representation);
         self
@@ -393,6 +393,39 @@ mod tests {
             super::ViewRepresentation::SqlViewRepresentation(super::SqlViewRepresentation {
                 sql: "SELECT 3".to_string(),
                 dialect: "trino".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn no_duplicate_sql_dialects_case_insensitive() {
+        let mut builder = super::ViewRepresentationsBuilder::new();
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 1".to_string(), "trino".to_string());
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 2".to_string(), "spark".to_string());
+        builder = builder
+            .add_or_overwrite_sql_representation("SELECT 3".to_string(), "TrInO".to_string());
+
+        let representations = builder.build();
+        assert_eq!(representations.len(), 2);
+        assert_eq!(
+            representations
+                .clone()
+                .into_iter()
+                .filter(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(_)))
+                .count(),
+            2
+        );
+        let trino_rep = representations
+            .into_iter()
+            .find(|r| matches!(r, super::ViewRepresentation::SqlViewRepresentation(sql) if sql.dialect == "TrInO"))
+            .unwrap();
+        assert_eq!(
+            trino_rep,
+            super::ViewRepresentation::SqlViewRepresentation(super::SqlViewRepresentation {
+                sql: "SELECT 3".to_string(),
+                dialect: "TrInO".to_string()
             })
         );
     }
