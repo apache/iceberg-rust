@@ -18,7 +18,7 @@
 /*!
  * View Versions!
 */
-use crate::error::Result;
+use crate::error::{timestamp_ms_to_utc, Result};
 use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -75,17 +75,7 @@ impl ViewVersion {
     /// Get the timestamp of when the view version was created
     #[inline]
     pub fn timestamp(&self) -> Result<DateTime<Utc>> {
-        match Utc.timestamp_millis_opt(self.timestamp_ms) {
-            MappedLocalTime::Single(t) => Ok(t),
-            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Ambiguous timestamp in view version",
-            )),
-            MappedLocalTime::None => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Invalid timestamp in view version",
-            )),
-        }
+        timestamp_ms_to_utc(self.timestamp_ms)
     }
 
     /// Get the timestamp of when the view version was created in milliseconds since epoch
@@ -157,7 +147,7 @@ impl ViewRepresentations {
     }
 
     /// Get an iterator over the representations
-    pub fn iter(&self) -> impl Iterator<Item=&'_ ViewRepresentation> {
+    pub fn iter(&self) -> impl Iterator<Item = &'_ ViewRepresentation> {
         self.0.iter()
     }
 }

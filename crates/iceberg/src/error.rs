@@ -19,6 +19,8 @@ use std::backtrace::{Backtrace, BacktraceStatus};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 
+use chrono::{DateTime, TimeZone as _, Utc};
+
 /// Result that is a wrapper of `Result<T, iceberg::Error>`
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -330,6 +332,27 @@ define_from_err!(
 );
 
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
+
+/// Converts a timestamp in milliseconds to `DateTime<Utc>`, handling errors.
+///
+/// # Arguments
+///
+/// * `timestamp_ms` - The timestamp in milliseconds to convert.
+///
+/// # Returns
+///
+/// This function returns a `Result<DateTime<Utc>, Error>` which is `Ok` with the `DateTime<Utc>` if the conversion is successful,
+/// or an `Err` with an appropriate error if the timestamp is ambiguous or invalid.
+pub(crate) fn timestamp_ms_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>> {
+    match Utc.timestamp_millis_opt(timestamp_ms) {
+        chrono::LocalResult::Single(t) => Ok(t),
+        chrono::LocalResult::Ambiguous(_, _) => Err(Error::new(
+            ErrorKind::Unexpected,
+            "Ambiguous timestamp with two possible results",
+        )),
+        chrono::LocalResult::None => Err(Error::new(ErrorKind::Unexpected, "Invalid timestamp")),
+    }
+}
 
 /// Helper macro to check arguments.
 ///
