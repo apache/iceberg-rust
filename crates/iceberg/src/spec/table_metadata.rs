@@ -24,7 +24,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -143,8 +143,24 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.last_updated_ms).unwrap()
+    pub fn last_updated_timestamp(&self) -> Result<DateTime<Utc>> {
+        match Utc.timestamp_millis_opt(self.last_updated_ms) {
+            MappedLocalTime::Single(t) => Ok(t),
+            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Ambiguous timestamp in table metadata last updated",
+            )),
+            MappedLocalTime::None => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Invalid timestamp in table metadata last updated",
+            )),
+        }
+    }
+
+    /// Returns last updated time in milliseconds.
+    #[inline]
+    pub fn last_updated_ms(&self) -> i64 {
+        self.last_updated_ms
     }
 
     /// Returns schemas
@@ -903,8 +919,24 @@ pub struct SnapshotLog {
 
 impl SnapshotLog {
     /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
-    pub fn timestamp(self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    pub fn timestamp(self) -> Result<DateTime<Utc>> {
+        match Utc.timestamp_millis_opt(self.timestamp_ms) {
+            MappedLocalTime::Single(t) => Ok(t),
+            MappedLocalTime::Ambiguous(_, _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Ambiguous timestamp in snapshot log",
+            )),
+            MappedLocalTime::None => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Invalid timestamp in snapshot log",
+            )),
+        }
+    }
+
+    /// Returns the timestamp in milliseconds
+    #[inline]
+    pub fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
     }
 }
 
