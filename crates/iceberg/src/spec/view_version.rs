@@ -184,7 +184,7 @@ impl ViewRepresentationsBuilder {
         Self(Vec::new())
     }
 
-    /// Add a representation to the list.
+    /// Add a or overwrite a representation for a view
     ///
     /// SQL representations dialects must be unique (case insensitive). If a representation with the same
     /// dialect already exists, it will be overwritten.
@@ -200,12 +200,37 @@ impl ViewRepresentationsBuilder {
         self
     }
 
-    /// Add a SQL representation to the list.
+    /// Add a SQL representation for a view. Fails if a representation with the same dialect already exists.
+    pub fn add_representation(self, representation: ViewRepresentation) -> Result<Self> {
+        let dialect = match &representation {
+            ViewRepresentation::SqlViewRepresentation(sql) => &sql.dialect,
+        };
+        if self
+            .0
+            .iter()
+            .any(|r| matches!(r, ViewRepresentation::SqlViewRepresentation(sql) if sql.dialect.eq_ignore_ascii_case(dialect)))
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Representation with dialect {} already exists", dialect),
+            ));
+        }
+        Ok(self.add_or_overwrite_representation(representation))
+    }
+
+    /// Add a or overwrite a SQL representation for a view
     ///
     /// SQL representations dialects must be unique. If a representation with the same
     /// dialect already exists, it will be overwritten.
     pub fn add_or_overwrite_sql_representation(self, sql: String, dialect: String) -> Self {
         self.add_or_overwrite_representation(ViewRepresentation::SqlViewRepresentation(
+            SqlViewRepresentation { sql, dialect },
+        ))
+    }
+
+    /// Add a SQL representation for a view. Fails if a representation with the same dialect already exists.
+    pub fn add_sql_representation(self, sql: String, dialect: String) -> Result<Self> {
+        self.add_representation(ViewRepresentation::SqlViewRepresentation(
             SqlViewRepresentation { sql, dialect },
         ))
     }
