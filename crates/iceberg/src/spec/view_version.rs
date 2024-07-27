@@ -169,12 +169,11 @@ impl IntoIterator for ViewRepresentations {
         self.0.into_iter()
     }
 }
-impl<'a> IntoIterator for &'a ViewRepresentations {
+impl<'a> Iterator for &'a ViewRepresentations {
     type Item = &'a ViewRepresentation;
-    type IntoIter = std::slice::Iter<'a, ViewRepresentation>;
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+    fn next(&mut self) -> Option<&'a ViewRepresentation> {
+        self.0.iter().next()
     }
 }
 
