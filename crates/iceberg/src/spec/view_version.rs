@@ -109,7 +109,7 @@ impl ViewVersion {
                     format!("Schema with id {} not found", self.schema_id()),
                 )
             })
-            .map(|s| s.clone());
+            .cloned();
         r
     }
 
@@ -134,14 +134,14 @@ impl ViewRepresentationsBuilder {
     }
 
     /// Add a representation to the list.
-    pub fn add(mut self, representation: ViewRepresentation) -> Self {
+    pub fn add_representation(mut self, representation: ViewRepresentation) -> Self {
         self.0.push(representation);
         self
     }
 
     /// Add a SQL representation to the list.
-    pub fn add_sql(self, sql: String, dialect: String) -> Self {
-        self.add(ViewRepresentation::SqlViewRepresentation(
+    pub fn add_sql_representation(self, sql: String, dialect: String) -> Self {
+        self.add_representation(ViewRepresentation::SqlViewRepresentation(
             SqlViewRepresentation { sql, dialect },
         ))
     }
@@ -149,6 +149,12 @@ impl ViewRepresentationsBuilder {
     /// Build the list of representations.
     pub fn build(self) -> ViewRepresentations {
         self.0
+    }
+}
+
+impl Default for ViewRepresentationsBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -257,8 +263,7 @@ mod tests {
 
         let result: ViewVersion = serde_json::from_value::<ViewVersionV1>(record.clone())
             .unwrap()
-            .try_into()
-            .unwrap();
+            .into();
 
         // Roundtrip
         assert_eq!(serde_json::to_value(result.clone()).unwrap(), record);
@@ -277,15 +282,13 @@ mod tests {
             map
         });
         assert_eq!(result.representations(), &{
-            let mut vec = Vec::new();
-            vec.push(super::ViewRepresentation::SqlViewRepresentation(
+            vec![super::ViewRepresentation::SqlViewRepresentation(
                 super::SqlViewRepresentation {
                     sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
                         .to_string(),
                     dialect: "spark".to_string(),
                 },
-            ));
-            vec
+            )]
         });
         assert_eq!(
             result.default_namespace.inner(),
