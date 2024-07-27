@@ -1215,4 +1215,28 @@ mod tests {
             .build(&schema)
             .unwrap();
     }
+
+    #[test]
+    fn test_build_unbound_specs_without_partition_id() {
+        let spec = PartitionSpec::builder()
+            .with_spec_id(1)
+            .with_unbound_partition_field(UnboundPartitionField {
+                source_id: 1,
+                partition_id: None,
+                name: "id_bucket[16]".to_string(),
+                transform: Transform::Bucket(16),
+            })
+            .unwrap()
+            .build_unbound();
+
+        assert_eq!(spec, UnboundPartitionSpec {
+            spec_id: Some(1),
+            fields: vec![UnboundPartitionField {
+                source_id: 1,
+                partition_id: None,
+                name: "id_bucket[16]".to_string(),
+                transform: Transform::Bucket(16),
+            }]
+        });
+    }
 }
