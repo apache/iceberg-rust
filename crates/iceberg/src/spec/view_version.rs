@@ -157,7 +157,7 @@ impl ViewRepresentations {
     }
 
     /// Get an iterator over the representations
-    pub fn iter(&self) -> std::slice::Iter<'_, ViewRepresentation> {
+    pub fn iter(&self) -> impl Iterator<Item=&'_ ViewRepresentation> {
         self.0.iter()
     }
 }
