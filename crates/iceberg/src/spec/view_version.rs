@@ -158,6 +158,11 @@ impl ViewRepresentations {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Get an iterator over the representations
+    pub fn iter(&self) -> std::slice::Iter<'_, ViewRepresentation> {
+        self.0.iter()
+    }
 }
 
 // Iterator for ViewRepresentations
@@ -167,13 +172,6 @@ impl IntoIterator for ViewRepresentations {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
-    }
-}
-impl<'a> Iterator for &'a ViewRepresentations {
-    type Item = &'a ViewRepresentation;
-
-    fn next(&mut self) -> Option<&'a ViewRepresentation> {
-        self.0.iter().next()
     }
 }
 
