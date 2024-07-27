@@ -371,7 +371,7 @@ impl PartitionSpecBuilder {
             // If we switch to deduped_name here, we would not support year & month & day partitions on the same column, as it is always "time".
             // deduped_name would probably be more correct for bucket transform, to disallow different bucket sizes on the same column.
             // Java seems to use deduped_name: https://github.com/apache/iceberg/blob/4dbc7f578eee7ceb9def35ebfa1a4cc236fb598f/api/src/main/java/org/apache/iceberg/PartitionSpec.java#L420
-            // Does java disalow year & month partitions on the same column? If so our tests are broken:
+            // Does java disallow year & month partitions on the same column? If so our tests are broken:
             // (test_inclusive_projection_date_transforms)
             .find(|f| f.source_id == source_id && &f.transform == transform);
 
@@ -1172,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_multiple_time_partitons() {
+    fn test_build_multiple_time_partitions() {
         let schema = Schema::builder()
             .with_fields(vec![NestedField::required(
                 1,
