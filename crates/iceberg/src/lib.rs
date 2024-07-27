@@ -29,7 +29,7 @@ mod catalog;
 
 pub use catalog::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement,
-    TableUpdate,
+    TableUpdate, ViewCreation,
 };
 
 pub mod table;
