@@ -305,14 +305,6 @@ mod tests {
             map.insert("engineVersion".to_string(), "3.3.2".to_string());
             map
         });
-        let representations =
-            ViewRepresentations(vec![super::ViewRepresentation::SqlViewRepresentation(
-                super::SqlViewRepresentation {
-                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
-                        .to_string(),
-                    dialect: "spark".to_string(),
-                },
-            )]);
         assert_eq!(
             result.representations().to_owned(),
             ViewRepresentations(vec![super::ViewRepresentation::SqlViewRepresentation(
