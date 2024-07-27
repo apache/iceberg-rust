@@ -144,22 +144,19 @@ pub struct UnboundPartitionField {
 }
 
 /// Unbound partition spec can be built without a schema and later bound to a schema.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default, Builder)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
-#[builder(setter(prefix = "with"))]
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
-    #[builder(default, setter(strip_option))]
     pub spec_id: Option<i32>,
     /// Details of the partition spec
-    #[builder(setter(each(name = "with_unbound_partition_field")))]
     pub fields: Vec<UnboundPartitionField>,
 }
 
 impl UnboundPartitionSpec {
     /// Create unbound partition spec builer
-    pub fn builder() -> UnboundPartitionSpecBuilder {
-        UnboundPartitionSpecBuilder::default()
+    pub fn builder() -> PartitionSpecBuilder {
+        PartitionSpecBuilder::default()
     }
 }
 

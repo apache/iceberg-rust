@@ -1467,13 +1467,13 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .with_fields(vec![UnboundPartitionField::builder()
+                    .with_unbound_fields(vec![UnboundPartitionField::builder()
                         .source_id(1)
                         .transform(Transform::Truncate(3))
                         .name("id".to_string())
                         .build()])
-                    .build()
-                    .unwrap(),
+                    .unwrap()
+                    .build_unbound(),
             )
             .sort_order(
                 SortOrder::builder()

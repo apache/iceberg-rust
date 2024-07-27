@@ -802,6 +802,7 @@ mod tests {
                             .transform(Transform::Day)
                             .build(),
                     )
+                    .unwrap()
                     .with_unbound_partition_field(
                         UnboundPartitionField::builder()
                             .source_id(1)
@@ -809,6 +810,7 @@ mod tests {
                             .transform(Transform::Bucket(16))
                             .build(),
                     )
+                    .unwrap()
                     .with_unbound_partition_field(
                         UnboundPartitionField::builder()
                             .source_id(2)
@@ -816,8 +818,8 @@ mod tests {
                             .transform(Transform::Truncate(4))
                             .build(),
                     )
-                    .build()
-                    .unwrap(),
+                    .unwrap()
+                    .build_unbound(),
             },
         );
     }
