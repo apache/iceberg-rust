@@ -24,7 +24,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use super::snapshot::{Snapshot, SnapshotReference, SnapshotRetention};
 use super::{
     PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrder, SortOrderRef,
 };
-use crate::error::Result;
+use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind, TableCreation};
 
 static MAIN_BRANCH: &str = "main";
@@ -143,8 +143,14 @@ impl TableMetadata {
 
     /// Returns last updated time.
     #[inline]
-    pub fn last_updated_ms(&self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.last_updated_ms).unwrap()
+    pub fn last_updated_timestamp(&self) -> Result<DateTime<Utc>> {
+        timestamp_ms_to_utc(self.last_updated_ms)
+    }
+
+    /// Returns last updated time in milliseconds.
+    #[inline]
+    pub fn last_updated_ms(&self) -> i64 {
+        self.last_updated_ms
     }
 
     /// Returns schemas
@@ -328,7 +334,7 @@ impl TableMetadataBuilder {
 
         let table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
-            table_uuid: Uuid::new_v4(),
+            table_uuid: Uuid::now_v7(),
             location: location.ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -472,7 +478,7 @@ pub(super) mod _serde {
 
     /// Helper to serialize and deserialize the format version.
     #[derive(Debug, PartialEq, Eq)]
-    pub(super) struct VersionNumber<const V: u8>;
+    pub(crate) struct VersionNumber<const V: u8>;
 
     impl Serialize for TableMetadata {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -903,8 +909,14 @@ pub struct SnapshotLog {
 
 impl SnapshotLog {
     /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision
-    pub fn timestamp(self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    pub fn timestamp(self) -> Result<DateTime<Utc>> {
+        timestamp_ms_to_utc(self.timestamp_ms)
+    }
+
+    /// Returns the timestamp in milliseconds
+    #[inline]
+    pub fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
     }
 }
 
