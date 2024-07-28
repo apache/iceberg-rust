@@ -33,19 +33,24 @@ use uuid::Uuid;
 
 use crate::namespace_state::NamespaceState;
 
+/// namespace `location` property
+const LOCATION: &str = "location";
+
 /// Memory catalog implementation.
 #[derive(Debug)]
 pub struct MemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
+    warehouse_location: Option<String>,
 }
 
 impl MemoryCatalog {
     /// Creates an memory catalog.
-    pub fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO, warehouse_location: Option<String>) -> Self {
         Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
             file_io,
+            warehouse_location,
         }
     }
 }
@@ -165,8 +170,21 @@ impl Catalog for MemoryCatalog {
         let (table_creation, location) = match table_creation.location.clone() {
             Some(location) => (table_creation, location),
             None => {
-                let location = format!(
-                    "{}/{}",
+                let location = match root_namespace_state.get_properties(&namespace_ident)?.get(LOCATION) {
+                    Some(namespace_location) => Ok(namespace_location.clone()),
+                    None => match self.warehouse_location.clone() {
+                        Some(warehouse_location) => Ok(warehouse_location),
+                        None => Err(Error::new(ErrorKind::Unexpected,
+                            format!(
+                                "Cannot create table {:?}. No table location or namespace location or warehouse location were provided.",
+                                &table_ident
+                            )))
+                    },
+                }?;
+
+                format!(
+                    "{}/{}/{}",
+                    location,
                     table_ident.namespace().join("/"),
                     table_ident.name()
                 );
@@ -277,9 +295,15 @@ mod tests {
 
     use super::*;
 
+    fn temp_path() -> String {
+        let temp_dir = TempDir::new().unwrap();
+        temp_dir.path().to_str().unwrap().to_string()
+    }
+
     fn new_memory_catalog() -> impl Catalog {
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        MemoryCatalog::new(file_io)
+        let warehouse_location = temp_path();
+        MemoryCatalog::new(file_io, Some(warehouse_location))
     }
 
     async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
@@ -312,16 +336,12 @@ mod tests {
     }
 
     async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
-        let tmp_dir = TempDir::new().unwrap();
-        let location = tmp_dir.path().to_str().unwrap().to_string();
-
         let _ = catalog
             .create_table(
                 &table_ident.namespace,
                 TableCreation::builder()
                     .name(table_ident.name().into())
                     .schema(simple_table_schema())
-                    .location(location)
                     .build(),
             )
             .await
@@ -372,6 +392,14 @@ mod tests {
         assert_eq!(metadata.properties(), &HashMap::new());
 
         assert!(!table.readonly());
+    }
+
+    fn assert_table_location_start_with(table: &Table, location_prefix: &str) {
+        assert!(table
+            .metadata_location()
+            .unwrap()
+            .to_string()
+            .starts_with(location_prefix));
     }
 
     #[tokio::test]
@@ -957,6 +985,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_table_falls_back_to_namespace_location_if_table_location_is_missing() {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let warehouse_location = temp_path();
+        let namespace_location = temp_path();
+        let catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let mut namespace_properties = HashMap::new();
+        namespace_properties.insert(LOCATION.to_string(), namespace_location.to_string());
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        let table = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_location_start_with(&table, &namespace_location);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_location_start_with(&table, &namespace_location);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
+    ) {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let warehouse_location = temp_path();
+        let catalog = MemoryCatalog::new(file_io, Some(warehouse_location.clone()));
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        // note: no location specified in namespace_properties
+        let namespace_properties = HashMap::new();
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        let table = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_location_start_with(&table, &warehouse_location);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_location_start_with(&table, &warehouse_location);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_throws_error_if_table_location_and_namespace_location_and_warehouse_location_are_missing(
+    ) {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let catalog = MemoryCatalog::new(file_io, None);
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        assert_eq!(
+            catalog
+                .create_table(
+                    &namespace_ident,
+                    TableCreation::builder()
+                        .name(table_name.into())
+                        .schema(simple_table_schema())
+                        .build(),
+                )
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => Cannot create table {:?}. No table location or namespace location or warehouse location were provided.",
+                &expected_table_ident
+            )
+        )
+    }
+
+    #[tokio::test]
     async fn test_create_table_with_location() {
         let tmp_dir = TempDir::new().unwrap();
         let catalog = new_memory_catalog();
@@ -990,13 +1123,7 @@ mod tests {
             .metadata_location()
             .unwrap()
             .to_string()
-            .starts_with(&location));
-
-        assert_table_eq(
-            &catalog.load_table(&expected_table_ident).await.unwrap(),
-            &expected_table_ident,
-            &simple_table_schema(),
-        )
+            .starts_with(&location))
     }
 
     #[tokio::test]
