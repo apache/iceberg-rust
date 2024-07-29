@@ -18,7 +18,7 @@
 use std::net::IpAddr;
 use std::process::Command;
 
-use crate::cmd::{get_cmd_output, get_cmd_output_dont_panic, run_command};
+use crate::cmd::{get_cmd_output, get_cmd_output_result, run_command};
 
 /// A utility to manage the lifecycle of `docker compose`.
 ///
@@ -49,7 +49,7 @@ impl DockerCompose {
             .arg("--format")
             .arg("{{.OSType}}/{{.Architecture}}");
 
-        let result = get_cmd_output_dont_panic(cmd, "Get os arch".to_string());
+        let result = get_cmd_output_result(cmd, "Get os arch".to_string());
         match result {
             Ok(value) => value.trim().to_string(),
             Err(_err) => {
