@@ -41,8 +41,6 @@ impl DockerCompose {
         self.project_name.as_str()
     }
 
-    // docker/podman do not consistently place OSArch in the same json path across OS and versions
-    // below function tries two common places then gives up
     fn get_os_arch() -> String {
         let mut cmd = Command::new("docker");
         cmd.arg("info")
@@ -53,6 +51,8 @@ impl DockerCompose {
         match result {
             Ok(value) => value.trim().to_string(),
             Err(_err) => {
+                // docker/podman do not consistently place OSArch info in the same json path across OS and versions
+                // Below tries an alternative path if the above path fails
                 let mut alt_cmd = Command::new("docker");
                 alt_cmd
                     .arg("info")
@@ -99,10 +99,10 @@ impl DockerCompose {
             .arg("{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
             .arg(&container_name);
 
-        let ip = get_cmd_output(cmd, format!("Get container ip of {container_name}"))
+        let ip_result = get_cmd_output(cmd, format!("Get container ip of {container_name}"))
             .trim()
             .parse::<IpAddr>();
-        match ip {
+        match ip_result {
             Ok(ip) => ip,
             Err(e) => {
                 log::error!("Invalid IP, {e}");

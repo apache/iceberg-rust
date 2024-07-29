@@ -31,27 +31,24 @@ pub fn run_command(mut cmd: Command, desc: impl ToString) {
 pub fn get_cmd_output_result(mut cmd: Command, desc: impl ToString) -> Result<String, String> {
     let desc = desc.to_string();
     log::info!("Starting to {}, command: {:?}", &desc, cmd);
-    let output = cmd.output();
-    match output {
+    let result = cmd.output();
+    match result {
         Ok(output) => {
             if output.status.success() {
+                log::info!("{} succeed!", desc);
                 Ok(String::from_utf8(output.stdout).unwrap())
             } else {
-                Err(format!("{} failed: {:?}", desc, output.status))
+                Err(format!("{} failed with rc: {:?}", desc, output.status))
             }
         }
-        Err(_err) => Err(format!("{} failed ", desc)),
+        Err(_err) => Err(format!("{} failed to execute", desc)),
     }
 }
 
-pub fn get_cmd_output(mut cmd: Command, desc: impl ToString) -> String {
-    let desc = desc.to_string();
-    log::info!("Starting to {}, command: {:?}", &desc, cmd);
-    let output = cmd.output().unwrap();
-    if output.status.success() {
-        log::info!("{} succeed!", desc);
-        String::from_utf8(output.stdout).unwrap()
-    } else {
-        panic!("{} failed: {:?}", desc, output.status);
+pub fn get_cmd_output(cmd: Command, desc: impl ToString) -> String {
+    let result = get_cmd_output_result(cmd, desc);
+    match result {
+        Ok(output_str) => output_str,
+        Err(err) => panic!("{}", err),
     }
 }
