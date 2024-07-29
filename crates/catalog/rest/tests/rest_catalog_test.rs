@@ -67,7 +67,7 @@ async fn get_catalog() -> RestCatalog {
     }
 
     let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}", rest_socket_addr.to_string()))
+        .uri(format!("http://{}", rest_socket_addr))
         .build();
     RestCatalog::new(config)
 }

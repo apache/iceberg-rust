@@ -96,7 +96,7 @@ async fn get_test_fixture() -> TestFixture {
     let props = HashMap::from([
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}", minio_socket_addr.to_string()),
+            format!("http://{}", minio_socket_addr),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
