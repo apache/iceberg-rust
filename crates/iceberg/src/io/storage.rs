@@ -15,30 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+#[cfg(feature = "storage-s3")]
+use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
 
 use super::FileIOBuilder;
-#[cfg(feature = "storage-fs")]
-use super::FsConfig;
-#[cfg(feature = "storage-memory")]
-use super::MemoryConfig;
-#[cfg(feature = "storage-s3")]
-use super::S3Config;
 use crate::{Error, ErrorKind};
 
 /// The storage carries all supported storage services in iceberg
 #[derive(Debug)]
 pub(crate) enum Storage {
     #[cfg(feature = "storage-memory")]
-    Memory { config: MemoryConfig },
+    Memory,
     #[cfg(feature = "storage-fs")]
-    LocalFs { config: FsConfig },
+    LocalFs,
     #[cfg(feature = "storage-s3")]
     S3 {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
         scheme_str: String,
-        config: S3Config,
+        config: Arc<S3Config>,
     },
 }
 
@@ -50,17 +48,13 @@ impl Storage {
 
         match scheme {
             #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory {
-                config: MemoryConfig::new(props),
-            }),
+            Scheme::Memory => Ok(Self::Memory),
             #[cfg(feature = "storage-fs")]
-            Scheme::Fs => Ok(Self::LocalFs {
-                config: FsConfig::new(props),
-            }),
+            Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
                 scheme_str,
-                config: S3Config::new(props),
+                config: super::s3_config_parse(props).into(),
             }),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -88,8 +82,8 @@ impl Storage {
         let path = path.as_ref();
         match self {
             #[cfg(feature = "storage-memory")]
-            Storage::Memory { config } => {
-                let op = config.build(path)?;
+            Storage::Memory => {
+                let op = super::memory_config_build(path)?;
 
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     Ok((op, stripped))
@@ -98,8 +92,8 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-fs")]
-            Storage::LocalFs { config } => {
-                let op = config.build(path)?;
+            Storage::LocalFs => {
+                let op = super::fs_config_build(path)?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
                     Ok((op, stripped))
@@ -109,7 +103,7 @@ impl Storage {
             }
             #[cfg(feature = "storage-s3")]
             Storage::S3 { scheme_str, config } => {
-                let op = config.build(path)?;
+                let op = super::s3_config_build(config, path)?;
                 let op_info = op.info();
 
                 // Check prefix of s3 path.
@@ -140,15 +134,4 @@ impl Storage {
             s => Ok(s.parse::<Scheme>()?),
         }
     }
-}
-
-/// redact_secret will redact the secret part of the string.
-#[inline]
-pub(crate) fn redact_secret(s: &str) -> String {
-    let len = s.len();
-    if len <= 6 {
-        return "***".to_string();
-    }
-
-    format!("{}***{}", &s[0..3], &s[len - 3..len])
 }

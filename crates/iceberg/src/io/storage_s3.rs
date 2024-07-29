@@ -16,12 +16,11 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
 
-use opendal::{Operator, Scheme};
+use opendal::services::S3Config;
+use opendal::Operator;
 use url::Url;
 
-use crate::io::storage::redact_secret;
 use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -34,69 +33,36 @@ pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
 /// S3 region.
 pub const S3_REGION: &str = "s3.region";
 
-/// # TODO
-///
-/// opendal has a plan to introduce native config support.
-/// We manually parse the config here and those code will be finally removed.
-#[derive(Default, Clone)]
-pub(crate) struct S3Config {
-    pub endpoint: String,
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub region: String,
+/// Parse iceberg props to s3 config.
+pub(crate) fn s3_config_parse(m: HashMap<String, String>) -> S3Config {
+    let mut cfg = S3Config::default();
+    if let Some(endpoint) = m.get(S3_ENDPOINT) {
+        cfg.endpoint = Some(endpoint.clone());
+    };
+    if let Some(access_key_id) = m.get(S3_ACCESS_KEY_ID) {
+        cfg.access_key_id = Some(access_key_id.clone());
+    };
+    if let Some(secret_access_key) = m.get(S3_SECRET_ACCESS_KEY) {
+        cfg.secret_access_key = Some(secret_access_key.clone());
+    };
+    if let Some(region) = m.get(S3_REGION) {
+        cfg.region = Some(region.clone());
+    };
+
+    cfg
 }
 
-impl Debug for S3Config {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("S3Config")
-            .field("endpoint", &self.endpoint)
-            .field("region", &self.region)
-            .field("access_key_id", &redact_secret(&self.access_key_id))
-            .field("secret_access_key", &redact_secret(&self.secret_access_key))
-            .finish()
-    }
-}
+/// Build new opendal operator from give path.
+pub(crate) fn s3_config_build(cfg: &S3Config, path: &str) -> Result<Operator> {
+    let url = Url::parse(path)?;
+    let bucket = url.host_str().ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid s3 url: {}, missing bucket", path),
+        )
+    })?;
 
-impl S3Config {
-    /// Decode from iceberg props.
-    pub fn new(m: HashMap<String, String>) -> Self {
-        let mut cfg = Self::default();
-        if let Some(endpoint) = m.get(S3_ENDPOINT) {
-            cfg.endpoint = endpoint.clone();
-        };
-        if let Some(access_key_id) = m.get(S3_ACCESS_KEY_ID) {
-            cfg.access_key_id = access_key_id.clone();
-        };
-        if let Some(secret_access_key) = m.get(S3_SECRET_ACCESS_KEY) {
-            cfg.secret_access_key = secret_access_key.clone();
-        };
-        if let Some(region) = m.get(S3_REGION) {
-            cfg.region = region.clone();
-        };
-
-        cfg
-    }
-
-    /// Build new opendal operator from give path.
-    pub fn build(&self, path: &str) -> Result<Operator> {
-        let url = Url::parse(path)?;
-        let bucket = url.host_str().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid s3 url: {}, missing bucket", path),
-            )
-        })?;
-
-        let mut m = HashMap::with_capacity(5);
-        m.insert("bucket".to_string(), bucket.to_string());
-        m.insert("endpoint".to_string(), self.endpoint.clone());
-        m.insert("access_key_id".to_string(), self.access_key_id.clone());
-        m.insert(
-            "secret_access_key".to_string(),
-            self.secret_access_key.clone(),
-        );
-        m.insert("region".to_string(), self.region.clone());
-
-        Ok(Operator::via_map(Scheme::S3, m)?)
-    }
+    let mut cfg = cfg.clone();
+    cfg.bucket = bucket.to_string();
+    Ok(Operator::from_config(cfg)?.finish())
 }
