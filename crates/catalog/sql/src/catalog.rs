@@ -15,22 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use sqlx::{
-    any::{install_default_drivers, AnyPoolOptions, AnyRow},
-    AnyPool, Row,
-};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::time::Duration;
 
+use async_trait::async_trait;
+use iceberg::io::FileIO;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
+use iceberg::table::Table;
 use iceberg::{
-    io::FileIO,
-    spec::{TableMetadata, TableMetadataBuilder},
-    table::Table,
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
-use std::time::Duration;
+use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyRow};
+use sqlx::{AnyPool, Row};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
@@ -278,7 +276,7 @@ impl Catalog for SqlCatalog {
     ) -> Result<Namespace> {
         {
             let catalog_name = self.name.clone();
-            let namespace = namespace.encode_in_url();
+            let namespace = namespace.to_url_string();
 
             let query_string = format!(
                 "insert into {} ({}, {}, {}, {}) values (?, ?, ?, ?);",
@@ -290,27 +288,21 @@ impl Catalog for SqlCatalog {
             );
 
             if properties.is_empty() {
-                self.execute_statement(
-                    &query_string,
-                    vec![
-                        Some(&catalog_name),
-                        Some(&namespace),
-                        None::<&String>,
-                        None::<&String>,
-                    ],
-                )
+                self.execute_statement(&query_string, vec![
+                    Some(&catalog_name),
+                    Some(&namespace),
+                    None::<&String>,
+                    None::<&String>,
+                ])
                 .await?;
             } else {
                 for (key, value) in properties.iter() {
-                    self.execute_statement(
-                        &query_string,
-                        vec![
-                            Some(&catalog_name),
-                            Some(&namespace),
-                            Some(&key),
-                            Some(&value),
-                        ],
-                    )
+                    self.execute_statement(&query_string, vec![
+                        Some(&catalog_name),
+                        Some(&namespace),
+                        Some(&key),
+                        Some(&value),
+                    ])
                     .await?;
                 }
             }
@@ -530,7 +522,7 @@ impl Catalog for SqlCatalog {
 
     async fn drop_table(&self, identifier: &TableIdent) -> Result<()> {
         let catalog_name = self.name.clone();
-        let namespace = identifier.namespace().encode_in_url();
+        let namespace = identifier.namespace().to_url_string();
         let name = identifier.name.to_string();
 
         self.execute_statement(
@@ -548,7 +540,7 @@ impl Catalog for SqlCatalog {
     async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
         let metadata_location = {
             let catalog_name = self.name.clone();
-            let namespace = identifier.namespace().encode_in_url();
+            let namespace = identifier.namespace().to_url_string();
             let name = identifier.name().to_string();
             let row = self
                 .execute_statement(
@@ -608,7 +600,7 @@ impl Catalog for SqlCatalog {
 
         {
             let catalog_name = self.name.clone();
-            let namespace = namespace.encode_in_url();
+            let namespace = namespace.to_url_string();
             let name = name.clone();
             let metadata_location = metadata_location.to_string();
 
@@ -640,10 +632,10 @@ impl Catalog for SqlCatalog {
     }
 
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
-        let source_namespace = &src.namespace.encode_in_url();
+        let source_namespace = &src.namespace.to_url_string();
         let source_table = &src.name;
 
-        let destination_namespace = &dest.namespace.encode_in_url();
+        let destination_namespace = &dest.namespace.to_url_string();
         let destination_table = &dest.name;
 
         let src_table_exist = self.table_exists(src).await;
@@ -680,15 +672,12 @@ impl Catalog for SqlCatalog {
             CATALOG_TABLE_VIEW_NAME, TABLE_NAMESPACE, TABLE_NAME, TABLE_NAMESPACE, TABLE_NAME
         );
 
-        self.execute_statement(
-            &query,
-            vec![
-                Some(destination_namespace),
-                Some(destination_table),
-                Some(source_namespace),
-                Some(source_table),
-            ],
-        )
+        self.execute_statement(&query, vec![
+            Some(destination_namespace),
+            Some(destination_table),
+            Some(source_namespace),
+            Some(source_table),
+        ])
         .await?;
 
         let src_table_exist = self.table_exists(src).await;
@@ -718,14 +707,12 @@ impl Catalog for SqlCatalog {
 pub mod tests {
     use std::collections::HashMap;
 
-    use iceberg::{
-        spec::{NestedField, PrimitiveType, Schema, Type},
-        Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent,
-    };
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
     use crate::{SqlCatalog, SqlCatalogConfig};
-    use sqlx::migrate::MigrateDatabase;
 
     #[tokio::test]
     async fn test_create_update_drop_table() {
@@ -790,7 +777,7 @@ pub mod tests {
             .list_namespaces(None)
             .await
             .expect("Failed to list namespaces");
-        assert_eq!(namespaces[0].encode_in_url(), "test");
+        assert_eq!(namespaces[0].to_url_string(), "test");
 
         let test_namespace = catalog
             .get_namespace(&namespace)

@@ -21,14 +21,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::{collections::HashMap, sync::Arc};
-use uuid::Uuid;
-
-use super::{
-    snapshot::{Snapshot, SnapshotReference, SnapshotRetention},
-    PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrderRef,
-};
-use super::{PartitionSpec, SortOrder};
+use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
 use chrono::{DateTime, Utc};
