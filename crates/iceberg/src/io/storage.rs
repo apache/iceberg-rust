@@ -83,7 +83,7 @@ impl Storage {
         match self {
             #[cfg(feature = "storage-memory")]
             Storage::Memory => {
-                let op = super::memory_config_build(path)?;
+                let op = super::memory_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("memory:/") {
                     Ok((op, stripped))
@@ -93,7 +93,7 @@ impl Storage {
             }
             #[cfg(feature = "storage-fs")]
             Storage::LocalFs => {
-                let op = super::fs_config_build(path)?;
+                let op = super::fs_config_build()?;
 
                 if let Some(stripped) = path.strip_prefix("file:/") {
                     Ok((op, stripped))

@@ -20,6 +20,6 @@ use opendal::Operator;
 
 use crate::Result;
 
-pub(crate) fn memory_config_build(_: &str) -> Result<Operator> {
+pub(crate) fn memory_config_build() -> Result<Operator> {
     Ok(Operator::from_config(MemoryConfig::default())?.finish())
 }

@@ -21,7 +21,7 @@ use opendal::Operator;
 use crate::Result;
 
 /// Build new opendal operator from give path.
-pub(crate) fn fs_config_build(_: &str) -> Result<Operator> {
+pub(crate) fn fs_config_build() -> Result<Operator> {
     let mut cfg = FsConfig::default();
     cfg.root = Some("/".to_string());
 
