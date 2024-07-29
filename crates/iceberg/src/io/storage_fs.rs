@@ -45,7 +45,9 @@ impl FsConfig {
     ///
     /// fs always build from `/`
     pub fn build(&self, _: &str) -> Result<Operator> {
-        let m = HashMap::from_iter([("root".to_string(), "/".to_string())]);
-        Ok(Operator::via_map(Scheme::Fs, m)?)
+        Ok(Operator::via_iter(Scheme::Fs, [(
+            "root".to_string(),
+            "/".to_string(),
+        )])?)
     }
 }

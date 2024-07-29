@@ -40,6 +40,6 @@ impl MemoryConfig {
     /// Build new opendal operator from given path.
     pub fn build(&self, _: &str) -> Result<Operator> {
         let m = HashMap::new();
-        Ok(Operator::via_map(Scheme::Memory, m)?)
+        Ok(Operator::via_iter(Scheme::Memory, m)?)
     }
 }
