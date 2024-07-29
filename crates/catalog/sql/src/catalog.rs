@@ -172,7 +172,7 @@ impl SqlCatalog {
             }
             Cow::Owned(query)
         } else {
-            Cow::Borrowed(&query)
+            Cow::Borrowed(query)
         };
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
@@ -300,8 +300,8 @@ impl Catalog for SqlCatalog {
                     self.execute_statement(&query_string, vec![
                         Some(&catalog_name),
                         Some(&namespace),
-                        Some(&key),
-                        Some(&value),
+                        Some(key),
+                        Some(value),
                     ])
                     .await?;
                 }
@@ -426,7 +426,7 @@ impl Catalog for SqlCatalog {
         let existence = self.namespace_exists(namespace).await?;
         if existence {
             if let Ok(tbls) = self.list_tables(namespace).await {
-                if tbls.len() > 0 {
+                if !tbls.is_empty() {
                     Err(Error::new(
                         ErrorKind::Unexpected,
                         format!(

@@ -29,20 +29,11 @@ license = { workspace = true }
 keywords = ["iceberg", "sql", "catalog"]
 
 [dependencies]
-anyhow = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
-futures = { workspace = true }
 iceberg = { workspace = true }
-log = { workspace = true }
-opendal = { workspace = true }
-serde = { workspace = true }
-serde_derive = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { version = "0.7.4", features = ["tls-rustls", "any" ], default-features = false }
 typed-builder = { workspace = true }
-url = { workspace = true }
-urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
