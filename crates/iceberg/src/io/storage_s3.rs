@@ -34,19 +34,19 @@ pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
 pub const S3_REGION: &str = "s3.region";
 
 /// Parse iceberg props to s3 config.
-pub(crate) fn s3_config_parse(m: HashMap<String, String>) -> S3Config {
+pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> S3Config {
     let mut cfg = S3Config::default();
-    if let Some(endpoint) = m.get(S3_ENDPOINT) {
-        cfg.endpoint = Some(endpoint.clone());
+    if let Some(endpoint) = m.remove(S3_ENDPOINT) {
+        cfg.endpoint = Some(endpoint);
     };
-    if let Some(access_key_id) = m.get(S3_ACCESS_KEY_ID) {
-        cfg.access_key_id = Some(access_key_id.clone());
+    if let Some(access_key_id) = m.remove(S3_ACCESS_KEY_ID) {
+        cfg.access_key_id = Some(access_key_id);
     };
-    if let Some(secret_access_key) = m.get(S3_SECRET_ACCESS_KEY) {
-        cfg.secret_access_key = Some(secret_access_key.clone());
+    if let Some(secret_access_key) = m.remove(S3_SECRET_ACCESS_KEY) {
+        cfg.secret_access_key = Some(secret_access_key);
     };
-    if let Some(region) = m.get(S3_REGION) {
-        cfg.region = Some(region.clone());
+    if let Some(region) = m.remove(S3_REGION) {
+        cfg.region = Some(region);
     };
 
     cfg
