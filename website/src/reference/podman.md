@@ -19,9 +19,7 @@
 
 # Using Podman instead of Docker
 
-The majority of iceberg-rust is agnostic as to which containerization provider is used. However,
-for integration tests, "docker" and "docker-compose" are used to spinup containers for minio and various catalogs.
-It is possible with the below instructions to run integrations tests with no source-code changes via "podman" and docker's official docker-compose plugin.
+Iceberg-rust does not require containerization, except for integration tests, where "docker" and "docker-compose" are used to start containers for minio and various catalogs. Below instructions setup "rootful podman" and docker's official docker-compose plugin to run integration tests as an alternative to docker or Orbstack. 
 
 1. Have podman v4 or newer.
     ```console
@@ -74,12 +72,12 @@ It is possible with the below instructions to run integrations tests with no sou
     cargo test -p iceberg --test file_io_s3_test
     ```
 
-### References
+# References
 
 * <https://docs.docker.com/compose/install/linux>
 * <https://www.redhat.com/sysadmin/podman-docker-compose>
 
-### Note on rootless containers
+# Note on rootless containers
 
 As of podman v4, ["To be succinct and simple, when running rootless containers, the container itself does not have an IP address"](https://www.redhat.com/sysadmin/container-ip-address-podman) This causes issues with iceberg-rust's integration tests, which rely upon ip-addressable containers via docker-compose. As a result, podman "rootful" containers are required throughout to ensure containers have IP addresses. Perhaps as a future work or with updates to default podman networking, the need for "rootful" podman containers can be eliminated.
 
