@@ -97,6 +97,6 @@ impl S3Config {
         );
         m.insert("region".to_string(), self.region.clone());
 
-        Ok(Operator::via_map(Scheme::S3, m)?)
+        Ok(Operator::via_iter(Scheme::S3, m)?)
     }
 }
