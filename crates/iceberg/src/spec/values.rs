@@ -977,9 +977,22 @@ impl Datum {
 
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
-        // TODO: We should allow more type conversions
         match target_type {
-            Type::Primitive(typ) if typ == &self.r#type => Ok(self),
+            Type::Primitive(target_primitive_type) => {
+                match (&self.literal, &self.r#type, target_primitive_type) {
+                    (PrimitiveLiteral::Date(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
+                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
+                    // TODO: implement more type conversions
+                    (_, self_type, target_type) if self_type == target_type => Ok(self),
+                    _ => Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Can't convert datum from {} type to {} type.",
+                            self.r#type, target_primitive_type
+                        ),
+                    )),
+                }
+            }
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -2614,6 +2627,7 @@ mod tests {
     use crate::avro::schema_to_avro_schema;
     use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
     use crate::spec::Schema;
+    use crate::spec::Type::Primitive;
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
@@ -3363,5 +3377,27 @@ mod tests {
         test_fn(datum);
         let datum = Datum::fixed(vec![1, 2, 3, 4, 5]);
         test_fn(datum);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_int() {
+        let datum_date = Datum::date(12345);
+
+        let result = datum_date.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::int(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_int_convert_to_date() {
+        let datum_int = Datum::int(12345);
+
+        let result = datum_int.to(&Primitive(PrimitiveType::Date)).unwrap();
+
+        let expected = Datum::date(12345);
+
+        assert_eq!(result, expected);
     }
 }
