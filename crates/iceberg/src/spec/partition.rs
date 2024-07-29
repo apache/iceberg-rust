@@ -46,7 +46,7 @@ pub struct PartitionField {
 
 impl PartitionField {
     /// To unbound partition field
-    pub fn to_unbound(self) -> UnboundPartitionField {
+    pub fn into_unbound(self) -> UnboundPartitionField {
         UnboundPartitionField {
             source_id: self.source_id,
             partition_id: Some(self.field_id),
@@ -202,7 +202,7 @@ impl PartitionSpecBuilder {
         self.check_for_redundant_partitions(field.source_id, &field.transform)?;
         self.check_partition_id_unique(field.field_id)?;
 
-        self.fields.push(field.to_unbound());
+        self.fields.push(field.into_unbound());
         Ok(self)
     }
 
