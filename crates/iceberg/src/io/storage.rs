@@ -54,7 +54,7 @@ impl Storage {
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
                 scheme_str,
-                config: super::s3_config_parse(props).into(),
+                config: super::s3_config_parse(props)?.into(),
             }),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
