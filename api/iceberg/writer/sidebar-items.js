@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["base_writer","file_writer"],"trait":["CurrentFileStatus","IcebergWriter","IcebergWriterBuilder"]};

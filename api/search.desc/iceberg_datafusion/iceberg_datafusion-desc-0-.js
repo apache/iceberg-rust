@@ -1,0 +1,1 @@
+searchState.loadedDescShard("iceberg_datafusion", 0, "Provides an interface to manage and access multiple schemas\nReturns the argument unchanged.\nConverts a datafusion error into an iceberg error.\nCalls <code>U::from(self)</code>.\nConverts an iceberg error into a datafusion error.\nAsynchronously tries to construct a new …")

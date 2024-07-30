@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["arrow_schema_to_schema","schema_to_arrow_schema"],"struct":["ArrowReader","ArrowReaderBuilder"],"trait":["ArrowSchemaVisitor"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["FileScanTask","TableScan","TableScanBuilder"],"type":["ArrowRecordBatchStream","FileScanTaskStream"]};

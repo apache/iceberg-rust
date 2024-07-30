@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["location_generator"],"struct":["ParquetWriter","ParquetWriterBuilder"],"trait":["FileWriter","FileWriterBuilder"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HmsThriftTransport"],"struct":["HmsCatalog","HmsCatalogConfig"]};

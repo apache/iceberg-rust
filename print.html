@@ -319,9 +319,10 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">// specific language governing permissions and limitations
 </span><span class="boring">// under the License.
 </span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-</span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
@@ -330,7 +331,7 @@ example of how to create a <code>RestCatalog</code>:</p>
         .uri(&quot;http://localhost:8080&quot;.to_string())
         .build();
 
-    let catalog = RestCatalog::new(config).await.unwrap();
+    let catalog = RestCatalog::new(config);
 <span class="boring">
 </span><span class="boring">    // List all namespaces
 </span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -367,9 +368,10 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">// specific language governing permissions and limitations
 </span><span class="boring">// under the License.
 </span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-</span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
@@ -378,7 +380,7 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
-</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
 </span>    // List all namespaces
     let all_namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -415,9 +417,10 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">// specific language governing permissions and limitations
 </span><span class="boring">// under the License.
 </span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-</span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
@@ -426,7 +429,7 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
-</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
 </span><span class="boring">    // List all namespaces
 </span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -465,10 +468,11 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">// specific language governing permissions and limitations
 </span><span class="boring">// under the License.
 </span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
 </span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 </span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-</span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
@@ -477,7 +481,7 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
-</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
 </span>    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
 
@@ -530,10 +534,11 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">// specific language governing permissions and limitations
 </span><span class="boring">// under the License.
 </span><span class="boring">
+</span><span class="boring">use std::collections::HashMap;
+</span><span class="boring">
 </span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 </span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-</span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
@@ -542,7 +547,7 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
-</span><span class="boring">    let catalog = RestCatalog::new(config).await.unwrap();
+</span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
 </span><span class="boring">    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
 </span><span class="boring">

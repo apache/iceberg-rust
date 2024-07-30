@@ -1,0 +1,6 @@
+(function() {var implementors = {
+"iceberg_catalog_glue":[["impl <a class=\"trait\" href=\"iceberg/catalog/trait.Catalog.html\" title=\"trait iceberg::catalog::Catalog\">Catalog</a> for <a class=\"struct\" href=\"iceberg_catalog_glue/struct.GlueCatalog.html\" title=\"struct iceberg_catalog_glue::GlueCatalog\">GlueCatalog</a>"]],
+"iceberg_catalog_hms":[["impl <a class=\"trait\" href=\"iceberg/catalog/trait.Catalog.html\" title=\"trait iceberg::catalog::Catalog\">Catalog</a> for <a class=\"struct\" href=\"iceberg_catalog_hms/struct.HmsCatalog.html\" title=\"struct iceberg_catalog_hms::HmsCatalog\">HmsCatalog</a>"]],
+"iceberg_catalog_memory":[["impl Catalog for <a class=\"struct\" href=\"iceberg_catalog_memory/struct.MemoryCatalog.html\" title=\"struct iceberg_catalog_memory::MemoryCatalog\">MemoryCatalog</a>"]],
+"iceberg_catalog_rest":[["impl Catalog for <a class=\"struct\" href=\"iceberg_catalog_rest/struct.RestCatalog.html\" title=\"struct iceberg_catalog_rest::RestCatalog\">RestCatalog</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
