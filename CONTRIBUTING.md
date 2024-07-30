@@ -118,7 +118,7 @@ You can learn how to install Docker from [here](https://docs.docker.com/get-dock
 
 For macos users, you can install [OrbStack](https://orbstack.dev/) as a docker alternative.
 
-For podman users, refer to [Using Podman instead of Docker](https://rust.iceberg.apache.org/reference/podman.md)
+For podman users, refer to [Using Podman instead of Docker](docs/contributing/podman.md)
 
 ## Build
 
