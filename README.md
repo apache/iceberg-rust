@@ -46,22 +46,22 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg dev docs]: https://rust.iceberg.apache.org/api/iceberg/
 
 [iceberg-datafusion]: crates/integrations/datafusion/README.md
-[iceberg-datafusion dev docs]: https://rust.iceberg.apache.org/api/iceberg-datafusion/
+[iceberg-datafusion dev docs]: https://rust.iceberg.apache.org/api/iceberg_datafusion/
 
 [iceberg-catalog-glue]: crates/catalog/glue/README.md
-[iceberg-catalog-glue dev docs]: https://rust.iceberg.apache.org/api/iceberg-catalog-glue/
+[iceberg-catalog-glue dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_glue/
 
 [iceberg-catalog-hms]: crates/catalog/hms/README.md
 [iceberg-catalog-hms image]: https://img.shields.io/crates/v/iceberg-catalog-hms.svg
 [iceberg-catalog-hms link]: https://crates.io/crates/iceberg-catalog-hms
 [iceberg-catalog-hms release docs]: https://docs.rs/iceberg-catalog-hms
-[iceberg-catalog-hms dev docs]: https://rust.iceberg.apache.org/api/iceberg-catalog-hms/
+[iceberg-catalog-hms dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_hms/
 
 [iceberg-catalog-rest]: crates/catalog/rest/README.md
 [iceberg-catalog-rest image]: https://img.shields.io/crates/v/iceberg-catalog-rest.svg
 [iceberg-catalog-rest link]: https://crates.io/crates/iceberg-catalog-rest
 [iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
-[iceberg-catalog-rest dev docs]: https://rust.iceberg.apache.org/api/iceberg-catalog-rest/
+[iceberg-catalog-rest dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_rest/
 
 ## Supported Rust Version
 
