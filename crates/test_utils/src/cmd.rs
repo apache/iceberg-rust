@@ -41,7 +41,7 @@ pub fn get_cmd_output_result(mut cmd: Command, desc: impl ToString) -> Result<St
                 Err(format!("{} failed with rc: {:?}", desc, output.status))
             }
         }
-        Err(_err) => Err(format!("{} failed to execute", desc)),
+        Err(err) => Err(format!("{} failed with error: {}", desc, { err })),
     }
 }
 
