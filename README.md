@@ -33,9 +33,7 @@ The Apache Iceberg Rust project is composed of the following components:
 |------------------------|------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | [iceberg]              | [![iceberg image]][iceberg link]                           | [![docs release]][iceberg release docs] [![docs dev]][iceberg dev docs]                           |
 | [iceberg-datafusion]   | -                                                          | [![docs dev]][iceberg-datafusion dev docs]                                                        |
-| [iceberg-datafusion]                                                                        |
 | [iceberg-catalog-glue] | -                                                          | [![docs dev]][iceberg-catalog-glue dev docs]                                                      |
-| [iceberg-datafusion]                                                                       |
 | [iceberg-catalog-hms]  | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]   | [![docs release]][iceberg-catalog-hms release docs] [![docs dev]][iceberg-catalog-hms dev docs]   |
 | [iceberg-catalog-rest] | [![iceberg-catalog-rest image]][iceberg-catalog-rest link] | [![docs release]][iceberg-catalog-rest release docs] [![docs dev]][iceberg-catalog-rest dev docs] |
 
