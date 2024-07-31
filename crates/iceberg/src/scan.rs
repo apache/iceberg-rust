@@ -57,6 +57,9 @@ pub struct TableScanConfig {
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     concurrency_limit_manifest_entries: usize,
+
+    /// passed down to ArrowReader
+    concurrency_limit_data_files: usize,
 }
 
 impl Default for TableScanConfig {
@@ -65,6 +68,7 @@ impl Default for TableScanConfig {
         Self {
             concurrency_limit_manifest_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
+            concurrency_limit_data_files: num_cpus,
         }
     }
 }
@@ -148,6 +152,7 @@ impl<'a> TableScanBuilder<'a> {
         self.table_scan_config = TableScanConfig {
             concurrency_limit_manifest_files: limit,
             concurrency_limit_manifest_entries: limit,
+            concurrency_limit_data_files: limit,
         };
         self
     }
@@ -156,20 +161,25 @@ impl<'a> TableScanBuilder<'a> {
     pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
         self.table_scan_config = TableScanConfig {
             concurrency_limit_manifest_files: limit,
-            concurrency_limit_manifest_entries: self
-                .table_scan_config
-                .concurrency_limit_manifest_entries,
+            ..self.table_scan_config
         };
         self
     }
 
     /// sets the manifest entry concurrency limit for this scan
-    pub fn with_manifest_entru_concurrency_limit(mut self, limit: usize) -> Self {
+    pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
         self.table_scan_config = TableScanConfig {
             concurrency_limit_manifest_entries: limit,
-            concurrency_limit_manifest_files: self
-                .table_scan_config
-                .concurrency_limit_manifest_files,
+            ..self.table_scan_config
+        };
+        self
+    }
+
+    /// sets the data file concurrency limit for this scan
+    pub fn with_data_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.table_scan_config = TableScanConfig {
+            concurrency_limit_data_files: limit,
+            ..self.table_scan_config
         };
         self
     }
@@ -368,7 +378,8 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone());
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
+            .with_data_file_concurrency_limit(self.table_scan_config.concurrency_limit_data_files);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
