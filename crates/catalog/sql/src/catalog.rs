@@ -534,7 +534,24 @@ impl Catalog for SqlCatalog {
         )
         .await?;
 
-        Ok(())
+        let table_existence = self.table_exists(identifier).await;
+
+        match table_existence {
+            Ok(res) => {
+                if res {
+                    Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "drop table was not successful",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Err(Error::new(
+                ErrorKind::Unexpected,
+                "drop table was not successful",
+            )),
+        }
     }
 
     async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
@@ -560,7 +577,6 @@ impl Catalog for SqlCatalog {
                     vec![Some(&catalog_name), Some(&namespace), Some(&name)],
                 )
                 .await?;
-            assert_eq!(row.len(), 1, "expected only one row from load_table query");
             let row = query_map(&row[0]).map_err(from_sqlx_error)?;
             row.metadata_location
         };
@@ -641,30 +657,25 @@ impl Catalog for SqlCatalog {
         let src_table_exist = self.table_exists(src).await;
         let dst_table_exist = self.table_exists(dest).await;
 
-        match src_table_exist {
-            Ok(res) => {
-                if res {
-                    match dst_table_exist {
-                        Ok(dst_res) => {
-                            if dst_res {
-                                Err(Error::new(
-                                    ErrorKind::Unexpected,
-                                    "failed to rename table as destination already exists",
-                                ))
-                            } else {
-                                Ok(())
-                            }
-                        }
-                        Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
-                    }
-                } else {
+        match (src_table_exist, dst_table_exist) {
+            (Ok(src_res), Ok(dst_res)) => {
+                if src_res && !dst_res {
+                    Ok(())
+                } else if src_res && dst_res {
+                    Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "failed to rename table as destination already exists",
+                    ))
+                } else if !src_res && dst_res {
                     Err(Error::new(
                         ErrorKind::Unexpected,
                         "failed to rename table as source does not exist",
                     ))
+                } else {
+                    Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
                 }
             }
-            Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+            _ => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
         }?;
 
         let query = format!(
@@ -683,18 +694,15 @@ impl Catalog for SqlCatalog {
         let src_table_exist = self.table_exists(src).await;
         let dst_table_exist = self.table_exists(dest).await;
 
-        match src_table_exist {
-            Ok(src_res) => match dst_table_exist {
-                Ok(dst_res) => {
-                    if !src_res && dst_res {
-                        Ok(())
-                    } else {
-                        Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
-                    }
+        match (src_table_exist, dst_table_exist) {
+            (Ok(src_res), Ok(dst_res)) => {
+                if !src_res && dst_res {
+                    Ok(())
+                } else {
+                    Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
                 }
-                Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
-            },
-            Err(_) => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
+            }
+            _ => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
         }
     }
 
@@ -805,8 +813,6 @@ pub mod tests {
             test_namespace,
             Namespace::with_properties(namespace.clone(), props.clone())
         );
-
-        //load table points to a /var location - check why
 
         let table = catalog.load_table(&identifier).await.unwrap();
 
