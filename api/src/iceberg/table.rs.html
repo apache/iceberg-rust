@@ -237,6 +237,7 @@
 <a href="#237" id="237">237</a>
 <a href="#238" id="238">238</a>
 <a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -343,6 +344,7 @@
 ///     .snapshot_id();
 /// # }
 /// ```
+</span><span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>StaticTable(Table);
 
 <span class="kw">impl </span>StaticTable {
@@ -383,9 +385,9 @@
         <span class="self">self</span>.<span class="number">0</span>.metadata_ref()
     }
 
-    <span class="doccomment">/// Consumes the `StaticTable` and return it as a `Table`    
-    /// Please use this method carefully as the Table it returns remains detached from a catalog     
-    /// and can't be used to perform modifications on the table.     
+    <span class="doccomment">/// Consumes the `StaticTable` and return it as a `Table`
+    /// Please use this method carefully as the Table it returns remains detached from a catalog
+    /// and can't be used to perform modifications on the table.
     </span><span class="kw">pub fn </span>into_table(<span class="self">self</span>) -&gt; Table {
         <span class="self">self</span>.<span class="number">0
     </span>}
