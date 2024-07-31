@@ -32,4 +32,5 @@
 
 # Reference
 
+- [Using Podman instead of Docker](./reference/podman.md)
 - [Setup GPG key](./reference/setup_gpg.md)

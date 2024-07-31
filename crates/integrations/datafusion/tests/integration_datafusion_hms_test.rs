@@ -18,6 +18,7 @@
 //! Integration tests for Iceberg Datafusion with Hive Metastore.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use ctor::{ctor, dtor};
@@ -40,7 +41,7 @@ static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 struct TestFixture {
     hms_catalog: HmsCatalog,
     props: HashMap<String, String>,
-    hms_catalog_ip: String,
+    hms_catalog_socket_addr: SocketAddr,
 }
 
 #[ctor]
@@ -63,7 +64,7 @@ fn after_all() {
 impl TestFixture {
     fn get_catalog(&self) -> HmsCatalog {
         let config = HmsCatalogConfig::builder()
-            .address(format!("{}:{}", self.hms_catalog_ip, HMS_CATALOG_PORT))
+            .address(self.hms_catalog_socket_addr.to_string())
             .thrift_transport(HmsThriftTransport::Buffered)
             .warehouse("s3a://warehouse/hive".to_string())
             .props(self.props.clone())
@@ -85,20 +86,17 @@ async fn get_test_fixture() -> TestFixture {
         )
     };
 
-    let read_port = format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT);
-    loop {
-        if !scan_port_addr(&read_port) {
-            log::info!("Waiting for 1s hms catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
-        } else {
-            break;
-        }
+    let hms_catalog_socket_addr = SocketAddr::new(hms_catalog_ip, HMS_CATALOG_PORT);
+    let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
+    while !scan_port_addr(hms_catalog_socket_addr) {
+        log::info!("Waiting for 1s hms catalog to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
     }
 
     let props = HashMap::from([
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}:{}", minio_ip, MINIO_PORT),
+            format!("http://{}", minio_socket_addr),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
@@ -106,7 +104,7 @@ async fn get_test_fixture() -> TestFixture {
     ]);
 
     let config = HmsCatalogConfig::builder()
-        .address(format!("{}:{}", hms_catalog_ip, HMS_CATALOG_PORT))
+        .address(hms_catalog_socket_addr.to_string())
         .thrift_transport(HmsThriftTransport::Buffered)
         .warehouse("s3a://warehouse/hive".to_string())
         .props(props.clone())
@@ -117,7 +115,7 @@ async fn get_test_fixture() -> TestFixture {
     TestFixture {
         hms_catalog,
         props,
-        hms_catalog_ip,
+        hms_catalog_socket_addr,
     }
 }
 

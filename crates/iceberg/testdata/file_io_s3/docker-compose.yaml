@@ -18,7 +18,7 @@
 services:
   minio:
     image: minio/minio:RELEASE.2024-02-26T09-33-48Z
-    ports:
+    expose:
       - 9000
       - 9001
     environment:
