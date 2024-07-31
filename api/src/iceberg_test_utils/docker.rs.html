@@ -114,6 +114,27 @@
 <a href="#114" id="114">114</a>
 <a href="#115" id="115">115</a>
 <a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -131,9 +152,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use </span>std::process::Command;
+</span><span class="kw">use </span>std::net::IpAddr;
+<span class="kw">use </span>std::process::Command;
 
-<span class="kw">use </span><span class="kw">crate</span>::cmd::{get_cmd_output, run_command};
+<span class="kw">use </span><span class="kw">crate</span>::cmd::{get_cmd_output, get_cmd_output_result, run_command};
 
 <span class="doccomment">/// A utility to manage the lifecycle of `docker compose`.
 ///
@@ -162,9 +184,22 @@
             .arg(<span class="string">"--format"</span>)
             .arg(<span class="string">"{{.OSType}}/{{.Architecture}}"</span>);
 
-        get_cmd_output(cmd, <span class="string">"Get os arch"</span>.to_string())
-            .trim()
-            .to_string()
+        <span class="kw">let </span>result = get_cmd_output_result(cmd, <span class="string">"Get os arch"</span>.to_string());
+        <span class="kw">match </span>result {
+            <span class="prelude-val">Ok</span>(value) =&gt; value.trim().to_string(),
+            <span class="prelude-val">Err</span>(_err) =&gt; {
+                <span class="comment">// docker/podman do not consistently place OSArch info in the same json path across OS and versions
+                // Below tries an alternative path if the above path fails
+                </span><span class="kw">let </span><span class="kw-2">mut </span>alt_cmd = Command::new(<span class="string">"docker"</span>);
+                alt_cmd
+                    .arg(<span class="string">"info"</span>)
+                    .arg(<span class="string">"--format"</span>)
+                    .arg(<span class="string">"{{.Version.OsArch}}"</span>);
+                get_cmd_output(alt_cmd, <span class="string">"Get os arch"</span>.to_string())
+                    .trim()
+                    .to_string()
+            }
+        }
     }
 
     <span class="kw">pub fn </span>run(<span class="kw-2">&amp;</span><span class="self">self</span>) {
@@ -193,7 +228,7 @@
         )
     }
 
-    <span class="kw">pub fn </span>get_container_ip(<span class="kw-2">&amp;</span><span class="self">self</span>, service_name: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; String {
+    <span class="kw">pub fn </span>get_container_ip(<span class="kw-2">&amp;</span><span class="self">self</span>, service_name: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; IpAddr {
         <span class="kw">let </span>container_name = <span class="macro">format!</span>(<span class="string">"{}-{}-1"</span>, <span class="self">self</span>.project_name, service_name.as_ref());
         <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(<span class="string">"docker"</span>);
         cmd.arg(<span class="string">"inspect"</span>)
@@ -201,9 +236,16 @@
             .arg(<span class="string">"{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}"</span>)
             .arg(<span class="kw-2">&amp;</span>container_name);
 
-        get_cmd_output(cmd, <span class="macro">format!</span>(<span class="string">"Get container ip of {container_name}"</span>))
+        <span class="kw">let </span>ip_result = get_cmd_output(cmd, <span class="macro">format!</span>(<span class="string">"Get container ip of {container_name}"</span>))
             .trim()
-            .to_string()
+            .parse::&lt;IpAddr&gt;();
+        <span class="kw">match </span>ip_result {
+            <span class="prelude-val">Ok</span>(ip) =&gt; ip,
+            <span class="prelude-val">Err</span>(e) =&gt; {
+                <span class="macro">log::error!</span>(<span class="string">"Invalid IP, {e}"</span>);
+                <span class="macro">panic!</span>(<span class="string">"Failed to parse IP for {container_name}"</span>)
+            }
+        }
     }
 }
 
