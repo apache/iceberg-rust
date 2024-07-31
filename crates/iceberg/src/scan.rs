@@ -55,8 +55,9 @@ pub struct TableScanBuilder<'a> {
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
-    concurrency_limit_manifest_files: usize,
+    concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -72,8 +73,9 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: None,
             case_sensitive: true,
             filter: None,
-            concurrency_limit_manifest_files: num_cpus,
+            concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
+            concurrency_limit_manifest_files: num_cpus,
         }
     }
 
@@ -124,18 +126,25 @@ impl<'a> TableScanBuilder<'a> {
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_files = limit;
         self.concurrency_limit_manifest_entries = limit;
+        self.concurrency_limit_data_files = limit;
         self
     }
 
-    /// Sets the manifest file concurrency limit for this scan
-    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit_manifest_files = limit;
+    /// Sets the data file concurrency limit for this scan
+    pub fn with_data_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_data_files = limit;
         self
     }
 
     /// Sets the manifest entry concurrency limit for this scan
     pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_entries = limit;
+        self
+    }
+
+    /// Sets the manifest file concurrency limit for this scan
+    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_files = limit;
         self
     }
 
@@ -244,10 +253,11 @@ impl<'a> TableScanBuilder<'a> {
         Ok(TableScan {
             batch_size: self.batch_size,
             column_names: self.column_names,
-            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             file_io: self.table.file_io().clone(),
             plan_context,
+            concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
         })
     }
 }
@@ -266,6 +276,10 @@ pub struct TableScan {
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     concurrency_limit_manifest_entries: usize,
+
+    /// The maximum number of [`ManifestEntry`]s that will
+    /// be processed in parallel
+    concurrency_limit_data_files: usize,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -350,7 +364,8 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone());
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
