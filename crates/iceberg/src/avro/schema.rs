@@ -399,7 +399,7 @@ pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) 
 struct AvroSchemaToSchema;
 
 impl AvroSchemaToSchema {
-    /// A convinent way to get element id(i32) from attributes.
+    /// A convenient way to get element id(i32) from attributes.
     #[inline]
     fn get_element_id_from_attributes(
         attributes: &BTreeMap<String, Value>,
