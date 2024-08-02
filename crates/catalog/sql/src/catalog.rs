@@ -537,16 +537,7 @@ impl Catalog for SqlCatalog {
         let table_existence = self.table_exists(identifier).await;
 
         match table_existence {
-            Ok(res) => {
-                if res {
-                    Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "drop table was not successful",
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
+            Ok(false) => Ok(()),
             _ => Err(Error::new(
                 ErrorKind::Unexpected,
                 "drop table was not successful",
@@ -658,23 +649,15 @@ impl Catalog for SqlCatalog {
         let dst_table_exist = self.table_exists(dest).await;
 
         match (src_table_exist, dst_table_exist) {
-            (Ok(src_res), Ok(dst_res)) => {
-                if src_res && !dst_res {
-                    Ok(())
-                } else if src_res && dst_res {
-                    Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "failed to rename table as destination already exists",
-                    ))
-                } else if !src_res && dst_res {
-                    Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "failed to rename table as source does not exist",
-                    ))
-                } else {
-                    Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
-                }
-            }
+            (Ok(true), Ok(false)) => Ok(()),
+            (_, Ok(true)) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "failed to rename table as destination already exists",
+            )),
+            (Ok(false), _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                "failed to rename table as source does not exist",
+            )),
             _ => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
         }?;
 
@@ -695,13 +678,7 @@ impl Catalog for SqlCatalog {
         let dst_table_exist = self.table_exists(dest).await;
 
         match (src_table_exist, dst_table_exist) {
-            (Ok(src_res), Ok(dst_res)) => {
-                if !src_res && dst_res {
-                    Ok(())
-                } else {
-                    Err(Error::new(ErrorKind::Unexpected, "failed to rename table"))
-                }
-            }
+            (Ok(false), Ok(true)) => Ok(()),
             _ => Err(Error::new(ErrorKind::Unexpected, "failed to rename table")),
         }
     }
