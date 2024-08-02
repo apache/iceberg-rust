@@ -61,7 +61,9 @@ impl Storage {
                 config: super::s3_config_parse(props)?.into(),
             }),
             #[cfg(feature = "storage-gcs")]
-            Scheme::Gcs => Ok(Self::Gcs { config: todo!() }),
+            Scheme::Gcs => Ok(Self::Gcs {
+                config: super::gcs_config_parse(props)?.into(),
+            }),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("Constructing file io from scheme: {scheme} not supported now",),
@@ -124,7 +126,18 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-gcs")]
-            Storage::Gcs { config: _ } => todo!(),
+            Storage::Gcs { config } => {
+                let operator = super::gcs_config_build(config)?;
+                let prefix = format!("gs://{}/", operator.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((operator, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid gcs url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
