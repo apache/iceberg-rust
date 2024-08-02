@@ -82,3 +82,7 @@ pub use storage_s3::*;
 mod storage_fs;
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
+#[cfg(feature = "storage-gcs")]
+mod storage_gcs;
+//#[cfg(feature = "storage-gcs")]
+//use storage_s3::*;

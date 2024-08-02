@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "storage-gcs")]
+use opendal::services::GcsConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
@@ -38,6 +40,8 @@ pub(crate) enum Storage {
         scheme_str: String,
         config: Arc<S3Config>,
     },
+    #[cfg(feature = "storage-gcs")]
+    Gcs { config: Arc<GcsConfig> },
 }
 
 impl Storage {
@@ -56,6 +60,8 @@ impl Storage {
                 scheme_str,
                 config: super::s3_config_parse(props)?.into(),
             }),
+            #[cfg(feature = "storage-gcs")]
+            Scheme::Gcs => Ok(Self::Gcs { config: todo!() }),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("Constructing file io from scheme: {scheme} not supported now",),
@@ -117,7 +123,13 @@ impl Storage {
                     ))
                 }
             }
-            #[cfg(all(not(feature = "storage-s3"), not(feature = "storage-fs")))]
+            #[cfg(feature = "storage-gcs")]
+            Storage::Gcs { config: _ } => todo!(),
+            #[cfg(all(
+                not(feature = "storage-s3"),
+                not(feature = "storage-fs"),
+                not(feature = "storage-gcs")
+            ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "No storage service has been enabled",
@@ -131,6 +143,7 @@ impl Storage {
             "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
+            "gs" => Ok(Scheme::Gcs),
             s => Ok(s.parse::<Scheme>()?),
         }
     }
