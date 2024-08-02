@@ -27,7 +27,8 @@ use itertools::{Either, Itertools};
 use serde_json::{Number, Value};
 
 use crate::spec::{
-    visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor, StructType, Type
+    visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema,
+    SchemaVisitor, StructType, Type,
 };
 use crate::{ensure_data_valid, Error, ErrorKind, Result};
 
@@ -599,6 +600,9 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 }
 
+// # TODO
+// Fix this when we have used `avro_schema_to_schema` inner.
+#[allow(unused)]
 /// Converts avro schema to iceberg schema.
 pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
     if let AvroSchema::Record(_) = avro_schema {
