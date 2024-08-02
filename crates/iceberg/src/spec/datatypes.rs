@@ -581,6 +581,19 @@ impl From<NestedField> for SerdeNestedField {
 pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
+    /// Construct a new field.
+    pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            required,
+            field_type: Box::new(field_type),
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        }
+    }
+
     /// Construct a required field.
     pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
         Self {

@@ -330,6 +330,8 @@ pub(crate) trait AvroSchemaVisitor {
 
     fn array(&mut self, array: &ArraySchema, item: Self::T) -> Result<Self::T>;
     fn map(&mut self, map: &MapSchema, value: Self::T) -> Result<Self::T>;
+    // There are two representation for iceberg map in avro: array of key-value records, or map when keys are strings (optional),
+    // ref: https://iceberg.apache.org/spec/#avro
     fn map_array(&mut self, array: &RecordSchema, key: Self::T, value: Self::T) -> Result<Self::T>;
 
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Self::T>;
@@ -395,6 +397,38 @@ pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) 
 
 struct AvroSchemaToSchema;
 
+impl AvroSchemaToSchema {
+    /// A convinent way to get element id(i32) from attributes.
+    #[inline]
+    fn get_element_id_from_attributes(
+        attributes: &BTreeMap<String, Value>,
+        name: &str,
+    ) -> Result<i32> {
+        attributes
+            .get(name)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't convert avro array schema, missing element id.",
+                )
+            })?
+            .as_i64()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't convert avro array schema, element id is not a valid i64 number.",
+                )
+            })?
+            .try_into()
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Can't convert avro array schema, element id is not a valid i32.",
+                )
+            })
+    }
+}
+
 impl AvroSchemaVisitor for AvroSchemaToSchema {
     // Only `AvroSchema::Null` will return `None`
     type T = Option<Type>;
@@ -406,24 +440,12 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     ) -> Result<Option<Type>> {
         let mut fields = Vec::with_capacity(field_types.len());
         for (avro_field, typ) in record.fields.iter().zip_eq(field_types) {
-            let field_id = avro_field
-                .custom_attributes
-                .get(FILED_ID_PROP)
-                .and_then(Value::as_i64)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Can't convert field, missing field id: {avro_field:?}"),
-                    )
-                })?;
+            let field_id =
+                Self::get_element_id_from_attributes(&avro_field.custom_attributes, FILED_ID_PROP)?;
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let mut field = if optional {
-                NestedField::optional(field_id as i32, &avro_field.name, typ.unwrap())
-            } else {
-                NestedField::required(field_id as i32, &avro_field.name, typ.unwrap())
-            };
+            let mut field = NestedField::new(field_id, &avro_field.name, typ.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
@@ -462,23 +484,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 
     fn array(&mut self, array: &ArraySchema, item: Option<Type>) -> Result<Self::T> {
-        let element_field_id = array
-            .attributes
-            .get(ELEMENT_ID)
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro array schema, missing element id.",
-                )
-            })?
-            .try_into()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro array schema, element id is not a valid i32.",
-                )
-            })?;
+        let element_field_id = Self::get_element_id_from_attributes(&array.attributes, ELEMENT_ID)?;
         let element_field = NestedField::list_element(
             element_field_id,
             item.unwrap(),
@@ -489,42 +495,10 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 
     fn map(&mut self, map: &MapSchema, value: Option<Type>) -> Result<Option<Type>> {
-        let key_field_id = map
-            .attributes
-            .get(KEY_ID)
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, missing key id.",
-                )
-            })?
-            .try_into()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, key id is not a valid i32.",
-                )
-            })?;
+        let key_field_id = Self::get_element_id_from_attributes(&map.attributes, KEY_ID)?;
         let key_field =
             NestedField::map_key_element(key_field_id, Type::Primitive(PrimitiveType::String));
-        let value_field_id = map
-            .attributes
-            .get(VALUE_ID)
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, missing value id.",
-                )
-            })?
-            .try_into()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, value id is not a valid i32.",
-                )
-            })?;
+        let value_field_id = Self::get_element_id_from_attributes(&map.attributes, VALUE_ID)?;
         let value_field = NestedField::map_value_element(
             value_field_id,
             value.unwrap(),
@@ -586,7 +560,12 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         Ok(Some(typ))
     }
 
-    fn map_array(&mut self, array: &RecordSchema, key: Self::T, value: Self::T) -> Result<Self::T> {
+    fn map_array(
+        &mut self,
+        array: &RecordSchema,
+        key: Option<Type>,
+        value: Option<Type>,
+    ) -> Result<Self::T> {
         let key = key.ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
@@ -599,46 +578,20 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                 "Can't convert avro map schema, missing value schema.",
             )
         })?;
-        let key_id = array.fields[0]
-            .custom_attributes
-            .get(FILED_ID_PROP)
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, missing key id.",
-                )
-            })?
-            .try_into()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, key id is not a valid i32.",
-                )
-            })?;
-        let value_id = array.fields[1]
-            .custom_attributes
-            .get(FILED_ID_PROP)
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, missing value id.",
-                )
-            })?
-            .try_into()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Can't convert avro map schema, value id is not a valid i32.",
-                )
-            })?;
-        let key_field = NestedField::required(key_id, array.fields[0].name.clone(), key);
-        let value_field = if is_avro_optional(&array.fields[1].schema) {
-            NestedField::optional(value_id, array.fields[1].name.clone(), value)
-        } else {
-            NestedField::required(value_id, array.fields[1].name.clone(), value)
-        };
+        let key_id = Self::get_element_id_from_attributes(
+            &array.fields[0].custom_attributes,
+            FILED_ID_PROP,
+        )?;
+        let value_id = Self::get_element_id_from_attributes(
+            &array.fields[1].custom_attributes,
+            FILED_ID_PROP,
+        )?;
+        let key_field = NestedField::map_key_element(key_id, key);
+        let value_field = NestedField::map_value_element(
+            value_id,
+            value,
+            !is_avro_optional(&array.fields[1].schema),
+        );
         Ok(Some(Type::Map(MapType {
             key_field: key_field.into(),
             value_field: value_field.into(),
