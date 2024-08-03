@@ -148,14 +148,11 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
-        let file_io = FileIO::from_path(&config.warehouse)?
-            .with_props(&config.props)
-            .build()?;
-
         Ok(SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
-            fileio: file_io,
+            warehouse_location: config.warehouse_location,
+            fileio: config.file_io,
             backend: db_type,
         })
     }
