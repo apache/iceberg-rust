@@ -15,12 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-target
-Cargo.lock
-.idea
-.vscode
-**/.DS_Store
-dist/*
-**/venv
-*.so
-*.pyc
+from pyiceberg_core import hello_world
+
+
+def test_hello_world():
+    hello_world()

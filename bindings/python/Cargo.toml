@@ -15,12 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-target
-Cargo.lock
-.idea
-.vscode
-**/.DS_Store
-dist/*
-**/venv
-*.so
-*.pyc
+[package]
+name = "pyiceberg_core_rust"
+version = "0.0.1"
+edition = "2021"
+homepage = "https://rust.iceberg.apache.org"
+rust-version = "1.77.1"
+# This crate is used to build python bindings, we don't want to publish it
+publish = false
+
+license = "Apache-2.0"
+keywords = ["iceberg"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iceberg = { path = "../../crates/iceberg" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
