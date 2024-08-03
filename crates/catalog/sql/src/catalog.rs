@@ -34,6 +34,9 @@ use uuid::Uuid;
 
 use crate::error::from_sqlx_error;
 
+/// namespace `location` property
+const LOCATION: &str = "location";
+
 static CATALOG_TABLE_VIEW_NAME: &str = "iceberg_tables";
 static CATALOG_NAME: &str = "catalog_name";
 static TABLE_NAME: &str = "table_name";
