@@ -57,7 +57,8 @@ static TEST_BEFORE_ACQUIRE: bool = true;
 pub struct SqlCatalogConfig {
     uri: String,
     name: String,
-    warehouse: String,
+    warehouse_location: Option<String>,
+    file_io: FileIO,
     #[builder(default)]
     props: HashMap<String, String>,
 }
