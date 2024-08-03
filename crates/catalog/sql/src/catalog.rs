@@ -67,6 +67,7 @@ pub struct SqlCatalogConfig {
 pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
+    warehouse_location: Option<String>,
     fileio: FileIO,
     backend: DatabaseType,
 }
