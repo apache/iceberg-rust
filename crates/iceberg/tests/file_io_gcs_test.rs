@@ -17,53 +17,87 @@
 
 //! Integration tests for FileIO Google Cloud Storage (GCS).
 
-use std::net::SocketAddr;
-use std::sync::RwLock;
+use bytes::Bytes;
+use iceberg::io::{FileIO, FileIOBuilder, GCS_BUCKET, GCS_CREDENTIAL_PATH};
+use iceberg_test_utils::set_up;
 
-use ctor::{ctor, dtor};
-use iceberg::io::{FileIO, FileIOBuilder, GCS_BUCKET, GCS_ENDPOINT};
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{normalize_test_name, set_up};
+// static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
 
-const FAKE_GCS_PORT: u16 = 4443;
-static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
+// TODO: use compose with fake-gcs-server
+//#[ctor]
+//fn before_all() {
+//    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+//    let docker_compose = DockerCompose::new(
+//        normalize_test_name(module_path!()),
+//        format!("{}/testdata/file_io_gcs", env!("CARGO_MANIFEST_DIR")),
+//    );
+//    docker_compose.run();
+//    guard.replace(docker_compose);
+//}
+//
+//#[dtor]
+//fn after_all() {
+//    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
+//    guard.take();
+//}
 
-#[ctor]
-fn before_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(module_path!()),
-        format!("{}/testdata/file_io_gcs", env!("CARGO_MANIFEST_DIR")),
-    );
-    docker_compose.run();
-    guard.replace(docker_compose);
-}
-
-#[dtor]
-fn after_all() {
-    let mut guard = DOCKER_COMPOSE_ENV.write().unwrap();
-    guard.take();
-}
-
-async fn get_file_io() -> FileIO {
+async fn get_file_io_gcs() -> FileIO {
     set_up();
-
-    let guard = DOCKER_COMPOSE_ENV.read().unwrap();
-    let docker_compose = guard.as_ref().unwrap();
-    let container_ip = docker_compose.get_container_ip("gcs-server");
-    let gcs_socket_addr = SocketAddr::new(container_ip, FAKE_GCS_PORT);
 
     FileIOBuilder::new("gcs")
         .with_props(vec![
-            (GCS_ENDPOINT, format!("http://{}", gcs_socket_addr)),
-            (GCS_BUCKET, "my-test-bucket".to_string()),
+            (GCS_BUCKET, std::env::var("GCS_BUCKET").unwrap().to_string()),
+            (
+                GCS_CREDENTIAL_PATH,
+                std::env::var("GCS_CREDENTIAL_PATH").unwrap().to_string(),
+            ),
         ])
         .build()
         .unwrap()
 }
 
+fn get_gs_path() -> String {
+    format!(
+        "gs://{}",
+        std::env::var("GCS_BUCKET").expect("Only runs with var enabled")
+    )
+}
+
 #[tokio::test]
-async fn test_file_io_gcs_exists() {
-    let file_io = get_file_io().await;
-    assert!(file_io.is_exist("gs://my-test-bucket/").await.unwrap());
+#[test_with::env(GCS_BUCKET, GCS_CREDENTIAL_PATH)]
+async fn gcs_exists() {
+    let file_io = get_file_io_gcs().await;
+    assert!(file_io
+        .is_exist(format!("{}/", get_gs_path()))
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+#[test_with::env(GCS_BUCKET, GCS_CREDENTIAL_PATH)]
+async fn gcs_write() {
+    let gs_file = format!("{}/write-file", get_gs_path());
+    let file_io = get_file_io_gcs().await;
+    let output = file_io.new_output(&gs_file).unwrap();
+    output
+        .write(bytes::Bytes::from_static(b"iceberg-gcs!"))
+        .await
+        .expect("Write to test output file");
+    assert!(file_io.is_exist(gs_file).await.unwrap())
+}
+
+#[tokio::test]
+#[test_with::env(GCS_BUCKET, GCS_CREDENTIAL_PATH)]
+async fn gcs_read() {
+    let gs_file = format!("{}/read-gcs", get_gs_path());
+    let file_io = get_file_io_gcs().await;
+    let output = file_io.new_output(&gs_file).unwrap();
+    output
+        .write(bytes::Bytes::from_static(b"iceberg!"))
+        .await
+        .expect("Write to test output file");
+    assert!(file_io.is_exist(&gs_file).await.unwrap());
+
+    let input = file_io.new_input(gs_file).unwrap();
+    assert_eq!(input.read().await.unwrap(), Bytes::from_static(b"iceberg!"));
 }
