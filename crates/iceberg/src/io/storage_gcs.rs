@@ -27,38 +27,48 @@ use crate::{Error, ErrorKind, Result};
 
 /// Google Cloud Storage bucket name
 pub const GCS_BUCKET: &str = "gcs.bucket";
-/// Google Project ID
-pub const GCS_PROJECT_ID: &str = "gcs.project-id";
 /// Google Cloud Storage endpoint
 pub const GCS_ENDPOINT: &str = "gcs.endpoint";
 /// Google Cloud Storage OAuth token
 pub const GCS_OAUTH2_TOKEN: &str = "gcs.oauth2.token";
 /// Google Cloud Storage working (root) directory
 pub const GCS_ROOT: &str = "gcs.root";
+/// Google Cloud Storage working (root) directory
+pub const GCS_CREDENTIAL_PATH: &str = "gcs.credential-path";
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
     let mut cfg = GcsConfig::default();
-    if let Some(endpoint) = m.remove(GCS_ENDPOINT) {
-        cfg.endpoint = Some(endpoint);
-    };
 
     if let Some(bucket) = m.remove(GCS_BUCKET) {
         cfg.bucket = bucket;
+    } else {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Bucket name is required for GCS",
+        ));
     }
 
     if let Some(root) = m.remove(GCS_ROOT) {
         cfg.root = Some(root)
     }
 
-    if let Some(credential) = m.remove(GCS_OAUTH2_TOKEN) {
-        cfg.credential = Some(credential)
+    if let Some(endpoint) = m.remove(GCS_ENDPOINT) {
+        cfg.endpoint = Some(endpoint);
+    }
+
+    if let Some(cred_path) = m.remove(GCS_CREDENTIAL_PATH) {
+        cfg.credential_path = Some(cred_path);
+    }
+
+    if let Some(token) = m.remove(GCS_OAUTH2_TOKEN) {
+        cfg.credential = Some(token);
     }
 
     Ok(cfg)
 }
 
-/// Build a new OpenDAL [`Operator`] based on a known [`GcsConfig`].
+/// Build a new OpenDAL [`Operator`] based on a provided [`GcsConfig`].
 pub(crate) fn gcs_config_build(cfg: &GcsConfig) -> Result<Operator> {
     Ok(Operator::from_config(cfg.clone())?.finish())
 }
