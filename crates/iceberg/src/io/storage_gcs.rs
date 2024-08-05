@@ -30,6 +30,8 @@ use crate::{Error, ErrorKind, Result};
 pub const GCS_PROJECT_ID: &str = "gcs.project-id";
 /// Google Cloud Storage endpoint
 pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
+/// Google Cloud user project
+pub const GCS_USER_PROJECT: &str = "gcs.user-project";
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
