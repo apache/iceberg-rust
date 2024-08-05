@@ -18,6 +18,7 @@
 //! Integration tests for glue catalog.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::RwLock;
 
 use ctor::{ctor, dtor};
@@ -64,14 +65,11 @@ async fn get_catalog() -> GlueCatalog {
             docker_compose.get_container_ip("minio"),
         )
     };
-    let read_port = format!("{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT);
-    loop {
-        if !scan_port_addr(&read_port) {
-            log::info!("Waiting for 1s glue catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
-        } else {
-            break;
-        }
+    let glue_socket_addr = SocketAddr::new(glue_catalog_ip, GLUE_CATALOG_PORT);
+    let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
+    while !scan_port_addr(glue_socket_addr) {
+        log::info!("Waiting for 1s glue catalog to ready...");
+        sleep(std::time::Duration::from_millis(1000)).await;
     }
 
     let props = HashMap::from([
@@ -83,7 +81,7 @@ async fn get_catalog() -> GlueCatalog {
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
         (
             S3_ENDPOINT.to_string(),
-            format!("http://{}:{}", minio_ip, MINIO_PORT),
+            format!("http://{}", minio_socket_addr),
         ),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
@@ -91,7 +89,7 @@ async fn get_catalog() -> GlueCatalog {
     ]);
 
     let config = GlueCatalogConfig::builder()
-        .uri(format!("http://{}:{}", glue_catalog_ip, GLUE_CATALOG_PORT))
+        .uri(format!("http://{}", glue_socket_addr))
         .warehouse("s3a://warehouse/hive".to_string())
         .props(props.clone())
         .build();

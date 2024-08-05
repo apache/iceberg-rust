@@ -28,14 +28,27 @@ pub fn run_command(mut cmd: Command, desc: impl ToString) {
     }
 }
 
-pub fn get_cmd_output(mut cmd: Command, desc: impl ToString) -> String {
+pub fn get_cmd_output_result(mut cmd: Command, desc: impl ToString) -> Result<String, String> {
     let desc = desc.to_string();
     log::info!("Starting to {}, command: {:?}", &desc, cmd);
-    let output = cmd.output().unwrap();
-    if output.status.success() {
-        log::info!("{} succeed!", desc);
-        String::from_utf8(output.stdout).unwrap()
-    } else {
-        panic!("{} failed: {:?}", desc, output.status);
+    let result = cmd.output();
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                log::info!("{} succeed!", desc);
+                Ok(String::from_utf8(output.stdout).unwrap())
+            } else {
+                Err(format!("{} failed with rc: {:?}", desc, output.status))
+            }
+        }
+        Err(err) => Err(format!("{} failed with error: {}", desc, { err })),
+    }
+}
+
+pub fn get_cmd_output(cmd: Command, desc: impl ToString) -> String {
+    let result = get_cmd_output_result(cmd, desc);
+    match result {
+        Ok(output_str) => output_str,
+        Err(err) => panic!("{}", err),
     }
 }

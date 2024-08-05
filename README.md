@@ -29,33 +29,39 @@ Working on [v0.3.0 Release Milestone](https://github.com/apache/iceberg-rust/mil
 
 The Apache Iceberg Rust project is composed of the following components:
 
-| Name                   | Release                                                    | Docs                                                 |
-|------------------------|------------------------------------------------------------|------------------------------------------------------|
-| [iceberg]              | [![iceberg image]][iceberg link]                           | [![docs release]][iceberg release docs]              |
-| [iceberg-datafusion]   | -                                                          | -                                                    |
-| [iceberg-catalog-glue] | -                                                          | -                                                    |
-| [iceberg-catalog-hms]  | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]   | [![docs release]][iceberg-catalog-hms release docs]  |
-| [iceberg-catalog-rest] | [![iceberg-catalog-rest image]][iceberg-catalog-rest link] | [![docs release]][iceberg-catalog-rest release docs] |
+| Name                   | Release                                                    | Docs                                                                                              |
+|------------------------|------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| [iceberg]              | [![iceberg image]][iceberg link]                           | [![docs release]][iceberg release docs] [![docs dev]][iceberg dev docs]                           |
+| [iceberg-datafusion]   | -                                                          | [![docs dev]][iceberg-datafusion dev docs]                                                        |
+| [iceberg-catalog-glue] | -                                                          | [![docs dev]][iceberg-catalog-glue dev docs]                                                      |
+| [iceberg-catalog-hms]  | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]   | [![docs release]][iceberg-catalog-hms release docs] [![docs dev]][iceberg-catalog-hms dev docs]   |
+| [iceberg-catalog-rest] | [![iceberg-catalog-rest image]][iceberg-catalog-rest link] | [![docs release]][iceberg-catalog-rest release docs] [![docs dev]][iceberg-catalog-rest dev docs] |
 
 [docs release]: https://img.shields.io/badge/docs-release-blue
+[docs dev]: https://img.shields.io/badge/docs-dev-blue
 [iceberg]: crates/iceberg/README.md
 [iceberg image]: https://img.shields.io/crates/v/iceberg.svg
 [iceberg link]: https://crates.io/crates/iceberg
 [iceberg release docs]: https://docs.rs/iceberg
+[iceberg dev docs]: https://rust.iceberg.apache.org/api/iceberg/
 
 [iceberg-datafusion]: crates/integrations/datafusion/README.md
+[iceberg-datafusion dev docs]: https://rust.iceberg.apache.org/api/iceberg_datafusion/
 
 [iceberg-catalog-glue]: crates/catalog/glue/README.md
+[iceberg-catalog-glue dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_glue/
 
 [iceberg-catalog-hms]: crates/catalog/hms/README.md
 [iceberg-catalog-hms image]: https://img.shields.io/crates/v/iceberg-catalog-hms.svg
 [iceberg-catalog-hms link]: https://crates.io/crates/iceberg-catalog-hms
 [iceberg-catalog-hms release docs]: https://docs.rs/iceberg-catalog-hms
+[iceberg-catalog-hms dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_hms/
 
 [iceberg-catalog-rest]: crates/catalog/rest/README.md
 [iceberg-catalog-rest image]: https://img.shields.io/crates/v/iceberg-catalog-rest.svg
 [iceberg-catalog-rest link]: https://crates.io/crates/iceberg-catalog-rest
 [iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
+[iceberg-catalog-rest dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_rest/
 
 ## Supported Rust Version
 
