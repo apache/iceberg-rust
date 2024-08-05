@@ -209,14 +209,12 @@ impl Catalog for MemoryCatalog {
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
-        let table = Table::builder()
+        Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident)
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Load table from the catalog.
@@ -227,14 +225,13 @@ impl Catalog for MemoryCatalog {
         let input_file = self.file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
         let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-        let table = Table::builder()
+
+        Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location.clone())
             .metadata(metadata)
             .identifier(table_ident.clone())
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Drop a table from the catalog.

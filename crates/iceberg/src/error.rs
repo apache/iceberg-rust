@@ -331,6 +331,12 @@ define_from_err!(
     "Failed to read a Parquet file"
 );
 
+define_from_err!(
+    futures::channel::mpsc::SendError,
+    ErrorKind::Unexpected,
+    "Failed to send a message to a channel"
+);
+
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
 
 /// Converts a timestamp in milliseconds to `DateTime<Utc>`, handling errors.
