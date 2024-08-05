@@ -79,8 +79,15 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+criterion = { version = "0.3", features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
+futures-util = "0.3"
+iceberg-catalog-rest = { path = "../catalog/rest" }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
+
+[[bench]]
+name = "table_scan_plan_files"
+harness = false
