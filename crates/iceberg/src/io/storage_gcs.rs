@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use opendal::services::GcsConfig;
 use opendal::Operator;
+use url::Url;
 
 use crate::{Error, ErrorKind, Result};
 
@@ -42,6 +43,16 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
 }
 
 /// Build a new OpenDAL [`Operator`] based on a provided [`GcsConfig`].
-pub(crate) fn gcs_config_build(cfg: &GcsConfig) -> Result<Operator> {
-    Ok(Operator::from_config(cfg.clone())?.finish())
+pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> {
+    let url = Url::parse(path)?;
+    let bucket = url.host_str().ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid gcs url: {}, bucket is required", path),
+        )
+    })?;
+
+    let mut cfg = cfg.clone();
+    cfg.bucket = bucket.to_string();
+    Ok(Operator::from_config(cfg)?.finish())
 }

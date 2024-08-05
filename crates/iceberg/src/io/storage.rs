@@ -127,7 +127,7 @@ impl Storage {
             }
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
-                let operator = super::gcs_config_build(config)?;
+                let operator = super::gcs_config_build(config, path)?;
                 let prefix = format!("gs://{}/", operator.info().name());
                 if path.starts_with(&prefix) {
                     Ok((operator, &path[prefix.len()..]))

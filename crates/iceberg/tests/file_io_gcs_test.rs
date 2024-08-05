@@ -18,7 +18,7 @@
 //! Integration tests for FileIO Google Cloud Storage (GCS).
 
 use bytes::Bytes;
-use iceberg::io::{FileIO, FileIOBuilder, GCS_BUCKET, GCS_CREDENTIAL_PATH};
+use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg_test_utils::set_up;
 
 // static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
@@ -43,17 +43,7 @@ use iceberg_test_utils::set_up;
 
 async fn get_file_io_gcs() -> FileIO {
     set_up();
-
-    FileIOBuilder::new("gcs")
-        .with_props(vec![
-            (GCS_BUCKET, std::env::var("GCS_BUCKET").unwrap().to_string()),
-            (
-                GCS_CREDENTIAL_PATH,
-                std::env::var("GCS_CREDENTIAL_PATH").unwrap().to_string(),
-            ),
-        ])
-        .build()
-        .unwrap()
+    FileIOBuilder::new("gcs").build().unwrap()
 }
 
 fn get_gs_path() -> String {
