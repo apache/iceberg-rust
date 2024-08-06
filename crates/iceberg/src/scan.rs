@@ -46,28 +46,6 @@ pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
-/// Configuration settings for a TableScan
-#[derive(Debug)]
-pub struct TableScanConfig {
-    /// The maximum number of manifest files that will be
-    /// retrieved from [`FileIO`] concurrently
-    concurrency_limit_manifest_files: usize,
-
-    /// The maximum number of [`ManifestEntry`]s that will
-    /// be processed in parallel
-    concurrency_limit_manifest_entries: usize,
-}
-
-impl Default for TableScanConfig {
-    fn default() -> Self {
-        let num_cpus = num_cpus::get();
-        Self {
-            concurrency_limit_manifest_files: num_cpus,
-            concurrency_limit_manifest_entries: num_cpus,
-        }
-    }
-}
-
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
@@ -77,11 +55,14 @@ pub struct TableScanBuilder<'a> {
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
-    table_scan_config: TableScanConfig,
+    concurrency_limit_manifest_files: usize,
+    concurrency_limit_manifest_entries: usize,
 }
 
 impl<'a> TableScanBuilder<'a> {
     pub(crate) fn new(table: &'a Table) -> Self {
+        let num_cpus = num_cpus::get();
+
         Self {
             table,
             column_names: vec![],
@@ -89,7 +70,8 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: None,
             case_sensitive: true,
             filter: None,
-            table_scan_config: TableScanConfig::default(),
+            concurrency_limit_manifest_files: num_cpus,
+            concurrency_limit_manifest_entries: num_cpus,
         }
     }
 
@@ -135,41 +117,23 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Provides a TableScanConfig to use as the config for this TableScan
-    pub fn with_config(mut self, table_scan_config: TableScanConfig) -> Self {
-        self.table_scan_config = table_scan_config;
-        self
-    }
-
     /// Sets the concurrency limit for both manifest files and manifest
     /// entries for this scan
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
-        self.table_scan_config = TableScanConfig {
-            concurrency_limit_manifest_files: limit,
-            concurrency_limit_manifest_entries: limit,
-        };
+        self.concurrency_limit_manifest_files = limit;
+        self.concurrency_limit_manifest_entries = limit;
         self
     }
 
-    /// sets the manifest file concurrency limit for this scan
+    /// Sets the manifest file concurrency limit for this scan
     pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
-        self.table_scan_config = TableScanConfig {
-            concurrency_limit_manifest_files: limit,
-            concurrency_limit_manifest_entries: self
-                .table_scan_config
-                .concurrency_limit_manifest_entries,
-        };
+        self.concurrency_limit_manifest_files = limit;
         self
     }
 
-    /// sets the manifest entry concurrency limit for this scan
-    pub fn with_manifest_entru_concurrency_limit(mut self, limit: usize) -> Self {
-        self.table_scan_config = TableScanConfig {
-            concurrency_limit_manifest_entries: limit,
-            concurrency_limit_manifest_files: self
-                .table_scan_config
-                .concurrency_limit_manifest_files,
-        };
+    /// Sets the manifest entry concurrency limit for this scan
+    pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_entries = limit;
         self
     }
 
@@ -278,9 +242,10 @@ impl<'a> TableScanBuilder<'a> {
         Ok(TableScan {
             batch_size: self.batch_size,
             column_names: self.column_names,
+            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             file_io: self.table.file_io().clone(),
             plan_context,
-            table_scan_config: self.table_scan_config,
+            concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
         })
     }
 }
@@ -292,7 +257,13 @@ pub struct TableScan {
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Vec<String>,
-    table_scan_config: TableScanConfig,
+    /// The maximum number of manifest files that will be
+    /// retrieved from [`FileIO`] concurrently
+    concurrency_limit_manifest_files: usize,
+
+    /// The maximum number of [`ManifestEntry`]s that will
+    /// be processed in parallel
+    concurrency_limit_manifest_entries: usize,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -317,10 +288,8 @@ struct PlanContext {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        let concurrency_limit_manifest_files =
-            self.table_scan_config.concurrency_limit_manifest_files;
-        let concurrency_limit_manifest_entries =
-            self.table_scan_config.concurrency_limit_manifest_entries;
+        let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
+        let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
         // used to stream ManifestEntryContexts between stages of the file plan operation
         let (manifest_entry_ctx_tx, manifest_entry_ctx_rx) =
