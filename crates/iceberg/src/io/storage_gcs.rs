@@ -32,6 +32,8 @@ pub const GCS_PROJECT_ID: &str = "gcs.project-id";
 pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
 /// Google Cloud user project
 pub const GCS_USER_PROJECT: &str = "gcs.user-project";
+/// Allow unauthenticated requests
+pub const GCS_NO_AUTH: &str = "gcs.no-auth";
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
@@ -39,6 +41,10 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
 
     if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
         cfg.endpoint = Some(endpoint);
+    }
+
+    if m.remove(GCS_NO_AUTH).is_some() {
+        cfg.allow_anonymous = true;
     }
 
     Ok(cfg)

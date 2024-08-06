@@ -20,3 +20,4 @@ services:
     image: fsouza/fake-gcs-server@sha256:36b0116fae5236e8def76ccb07761a9ca323e476f366a5f4bf449cac19deaf2d
     expose:
       - 4443
+    command: --scheme http
