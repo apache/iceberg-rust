@@ -495,8 +495,8 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField,
-        PartitionSpec, PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
     const INT_MIN_VALUE: i32 = 30;
