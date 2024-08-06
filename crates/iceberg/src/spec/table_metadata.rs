@@ -923,7 +923,7 @@ mod tests {
     use crate::spec::{
         NestedField, NullOrder, Operation, PartitionField, PartitionSpec, PrimitiveType, Schema,
         Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-        Summary, Transform, Type,
+        Summary, Transform, Type, UnboundPartitionField,
     };
     use crate::TableCreation;
 
@@ -1008,16 +1008,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(1)
-            .with_partition_field(PartitionField {
+        let partition_spec = PartitionSpec {
+            spec_id: 1,
+            fields: vec![PartitionField {
                 name: "ts_day".to_string(),
                 transform: Transform::Day,
                 source_id: 4,
                 field_id: 1000,
-            })
-            .unwrap()
-            .build_unchecked();
+            }],
+        };
 
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
@@ -1167,16 +1166,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(0)
-            .with_partition_field(PartitionField {
-                name: "vendor_id".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: 1000,
-            })
+            .add_partition_field(
+                "vendor_id".to_string(),
+                "vendor_id".to_string(),
+                Transform::Identity,
+            )
             .unwrap()
-            .build(&schema)
+            .build()
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1281,16 +1279,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema1)
             .with_spec_id(0)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                field_id: 1000,
+                partition_id: Some(1000),
             })
             .unwrap()
-            .build(&schema1)
+            .build()
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1404,16 +1402,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(0)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                field_id: 1000,
+                partition_id: Some(1000),
             })
             .unwrap()
-            .build(&schema)
+            .build()
             .unwrap();
 
         let sort_order = SortOrder::builder()
@@ -1484,16 +1482,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(0)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                field_id: 1000,
+                partition_id: Some(1000),
             })
             .unwrap()
-            .build(&schema)
+            .build()
             .unwrap();
 
         let expected = TableMetadata {

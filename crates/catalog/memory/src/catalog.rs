@@ -341,11 +341,10 @@ mod tests {
 
         assert_eq!(metadata.current_schema().as_ref(), expected_schema);
 
-        let expected_partition_spec = PartitionSpec::builder()
+        let expected_partition_spec = PartitionSpec::builder(expected_schema)
             .with_spec_id(0)
-            .with_fields(vec![])
-            .unwrap()
-            .build_unchecked();
+            .build()
+            .unwrap();
 
         assert_eq!(
             metadata
