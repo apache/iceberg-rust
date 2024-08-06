@@ -63,7 +63,8 @@ futures = { workspace = true }
 itertools = { workspace = true }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }
-opendal = { workspace = true }
+# opendal = { workspace = true }
+opendal = { git = "https://github.com/apache/opendal", rev = "0a3e98f"}
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
 reqwest = { workspace = true }
