@@ -271,7 +271,10 @@ impl<'a> PartitionSpecBuilder<'a> {
     }
 
     /// Set the last assigned field id for the partition spec.
-    /// This is useful when re-binding partition specs.
+    ///
+    /// Set this field when a new partition spec is created for an existing TableMetaData.
+    /// As `field_id` must be unique in V2 metadata, this should be set to
+    /// the highest field id used previously.
     pub fn with_last_assigned_field_id(mut self, last_assigned_field_id: i32) -> Self {
         self.last_assigned_field_id = last_assigned_field_id;
         self
