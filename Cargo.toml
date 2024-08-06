@@ -36,7 +36,7 @@ rust-version = "1.77.1"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = { git = "https://github.com/apache/avro.git", recv = "fdab5db0816e28e3e10c87910c8b6f98c33072dc" }
+apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "52" }
 arrow-array = { version = "52" }

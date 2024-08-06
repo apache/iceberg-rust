@@ -947,6 +947,7 @@ mod tests {
                     ]
                 },
                 "default": [],
+                "element-id": 101,
                 "logicalType": "map"
             },
             "field-id": 100
@@ -974,6 +975,15 @@ mod tests {
                 "logicalType": "map"
             },
             "field-id": 104
+        }, {
+            "name": "string_map",
+            "type": {
+                "type": "map",
+                "values": ["null", "long"],
+                "key-id": 108,
+                "value-id": 109
+            },
+            "field-id": 107
         }
     ]
 }
@@ -1015,6 +1025,23 @@ mod tests {
                                 106,
                                 PrimitiveType::Boolean.into(),
                                 true,
+                            )
+                            .into(),
+                        }),
+                    )),
+                    Arc::new(NestedField::required(
+                        107,
+                        "string_map",
+                        Type::Map(MapType {
+                            key_field: NestedField::map_key_element(
+                                108,
+                                PrimitiveType::String.into(),
+                            )
+                            .into(),
+                            value_field: NestedField::map_value_element(
+                                109,
+                                PrimitiveType::Long.into(),
+                                false,
                             )
                             .into(),
                         }),
