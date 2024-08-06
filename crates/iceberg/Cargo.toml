@@ -50,7 +50,6 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
-async-stream = { workspace = true }
 async-trait = { workspace = true }
 bimap = { workspace = true }
 bitvec = { workspace = true }
@@ -60,7 +59,9 @@ derive_builder = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+moka = { version = "0.12.8", features = ["future"] }
 murmur3 = { workspace = true }
+num_cpus = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }

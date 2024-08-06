@@ -16,28 +16,156 @@
 // under the License.
 
 //! Table API for Apache Iceberg
-use typed_builder::TypedBuilder;
+
+use std::sync::Arc;
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
-use crate::{Result, TableIdent};
+use crate::{Error, ErrorKind, Result, TableIdent};
+
+/// Builder to create table scan.
+pub struct TableBuilder {
+    file_io: Option<FileIO>,
+    metadata_location: Option<String>,
+    metadata: Option<TableMetadataRef>,
+    identifier: Option<TableIdent>,
+    readonly: bool,
+    disable_cache: bool,
+    cache_size_bytes: Option<u64>,
+}
+
+impl TableBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            file_io: None,
+            metadata_location: None,
+            metadata: None,
+            identifier: None,
+            readonly: false,
+            disable_cache: false,
+            cache_size_bytes: None,
+        }
+    }
+
+    /// required - sets the necessary FileIO to use for the table
+    pub fn file_io(mut self, file_io: FileIO) -> Self {
+        self.file_io = Some(file_io);
+        self
+    }
+
+    /// optional - sets the tables metadata location
+    pub fn metadata_location<T: Into<String>>(mut self, metadata_location: T) -> Self {
+        self.metadata_location = Some(metadata_location.into());
+        self
+    }
+
+    /// required - passes in the TableMetadata to use for the Table
+    pub fn metadata<T: Into<TableMetadataRef>>(mut self, metadata: T) -> Self {
+        self.metadata = Some(metadata.into());
+        self
+    }
+
+    /// required - passes in the TableIdent to use for the Table
+    pub fn identifier(mut self, identifier: TableIdent) -> Self {
+        self.identifier = Some(identifier);
+        self
+    }
+
+    /// specifies if the Table is readonly or not (default not)
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
+        self
+    }
+
+    /// specifies if the Table's metadata cache will be disabled,
+    /// so that reads of Manifests and ManifestLists will never
+    /// get cached.
+    pub fn disable_cache(mut self) -> Self {
+        self.disable_cache = true;
+        self
+    }
+
+    /// optionally set a non-default metadata cache size
+    pub fn cache_size_bytes(mut self, cache_size_bytes: u64) -> Self {
+        self.cache_size_bytes = Some(cache_size_bytes);
+        self
+    }
+
+    /// build the Table
+    pub fn build(self) -> Result<Table> {
+        let Self {
+            file_io,
+            metadata_location,
+            metadata,
+            identifier,
+            readonly,
+            disable_cache,
+            cache_size_bytes,
+        } = self;
+
+        let Some(file_io) = file_io else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "FileIO must be provided with TableBuilder.file_io()",
+            ));
+        };
+
+        let Some(metadata) = metadata else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "TableMetadataRef must be provided with TableBuilder.metadata()",
+            ));
+        };
+
+        let Some(identifier) = identifier else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "TableIdent must be provided with TableBuilder.identifier()",
+            ));
+        };
+
+        let object_cache = if disable_cache {
+            Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
+        } else if let Some(cache_size_bytes) = cache_size_bytes {
+            Arc::new(ObjectCache::new_with_cache_size(
+                file_io.clone(),
+                cache_size_bytes,
+            ))
+        } else {
+            Arc::new(ObjectCache::new(file_io.clone()))
+        };
+
+        Ok(Table {
+            file_io,
+            metadata_location,
+            metadata,
+            identifier,
+            readonly,
+            object_cache,
+        })
+    }
+}
 
 /// Table represents a table in the catalog.
-#[derive(TypedBuilder, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Table {
     file_io: FileIO,
-    #[builder(default, setter(strip_option, into))]
     metadata_location: Option<String>,
-    #[builder(setter(into))]
     metadata: TableMetadataRef,
     identifier: TableIdent,
-    #[builder(default = false)]
     readonly: bool,
+    object_cache: Arc<ObjectCache>,
 }
 
 impl Table {
+    /// Returns a TableBuilder to build a table
+    pub fn builder() -> TableBuilder {
+        TableBuilder::new()
+    }
+
     /// Returns table identifier.
     pub fn identifier(&self) -> &TableIdent {
         &self.identifier
@@ -60,6 +188,11 @@ impl Table {
     /// Returns file io used in this table.
     pub fn file_io(&self) -> &FileIO {
         &self.file_io
+    }
+
+    /// Returns this table's object cache
+    pub fn object_cache(&self) -> Arc<ObjectCache> {
+        self.object_cache.clone()
     }
 
     /// Creates a table scan.
@@ -117,11 +250,11 @@ impl StaticTable {
         let table = Table::builder()
             .metadata(metadata)
             .identifier(table_ident)
-            .file_io(file_io)
+            .file_io(file_io.clone())
             .readonly(true)
             .build();
 
-        Ok(Self(table))
+        Ok(Self(table?))
     }
     /// Creates a static table directly from metadata file and `FileIO`
     pub async fn from_metadata_file(
@@ -232,8 +365,9 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata)
             .identifier(static_identifier)
-            .file_io(file_io)
-            .build();
+            .file_io(file_io.clone())
+            .build()
+            .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
     }
