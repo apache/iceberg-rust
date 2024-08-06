@@ -29,22 +29,22 @@ use typed_builder::TypedBuilder;
 
 use crate::error::from_sqlx_error;
 
-static CATALOG_TABLE_VIEW_NAME: &str = "iceberg_tables";
-static CATALOG_NAME: &str = "catalog_name";
-static TABLE_NAME: &str = "table_name";
-static TABLE_NAMESPACE: &str = "table_namespace";
-static METADATA_LOCATION_PROP: &str = "metadata_location";
-static PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
-static RECORD_TYPE: &str = "iceberg_type";
+static CATALOG_TABLE_NAME: &str = "iceberg_tables";
+static CATALOG_FIELD_CATALOG_NAME: &str = "catalog_name";
+static CATALOG_FIELD_TABLE_NAME: &str = "table_name";
+static CATALOG_FIELD_TABLE_NAMESPACE: &str = "table_namespace";
+static CATALOG_FIELD_METADATA_LOCATION_PROP: &str = "metadata_location";
+static CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
+static CATALOG_FIELD_RECORD_TYPE: &str = "iceberg_type";
 
-static NAMESPACE_PROPERTIES_TABLE_NAME: &str = "iceberg_namespace_properties";
-static NAMESPACE_NAME: &str = "namespace";
-static NAMESPACE_PROPERTY_KEY: &str = "property_key";
-static NAMESPACE_PROPERTY_VALUE: &str = "property_value";
+static NAMESPACE_TABLE_NAME: &str = "iceberg_namespace_properties";
+static NAMESPACE_FIELD_NAME: &str = "namespace";
+static NAMESPACE_FIELD_PROPERTY_KEY: &str = "property_key";
+static NAMESPACE_FIELD_PROPERTY_VALUE: &str = "property_value";
 
-static MAX_CONNECTIONS: u32 = 10;
-static IDLE_TIMEOUT: u64 = 10;
-static TEST_BEFORE_ACQUIRE: bool = true;
+static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if not provided
+static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
+static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
 /// Sql catalog config
 #[derive(Debug, TypedBuilder)]
@@ -53,6 +53,7 @@ pub struct SqlCatalogConfig {
     name: String,
     warehouse_location: String,
     file_io: FileIO,
+    sql_bind_style: SqlBindStyle,
     #[builder(default)]
     props: HashMap<String, String>,
 }
@@ -64,14 +65,16 @@ pub struct SqlCatalog {
     connection: AnyPool,
     _warehouse_location: String,
     _fileio: FileIO,
-    backend: DatabaseType,
+    sql_bind_style: SqlBindStyle,
 }
 
 #[derive(Debug, PartialEq)]
-enum DatabaseType {
-    PostgreSQL,
-    MySQL,
-    SQLite,
+/// Set the SQL parameter bind style to either $1..$N (Postgres style) or ? (SQLite/MySQL/MariaDB)
+pub enum SqlBindStyle {
+    /// DollarNumeric uses parameters of the form `$1..$N``, which is the Postgres style
+    DollarNumeric,
+    /// QMark uses parameters of the form `?` which is the style for other dialects (SQLite/MySQL/MariaDB)
+    QMark,
 }
 
 impl SqlCatalog {
@@ -102,36 +105,27 @@ impl SqlCatalog {
             .await
             .map_err(from_sqlx_error)?;
 
-        let conn = pool.acquire().await.map_err(from_sqlx_error)?;
-
-        let db_type = match conn.backend_name() {
-            "PostgreSQL" => DatabaseType::PostgreSQL,
-            "MySQL" => DatabaseType::MySQL,
-            "SQLite" => DatabaseType::SQLite,
-            _ => DatabaseType::SQLite,
-        };
-
         sqlx::query(&format!(
-            "CREATE TABLE IF NOT EXISTS {CATALOG_TABLE_VIEW_NAME} (
-                {CATALOG_NAME} VARCHAR(255) NOT NULL,
-                {TABLE_NAMESPACE} VARCHAR(255) NOT NULL,
-                {TABLE_NAME} VARCHAR(255) NOT NULL,
-                {METADATA_LOCATION_PROP} VARCHAR(1000),
-                {PREVIOUS_METADATA_LOCATION_PROP} VARCHAR(1000),
-                {RECORD_TYPE} VARCHAR(5),
-                PRIMARY KEY ({CATALOG_NAME}, {TABLE_NAMESPACE}, {TABLE_NAME}))"
+            "CREATE TABLE IF NOT EXISTS {CATALOG_TABLE_NAME} (
+                {CATALOG_FIELD_CATALOG_NAME} VARCHAR(255) NOT NULL,
+                {CATALOG_FIELD_TABLE_NAMESPACE} VARCHAR(255) NOT NULL,
+                {CATALOG_FIELD_TABLE_NAME} VARCHAR(255) NOT NULL,
+                {CATALOG_FIELD_METADATA_LOCATION_PROP} VARCHAR(1000),
+                {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} VARCHAR(1000),
+                {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5),
+                PRIMARY KEY ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}))"
         ))
         .execute(&pool)
         .await
         .map_err(from_sqlx_error)?;
 
         sqlx::query(&format!(
-            "CREATE TABLE IF NOT EXISTS {NAMESPACE_PROPERTIES_TABLE_NAME} (
-                {CATALOG_NAME} VARCHAR(255) NOT NULL,
-                {NAMESPACE_NAME} VARCHAR(255) NOT NULL,
-                {NAMESPACE_PROPERTY_KEY} VARCHAR(255),
-                {NAMESPACE_PROPERTY_VALUE} VARCHAR(1000),
-                PRIMARY KEY ({CATALOG_NAME}, {NAMESPACE_NAME}, {NAMESPACE_PROPERTY_KEY}))"
+            "CREATE TABLE IF NOT EXISTS {NAMESPACE_TABLE_NAME} (
+                {CATALOG_FIELD_CATALOG_NAME} VARCHAR(255) NOT NULL,
+                {NAMESPACE_FIELD_NAME} VARCHAR(255) NOT NULL,
+                {NAMESPACE_FIELD_PROPERTY_KEY} VARCHAR(255),
+                {NAMESPACE_FIELD_PROPERTY_VALUE} VARCHAR(1000),
+                PRIMARY KEY ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}))"
         ))
         .execute(&pool)
         .await
@@ -142,7 +136,7 @@ impl SqlCatalog {
             connection: pool,
             _warehouse_location: config.warehouse_location,
             _fileio: config.file_io,
-            backend: db_type,
+            sql_bind_style: config.sql_bind_style,
         })
     }
 
@@ -152,15 +146,16 @@ impl SqlCatalog {
         query: &String,
         args: Vec<Option<&String>>,
     ) -> Result<Vec<AnyRow>> {
-        let query_with_placeholders: Cow<str> = if self.backend == DatabaseType::PostgreSQL {
-            let mut query = query.clone();
-            for i in 0..args.len() {
-                query = query.replacen("?", &format!("${}", i + 1), 1);
-            }
-            Cow::Owned(query)
-        } else {
-            Cow::Borrowed(query)
-        };
+        let query_with_placeholders: Cow<str> =
+            if self.sql_bind_style == SqlBindStyle::DollarNumeric {
+                let mut query = query.clone();
+                for i in 0..args.len() {
+                    query = query.replacen("?", &format!("${}", i + 1), 1);
+                }
+                Cow::Owned(query)
+            } else {
+                Cow::Borrowed(query)
+            };
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
         for arg in args {
@@ -251,7 +246,7 @@ mod tests {
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
-    use crate::{SqlCatalog, SqlCatalogConfig};
+    use crate::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
@@ -267,6 +262,7 @@ mod tests {
             .name("iceberg".to_string())
             .warehouse_location(warehouse_location)
             .file_io(FileIOBuilder::new_fs_io().build().unwrap())
+            .sql_bind_style(SqlBindStyle::QMark)
             .build();
 
         SqlCatalog::new(config).await.unwrap()
