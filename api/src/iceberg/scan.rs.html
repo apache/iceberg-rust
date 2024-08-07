@@ -1560,6 +1560,8 @@
 <a href="#1560" id="1560">1560</a>
 <a href="#1561" id="1561">1561</a>
 <a href="#1562" id="1562">1562</a>
+<a href="#1563" id="1563">1563</a>
+<a href="#1564" id="1564">1564</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1623,7 +1625,9 @@
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; TableScanBuilder&lt;<span class="lifetime">'a</span>&gt; {
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>num_cpus = num_cpus::get();
+        <span class="kw">let </span>num_cpus = std::thread::available_parallelism()
+            .expect(<span class="string">"failed to get number of CPUs"</span>)
+            .get();
 
         <span class="self">Self </span>{
             table,
