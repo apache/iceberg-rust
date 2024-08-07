@@ -89,7 +89,6 @@ fn get_gs_path() -> String {
 }
 
 #[tokio::test]
-//#[test_with::env(GCS_BUCKET, GCS_CREDENTIAL_PATH)]
 async fn gcs_exists() {
     let file_io = get_file_io_gcs().await;
     assert!(file_io
