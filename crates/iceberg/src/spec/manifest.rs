@@ -94,6 +94,12 @@ impl Manifest {
         &self.entries
     }
 
+    /// Consume this Manifest, returning its constituent parts
+    pub fn consume(self) -> (Vec<ManifestEntryRef>, ManifestMetadata) {
+        let Self { entries, metadata } = self;
+        (entries, metadata)
+    }
+
     /// Constructor from [`ManifestMetadata`] and [`ManifestEntry`]s.
     pub fn new(metadata: ManifestMetadata, entries: Vec<ManifestEntry>) -> Self {
         Self {
