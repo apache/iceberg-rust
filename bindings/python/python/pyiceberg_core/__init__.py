@@ -15,12 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-target
-Cargo.lock
-.idea
-.vscode
-**/.DS_Store
-dist/*
-**/venv
-*.so
-*.pyc
+from .pyiceberg_core_rust import *
+
+__doc__ = pyiceberg_core_rust.__doc__
+__all__ = pyiceberg_core_rust.__all__
