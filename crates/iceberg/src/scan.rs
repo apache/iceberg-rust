@@ -61,7 +61,9 @@ pub struct TableScanBuilder<'a> {
 
 impl<'a> TableScanBuilder<'a> {
     pub(crate) fn new(table: &'a Table) -> Self {
-        let num_cpus = num_cpus::get();
+        let num_cpus = std::thread::available_parallelism()
+            .expect("failed to get number of CPUs")
+            .get();
 
         Self {
             table,
