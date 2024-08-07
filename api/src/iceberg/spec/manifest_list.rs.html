@@ -1513,6 +1513,11 @@
 <a href="#1513" id="1513">1513</a>
 <a href="#1514" id="1514">1514</a>
 <a href="#1515" id="1515">1515</a>
+<a href="#1516" id="1516">1516</a>
+<a href="#1517" id="1517">1517</a>
+<a href="#1518" id="1518">1518</a>
+<a href="#1519" id="1519">1519</a>
+<a href="#1520" id="1520">1520</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1592,6 +1597,11 @@
     <span class="doccomment">/// Get the entries in the manifest list.
     </span><span class="kw">pub fn </span>entries(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ManifestFile] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.entries
+    }
+
+    <span class="doccomment">/// Take ownership of the entries in the manifest list, consuming it
+    </span><span class="kw">pub fn </span>consume_entries(<span class="self">self</span>) -&gt; <span class="kw">impl </span>IntoIterator&lt;Item = ManifestFile&gt; {
+        Box::new(<span class="self">self</span>.entries.into_iter())
     }
 }
 

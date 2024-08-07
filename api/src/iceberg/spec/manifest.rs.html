@@ -2090,6 +2090,12 @@
 <a href="#2090" id="2090">2090</a>
 <a href="#2091" id="2091">2091</a>
 <a href="#2092" id="2092">2092</a>
+<a href="#2093" id="2093">2093</a>
+<a href="#2094" id="2094">2094</a>
+<a href="#2095" id="2095">2095</a>
+<a href="#2096" id="2096">2096</a>
+<a href="#2097" id="2097">2097</a>
+<a href="#2098" id="2098">2098</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2184,6 +2190,12 @@
     <span class="doccomment">/// Entries slice.
     </span><span class="kw">pub fn </span>entries(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ManifestEntryRef] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.entries
+    }
+
+    <span class="doccomment">/// Consume this Manifest, returning its constituent parts
+    </span><span class="kw">pub fn </span>consume(<span class="self">self</span>) -&gt; (Vec&lt;ManifestEntryRef&gt;, ManifestMetadata) {
+        <span class="kw">let </span><span class="self">Self </span>{ entries, metadata } = <span class="self">self</span>;
+        (entries, metadata)
     }
 
     <span class="doccomment">/// Constructor from [`ManifestMetadata`] and [`ManifestEntry`]s.
