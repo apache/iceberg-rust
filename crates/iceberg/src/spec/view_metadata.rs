@@ -24,7 +24,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use _serde::ViewMetadataEnum;
-use chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
@@ -32,7 +32,7 @@ use uuid::Uuid;
 use super::view_version::{ViewVersion, ViewVersionId, ViewVersionRef};
 use super::{SchemaId, SchemaRef};
 use crate::catalog::ViewCreation;
-use crate::error::Result;
+use crate::error::{timestamp_ms_to_utc, Result};
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
@@ -238,8 +238,8 @@ impl ViewVersionLog {
     }
 
     /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision.
-    pub fn timestamp(self) -> MappedLocalTime<DateTime<Utc>> {
-        Utc.timestamp_millis_opt(self.timestamp_ms)
+    pub fn timestamp(self) -> Result<DateTime<Utc>> {
+        timestamp_ms_to_utc(self.timestamp_ms)
     }
 }
 
