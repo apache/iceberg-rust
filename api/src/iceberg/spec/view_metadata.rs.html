@@ -752,7 +752,7 @@
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>_serde::ViewMetadataEnum;
-<span class="kw">use </span>chrono::{DateTime, MappedLocalTime, TimeZone, Utc};
+<span class="kw">use </span>chrono::{DateTime, Utc};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>serde_repr::{Deserialize_repr, Serialize_repr};
 <span class="kw">use </span>uuid::Uuid;
@@ -760,7 +760,7 @@
 <span class="kw">use </span><span class="kw">super</span>::view_version::{ViewVersion, ViewVersionId, ViewVersionRef};
 <span class="kw">use super</span>::{SchemaId, SchemaRef};
 <span class="kw">use </span><span class="kw">crate</span>::catalog::ViewCreation;
-<span class="kw">use </span><span class="kw">crate</span>::error::Result;
+<span class="kw">use </span><span class="kw">crate</span>::error::{timestamp_ms_to_utc, <span class="prelude-ty">Result</span>};
 
 <span class="doccomment">/// Reference to [`ViewMetadata`].
 </span><span class="kw">pub type </span>ViewMetadataRef = Arc&lt;ViewMetadata&gt;;
@@ -966,8 +966,8 @@
     }
 
     <span class="doccomment">/// Returns the last updated timestamp as a DateTime&lt;Utc&gt; with millisecond precision.
-    </span><span class="kw">pub fn </span>timestamp(<span class="self">self</span>) -&gt; MappedLocalTime&lt;DateTime&lt;Utc&gt;&gt; {
-        Utc.timestamp_millis_opt(<span class="self">self</span>.timestamp_ms)
+    </span><span class="kw">pub fn </span>timestamp(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DateTime&lt;Utc&gt;&gt; {
+        timestamp_ms_to_utc(<span class="self">self</span>.timestamp_ms)
     }
 }
 
