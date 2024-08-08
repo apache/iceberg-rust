@@ -649,19 +649,27 @@ mod tests {
         AvroSchema::parse_str(input.as_str()).unwrap()
     }
 
-    fn check_schema_conversion(avro_schema: AvroSchema, expected_iceberg_schema: Schema) {
+    /// Help function to check schema conversion between avro and iceberg:
+    /// 1. avro to iceberg
+    /// 2. iceberg to avro
+    /// 3. iceberg to avro to iceberg back
+    fn check_schema_conversion(avro_schema: AvroSchema, iceberg_schema: Schema) {
+        // 1. avro to iceberg
         let converted_iceberg_schema = avro_schema_to_schema(&avro_schema).unwrap();
-        assert_eq!(expected_iceberg_schema, converted_iceberg_schema);
+        assert_eq!(iceberg_schema, converted_iceberg_schema);
 
+        // 2. iceberg to avro
         let converted_avro_schema = schema_to_avro_schema(
             avro_schema.name().unwrap().fullname(Namespace::None),
-            &expected_iceberg_schema,
+            &iceberg_schema,
         )
         .unwrap();
         assert_eq!(avro_schema, converted_avro_schema);
 
-        let converted_converted_iceberg_schema = avro_schema_to_schema(&avro_schema).unwrap();
-        assert_eq!(expected_iceberg_schema, converted_converted_iceberg_schema);
+        // 3.iceberg to avro to iceberg back
+        let converted_avro_converted_iceberg_schema =
+            avro_schema_to_schema(&converted_avro_schema).unwrap();
+        assert_eq!(iceberg_schema, converted_avro_converted_iceberg_schema);
     }
 
     #[test]
