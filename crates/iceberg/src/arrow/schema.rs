@@ -649,178 +649,106 @@ mod tests {
     use super::*;
     use crate::spec::Schema;
 
+    /**
+     * Create a simple field with metadata.
+     */
+    fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
+        Field::new(name, ty, nullable).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            value.to_string(),
+        )]))
+    }
+
     fn arrow_schema_for_arrow_schema_to_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
-            Field::new("key", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "17".to_string(),
-            )])),
-            Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "18".to_string(),
-            )])),
+            simple_field("key", DataType::Int32, false, "17"),
+            simple_field("value", DataType::Utf8, true, "18"),
         ]);
 
         let r#struct = DataType::Struct(fields);
         let map = DataType::Map(
-            Arc::new(
-                Field::new(DEFAULT_MAP_FIELD_NAME, r#struct, false).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "19".to_string()),
-                ])),
-            ),
+            Arc::new(simple_field(DEFAULT_MAP_FIELD_NAME, r#struct, false, "17")),
             false,
         );
 
         let fields = Fields::from(vec![
-            Field::new("aa", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "18".to_string(),
-            )])),
-            Field::new("bb", DataType::Utf8, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "19".to_string(),
-            )])),
-            Field::new(
+            simple_field("aa", DataType::Int32, false, "18"),
+            simple_field("bb", DataType::Utf8, true, "19"),
+            simple_field(
                 "cc",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "20".to_string(),
-            )])),
+                "20",
+            ),
         ]);
 
         let r#struct = DataType::Struct(fields);
 
         ArrowSchema::new(vec![
-            Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
-            Field::new("b", DataType::Int64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("c", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "3".to_string(),
-            )])),
-            Field::new("n", DataType::LargeUtf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "21".to_string(),
-            )])),
-            Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true).with_metadata(
-                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+            simple_field("a", DataType::Int32, false, "2"),
+            simple_field("b", DataType::Int64, false, "1"),
+            simple_field("c", DataType::Utf8, false, "3"),
+            simple_field("n", DataType::Utf8, false, "21"),
+            simple_field(
+                "d",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+                "4",
             ),
-            Field::new("e", DataType::Boolean, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "6".to_string(),
-            )])),
-            Field::new("f", DataType::Float32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "5".to_string(),
-            )])),
-            Field::new("g", DataType::Float64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "7".to_string(),
-            )])),
-            Field::new("p", DataType::Decimal128(10, 2), false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "27".to_string(),
-            )])),
-            Field::new("h", DataType::Date32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "8".to_string(),
-            )])),
-            Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
-                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "9".to_string())]),
-            ),
-            Field::new(
+            simple_field("e", DataType::Boolean, true, "6"),
+            simple_field("f", DataType::Float32, false, "5"),
+            simple_field("g", DataType::Float64, false, "7"),
+            simple_field("p", DataType::Decimal128(10, 2), false, "27"),
+            simple_field("h", DataType::Date32, false, "8"),
+            simple_field("i", DataType::Time64(TimeUnit::Microsecond), false, "9"),
+            simple_field(
                 "j",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "10".to_string(),
-            )])),
-            Field::new(
+                "10",
+            ),
+            simple_field(
                 "k",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "12".to_string(),
-            )])),
-            Field::new("l", DataType::Binary, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "13".to_string(),
-            )])),
-            Field::new("o", DataType::LargeBinary, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "22".to_string(),
-            )])),
-            Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "11".to_string(),
-            )])),
-            Field::new(
+                "12",
+            ),
+            simple_field("l", DataType::Binary, false, "13"),
+            simple_field("o", DataType::LargeBinary, false, "22"),
+            simple_field("m", DataType::FixedSizeBinary(10), false, "11"),
+            simple_field(
                 "list",
-                DataType::List(Arc::new(
-                    Field::new("element", DataType::Int32, false).with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "15".to_string(),
-                    )])),
-                )),
+                DataType::List(Arc::new(simple_field(
+                    "element",
+                    DataType::Int32,
+                    false,
+                    "15",
+                ))),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "14".to_string(),
-            )])),
-            Field::new(
+                "14",
+            ),
+            simple_field(
                 "large_list",
-                DataType::LargeList(Arc::new(
-                    Field::new("element", DataType::Utf8, false).with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "23".to_string(),
-                    )])),
-                )),
+                DataType::LargeList(Arc::new(simple_field(
+                    "element",
+                    DataType::Utf8,
+                    false,
+                    "23",
+                ))),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "24".to_string(),
-            )])),
-            Field::new(
+                "24",
+            ),
+            simple_field(
                 "fixed_list",
                 DataType::FixedSizeList(
-                    Arc::new(
-                        Field::new("element", DataType::Binary, false).with_metadata(
-                            HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "26".to_string(),
-                            )]),
-                        ),
-                    ),
+                    Arc::new(simple_field("element", DataType::Binary, false, "26")),
                     10,
                 ),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "25".to_string(),
-            )])),
-            Field::new("map", map, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "16".to_string(),
-            )])),
-            Field::new("struct", r#struct, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "17".to_string(),
-            )])),
+                "25",
+            ),
+            simple_field("map", map, false, "16"),
+            simple_field("struct", r#struct, false, "17"),
         ])
     }
 
@@ -1017,14 +945,8 @@ mod tests {
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
-            Field::new("key", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "17".to_string(),
-            )])),
-            Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "18".to_string(),
-            )])),
+            simple_field("key", DataType::Int32, false, "17"),
+            simple_field("value", DataType::Utf8, true, "18"),
         ]);
 
         let r#struct = DataType::Struct(fields);
@@ -1034,152 +956,86 @@ mod tests {
         );
 
         let fields = Fields::from(vec![
-            Field::new("aa", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "18".to_string(),
-            )])),
-            Field::new("bb", DataType::Utf8, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "19".to_string(),
-            )])),
-            Field::new(
+            simple_field("aa", DataType::Int32, false, "18"),
+            simple_field("bb", DataType::Utf8, true, "19"),
+            simple_field(
                 "cc",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "20".to_string(),
-            )])),
+                "20",
+            ),
         ]);
 
         let r#struct = DataType::Struct(fields);
 
         ArrowSchema::new(vec![
-            Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
-            Field::new("b", DataType::Int64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new("c", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "3".to_string(),
-            )])),
-            Field::new("n", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "21".to_string(),
-            )])),
-            Field::new("d", DataType::Timestamp(TimeUnit::Microsecond, None), true).with_metadata(
-                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+            simple_field("a", DataType::Int32, false, "2"),
+            simple_field("b", DataType::Int64, false, "1"),
+            simple_field("c", DataType::Utf8, false, "3"),
+            simple_field("n", DataType::Utf8, false, "21"),
+            simple_field(
+                "d",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+                "4",
             ),
-            Field::new("e", DataType::Boolean, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "6".to_string(),
-            )])),
-            Field::new("f", DataType::Float32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "5".to_string(),
-            )])),
-            Field::new("g", DataType::Float64, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "7".to_string(),
-            )])),
-            Field::new("p", DataType::Decimal128(10, 2), false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "27".to_string(),
-            )])),
-            Field::new("h", DataType::Date32, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "8".to_string(),
-            )])),
-            Field::new("i", DataType::Time64(TimeUnit::Microsecond), false).with_metadata(
-                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "9".to_string())]),
-            ),
-            Field::new(
+            simple_field("e", DataType::Boolean, true, "6"),
+            simple_field("f", DataType::Float32, false, "5"),
+            simple_field("g", DataType::Float64, false, "7"),
+            simple_field("p", DataType::Decimal128(10, 2), false, "27"),
+            simple_field("h", DataType::Date32, false, "8"),
+            simple_field("i", DataType::Time64(TimeUnit::Microsecond), false, "9"),
+            simple_field(
                 "j",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "10".to_string(),
-            )])),
-            Field::new(
+                "10",
+            ),
+            simple_field(
                 "k",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
                 false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "12".to_string(),
-            )])),
-            Field::new("l", DataType::LargeBinary, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "13".to_string(),
-            )])),
-            Field::new("o", DataType::LargeBinary, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "22".to_string(),
-            )])),
-            Field::new("m", DataType::FixedSizeBinary(10), false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "11".to_string(),
-            )])),
-            Field::new(
+                "12",
+            ),
+            simple_field("l", DataType::LargeBinary, false, "13"),
+            simple_field("o", DataType::LargeBinary, false, "22"),
+            simple_field("m", DataType::FixedSizeBinary(10), false, "11"),
+            simple_field(
                 "list",
-                DataType::List(Arc::new(
-                    Field::new("element", DataType::Int32, false).with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "15".to_string(),
-                    )])),
-                )),
+                DataType::List(Arc::new(simple_field(
+                    "element",
+                    DataType::Int32,
+                    false,
+                    "15",
+                ))),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "14".to_string(),
-            )])),
-            Field::new(
+                "14",
+            ),
+            simple_field(
                 "large_list",
-                DataType::List(Arc::new(
-                    Field::new("element", DataType::Utf8, false).with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "23".to_string(),
-                    )])),
-                )),
+                DataType::List(Arc::new(simple_field(
+                    "element",
+                    DataType::Utf8,
+                    false,
+                    "23",
+                ))),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "24".to_string(),
-            )])),
-            Field::new(
+                "24",
+            ),
+            simple_field(
                 "fixed_list",
-                DataType::List(Arc::new(
-                    Field::new("element", DataType::LargeBinary, false).with_metadata(
-                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "26".to_string())]),
-                    ),
-                )),
+                DataType::List(Arc::new(simple_field(
+                    "element",
+                    DataType::LargeBinary,
+                    false,
+                    "26",
+                ))),
                 true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "25".to_string(),
-            )])),
-            Field::new("map", map, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "16".to_string(),
-            )])),
-            Field::new("struct", r#struct, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "17".to_string(),
-            )])),
-            Field::new("uuid", DataType::FixedSizeBinary(16), false).with_metadata(HashMap::from(
-                [(PARQUET_FIELD_ID_META_KEY.to_string(), "26".to_string())],
-            )),
+                "25",
+            ),
+            simple_field("map", map, false, "16"),
+            simple_field("struct", r#struct, false, "17"),
+            simple_field("uuid", DataType::FixedSizeBinary(16), false, "26"),
         ])
     }
 
