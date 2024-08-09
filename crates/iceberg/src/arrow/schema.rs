@@ -649,9 +649,7 @@ mod tests {
     use super::*;
     use crate::spec::Schema;
 
-    /**
-     * Create a simple field with metadata.
-     */
+    /// Create a simple field with metadata.
     fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
         Field::new(name, ty, nullable).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
