@@ -130,7 +130,7 @@ impl TableBuilder {
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
-            Arc::new(ObjectCache::new_with_cache_size(
+            Arc::new(ObjectCache::new_with_capacity(
                 file_io.clone(),
                 cache_size_bytes,
             ))

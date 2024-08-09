@@ -23,7 +23,7 @@ use crate::spec::{
 };
 use crate::{Error, ErrorKind, Result};
 
-const DEFAULT_CACHE_SIZE_BYTES: u64 = 2 ^ 15; // 32MB
+const DEFAULT_CACHE_SIZE_BYTES: u64 = 32 * 1024 * 1024; // 32MB
 
 #[derive(Clone, Debug)]
 pub(crate) enum CachedItem {
@@ -49,12 +49,12 @@ impl ObjectCache {
     /// Creates a new [`ObjectCache`]
     /// with the default cache size
     pub(crate) fn new(file_io: FileIO) -> Self {
-        Self::new_with_cache_size(file_io, DEFAULT_CACHE_SIZE_BYTES)
+        Self::new_with_capacity(file_io, DEFAULT_CACHE_SIZE_BYTES)
     }
 
     /// Creates a new [`ObjectCache`]
     /// with a specific cache size
-    pub(crate) fn new_with_cache_size(file_io: FileIO, cache_size_bytes: u64) -> Self {
+    pub(crate) fn new_with_capacity(file_io: FileIO, cache_size_bytes: u64) -> Self {
         if cache_size_bytes == 0 {
             Self::with_disabled_cache(file_io)
         } else {
