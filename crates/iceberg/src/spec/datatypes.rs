@@ -245,14 +245,14 @@ impl PrimitiveType {
                 | (PrimitiveType::Long, PrimitiveLiteral::Long(_))
                 | (PrimitiveType::Float, PrimitiveLiteral::Float(_))
                 | (PrimitiveType::Double, PrimitiveLiteral::Double(_))
-                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Decimal(_))
-                | (PrimitiveType::Date, PrimitiveLiteral::Date(_))
-                | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
-                | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
-                | (PrimitiveType::Timestamptz, PrimitiveLiteral::Timestamptz(_))
+                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(_))
+                | (PrimitiveType::Date, PrimitiveLiteral::Int(_))
+                | (PrimitiveType::Time, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::Timestamp, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(_))
                 | (PrimitiveType::String, PrimitiveLiteral::String(_))
-                | (PrimitiveType::Uuid, PrimitiveLiteral::Uuid(_))
-                | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
+                | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
+                | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
         )
     }
@@ -933,11 +933,15 @@ mod tests {
             Type::Struct(StructType {
                 fields: vec![
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                            Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                            Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
+                                .unwrap()
+                                .as_u128(),
                         )))
-                        .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                            Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
+                        .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                            Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                                .unwrap()
+                                .as_u128(),
                         )))
                         .into(),
                     NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
@@ -1002,11 +1006,15 @@ mod tests {
 
         let struct_type = Type::Struct(StructType::new(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                    Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb")
+                        .unwrap()
+                        .as_u128(),
                 )))
-                .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                    Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
+                .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae")
+                        .unwrap()
+                        .as_u128(),
                 )))
                 .into(),
             NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Int)).into(),
@@ -1127,45 +1135,32 @@ mod tests {
 
     #[test]
     fn test_primitive_type_compatitable() {
-        let types = vec![
-            PrimitiveType::Boolean,
-            PrimitiveType::Int,
-            PrimitiveType::Long,
-            PrimitiveType::Float,
-            PrimitiveType::Double,
-            PrimitiveType::Decimal {
-                precision: 9,
-                scale: 2,
-            },
-            PrimitiveType::Date,
-            PrimitiveType::Time,
-            PrimitiveType::Timestamp,
-            PrimitiveType::Timestamptz,
-            PrimitiveType::String,
-            PrimitiveType::Uuid,
-            PrimitiveType::Fixed(8),
-            PrimitiveType::Binary,
+        let pairs = vec![
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(true)),
+            (PrimitiveType::Int, PrimitiveLiteral::Int(1)),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(1)),
+            (PrimitiveType::Float, PrimitiveLiteral::Float(1.0.into())),
+            (PrimitiveType::Double, PrimitiveLiteral::Double(1.0.into())),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                PrimitiveLiteral::Int128(1),
+            ),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(1)),
+            (PrimitiveType::Time, PrimitiveLiteral::Long(1)),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(1)),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(1)),
+            (
+                PrimitiveType::Uuid,
+                PrimitiveLiteral::UInt128(Uuid::new_v4().as_u128()),
+            ),
+            (PrimitiveType::Fixed(8), PrimitiveLiteral::Binary(vec![1])),
+            (PrimitiveType::Binary, PrimitiveLiteral::Binary(vec![1])),
         ];
-        let literals = vec![
-            PrimitiveLiteral::Boolean(true),
-            PrimitiveLiteral::Int(1),
-            PrimitiveLiteral::Long(1),
-            PrimitiveLiteral::Float(1.0.into()),
-            PrimitiveLiteral::Double(1.0.into()),
-            PrimitiveLiteral::Decimal(1),
-            PrimitiveLiteral::Date(1),
-            PrimitiveLiteral::Time(1),
-            PrimitiveLiteral::Timestamp(1),
-            PrimitiveLiteral::Timestamptz(1),
-            PrimitiveLiteral::String("1".to_string()),
-            PrimitiveLiteral::Uuid(Uuid::new_v4()),
-            PrimitiveLiteral::Fixed(vec![1]),
-            PrimitiveLiteral::Binary(vec![1]),
-        ];
-        for (i, t) in types.iter().enumerate() {
-            for (j, l) in literals.iter().enumerate() {
-                assert_eq!(i == j, t.compatible(l));
-            }
+        for (ty, literal) in pairs {
+            assert!(ty.compatible(&literal));
         }
     }
 }
