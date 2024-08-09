@@ -347,9 +347,7 @@ impl MinMaxColAggregator {
                 let convert_func = |v: ByteArray| -> Result<Datum> {
                     Result::<Datum>::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from_le_bytes(
-                            v.data().try_into().unwrap(),
-                        )),
+                        PrimitiveLiteral::Int128(i128::from_le_bytes(v.data().try_into().unwrap())),
                     ))
                 };
                 self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
@@ -364,7 +362,7 @@ impl MinMaxColAggregator {
                 let convert_func = |v: i32| {
                     Result::<Datum>::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from(v)),
+                        PrimitiveLiteral::Int128(i128::from(v)),
                     ))
                 };
                 self.update_state::<Int32Type>(field_id, &stat, convert_func)
@@ -379,7 +377,7 @@ impl MinMaxColAggregator {
                 let convert_func = |v: i64| {
                     Result::<Datum>::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from(v)),
+                        PrimitiveLiteral::Int128(i128::from(v)),
                     ))
                 };
                 self.update_state::<Int64Type>(field_id, &stat, convert_func)
@@ -1180,7 +1178,7 @@ mod tests {
                             precision: 10,
                             scale: 5
                         },
-                        PrimitiveLiteral::Decimal(1)
+                        PrimitiveLiteral::Int128(1)
                     )
                 ),
                 (12, Datum::uuid(Uuid::from_u128(0))),
@@ -1210,7 +1208,7 @@ mod tests {
                             precision: 10,
                             scale: 5
                         },
-                        PrimitiveLiteral::Decimal(100)
+                        PrimitiveLiteral::Int128(100)
                     )
                 ),
                 (12, Datum::uuid(Uuid::from_u128(3))),
