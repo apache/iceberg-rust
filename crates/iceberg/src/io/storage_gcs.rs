@@ -45,6 +45,8 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
 
     if m.remove(GCS_NO_AUTH).is_some() {
         cfg.allow_anonymous = true;
+        cfg.disable_vm_metadata = true;
+        cfg.disable_config_load = true;
     }
 
     Ok(cfg)
