@@ -649,7 +649,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (420034, 411288)"),
+            Some("name IN (411288, 420034)"),
         )?;
 
         fixture.assert_projection(
