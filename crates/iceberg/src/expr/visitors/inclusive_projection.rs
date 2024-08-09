@@ -236,6 +236,7 @@ mod tests {
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{
         Datum, NestedField, PartitionField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
+        UnboundPartitionField,
     };
 
     fn build_test_schema() -> Schema {
@@ -265,9 +266,8 @@ mod tests {
     fn test_inclusive_projection_logic_ops() {
         let schema = build_test_schema();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(1)
-            .with_fields(vec![])
             .build()
             .unwrap();
 
@@ -296,14 +296,17 @@ mod tests {
     fn test_inclusive_projection_identity_transform() {
         let schema = build_test_schema();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(1)
-            .with_fields(vec![PartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_id(1)
+                    .name("a".to_string())
+                    .partition_id(1)
+                    .transform(Transform::Identity)
+                    .build(),
+            )
+            .unwrap()
             .build()
             .unwrap();
 
@@ -330,30 +333,31 @@ mod tests {
     fn test_inclusive_projection_date_transforms() {
         let schema = build_test_schema();
 
-        let partition_spec = PartitionSpec::builder()
-            .with_spec_id(1)
-            .with_fields(vec![
-                PartitionField::builder()
-                    .source_id(2)
-                    .name("year".to_string())
-                    .field_id(2)
-                    .transform(Transform::Year)
-                    .build(),
-                PartitionField::builder()
-                    .source_id(2)
-                    .name("month".to_string())
-                    .field_id(2)
-                    .transform(Transform::Month)
-                    .build(),
-                PartitionField::builder()
-                    .source_id(2)
-                    .name("day".to_string())
-                    .field_id(2)
-                    .transform(Transform::Day)
-                    .build(),
-            ])
-            .build()
-            .unwrap();
+        // ToDo: We cannot use the builder here as having multiple transforms on
+        // a single field is not allowed. Should we keep this test?
+        let partition_spec = PartitionSpec {
+            spec_id: 1,
+            fields: vec![
+                PartitionField {
+                    source_id: 2,
+                    name: "year".to_string(),
+                    field_id: 1000,
+                    transform: Transform::Year,
+                },
+                PartitionField {
+                    source_id: 2,
+                    name: "month".to_string(),
+                    field_id: 1001,
+                    transform: Transform::Month,
+                },
+                PartitionField {
+                    source_id: 2,
+                    name: "day".to_string(),
+                    field_id: 1002,
+                    transform: Transform::Day,
+                },
+            ],
+        };
 
         let arc_schema = Arc::new(schema);
         let arc_partition_spec = Arc::new(partition_spec);
@@ -378,14 +382,17 @@ mod tests {
     fn test_inclusive_projection_truncate_transform() {
         let schema = build_test_schema();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(1)
-            .with_fields(vec![PartitionField::builder()
-                .source_id(3)
-                .name("name".to_string())
-                .field_id(3)
-                .transform(Transform::Truncate(4))
-                .build()])
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_id(3)
+                    .name("name_truncate".to_string())
+                    .partition_id(3)
+                    .transform(Transform::Truncate(4))
+                    .build(),
+            )
+            .unwrap()
             .build()
             .unwrap();
 
@@ -398,7 +405,7 @@ mod tests {
 
         // applying InclusiveProjection to bound_predicate
         // should result in the 'name STARTS WITH "Testy McTest"'
-        // predicate being transformed to 'name STARTS WITH "Test"',
+        // predicate being transformed to 'name_truncate STARTS WITH "Test"',
         // since a `Truncate(4)` partition will map values of
         // name that start with "Testy McTest" into a partition
         // for values of name that start with the first four letters
@@ -406,7 +413,7 @@ mod tests {
         let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
-        let expected = "name STARTS WITH \"Test\"".to_string();
+        let expected = "name_truncate STARTS WITH \"Test\"".to_string();
 
         assert_eq!(result.to_string(), expected)
     }
@@ -415,14 +422,17 @@ mod tests {
     fn test_inclusive_projection_bucket_transform() {
         let schema = build_test_schema();
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(1)
-            .with_fields(vec![PartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Bucket(7))
-                .build()])
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_id(1)
+                    .name("a_bucket[7]".to_string())
+                    .partition_id(1)
+                    .transform(Transform::Bucket(7))
+                    .build(),
+            )
+            .unwrap()
             .build()
             .unwrap();
 
@@ -440,7 +450,7 @@ mod tests {
         let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
-        let expected = "a = 2".to_string();
+        let expected = "a_bucket[7] = 2".to_string();
 
         assert_eq!(result.to_string(), expected)
     }
