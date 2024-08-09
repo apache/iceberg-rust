@@ -4,6 +4,7 @@ var srcIndex = new Map(JSON.parse('[\
 ["iceberg_catalog_hms",["",[],["catalog.rs","error.rs","lib.rs","schema.rs","utils.rs"]]],\
 ["iceberg_catalog_memory",["",[],["catalog.rs","lib.rs","namespace_state.rs"]]],\
 ["iceberg_catalog_rest",["",[],["catalog.rs","client.rs","lib.rs","types.rs"]]],\
+["iceberg_catalog_sql",["",[],["catalog.rs","error.rs","lib.rs"]]],\
 ["iceberg_datafusion",["",[["physical_plan",[],["mod.rs","scan.rs"]]],["catalog.rs","error.rs","lib.rs","schema.rs","table.rs"]]],\
 ["iceberg_test_utils",["",[],["cmd.rs","docker.rs","lib.rs"]]]\
 ]'));
