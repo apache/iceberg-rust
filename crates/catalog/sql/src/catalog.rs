@@ -25,8 +25,8 @@ use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
 };
-use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyRow};
-use sqlx::{AnyPool, Row};
+use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
+use sqlx::{Any, AnyConnection, AnyPool, Executor, Pool, Row, Transaction};
 use typed_builder::TypedBuilder;
 
 use crate::error::{from_sqlx_error, no_such_namespace_err};
@@ -143,11 +143,12 @@ impl SqlCatalog {
     }
 
     /// SQLX Any does not implement PostgresSQL bindings, so we have to do this.
-    pub async fn execute_statement(
+    pub async fn fetch_rows(
         &self,
         query: &String,
         args: Vec<Option<&String>>,
     ) -> Result<Vec<AnyRow>> {
+        // TODO: move this out to a function
         let query_with_placeholders: Cow<str> =
             if self.sql_bind_style == SqlBindStyle::DollarNumeric {
                 let mut query = query.clone();
@@ -168,6 +169,40 @@ impl SqlCatalog {
             .fetch_all(&self.connection)
             .await
             .map_err(from_sqlx_error)
+    }
+    /// Execute statements in a transaction, provided or not
+    pub async fn execute(
+        &self,
+        query: &String,
+        args: Vec<Option<&String>>,
+        transaction: Option<&mut Transaction<'_, Any>>,
+    ) -> Result<AnyQueryResult> {
+        // TODO: move this out to a function
+        let query_with_placeholders: Cow<str> =
+            if self.sql_bind_style == SqlBindStyle::DollarNumeric {
+                let mut query = query.clone();
+                for i in 0..args.len() {
+                    query = query.replacen("?", &format!("${}", i + 1), 1);
+                }
+                Cow::Owned(query)
+            } else {
+                Cow::Borrowed(query)
+            };
+
+        let mut sqlx_query = sqlx::query(&query_with_placeholders);
+        for arg in args {
+            sqlx_query = sqlx_query.bind(arg);
+        }
+
+        match transaction {
+            Some(t) => sqlx_query.execute(&mut **t).await.map_err(from_sqlx_error),
+            None => {
+                let mut tx = self.connection.begin().await.map_err(from_sqlx_error)?;
+                let result = sqlx_query.execute(&mut *tx).await.map_err(from_sqlx_error);
+                let _ = tx.commit().await.map_err(from_sqlx_error);
+                result
+            }
+        }
     }
 }
 
@@ -198,7 +233,7 @@ impl Catalog for SqlCatalog {
                         format!("{namespaces_stmt} AND {NAMESPACE_FIELD_NAME} LIKE CONCAT(?, '%')");
 
                     let namespace_rows = self
-                        .execute_statement(
+                        .fetch_rows(
                             &format!(
                                 "{parent_namespaces_stmt} UNION {parent_table_namespaces_stmt}"
                             ),
@@ -223,7 +258,7 @@ impl Catalog for SqlCatalog {
             },
             None => {
                 let namespace_rows = self
-                    .execute_statement(
+                    .fetch_rows(
                         &format!("{namespaces_stmt} UNION {table_namespaces_stmt}"),
                         vec![Some(&self.name), Some(&self.name)],
                     )
@@ -274,18 +309,21 @@ impl Catalog for SqlCatalog {
                     }
                 }
 
-                self.execute_statement(&properties_insert, query_args)
-                    .await?;
+                self.execute(&properties_insert, query_args, None).await?;
 
                 Ok(Namespace::with_properties(namespace.clone(), properties))
             } else {
                 // set a default property of exists = true
-                self.execute_statement(&insert, vec![
-                    Some(&self.name),
-                    Some(&namespace_str),
-                    Some(&"exists".to_string()),
-                    Some(&"true".to_string()),
-                ])
+                self.execute(
+                    &insert,
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace_str),
+                        Some(&"exists".to_string()),
+                        Some(&"true".to_string()),
+                    ],
+                    None,
+                )
                 .await?;
                 Ok(Namespace::with_properties(namespace.clone(), properties))
             }
@@ -296,7 +334,7 @@ impl Catalog for SqlCatalog {
         let exists = self.namespace_exists(namespace).await?;
         if exists {
             let namespace_props = self
-                .execute_statement(
+                .fetch_rows(
                     &format!(
                         "SELECT
                             {NAMESPACE_FIELD_NAME},
@@ -332,7 +370,7 @@ impl Catalog for SqlCatalog {
         let namespace_str = namespace.join(".");
 
         let table_namespaces = self
-            .execute_statement(
+            .fetch_rows(
                 &format!(
                     "SELECT 1 FROM {CATALOG_TABLE_NAME}
                      WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
@@ -347,7 +385,7 @@ impl Catalog for SqlCatalog {
             Ok(true)
         } else {
             let namespaces = self
-                .execute_statement(
+                .fetch_rows(
                     &format!(
                         "SELECT 1 FROM {NAMESPACE_TABLE_NAME}
                          WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
@@ -367,10 +405,74 @@ impl Catalog for SqlCatalog {
 
     async fn update_namespace(
         &self,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<()> {
-        todo!()
+        let exists = self.namespace_exists(namespace).await?;
+        if exists {
+            let existing_properties = self.get_namespace(namespace).await?.properties().clone();
+            let namespace_str = namespace.join(".");
+
+            let mut updates = vec![];
+            let mut inserts = vec![];
+
+            for (key, value) in properties.iter() {
+                if existing_properties.contains_key(key) {
+                    if existing_properties.get(key) != Some(value) {
+                        updates.push((key, value));
+                    }
+                } else {
+                    inserts.push((key, value));
+                }
+            }
+
+            let mut tx = self.connection.begin().await.map_err(from_sqlx_error)?;
+            let update_stmt = format!(
+                "UPDATE {NAMESPACE_TABLE_NAME} SET {NAMESPACE_FIELD_PROPERTY_VALUE} = ?
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ? 
+                 AND {NAMESPACE_FIELD_NAME} = ?
+                 AND {NAMESPACE_FIELD_PROPERTY_KEY} = ?"
+            );
+
+            let insert_stmt = format!(
+                "INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
+                 VALUES (?, ?, ?, ?)"
+            );
+
+            for (key, value) in updates {
+                self.execute(
+                    &update_stmt,
+                    vec![
+                        Some(value),
+                        Some(&self.name),
+                        Some(&namespace_str),
+                        Some(key),
+                    ],
+                    Some(&mut tx),
+                )
+                .await?;
+            }
+
+            for (key, value) in inserts {
+                self.execute(
+                    &insert_stmt,
+                    vec![
+                        Some(&self.name),
+                        Some(&namespace_str),
+                        Some(key),
+                        Some(value),
+                    ],
+                    Some(&mut tx),
+                )
+                .await?;
+            }
+
+            let _ = tx.commit().await.map_err(from_sqlx_error)?;
+
+            Ok(())
+        } else {
+            no_such_namespace_err(namespace)
+        }
     }
 
     async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
