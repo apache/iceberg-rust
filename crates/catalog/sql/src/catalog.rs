@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -26,7 +25,7 @@ use iceberg::{
     Catalog, Error, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
-use sqlx::{Any, AnyConnection, AnyPool, Executor, Pool, Row, Transaction};
+use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
 
 use crate::error::{from_sqlx_error, no_such_namespace_err};
@@ -143,22 +142,24 @@ impl SqlCatalog {
     }
 
     /// SQLX Any does not implement PostgresSQL bindings, so we have to do this.
-    pub async fn fetch_rows(
-        &self,
-        query: &String,
-        args: Vec<Option<&String>>,
-    ) -> Result<Vec<AnyRow>> {
-        // TODO: move this out to a function
-        let query_with_placeholders: Cow<str> =
-            if self.sql_bind_style == SqlBindStyle::DollarNumeric {
-                let mut query = query.clone();
-                for i in 0..args.len() {
-                    query = query.replacen("?", &format!("${}", i + 1), 1);
+    pub fn build_query(&self, query: &str) -> String {
+        match self.sql_bind_style {
+            SqlBindStyle::DollarNumeric => {
+                let mut query = query.to_owned();
+                let mut i = 1;
+                while let Some(pos) = query.find('?') {
+                    query.replace_range(pos..pos + 1, &format!("${}", i));
+                    i += 1;
                 }
-                Cow::Owned(query)
-            } else {
-                Cow::Borrowed(query)
-            };
+                query
+            }
+            _ => query.to_owned(),
+        }
+    }
+
+    /// Fetch a vec of AnyRows from a given query
+    pub async fn fetch_rows(&self, query: &str, args: Vec<Option<&String>>) -> Result<Vec<AnyRow>> {
+        let query_with_placeholders = self.build_query(query);
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
         for arg in args {
@@ -173,21 +174,11 @@ impl SqlCatalog {
     /// Execute statements in a transaction, provided or not
     pub async fn execute(
         &self,
-        query: &String,
+        query: &str,
         args: Vec<Option<&String>>,
         transaction: Option<&mut Transaction<'_, Any>>,
     ) -> Result<AnyQueryResult> {
-        // TODO: move this out to a function
-        let query_with_placeholders: Cow<str> =
-            if self.sql_bind_style == SqlBindStyle::DollarNumeric {
-                let mut query = query.clone();
-                for i in 0..args.len() {
-                    query = query.replacen("?", &format!("${}", i + 1), 1);
-                }
-                Cow::Owned(query)
-            } else {
-                Cow::Borrowed(query)
-            };
+        let query_with_placeholders = self.build_query(query);
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
         for arg in args {
