@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -217,6 +217,7 @@ impl Catalog for SqlCatalog {
         match parent {
             Some(parent) => match self.namespace_exists(parent).await? {
                 true => {
+                    let parent_str = parent.join(".");
                     let parent_table_namespaces_stmt = format!(
                         "{table_namespaces_stmt} AND {CATALOG_FIELD_TABLE_NAMESPACE} LIKE CONCAT(?, '%')"
                     );
@@ -230,9 +231,9 @@ impl Catalog for SqlCatalog {
                             ),
                             vec![
                                 Some(&self.name),
-                                Some(&parent.join(".")),
+                                Some(&parent_str),
                                 Some(&self.name),
-                                Some(&parent.join(".")),
+                                Some(&parent_str),
                             ],
                         )
                         .await?;
@@ -241,7 +242,14 @@ impl Catalog for SqlCatalog {
                         .iter()
                         .filter_map(|r| {
                             let nsp = r.try_get::<String, _>(0).ok();
-                            nsp.and_then(|n| NamespaceIdent::from_strs(n.split('.')).ok())
+                            nsp.and_then(|n| {
+                                if n == parent_str {
+                                    // Filter out itself
+                                    None
+                                } else {
+                                    NamespaceIdent::from_strs(n.split(".")).ok()
+                                }
+                            })
                         })
                         .collect())
                 }
@@ -259,9 +267,21 @@ impl Catalog for SqlCatalog {
                     .iter()
                     .filter_map(|r| {
                         let nsp = r.try_get::<String, _>(0).ok();
-                        nsp.and_then(|n| NamespaceIdent::from_strs(n.split('.')).ok())
+                        nsp.and_then(|n| {
+                            // for each row, split a.b.c into a, b, c levels
+                            let mut levels = n.split(".").collect::<Vec<&str>>();
+                            if !levels.is_empty() {
+                                // only return first-level idents
+                                let first_level = levels.drain(..1).collect::<Vec<&str>>();
+                                NamespaceIdent::from_strs(first_level).ok()
+                            } else {
+                                None
+                            }
+                        })
                     })
-                    .collect())
+                    .collect::<HashSet<NamespaceIdent>>()
+                    .into_iter()
+                    .collect::<Vec<NamespaceIdent>>())
             }
         }
     }
@@ -272,52 +292,62 @@ impl Catalog for SqlCatalog {
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
         let exists = self.namespace_exists(namespace).await?;
+
         if exists {
-            Err(Error::new(
+            return Err(Error::new(
                 iceberg::ErrorKind::Unexpected,
                 format!("Namespace {:?} already exists", namespace),
-            ))
-        } else {
-            let namespace_str = namespace.join(".");
-            let insert = format!(
-                "INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
-                 VALUES (?, ?, ?, ?)");
-            if !properties.is_empty() {
-                let mut query_args = vec![];
-                let mut properties_insert = insert.clone();
-                for (index, (key, value)) in properties.iter().enumerate() {
-                    query_args.extend(
-                        [
-                            Some(&self.name),
-                            Some(&namespace_str),
-                            Some(key),
-                            Some(value),
-                        ]
-                        .iter(),
-                    );
-                    if index > 0 {
-                        properties_insert = format!("{properties_insert}, (?, ?, ?, ?)");
-                    }
-                }
+            ));
+        }
 
-                self.execute(&properties_insert, query_args, None).await?;
+        for i in 1..namespace.len() {
+            let parent_namespace = NamespaceIdent::from_vec(namespace[..i].to_vec())?;
+            let parent_exists = self.namespace_exists(&parent_namespace).await?;
+            if !parent_exists {
+                return no_such_namespace_err(&parent_namespace);
+            }
+        }
 
-                Ok(Namespace::with_properties(namespace.clone(), properties))
-            } else {
-                // set a default property of exists = true
-                self.execute(
-                    &insert,
-                    vec![
+        let namespace_str = namespace.join(".");
+        let insert = format!(
+            "INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
+             VALUES (?, ?, ?, ?)");
+        if !properties.is_empty() {
+            let mut query_args = vec![];
+            let mut properties_insert = insert.clone();
+            for (index, (key, value)) in properties.iter().enumerate() {
+                query_args.extend(
+                    [
                         Some(&self.name),
                         Some(&namespace_str),
-                        Some(&"exists".to_string()),
-                        Some(&"true".to_string()),
-                    ],
-                    None,
-                )
-                .await?;
-                Ok(Namespace::with_properties(namespace.clone(), properties))
+                        Some(key),
+                        Some(value),
+                    ]
+                    .iter(),
+                );
+                if index > 0 {
+                    properties_insert = format!("{properties_insert}, (?, ?, ?, ?)");
+                }
             }
+
+            self.execute(&properties_insert, query_args, None).await?;
+
+            Ok(Namespace::with_properties(namespace.clone(), properties))
+        } else {
+            // set a default property of exists = true
+            // up for debate if this is worthwhile
+            self.execute(
+                &insert,
+                vec![
+                    Some(&self.name),
+                    Some(&namespace_str),
+                    Some(&"exists".to_string()),
+                    Some(&"true".to_string()),
+                ],
+                None,
+            )
+            .await?;
+            Ok(Namespace::with_properties(namespace.clone(), properties))
         }
     }
 
@@ -466,8 +496,21 @@ impl Catalog for SqlCatalog {
         }
     }
 
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        let exists = self.namespace_exists(namespace).await?;
+        if exists {
+            // TODO: check that the namespace is empty
+            self.execute(
+                &format!("DELETE FROM {NAMESPACE_TABLE_NAME} WHERE {NAMESPACE_FIELD_NAME} = ?"),
+                vec![Some(&namespace.join("."))],
+                None,
+            )
+            .await?;
+
+            Ok(())
+        } else {
+            no_such_namespace_err(namespace)
+        }
     }
 
     async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -505,8 +548,11 @@ impl Catalog for SqlCatalog {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::hash::Hash;
+
     use iceberg::io::FileIOBuilder;
-    use iceberg::Catalog;
+    use iceberg::{Catalog, Namespace, NamespaceIdent};
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
@@ -515,6 +561,14 @@ mod tests {
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
         temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+        HashSet::from_iter(vec)
+    }
+
+    fn default_properties() -> HashMap<String, String> {
+        HashMap::from([("exists".to_string(), "true".to_string())])
     }
 
     async fn new_sql_catalog(warehouse_location: String) -> impl Catalog {
@@ -532,6 +586,19 @@ mod tests {
         SqlCatalog::new(config).await.unwrap()
     }
 
+    async fn create_namespace<C: Catalog>(catalog: &C, namespace_ident: &NamespaceIdent) {
+        let _ = catalog
+            .create_namespace(namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+    }
+
+    async fn create_namespaces<C: Catalog>(catalog: &C, namespace_idents: &Vec<&NamespaceIdent>) {
+        for namespace_ident in namespace_idents {
+            let _ = create_namespace(catalog, namespace_ident).await;
+        }
+    }
+
     #[tokio::test]
     async fn test_initialized() {
         let warehouse_loc = temp_path();
@@ -539,5 +606,386 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone()).await;
         new_sql_catalog(warehouse_loc.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_empty_vector() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_multiple_namespaces() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_1 = NamespaceIdent::new("a".into());
+        let namespace_ident_2 = NamespaceIdent::new("b".into());
+        create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
+
+        assert_eq!(
+            to_set(catalog.list_namespaces(None).await.unwrap()),
+            to_set(vec![namespace_ident_1, namespace_ident_2])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_only_top_level_namespaces() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_1 = NamespaceIdent::new("a".into());
+        let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let namespace_ident_3 = NamespaceIdent::new("b".into());
+        create_namespaces(&catalog, &vec![
+            &namespace_ident_1,
+            &namespace_ident_2,
+            &namespace_ident_3,
+        ])
+        .await;
+
+        assert_eq!(
+            to_set(catalog.list_namespaces(None).await.unwrap()),
+            to_set(vec![namespace_ident_1, namespace_ident_3])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_no_namespaces_under_parent() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_1 = NamespaceIdent::new("a".into());
+        let namespace_ident_2 = NamespaceIdent::new("b".into());
+        create_namespaces(&catalog, &vec![&namespace_ident_1, &namespace_ident_2]).await;
+
+        assert_eq!(
+            catalog
+                .list_namespaces(Some(&namespace_ident_1))
+                .await
+                .unwrap(),
+            vec![]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_namespace_under_parent() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_1 = NamespaceIdent::new("a".into());
+        let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let namespace_ident_3 = NamespaceIdent::new("c".into());
+        create_namespaces(&catalog, &vec![
+            &namespace_ident_1,
+            &namespace_ident_2,
+            &namespace_ident_3,
+        ])
+        .await;
+
+        assert_eq!(
+            to_set(catalog.list_namespaces(None).await.unwrap()),
+            to_set(vec![namespace_ident_1.clone(), namespace_ident_3])
+        );
+
+        assert_eq!(
+            catalog
+                .list_namespaces(Some(&namespace_ident_1))
+                .await
+                .unwrap(),
+            vec![NamespaceIdent::from_strs(vec!["a", "b"]).unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_namespaces_returns_multiple_namespaces_under_parent() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_1 = NamespaceIdent::new("a".to_string());
+        let namespace_ident_2 = NamespaceIdent::from_strs(vec!["a", "a"]).unwrap();
+        let namespace_ident_3 = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let namespace_ident_4 = NamespaceIdent::from_strs(vec!["a", "c"]).unwrap();
+        let namespace_ident_5 = NamespaceIdent::new("b".into());
+        create_namespaces(&catalog, &vec![
+            &namespace_ident_1,
+            &namespace_ident_2,
+            &namespace_ident_3,
+            &namespace_ident_4,
+            &namespace_ident_5,
+        ])
+        .await;
+
+        assert_eq!(
+            to_set(
+                catalog
+                    .list_namespaces(Some(&namespace_ident_1))
+                    .await
+                    .unwrap()
+            ),
+            to_set(vec![
+                NamespaceIdent::from_strs(vec!["a", "a"]).unwrap(),
+                NamespaceIdent::from_strs(vec!["a", "b"]).unwrap(),
+                NamespaceIdent::from_strs(vec!["a", "c"]).unwrap(),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_namespace_exists_returns_false() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        assert!(!catalog
+            .namespace_exists(&NamespaceIdent::new("b".into()))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_namespace_exists_returns_true() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        assert!(catalog.namespace_exists(&namespace_ident).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_namespace_with_properties() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("abc".into());
+
+        let mut properties: HashMap<String, String> = HashMap::new();
+        properties.insert("k".into(), "v".into());
+
+        assert_eq!(
+            catalog
+                .create_namespace(&namespace_ident, properties.clone())
+                .await
+                .unwrap(),
+            Namespace::with_properties(namespace_ident.clone(), properties.clone())
+        );
+
+        assert_eq!(
+            catalog.get_namespace(&namespace_ident).await.unwrap(),
+            Namespace::with_properties(namespace_ident, properties)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_namespace_throws_error_if_namespace_already_exists() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        assert_eq!(
+            catalog
+                .create_namespace(&namespace_ident, HashMap::new())
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => Namespace {:?} already exists",
+                &namespace_ident
+            )
+        );
+
+        assert_eq!(
+            catalog.get_namespace(&namespace_ident).await.unwrap(),
+            Namespace::with_properties(namespace_ident, default_properties())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_nested_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let parent_namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &parent_namespace_ident).await;
+
+        let child_namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+
+        assert_eq!(
+            catalog
+                .create_namespace(&child_namespace_ident, HashMap::new())
+                .await
+                .unwrap(),
+            Namespace::new(child_namespace_ident.clone())
+        );
+
+        assert_eq!(
+            catalog.get_namespace(&child_namespace_ident).await.unwrap(),
+            Namespace::with_properties(child_namespace_ident, default_properties())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_deeply_nested_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_a = NamespaceIdent::new("a".into());
+        let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
+
+        let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
+
+        assert_eq!(
+            catalog
+                .create_namespace(&namespace_ident_a_b_c, HashMap::new())
+                .await
+                .unwrap(),
+            Namespace::new(namespace_ident_a_b_c.clone())
+        );
+
+        assert_eq!(
+            catalog.get_namespace(&namespace_ident_a_b_c).await.unwrap(),
+            Namespace::with_properties(namespace_ident_a_b_c, default_properties())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_nested_namespace_throws_error_if_top_level_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let nested_namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+
+        assert_eq!(
+            catalog
+                .create_namespace(&nested_namespace_ident, HashMap::new())
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => No such namespace: {:?}",
+                NamespaceIdent::new("a".into())
+            )
+        );
+
+        assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_drop_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        catalog.drop_namespace(&namespace_ident).await.unwrap();
+
+        assert!(!catalog.namespace_exists(&namespace_ident).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_drop_nested_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_a = NamespaceIdent::new("a".into());
+        let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
+
+        catalog.drop_namespace(&namespace_ident_a_b).await.unwrap();
+
+        assert!(!catalog
+            .namespace_exists(&namespace_ident_a_b)
+            .await
+            .unwrap());
+
+        assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_drop_deeply_nested_namespace() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_a = NamespaceIdent::new("a".into());
+        let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let namespace_ident_a_b_c = NamespaceIdent::from_strs(vec!["a", "b", "c"]).unwrap();
+        create_namespaces(&catalog, &vec![
+            &namespace_ident_a,
+            &namespace_ident_a_b,
+            &namespace_ident_a_b_c,
+        ])
+        .await;
+
+        catalog
+            .drop_namespace(&namespace_ident_a_b_c)
+            .await
+            .unwrap();
+
+        assert!(!catalog
+            .namespace_exists(&namespace_ident_a_b_c)
+            .await
+            .unwrap());
+
+        assert!(catalog
+            .namespace_exists(&namespace_ident_a_b)
+            .await
+            .unwrap());
+
+        assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_drop_namespace_throws_error_if_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let non_existent_namespace_ident = NamespaceIdent::new("abc".into());
+        assert_eq!(
+            catalog
+                .drop_namespace(&non_existent_namespace_ident)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => No such namespace: {:?}",
+                non_existent_namespace_ident
+            )
+        )
+    }
+
+    #[tokio::test]
+    async fn test_drop_namespace_throws_error_if_nested_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        create_namespace(&catalog, &NamespaceIdent::new("a".into())).await;
+
+        let non_existent_namespace_ident =
+            NamespaceIdent::from_vec(vec!["a".into(), "b".into()]).unwrap();
+        assert_eq!(
+            catalog
+                .drop_namespace(&non_existent_namespace_ident)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => No such namespace: {:?}",
+                non_existent_namespace_ident
+            )
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "Java/Python do not drop nested namespaces?"]
+    async fn test_dropping_a_namespace_also_drops_namespaces_nested_under_that_one() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident_a = NamespaceIdent::new("a".into());
+        let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        create_namespaces(&catalog, &vec![&namespace_ident_a, &namespace_ident_a_b]).await;
+
+        catalog.drop_namespace(&namespace_ident_a).await.unwrap();
+
+        assert!(!catalog.namespace_exists(&namespace_ident_a).await.unwrap());
+
+        assert!(!catalog
+            .namespace_exists(&namespace_ident_a_b)
+            .await
+            .unwrap());
     }
 }
