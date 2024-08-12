@@ -33,6 +33,7 @@ use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
+use crate::spec::PrimitiveLiteral;
 
 /// Field name for list type.
 pub(crate) const LIST_FILED_NAME: &str = "element";
@@ -232,6 +233,29 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+}
+
+impl PrimitiveType {
+    /// Check whether literal is compatible with the type.
+    pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
+        matches!(
+            (self, literal),
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(_))
+                | (PrimitiveType::Int, PrimitiveLiteral::Int(_))
+                | (PrimitiveType::Long, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::Float, PrimitiveLiteral::Float(_))
+                | (PrimitiveType::Double, PrimitiveLiteral::Double(_))
+                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Decimal(_))
+                | (PrimitiveType::Date, PrimitiveLiteral::Date(_))
+                | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
+                | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
+                | (PrimitiveType::Timestamptz, PrimitiveLiteral::Timestamptz(_))
+                | (PrimitiveType::String, PrimitiveLiteral::String(_))
+                | (PrimitiveType::Uuid, PrimitiveLiteral::Uuid(_))
+                | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
+                | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+        )
+    }
 }
 
 impl Serialize for Type {
@@ -557,6 +581,19 @@ impl From<NestedField> for SerdeNestedField {
 pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
+    /// Construct a new field.
+    pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            required,
+            field_type: Box::new(field_type),
+            doc: None,
+            initial_default: None,
+            write_default: None,
+        }
+    }
+
     /// Construct a required field.
     pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
         Self {
@@ -896,10 +933,10 @@ mod tests {
             Type::Struct(StructType {
                 fields: vec![
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
                             Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
                         )))
-                        .with_write_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                        .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
                             Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
                         )))
                         .into(),
@@ -965,10 +1002,10 @@ mod tests {
 
         let struct_type = Type::Struct(StructType::new(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
                     Uuid::parse_str("0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb").unwrap(),
                 )))
-                .with_write_default(Literal::Primitive(PrimitiveLiteral::UUID(
+                .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
                     Uuid::parse_str("ec5911be-b0a7-458c-8438-c9a3e53cffae").unwrap(),
                 )))
                 .into(),
@@ -1086,5 +1123,49 @@ mod tests {
 
         assert_eq!(5, Type::decimal_required_bytes(10).unwrap());
         assert_eq!(16, Type::decimal_required_bytes(38).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_type_compatitable() {
+        let types = vec![
+            PrimitiveType::Boolean,
+            PrimitiveType::Int,
+            PrimitiveType::Long,
+            PrimitiveType::Float,
+            PrimitiveType::Double,
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            PrimitiveType::Date,
+            PrimitiveType::Time,
+            PrimitiveType::Timestamp,
+            PrimitiveType::Timestamptz,
+            PrimitiveType::String,
+            PrimitiveType::Uuid,
+            PrimitiveType::Fixed(8),
+            PrimitiveType::Binary,
+        ];
+        let literals = vec![
+            PrimitiveLiteral::Boolean(true),
+            PrimitiveLiteral::Int(1),
+            PrimitiveLiteral::Long(1),
+            PrimitiveLiteral::Float(1.0.into()),
+            PrimitiveLiteral::Double(1.0.into()),
+            PrimitiveLiteral::Decimal(1),
+            PrimitiveLiteral::Date(1),
+            PrimitiveLiteral::Time(1),
+            PrimitiveLiteral::Timestamp(1),
+            PrimitiveLiteral::Timestamptz(1),
+            PrimitiveLiteral::String("1".to_string()),
+            PrimitiveLiteral::Uuid(Uuid::new_v4()),
+            PrimitiveLiteral::Fixed(vec![1]),
+            PrimitiveLiteral::Binary(vec![1]),
+        ];
+        for (i, t) in types.iter().enumerate() {
+            for (j, l) in literals.iter().enumerate() {
+                assert_eq!(i == j, t.compatible(l));
+            }
+        }
     }
 }

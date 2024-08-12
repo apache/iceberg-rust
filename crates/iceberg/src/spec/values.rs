@@ -76,7 +76,7 @@ pub enum PrimitiveLiteral {
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
-    UUID(Uuid),
+    Uuid(Uuid),
     /// Binary value
     Fixed(Vec<u8>),
     /// Binary value (without length)
@@ -278,8 +278,8 @@ impl PartialOrd for Datum {
                 PrimitiveType::String,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::UUID(val),
-                PrimitiveLiteral::UUID(other_val),
+                PrimitiveLiteral::Uuid(val),
+                PrimitiveLiteral::Uuid(other_val),
                 PrimitiveType::Uuid,
                 PrimitiveType::Uuid,
             ) => val.partial_cmp(other_val),
@@ -333,7 +333,7 @@ impl Display for Datum {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
-            (_, PrimitiveLiteral::UUID(val)) => write!(f, "{}", val),
+            (_, PrimitiveLiteral::Uuid(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
             (
@@ -410,7 +410,7 @@ impl Datum {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
             }
             PrimitiveType::Uuid => {
-                PrimitiveLiteral::UUID(Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)))
+                PrimitiveLiteral::Uuid(Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)))
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Fixed(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
@@ -443,7 +443,7 @@ impl Datum {
             PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
-            PrimitiveLiteral::UUID(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
+            PrimitiveLiteral::Uuid(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
             PrimitiveLiteral::Fixed(val) => ByteBuf::from(val.as_slice()),
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
             PrimitiveLiteral::Decimal(_) => todo!(),
@@ -868,7 +868,7 @@ impl Datum {
     pub fn uuid(uuid: Uuid) -> Self {
         Self {
             r#type: PrimitiveType::Uuid,
-            literal: PrimitiveLiteral::UUID(uuid),
+            literal: PrimitiveLiteral::Uuid(uuid),
         }
     }
 
@@ -977,9 +977,22 @@ impl Datum {
 
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
-        // TODO: We should allow more type conversions
         match target_type {
-            Type::Primitive(typ) if typ == &self.r#type => Ok(self),
+            Type::Primitive(target_primitive_type) => {
+                match (&self.literal, &self.r#type, target_primitive_type) {
+                    (PrimitiveLiteral::Date(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
+                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
+                    // TODO: implement more type conversions
+                    (_, self_type, target_type) if self_type == target_type => Ok(self),
+                    _ => Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Can't convert datum from {} type to {} type.",
+                            self.r#type, target_primitive_type
+                        ),
+                    )),
+                }
+            }
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -1408,7 +1421,7 @@ impl Literal {
 
     /// Creates uuid literal.
     pub fn uuid(uuid: Uuid) -> Self {
-        Self::Primitive(PrimitiveLiteral::UUID(uuid))
+        Self::Primitive(PrimitiveLiteral::Uuid(uuid))
     }
 
     /// Creates uuid from str. See [`Uuid::parse_str`].
@@ -1655,7 +1668,7 @@ impl Literal {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::String(s))))
                 }
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
-                    PrimitiveLiteral::UUID(Uuid::parse_str(&s)?),
+                    PrimitiveLiteral::Uuid(Uuid::parse_str(&s)?),
                 ))),
                 (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
                 (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
@@ -1793,7 +1806,7 @@ impl Literal {
                         .to_string(),
                 )),
                 PrimitiveLiteral::String(val) => Ok(JsonValue::String(val.clone())),
-                PrimitiveLiteral::UUID(val) => Ok(JsonValue::String(val.to_string())),
+                PrimitiveLiteral::Uuid(val) => Ok(JsonValue::String(val.to_string())),
                 PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.iter().fold(
                     String::new(),
                     |mut acc, x| {
@@ -1882,7 +1895,7 @@ impl Literal {
                 PrimitiveLiteral::Fixed(any) => Box::new(any),
                 PrimitiveLiteral::Binary(any) => Box::new(any),
                 PrimitiveLiteral::String(any) => Box::new(any),
-                PrimitiveLiteral::UUID(any) => Box::new(any),
+                PrimitiveLiteral::Uuid(any) => Box::new(any),
                 PrimitiveLiteral::Decimal(any) => Box::new(any),
             },
             _ => unimplemented!(),
@@ -2189,7 +2202,7 @@ mod _serde {
                     super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::Timestamptz(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
-                    super::PrimitiveLiteral::UUID(v) => {
+                    super::PrimitiveLiteral::Uuid(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))
                     }
                     super::PrimitiveLiteral::Fixed(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
@@ -2614,6 +2627,7 @@ mod tests {
     use crate::avro::schema_to_avro_schema;
     use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
     use crate::spec::Schema;
+    use crate::spec::Type::Primitive;
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
@@ -2818,7 +2832,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::UUID(
+            Literal::Primitive(PrimitiveLiteral::Uuid(
                 Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
             )),
             &Type::Primitive(PrimitiveType::Uuid),
@@ -3363,5 +3377,27 @@ mod tests {
         test_fn(datum);
         let datum = Datum::fixed(vec![1, 2, 3, 4, 5]);
         test_fn(datum);
+    }
+
+    #[test]
+    fn test_datum_date_convert_to_int() {
+        let datum_date = Datum::date(12345);
+
+        let result = datum_date.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::int(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_int_convert_to_date() {
+        let datum_int = Datum::int(12345);
+
+        let result = datum_int.to(&Primitive(PrimitiveType::Date)).unwrap();
+
+        let expected = Datum::date(12345);
+
+        assert_eq!(result, expected);
     }
 }

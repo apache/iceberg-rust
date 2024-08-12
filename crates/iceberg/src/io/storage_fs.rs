@@ -15,37 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-
-use opendal::{Operator, Scheme};
+use opendal::services::FsConfig;
+use opendal::Operator;
 
 use crate::Result;
 
-/// # TODO
-///
-/// opendal has a plan to introduce native config support.
-/// We manually parse the config here and those code will be finally removed.
-#[derive(Default, Clone)]
-pub(crate) struct FsConfig {}
+/// Build new opendal operator from give path.
+pub(crate) fn fs_config_build() -> Result<Operator> {
+    let mut cfg = FsConfig::default();
+    cfg.root = Some("/".to_string());
 
-impl Debug for FsConfig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FsConfig").finish()
-    }
-}
-
-impl FsConfig {
-    /// Decode from iceberg props.
-    pub fn new(_: HashMap<String, String>) -> Self {
-        Self::default()
-    }
-
-    /// Build new opendal operator from give path.
-    ///
-    /// fs always build from `/`
-    pub fn build(&self, _: &str) -> Result<Operator> {
-        let m = HashMap::from_iter([("root".to_string(), "/".to_string())]);
-        Ok(Operator::via_map(Scheme::Fs, m)?)
-    }
+    Ok(Operator::from_config(cfg)?.finish())
 }

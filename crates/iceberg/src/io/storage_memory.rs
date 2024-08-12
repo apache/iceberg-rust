@@ -15,31 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-
-use opendal::{Operator, Scheme};
+use opendal::services::MemoryConfig;
+use opendal::Operator;
 
 use crate::Result;
 
-#[derive(Default, Clone)]
-pub(crate) struct MemoryConfig {}
-
-impl Debug for MemoryConfig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MemoryConfig").finish()
-    }
-}
-
-impl MemoryConfig {
-    /// Decode from iceberg props.
-    pub fn new(_: HashMap<String, String>) -> Self {
-        Self::default()
-    }
-
-    /// Build new opendal operator from given path.
-    pub fn build(&self, _: &str) -> Result<Operator> {
-        let m = HashMap::new();
-        Ok(Operator::via_map(Scheme::Memory, m)?)
-    }
+pub(crate) fn memory_config_build() -> Result<Operator> {
+    Ok(Operator::from_config(MemoryConfig::default())?.finish())
 }

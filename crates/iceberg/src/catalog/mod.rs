@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
-    UnboundPartitionSpec,
+    UnboundPartitionSpec, ViewRepresentations,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -437,6 +437,31 @@ impl TableUpdate {
             _ => unimplemented!(),
         }
     }
+}
+
+/// ViewCreation represents the creation of a view in the catalog.
+#[derive(Debug, TypedBuilder)]
+pub struct ViewCreation {
+    /// The name of the view.
+    pub name: String,
+    /// The view's base location; used to create metadata file locations
+    pub location: String,
+    /// Representations for the view.
+    pub representations: ViewRepresentations,
+    /// The schema of the view.
+    pub schema: Schema,
+    /// The properties of the view.
+    #[builder(default)]
+    pub properties: HashMap<String, String>,
+    /// The default namespace to use when a reference in the SELECT is a single identifier
+    pub default_namespace: NamespaceIdent,
+    /// Default catalog to use when a reference in the SELECT does not contain a catalog
+    #[builder(default)]
+    pub default_catalog: Option<String>,
+    /// A string to string map of summary metadata about the version
+    /// Typical keys are "engine-name" and "engine-version"
+    #[builder(default)]
+    pub summary: HashMap<String, String>,
 }
 
 #[cfg(test)]

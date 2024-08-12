@@ -229,7 +229,7 @@ impl TransformFunction for Bucket {
             PrimitiveLiteral::Time(v) => self.bucket_time(*v),
             PrimitiveLiteral::Timestamp(v) => self.bucket_timestamp(*v),
             PrimitiveLiteral::String(v) => self.bucket_str(v.as_str()),
-            PrimitiveLiteral::UUID(v) => self.bucket_bytes(v.as_ref()),
+            PrimitiveLiteral::Uuid(v) => self.bucket_bytes(v.as_ref()),
             PrimitiveLiteral::Binary(v) => self.bucket_bytes(v.as_ref()),
             PrimitiveLiteral::Fixed(v) => self.bucket_bytes(v.as_ref()),
             _ => {

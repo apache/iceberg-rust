@@ -1321,7 +1321,7 @@ mod tests {
         );
         assert_eq!(
             Utc.timestamp_millis_opt(1646787054459).unwrap(),
-            table.metadata().last_updated_ms()
+            table.metadata().last_updated_timestamp().unwrap()
         );
         assert_eq!(
             vec![&Arc::new(
@@ -1511,7 +1511,11 @@ mod tests {
         );
         assert_eq!(
             1657810967051,
-            table.metadata().last_updated_ms().timestamp_millis()
+            table
+                .metadata()
+                .last_updated_timestamp()
+                .unwrap()
+                .timestamp_millis()
         );
         assert_eq!(
             vec![&Arc::new(
@@ -1682,7 +1686,11 @@ mod tests {
         );
         assert_eq!(
             1657810967051,
-            table.metadata().last_updated_ms().timestamp_millis()
+            table
+                .metadata()
+                .last_updated_timestamp()
+                .unwrap()
+                .timestamp_millis()
         );
         assert_eq!(
             vec![&Arc::new(
