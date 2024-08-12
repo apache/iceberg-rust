@@ -30,6 +30,9 @@ pub const S3_ENDPOINT: &str = "s3.endpoint";
 pub const S3_ACCESS_KEY_ID: &str = "s3.access-key-id";
 /// S3 secret access key.
 pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
+/// S3 session token.
+/// This is required when using temporary credentials.
+pub const S3_SESSION_TOKEN: &str = "s3.session-token";
 /// S3 region.
 pub const S3_REGION: &str = "s3.region";
 /// S3 Path Style Access.
@@ -55,6 +58,9 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
     };
     if let Some(secret_access_key) = m.remove(S3_SECRET_ACCESS_KEY) {
         cfg.secret_access_key = Some(secret_access_key);
+    };
+    if let Some(session_token) = m.remove(S3_SESSION_TOKEN) {
+        cfg.session_token = Some(session_token);
     };
     if let Some(region) = m.remove(S3_REGION) {
         cfg.region = Some(region);
