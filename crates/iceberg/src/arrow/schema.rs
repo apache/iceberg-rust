@@ -213,31 +213,7 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     visit_schema(schema, &mut visitor)
 }
 
-const ARROW_FIELD_DOC_KEY: &str = "doc";
-
-fn get_field_id(field: &Field) -> Result<i32> {
-    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-        return value.parse::<i32>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse field id".to_string(),
-            )
-            .with_context("value", value)
-            .with_source(e)
-        });
-    }
-    Err(Error::new(
-        ErrorKind::DataInvalid,
-        "Field id not found in metadata",
-    ))
-}
-
-fn get_field_doc(field: &Field) -> Option<String> {
-    if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
-        return Some(value.clone());
-    }
-    None
-}
+const ARROW_FIELD_DOC_KEY: &'static str = "doc";
 
 struct ArrowSchemaConverter;
 
@@ -247,25 +223,54 @@ impl ArrowSchemaConverter {
         Self {}
     }
 
-    fn convert_fields(fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
+    fn convert_fields(
+        &self,
+        fields: &Fields,
+        field_results: &[Type],
+    ) -> Result<Vec<NestedFieldRef>> {
+        assert_eq!(fields.len(), field_results.len());
         let mut results = Vec::with_capacity(fields.len());
-        for i in 0..fields.len() {
-            let field = &fields[i];
-            let field_type = &field_results[i];
-            let id = get_field_id(field)?;
-            let doc = get_field_doc(field);
-            let nested_field = NestedField {
-                id,
-                doc,
-                name: field.name().clone(),
-                required: !field.is_nullable(),
-                field_type: Box::new(field_type.clone()),
-                initial_default: None,
-                write_default: None,
-            };
+        for (field, field_type) in fields.iter().zip(field_results.iter()) {
+            let nested_field = self.convert_field(field, field_type)?;
             results.push(Arc::new(nested_field));
         }
         Ok(results)
+    }
+
+    /// Convert Arrow field to Iceberg field.
+    fn convert_field(&self, field: &Field, field_type: &Type) -> Result<NestedField> {
+        let id = field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .map_or_else(
+                || {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Field id not found in metadata",
+                    ))
+                },
+                |value| {
+                    value.parse::<i32>().map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Failed to parse field id".to_string(),
+                        )
+                        .with_context("value", value)
+                        .with_source(e)
+                    })
+                },
+            )?;
+
+        let doc = field.metadata().get(ARROW_FIELD_DOC_KEY).map(|x| x.into());
+        Ok(NestedField {
+            id,
+            doc,
+            name: field.name().clone(),
+            required: !field.is_nullable(),
+            field_type: Box::new(field_type.clone()),
+            initial_default: None,
+            write_default: None,
+        })
     }
 }
 
@@ -273,17 +278,20 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
     type T = Type;
     type U = Schema;
 
+    /// Convert Arrow schema to Iceberg schema.
     fn schema(&mut self, schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
-        let fields = Self::convert_fields(schema.fields(), &values)?;
+        let fields = self.convert_fields(schema.fields(), &values)?;
         let builder = Schema::builder().with_fields(fields);
         builder.build()
     }
 
+    /// Convert Arrow struct type to Iceberg struct type.
     fn r#struct(&mut self, fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
-        let fields = Self::convert_fields(fields, &results)?;
+        let fields = self.convert_fields(fields, &results)?;
         Ok(Type::Struct(StructType::new(fields)))
     }
 
+    /// Convert Arrow list type to Iceberg list type.
     fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
         let element_field = match list {
             DataType::List(element_field) => element_field,
@@ -297,17 +305,11 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
-        let id = get_field_id(element_field)?;
-        let doc = get_field_doc(element_field);
-        let mut element_field =
-            NestedField::list_element(id, value.clone(), !element_field.is_nullable());
-        if let Some(doc) = doc {
-            element_field = element_field.with_doc(doc);
-        }
-        let element_field = Arc::new(element_field);
-        Ok(Type::List(ListType { element_field }))
+        let element_field = self.convert_field(element_field, &value)?;
+        Ok(Type::List(ListType::new(element_field.into())))
     }
 
+    /// Convert Arrow map type to Iceberg map type.
     fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
         match map {
             DataType::Map(field, _) => match field.data_type() {
@@ -319,33 +321,13 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                         ));
                     }
 
-                    let key_field = &fields[0];
-                    let value_field = &fields[1];
+                    let key_field = self.convert_field(&fields[0], &key_value)?;
+                    let value_field = self.convert_field(&fields[1], &value)?;
 
-                    let key_id = get_field_id(key_field)?;
-                    let key_doc = get_field_doc(key_field);
-                    let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
-                    if let Some(doc) = key_doc {
-                        key_field = key_field.with_doc(doc);
-                    }
-                    let key_field = Arc::new(key_field);
-
-                    let value_id = get_field_id(value_field)?;
-                    let value_doc = get_field_doc(value_field);
-                    let mut value_field = NestedField::map_value_element(
-                        value_id,
-                        value.clone(),
-                        !value_field.is_nullable(),
-                    );
-                    if let Some(doc) = value_doc {
-                        value_field = value_field.with_doc(doc);
-                    }
-                    let value_field = Arc::new(value_field);
-
-                    Ok(Type::Map(MapType {
-                        key_field,
-                        value_field,
-                    }))
+                    Ok(Type::Map(MapType::new(
+                        key_field.into(),
+                        value_field.into(),
+                    )))
                 }
                 _ => Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -359,6 +341,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         }
     }
 
+    /// Convert Arrow primitive type to Iceberg primitive type.
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
         match p {
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
