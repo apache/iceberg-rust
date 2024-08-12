@@ -40,7 +40,7 @@ impl InclusiveProjection {
     fn get_parts_for_field_id(&mut self, field_id: i32) -> &Vec<PartitionField> {
         if let std::collections::hash_map::Entry::Vacant(e) = self.cached_parts.entry(field_id) {
             let mut parts: Vec<PartitionField> = vec![];
-            for partition_spec_field in &self.partition_spec.fields {
+            for partition_spec_field in self.partition_spec.fields() {
                 if partition_spec_field.source_id == field_id {
                     parts.push(partition_spec_field.clone())
                 }
@@ -333,8 +333,6 @@ mod tests {
     fn test_inclusive_projection_date_transforms() {
         let schema = build_test_schema();
 
-        // ToDo: We cannot use the builder here as having multiple transforms on
-        // a single field is not allowed. Should we keep this test?
         let partition_spec = PartitionSpec {
             spec_id: 1,
             fields: vec![

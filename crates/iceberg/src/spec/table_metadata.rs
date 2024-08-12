@@ -32,12 +32,12 @@ use uuid::Uuid;
 use super::snapshot::{Snapshot, SnapshotReference, SnapshotRetention};
 use super::{
     PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrder, SortOrderRef,
+    DEFAULT_PARTITION_SPEC_ID,
 };
 use crate::error::Result;
 use crate::{Error, ErrorKind, TableCreation};
 
 static MAIN_BRANCH: &str = "main";
-static DEFAULT_SPEC_ID: i32 = 0;
 static DEFAULT_SORT_ORDER_ID: i64 = 0;
 
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
@@ -181,8 +181,8 @@ impl TableMetadata {
     /// Get default partition spec
     #[inline]
     pub fn default_partition_spec(&self) -> Option<&PartitionSpecRef> {
-        if self.default_spec_id == DEFAULT_SPEC_ID {
-            self.partition_spec_by_id(DEFAULT_SPEC_ID)
+        if self.default_spec_id == DEFAULT_PARTITION_SPEC_ID {
+            self.partition_spec_by_id(DEFAULT_PARTITION_SPEC_ID)
         } else {
             Some(
                 self.partition_spec_by_id(self.default_spec_id)
@@ -302,9 +302,9 @@ impl TableMetadataBuilder {
                 ))
             }
             None => HashMap::from([(
-                DEFAULT_SPEC_ID,
+                DEFAULT_PARTITION_SPEC_ID,
                 Arc::new(PartitionSpec {
-                    spec_id: DEFAULT_SPEC_ID,
+                    spec_id: DEFAULT_PARTITION_SPEC_ID,
                     fields: vec![],
                 }),
             )]),
@@ -341,7 +341,7 @@ impl TableMetadataBuilder {
             current_schema_id: schema.schema_id(),
             schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
             partition_specs,
-            default_spec_id: DEFAULT_SPEC_ID,
+            default_spec_id: DEFAULT_PARTITION_SPEC_ID,
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
@@ -385,8 +385,8 @@ pub(super) mod _serde {
     use uuid::Uuid;
 
     use super::{
-        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
-        DEFAULT_SPEC_ID, MAIN_BRANCH,
+        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_PARTITION_SPEC_ID,
+        DEFAULT_SORT_ORDER_ID, MAIN_BRANCH,
     };
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
@@ -562,7 +562,7 @@ pub(super) mod _serde {
                     value
                         .partition_specs
                         .into_iter()
-                        .map(|x| (x.spec_id, Arc::new(x))),
+                        .map(|x| (x.spec_id(), Arc::new(x))),
                 ),
                 default_spec_id: value.default_spec_id,
                 last_partition_id: value.last_partition_id,
@@ -637,12 +637,12 @@ pub(super) mod _serde {
                     .partition_specs
                     .unwrap_or_else(|| {
                         vec![PartitionSpec {
-                            spec_id: DEFAULT_SPEC_ID,
+                            spec_id: DEFAULT_PARTITION_SPEC_ID,
                             fields: value.partition_spec,
                         }]
                     })
                     .into_iter()
-                    .map(|x| (x.spec_id, Arc::new(x))),
+                    .map(|x| (x.spec_id(), Arc::new(x))),
             );
             Ok(TableMetadata {
                 format_version: FormatVersion::V1,
@@ -802,7 +802,7 @@ pub(super) mod _serde {
                 partition_spec: v
                     .partition_specs
                     .get(&v.default_spec_id)
-                    .map(|x| x.fields.clone())
+                    .map(|x| x.fields().to_vec())
                     .unwrap_or_default(),
                 partition_specs: Some(
                     v.partition_specs
@@ -1168,11 +1168,7 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(&schema)
             .with_spec_id(0)
-            .add_partition_field(
-                "vendor_id".to_string(),
-                "vendor_id".to_string(),
-                Transform::Identity,
-            )
+            .add_partition_field("vendor_id", "vendor_id", Transform::Identity)
             .unwrap()
             .build()
             .unwrap();
@@ -1676,10 +1672,12 @@ mod tests {
             table_metadata.partition_specs,
             HashMap::from([(
                 0,
-                Arc::new(PartitionSpec {
-                    spec_id: 0,
-                    fields: vec![]
-                })
+                Arc::new(
+                    PartitionSpec::builder(table_metadata.schemas.get(&0).unwrap())
+                        .with_spec_id(0)
+                        .build()
+                        .unwrap()
+                )
             )])
         );
         assert_eq!(

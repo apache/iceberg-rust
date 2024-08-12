@@ -433,7 +433,7 @@ impl PartitionFilterCache {
                     let partition_fields = partition_type.fields().to_owned();
                     let partition_schema = Arc::new(
                         Schema::builder()
-                            .with_schema_id(partition_spec.spec_id)
+                            .with_schema_id(partition_spec.spec_id())
                             .with_fields(partition_fields)
                             .build()?,
                     );

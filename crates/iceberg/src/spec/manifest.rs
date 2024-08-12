@@ -221,14 +221,14 @@ impl ManifestWriter {
         )?;
         avro_writer.add_user_metadata(
             "partition-spec".to_string(),
-            to_vec(&manifest.metadata.partition_spec.fields).map_err(|err| {
+            to_vec(&manifest.metadata.partition_spec.fields()).map_err(|err| {
                 Error::new(ErrorKind::DataInvalid, "Fail to serialize partition spec")
                     .with_source(err)
             })?,
         )?;
         avro_writer.add_user_metadata(
             "partition-spec-id".to_string(),
-            manifest.metadata.partition_spec.spec_id.to_string(),
+            manifest.metadata.partition_spec.spec_id().to_string(),
         )?;
         avro_writer.add_user_metadata(
             "format-version".to_string(),
@@ -294,12 +294,12 @@ impl ManifestWriter {
         self.output.write(Bytes::from(content)).await?;
 
         let partition_summary =
-            self.get_field_summary_vec(&manifest.metadata.partition_spec.fields);
+            self.get_field_summary_vec(manifest.metadata.partition_spec.fields());
 
         Ok(ManifestFile {
             manifest_path: self.output.location().to_string(),
             manifest_length: length as i64,
-            partition_spec_id: manifest.metadata.partition_spec.spec_id,
+            partition_spec_id: manifest.metadata.partition_spec.spec_id(),
             content: manifest.metadata.content,
             // sequence_number and min_sequence_number with UNASSIGNED_SEQUENCE_NUMBER will be replace with
             // real sequence number in `ManifestListWriter`.
