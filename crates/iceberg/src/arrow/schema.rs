@@ -32,8 +32,8 @@ use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::Result;
 use crate::spec::{
-    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
+    Datum, ListType, MapType, NestedField, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type,
 };
 use crate::{Error, ErrorKind};
 
@@ -95,7 +95,7 @@ pub trait ArrowSchemaVisitor {
 #[allow(dead_code)]
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
-    visitor.to_iceberg_schema(schema)
+    visitor.convert_schema(schema)
 }
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
@@ -114,7 +114,7 @@ impl ArrowSchemaConverter {
     }
 
     /// Convert Arrow schema to Iceberg schema.
-    fn to_iceberg_schema(&mut self, schema: &ArrowSchema) -> Result<Schema> {
+    fn convert_schema(&mut self, schema: &ArrowSchema) -> Result<Schema> {
         let mut fields = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             self.before_field(field)?;
@@ -210,12 +210,12 @@ impl ArrowSchemaConverter {
     }
 
     /// Convert Arrow list type to Iceberg list type.
-    fn convert_list_type(&mut self, element_field: &Field) -> Result<Type> {
+    fn convert_list_type(&mut self, field: &Field) -> Result<Type> {
         // before_list_element
-        let tp = self.convert_type(element_field.data_type())?;
+        let tp = self.convert_type(field.data_type())?;
         // after list element
-        let element_field = self.convert_field(&element_field, &tp)?;
-        Ok(Type::List(ListType::new(element_field.into())))
+        let icebug_field = self.convert_field(field, &tp)?;
+        Ok(Type::List(ListType::new(icebug_field.into())))
     }
 
     /// Convert Arrow map type to Iceberg map type.
@@ -261,7 +261,7 @@ impl ArrowSchemaConverter {
         let mut ice_fields = Vec::with_capacity(fields.len());
         for field in fields {
             self.before_field(field)?;
-            let field_type = self.convert_type(&field.data_type())?;
+            let field_type = self.convert_type(field.data_type())?;
             self.after_field(field)?;
             let icebug_field = self.convert_field(field, &field_type)?;
             ice_fields.push(Arc::new(icebug_field));
@@ -498,7 +498,7 @@ impl TryFrom<&ArrowSchema> for crate::spec::Schema {
     type Error = Error;
 
     fn try_from(schema: &ArrowSchema) -> crate::Result<Self> {
-        ArrowSchemaConverter::new().to_iceberg_schema(schema)
+        ArrowSchemaConverter::new().convert_schema(schema)
     }
 }
 
