@@ -514,7 +514,7 @@ trait CorePartitionSpecValidator {
             ));
         }
 
-        if self.partition_names().contains(name) {
+        if self.fields().iter().any(|f| f.name == name) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Cannot use partition name more than once: {}", name),
@@ -525,7 +525,7 @@ trait CorePartitionSpecValidator {
 
     /// For a single source-column transformations must be unique.
     fn check_for_redundant_partitions(&self, source_id: i32, transform: &Transform) -> Result<()> {
-        let collision = self.fields().into_iter().find(|f| {
+        let collision = self.fields().iter().find(|f| {
             f.source_id == source_id && f.transform.dedup_name() == transform.dedup_name()
         });
 
@@ -561,28 +561,18 @@ trait CorePartitionSpecValidator {
         Ok(())
     }
 
-    fn partition_names(&self) -> std::collections::HashSet<&str>;
-
-    fn fields(&self) -> Vec<&UnboundPartitionField>;
+    fn fields(&self) -> &Vec<UnboundPartitionField>;
 }
 
 impl CorePartitionSpecValidator for PartitionSpecBuilder<'_> {
-    fn partition_names(&self) -> std::collections::HashSet<&str> {
-        self.fields.iter().map(|f| f.name.as_str()).collect()
-    }
-
-    fn fields(&self) -> Vec<&UnboundPartitionField> {
-        self.fields.iter().collect()
+    fn fields(&self) -> &Vec<UnboundPartitionField> {
+        &self.fields
     }
 }
 
 impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
-    fn partition_names(&self) -> std::collections::HashSet<&str> {
-        self.fields.iter().map(|f| f.name.as_str()).collect()
-    }
-
-    fn fields(&self) -> Vec<&UnboundPartitionField> {
-        self.fields.iter().collect()
+    fn fields(&self) -> &Vec<UnboundPartitionField> {
+        &self.fields
     }
 }
 
