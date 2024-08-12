@@ -142,24 +142,30 @@ impl SqlCatalog {
     }
 
     /// SQLX Any does not implement PostgresSQL bindings, so we have to do this.
-    pub fn build_query(&self, query: &str) -> String {
+    fn replace_placeholders(&self, query: &str) -> String {
         match self.sql_bind_style {
             SqlBindStyle::DollarNumeric => {
-                let mut query = query.to_owned();
-                let mut i = 1;
-                while let Some(pos) = query.find('?') {
-                    query.replace_range(pos..pos + 1, &format!("${}", i));
-                    i += 1;
-                }
+                let mut count = 1;
                 query
+                    .chars()
+                    .fold(String::with_capacity(query.len()), |mut acc, c| {
+                        if c == '?' {
+                            acc.push('$');
+                            acc.push_str(&count.to_string());
+                            count += 1;
+                        } else {
+                            acc.push(c);
+                        }
+                        acc
+                    })
             }
             _ => query.to_owned(),
         }
     }
 
     /// Fetch a vec of AnyRows from a given query
-    pub async fn fetch_rows(&self, query: &str, args: Vec<Option<&String>>) -> Result<Vec<AnyRow>> {
-        let query_with_placeholders = self.build_query(query);
+    pub async fn fetch_rows(&self, query: &str, args: Vec<Option<&str>>) -> Result<Vec<AnyRow>> {
+        let query_with_placeholders = self.replace_placeholders(query);
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
         for arg in args {
@@ -171,14 +177,15 @@ impl SqlCatalog {
             .await
             .map_err(from_sqlx_error)
     }
+
     /// Execute statements in a transaction, provided or not
     pub async fn execute(
         &self,
         query: &str,
-        args: Vec<Option<&String>>,
+        args: Vec<Option<&str>>,
         transaction: Option<&mut Transaction<'_, Any>>,
     ) -> Result<AnyQueryResult> {
-        let query_with_placeholders = self.build_query(query);
+        let query_with_placeholders = self.replace_placeholders(query);
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
         for arg in args {
@@ -313,18 +320,15 @@ impl Catalog for SqlCatalog {
             "INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
              VALUES (?, ?, ?, ?)");
         if !properties.is_empty() {
-            let mut query_args = vec![];
+            let mut query_args = Vec::with_capacity(properties.len() * 4);
             let mut properties_insert = insert.clone();
             for (index, (key, value)) in properties.iter().enumerate() {
-                query_args.extend(
-                    [
-                        Some(&self.name),
-                        Some(&namespace_str),
-                        Some(key),
-                        Some(value),
-                    ]
-                    .iter(),
-                );
+                query_args.extend_from_slice(&[
+                    Some(self.name.as_str()),
+                    Some(namespace_str.as_str()),
+                    Some(key.as_str()),
+                    Some(value.as_str()),
+                ]);
                 if index > 0 {
                     properties_insert = format!("{properties_insert}, (?, ?, ?, ?)");
                 }
@@ -341,8 +345,8 @@ impl Catalog for SqlCatalog {
                 vec![
                     Some(&self.name),
                     Some(&namespace_str),
-                    Some(&"exists".to_string()),
-                    Some(&"true".to_string()),
+                    Some("exists"),
+                    Some("true"),
                 ],
                 None,
             )
