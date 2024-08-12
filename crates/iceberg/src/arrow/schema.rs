@@ -213,7 +213,7 @@ pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     visit_schema(schema, &mut visitor)
 }
 
-const ARROW_FIELD_DOC_KEY: &'static str = "doc";
+const ARROW_FIELD_DOC_KEY: &str = "doc";
 
 struct ArrowSchemaConverter;
 
