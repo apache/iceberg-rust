@@ -65,24 +65,14 @@ pub enum PrimitiveLiteral {
     Float(OrderedFloat<f32>),
     /// Stored as 8-byte little-endian
     Double(OrderedFloat<f64>),
-    /// Stores days from the 1970-01-01 in an 4-byte little-endian int
-    Date(i32),
-    /// Stores microseconds from midnight in an 8-byte little-endian long
-    Time(i64),
-    /// Timestamp without timezone
-    Timestamp(i64),
-    /// Timestamp with timezone
-    Timestamptz(i64),
     /// UTF-8 bytes (without length)
     String(String),
-    /// 16-byte big-endian value
-    Uuid(Uuid),
-    /// Binary value
-    Fixed(Vec<u8>),
     /// Binary value (without length)
     Binary(Vec<u8>),
-    /// Stores unscaled value as big int. According to iceberg spec, the precision must less than 38(`MAX_DECIMAL_PRECISION`) , so i128 is suit here.
-    Decimal(i128),
+    /// Stored as 16-byte little-endian
+    Int128(i128),
+    /// Stored as 16-byte little-endian
+    UInt128(u128),
 }
 
 impl PrimitiveLiteral {
@@ -248,26 +238,26 @@ impl PartialOrd for Datum {
                 PrimitiveType::Double,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Date(val),
-                PrimitiveLiteral::Date(other_val),
+                PrimitiveLiteral::Int(val),
+                PrimitiveLiteral::Int(other_val),
                 PrimitiveType::Date,
                 PrimitiveType::Date,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Time(val),
-                PrimitiveLiteral::Time(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Time,
                 PrimitiveType::Time,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Timestamp(val),
-                PrimitiveLiteral::Timestamp(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Timestamp,
                 PrimitiveType::Timestamp,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Timestamptz(val),
-                PrimitiveLiteral::Timestamptz(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Timestamptz,
                 PrimitiveType::Timestamptz,
             ) => val.partial_cmp(other_val),
@@ -278,14 +268,14 @@ impl PartialOrd for Datum {
                 PrimitiveType::String,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Uuid(val),
-                PrimitiveLiteral::Uuid(other_val),
+                PrimitiveLiteral::UInt128(val),
+                PrimitiveLiteral::UInt128(other_val),
                 PrimitiveType::Uuid,
                 PrimitiveType::Uuid,
-            ) => val.partial_cmp(other_val),
+            ) => Uuid::from_u128(*val).partial_cmp(&Uuid::from_u128(*other_val)),
             (
-                PrimitiveLiteral::Fixed(val),
-                PrimitiveLiteral::Fixed(other_val),
+                PrimitiveLiteral::Binary(val),
+                PrimitiveLiteral::Binary(other_val),
                 PrimitiveType::Fixed(_),
                 PrimitiveType::Fixed(_),
             ) => val.partial_cmp(other_val),
@@ -296,8 +286,8 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Decimal(val),
-                PrimitiveLiteral::Decimal(other_val),
+                PrimitiveLiteral::Int128(val),
+                PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
                     precision: _,
                     scale,
@@ -320,28 +310,33 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Int(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
+            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{}", val),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Date(val)) => write!(f, "{}", days_to_date(*val)),
-            (_, PrimitiveLiteral::Time(val)) => write!(f, "{}", microseconds_to_time(*val)),
-            (_, PrimitiveLiteral::Timestamp(val)) => {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
+                write!(f, "{}", days_to_date(*val))
+            }
+            (PrimitiveType::Time, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{}", microseconds_to_time(*val))
+            }
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", microseconds_to_datetime(*val))
             }
-            (_, PrimitiveLiteral::Timestamptz(val)) => {
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
-            (_, PrimitiveLiteral::Uuid(val)) => write!(f, "{}", val),
-            (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
+                write!(f, "{}", Uuid::from_u128(*val))
+            }
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
             (
                 PrimitiveType::Decimal {
                     precision: _,
                     scale,
                 },
-                PrimitiveLiteral::Decimal(val),
+                PrimitiveLiteral::Int128(val),
             ) => {
                 write!(f, "{}", Decimal::from_i128_with_scale(*val, *scale))
             }
@@ -398,21 +393,21 @@ impl Datum {
             PrimitiveType::Double => {
                 PrimitiveLiteral::Double(OrderedFloat(f64::from_le_bytes(bytes.try_into()?)))
             }
-            PrimitiveType::Date => PrimitiveLiteral::Date(i32::from_le_bytes(bytes.try_into()?)),
-            PrimitiveType::Time => PrimitiveLiteral::Time(i64::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Date => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
+            PrimitiveType::Time => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Timestamp => {
-                PrimitiveLiteral::Timestamp(i64::from_le_bytes(bytes.try_into()?))
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::Timestamptz => {
-                PrimitiveLiteral::Timestamptz(i64::from_le_bytes(bytes.try_into()?))
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::String => {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
             }
             PrimitiveType::Uuid => {
-                PrimitiveLiteral::Uuid(Uuid::from_u128(u128::from_be_bytes(bytes.try_into()?)))
+                PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()?))
             }
-            PrimitiveType::Fixed(_) => PrimitiveLiteral::Fixed(Vec::from(bytes)),
+            PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal {
                 precision: _,
@@ -438,15 +433,10 @@ impl Datum {
             PrimitiveLiteral::Long(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Float(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Double(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Date(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
-            PrimitiveLiteral::Uuid(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
-            PrimitiveLiteral::Fixed(val) => ByteBuf::from(val.as_slice()),
+            PrimitiveLiteral::UInt128(val) => ByteBuf::from(val.to_be_bytes()),
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
-            PrimitiveLiteral::Decimal(_) => todo!(),
+            PrimitiveLiteral::Int128(_) => todo!(),
         }
     }
 
@@ -576,12 +566,12 @@ impl Datum {
     /// let t = Datum::date(2);
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-03");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Date(2)), t.into());
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Int(2)), t.into());
     /// ```
     pub fn date(days: i32) -> Self {
         Self {
             r#type: PrimitiveType::Date,
-            literal: PrimitiveLiteral::Date(days),
+            literal: PrimitiveLiteral::Int(days),
         }
     }
 
@@ -668,7 +658,7 @@ impl Datum {
 
         Ok(Self {
             r#type: PrimitiveType::Time,
-            literal: PrimitiveLiteral::Time(value),
+            literal: PrimitiveLiteral::Long(value),
         })
     }
 
@@ -680,7 +670,7 @@ impl Datum {
 
         Self {
             r#type: PrimitiveType::Time,
-            literal: PrimitiveLiteral::Time(micro_secs),
+            literal: PrimitiveLiteral::Long(micro_secs),
         }
     }
 
@@ -740,7 +730,7 @@ impl Datum {
     pub fn timestamp_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamp,
-            literal: PrimitiveLiteral::Timestamp(value),
+            literal: PrimitiveLiteral::Long(value),
         }
     }
 
@@ -798,7 +788,7 @@ impl Datum {
     pub fn timestamptz_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamptz,
-            literal: PrimitiveLiteral::Timestamptz(value),
+            literal: PrimitiveLiteral::Long(value),
         }
     }
 
@@ -868,7 +858,7 @@ impl Datum {
     pub fn uuid(uuid: Uuid) -> Self {
         Self {
             r#type: PrimitiveType::Uuid,
-            literal: PrimitiveLiteral::Uuid(uuid),
+            literal: PrimitiveLiteral::UInt128(uuid.as_u128()),
         }
     }
 
@@ -907,7 +897,7 @@ impl Datum {
         let value: Vec<u8> = input.into_iter().collect();
         Self {
             r#type: PrimitiveType::Fixed(value.len() as u64),
-            literal: PrimitiveLiteral::Fixed(value),
+            literal: PrimitiveLiteral::Binary(value),
         }
     }
 
@@ -968,7 +958,7 @@ impl Datum {
         if let Type::Primitive(p) = r#type {
             Ok(Self {
                 r#type: p,
-                literal: PrimitiveLiteral::Decimal(decimal.mantissa()),
+                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
             })
         } else {
             unreachable!("Decimal type must be primitive.")
@@ -980,7 +970,7 @@ impl Datum {
         match target_type {
             Type::Primitive(target_primitive_type) => {
                 match (&self.literal, &self.r#type, target_primitive_type) {
-                    (PrimitiveLiteral::Date(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
+                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
                     // TODO: implement more type conversions
                     (_, self_type, target_type) if self_type == target_type => Ok(self),
@@ -1242,7 +1232,7 @@ impl Literal {
 
     /// Creates date literal from number of days from unix epoch directly.
     pub fn date(days: i32) -> Self {
-        Self::Primitive(PrimitiveLiteral::Date(days))
+        Self::Primitive(PrimitiveLiteral::Int(days))
     }
 
     /// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
@@ -1293,7 +1283,7 @@ impl Literal {
 
     /// Creates time in microseconds directly
     pub fn time(value: i64) -> Self {
-        Self::Primitive(PrimitiveLiteral::Time(value))
+        Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
     /// Creates time literal from [`chrono::NaiveTime`].
@@ -1356,12 +1346,12 @@ impl Literal {
 
     /// Creates a timestamp from unix epoch in microseconds.
     pub fn timestamp(value: i64) -> Self {
-        Self::Primitive(PrimitiveLiteral::Timestamp(value))
+        Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
     /// Creates a timestamp with timezone from unix epoch in microseconds.
     pub fn timestamptz(value: i64) -> Self {
-        Self::Primitive(PrimitiveLiteral::Timestamptz(value))
+        Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
     /// Creates a timestamp from [`DateTime`].
@@ -1421,7 +1411,7 @@ impl Literal {
 
     /// Creates uuid literal.
     pub fn uuid(uuid: Uuid) -> Self {
-        Self::Primitive(PrimitiveLiteral::Uuid(uuid))
+        Self::Primitive(PrimitiveLiteral::UInt128(uuid.as_u128()))
     }
 
     /// Creates uuid from str. See [`Uuid::parse_str`].
@@ -1454,12 +1444,12 @@ impl Literal {
     /// ```rust
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t1 = Literal::fixed(vec![1u8, 2u8]);
-    /// let t2 = Literal::Primitive(PrimitiveLiteral::Fixed(vec![1u8, 2u8]));
+    /// let t2 = Literal::Primitive(PrimitiveLiteral::Binary(vec![1u8, 2u8]));
     ///
     /// assert_eq!(t1, t2);
     /// ```
     pub fn fixed<I: IntoIterator<Item = u8>>(input: I) -> Self {
-        Literal::Primitive(PrimitiveLiteral::Fixed(input.into_iter().collect()))
+        Literal::Primitive(PrimitiveLiteral::Binary(input.into_iter().collect()))
     }
 
     /// Creates a binary literal from bytes.
@@ -1479,7 +1469,7 @@ impl Literal {
 
     /// Creates a decimal literal.
     pub fn decimal(decimal: i128) -> Self {
-        Self::Primitive(PrimitiveLiteral::Decimal(decimal))
+        Self::Primitive(PrimitiveLiteral::Int128(decimal))
     }
 
     /// Creates decimal literal from string. See [`Decimal::from_str_exact`].
@@ -1643,22 +1633,22 @@ impl Literal {
                     ))?)),
                 ))),
                 (PrimitiveType::Date, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Date(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int(
                         date::date_to_days(&NaiveDate::parse_from_str(&s, "%Y-%m-%d")?),
                     ))))
                 }
                 (PrimitiveType::Time, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Time(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(
                         time::time_to_microseconds(&NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")?),
                     ))))
                 }
                 (PrimitiveType::Timestamp, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
-                    PrimitiveLiteral::Timestamp(timestamp::datetime_to_microseconds(
+                    PrimitiveLiteral::Long(timestamp::datetime_to_microseconds(
                         &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?,
                     )),
                 ))),
                 (PrimitiveType::Timestamptz, JsonValue::String(s)) => {
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Timestamptz(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(
                         timestamptz::datetimetz_to_microseconds(&Utc.from_utc_datetime(
                             &NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f+00:00")?,
                         )),
@@ -1668,7 +1658,7 @@ impl Literal {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::String(s))))
                 }
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
-                    PrimitiveLiteral::Uuid(Uuid::parse_str(&s)?),
+                    PrimitiveLiteral::UInt128(Uuid::parse_str(&s)?.as_u128()),
                 ))),
                 (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
                 (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
@@ -1681,7 +1671,7 @@ impl Literal {
                 ) => {
                     let mut decimal = Decimal::from_str_exact(&s)?;
                     decimal.rescale(*scale);
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Decimal(
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(
                         decimal.mantissa(),
                     ))))
                 }
@@ -1777,51 +1767,58 @@ impl Literal {
     /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
     pub fn try_into_json(self, r#type: &Type) -> Result<JsonValue> {
         match (self, r#type) {
-            (Literal::Primitive(prim), _) => match prim {
-                PrimitiveLiteral::Boolean(val) => Ok(JsonValue::Bool(val)),
-                PrimitiveLiteral::Int(val) => Ok(JsonValue::Number((val).into())),
-                PrimitiveLiteral::Long(val) => Ok(JsonValue::Number((val).into())),
-                PrimitiveLiteral::Float(val) => match Number::from_f64(val.0 as f64) {
-                    Some(number) => Ok(JsonValue::Number(number)),
-                    None => Ok(JsonValue::Null),
-                },
-                PrimitiveLiteral::Double(val) => match Number::from_f64(val.0) {
-                    Some(number) => Ok(JsonValue::Number(number)),
-                    None => Ok(JsonValue::Null),
-                },
-                PrimitiveLiteral::Date(val) => {
+            (Literal::Primitive(prim), Type::Primitive(prim_type)) => match (prim_type, prim) {
+                (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(val)) => {
+                    Ok(JsonValue::Bool(val))
+                }
+                (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => {
+                    Ok(JsonValue::Number((val).into()))
+                }
+                (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => {
+                    Ok(JsonValue::Number((val).into()))
+                }
+                (PrimitiveType::Float, PrimitiveLiteral::Float(val)) => {
+                    match Number::from_f64(val.0 as f64) {
+                        Some(number) => Ok(JsonValue::Number(number)),
+                        None => Ok(JsonValue::Null),
+                    }
+                }
+                (PrimitiveType::Double, PrimitiveLiteral::Double(val)) => {
+                    match Number::from_f64(val.0) {
+                        Some(number) => Ok(JsonValue::Number(number)),
+                        None => Ok(JsonValue::Null),
+                    }
+                }
+                (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
                     Ok(JsonValue::String(date::days_to_date(val).to_string()))
                 }
-                PrimitiveLiteral::Time(val) => Ok(JsonValue::String(
+                (PrimitiveType::Time, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
                     time::microseconds_to_time(val).to_string(),
                 )),
-                PrimitiveLiteral::Timestamp(val) => Ok(JsonValue::String(
+                (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
                     timestamp::microseconds_to_datetime(val)
                         .format("%Y-%m-%dT%H:%M:%S%.f")
                         .to_string(),
                 )),
-                PrimitiveLiteral::Timestamptz(val) => Ok(JsonValue::String(
+                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
                     timestamptz::microseconds_to_datetimetz(val)
                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
                         .to_string(),
                 )),
-                PrimitiveLiteral::String(val) => Ok(JsonValue::String(val.clone())),
-                PrimitiveLiteral::Uuid(val) => Ok(JsonValue::String(val.to_string())),
-                PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.iter().fold(
+                (PrimitiveType::String, PrimitiveLiteral::String(val)) => {
+                    Ok(JsonValue::String(val.clone()))
+                }
+                (_, PrimitiveLiteral::UInt128(val)) => {
+                    Ok(JsonValue::String(Uuid::from_u128(val).to_string()))
+                }
+                (_, PrimitiveLiteral::Binary(val)) => Ok(JsonValue::String(val.iter().fold(
                     String::new(),
                     |mut acc, x| {
                         acc.push_str(&format!("{:x}", x));
                         acc
                     },
                 ))),
-                PrimitiveLiteral::Binary(val) => Ok(JsonValue::String(val.iter().fold(
-                    String::new(),
-                    |mut acc, x| {
-                        acc.push_str(&format!("{:x}", x));
-                        acc
-                    },
-                ))),
-                PrimitiveLiteral::Decimal(val) => match r#type {
+                (_, PrimitiveLiteral::Int128(val)) => match r#type {
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _precision,
                         scale,
@@ -1834,6 +1831,10 @@ impl Literal {
                         "The iceberg type for decimal literal must be decimal.",
                     ))?,
                 },
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "The iceberg value doesn't fit to the iceberg type.",
+                )),
             },
             (Literal::Struct(s), Type::Struct(struct_type)) => {
                 let mut id_and_value = Vec::with_capacity(struct_type.fields().len());
@@ -1888,15 +1889,10 @@ impl Literal {
                 PrimitiveLiteral::Long(any) => Box::new(any),
                 PrimitiveLiteral::Float(any) => Box::new(any),
                 PrimitiveLiteral::Double(any) => Box::new(any),
-                PrimitiveLiteral::Date(any) => Box::new(any),
-                PrimitiveLiteral::Time(any) => Box::new(any),
-                PrimitiveLiteral::Timestamp(any) => Box::new(any),
-                PrimitiveLiteral::Timestamptz(any) => Box::new(any),
-                PrimitiveLiteral::Fixed(any) => Box::new(any),
                 PrimitiveLiteral::Binary(any) => Box::new(any),
                 PrimitiveLiteral::String(any) => Box::new(any),
-                PrimitiveLiteral::Uuid(any) => Box::new(any),
-                PrimitiveLiteral::Decimal(any) => Box::new(any),
+                PrimitiveLiteral::UInt128(any) => Box::new(any),
+                PrimitiveLiteral::Int128(any) => Box::new(any),
             },
             _ => unimplemented!(),
         }
@@ -2197,17 +2193,12 @@ mod _serde {
                     super::PrimitiveLiteral::Long(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::Float(v) => RawLiteralEnum::Float(v.0),
                     super::PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
-                    super::PrimitiveLiteral::Date(v) => RawLiteralEnum::Int(v),
-                    super::PrimitiveLiteral::Time(v) => RawLiteralEnum::Long(v),
-                    super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
-                    super::PrimitiveLiteral::Timestamptz(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
-                    super::PrimitiveLiteral::Uuid(v) => {
-                        RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))
+                    super::PrimitiveLiteral::UInt128(v) => {
+                        RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
-                    super::PrimitiveLiteral::Fixed(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     super::PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
-                    super::PrimitiveLiteral::Decimal(v) => {
+                    super::PrimitiveLiteral::Int128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
                 },
@@ -2777,7 +2768,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Date(17486)),
+            Literal::Primitive(PrimitiveLiteral::Int(17486)),
             &Type::Primitive(PrimitiveType::Date),
         );
     }
@@ -2788,7 +2779,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Time(81068123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(81068123456)),
             &Type::Primitive(PrimitiveType::Time),
         );
     }
@@ -2799,7 +2790,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Timestamp(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamp),
         );
     }
@@ -2810,7 +2801,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Timestamptz(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamptz),
         );
     }
@@ -2832,8 +2823,10 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Uuid(
-                Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
+            Literal::Primitive(PrimitiveLiteral::UInt128(
+                Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7")
+                    .unwrap()
+                    .as_u128(),
             )),
             &Type::Primitive(PrimitiveType::Uuid),
         );
@@ -2845,7 +2838,7 @@ mod tests {
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Decimal(1420)),
+            Literal::Primitive(PrimitiveLiteral::Int128(1420)),
             &Type::decimal(28, 2).unwrap(),
         );
     }
@@ -3012,7 +3005,7 @@ mod tests {
     #[test]
     fn avro_convert_test_date() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Date(17486)),
+            Literal::Primitive(PrimitiveLiteral::Int(17486)),
             &Type::Primitive(PrimitiveType::Date),
         );
     }
@@ -3020,7 +3013,7 @@ mod tests {
     #[test]
     fn avro_convert_test_time() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Time(81068123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(81068123456)),
             &Type::Primitive(PrimitiveType::Time),
         );
     }
@@ -3028,7 +3021,7 @@ mod tests {
     #[test]
     fn avro_convert_test_timestamp() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Timestamp(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamp),
         );
     }
@@ -3036,7 +3029,7 @@ mod tests {
     #[test]
     fn avro_convert_test_timestamptz() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Timestamptz(1510871468123456)),
+            Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
             &Type::Primitive(PrimitiveType::Timestamptz),
         );
     }

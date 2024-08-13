@@ -16,27 +16,20 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-memory"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-rust-version = { workspace = true }
+name = "pyiceberg_core_rust"
+version = "0.0.1"
+edition = "2021"
+homepage = "https://rust.iceberg.apache.org"
+rust-version = "1.77.1"
+# This crate is used to build python bindings, we don't want to publish it
+publish = false
 
-categories = ["database"]
-description = "Apache Iceberg Rust Memory Catalog API"
-repository = { workspace = true }
-license = { workspace = true }
-keywords = ["iceberg", "memory", "catalog"]
+license = "Apache-2.0"
+keywords = ["iceberg"]
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
-async-trait = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-itertools = { workspace = true }
-serde_json = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
-
-[dev-dependencies]
-regex = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+iceberg = { path = "../../crates/iceberg" }
+pyo3 = { version = "0.22", features = ["extension-module"] }

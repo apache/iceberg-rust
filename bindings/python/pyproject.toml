@@ -15,28 +15,29 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "iceberg-catalog-memory"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-rust-version = { workspace = true }
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
-categories = ["database"]
-description = "Apache Iceberg Rust Memory Catalog API"
-repository = { workspace = true }
-license = { workspace = true }
-keywords = ["iceberg", "memory", "catalog"]
+[project]
+name = "pyiceberg_core"
+version = "0.0.1"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
 
-[dependencies]
-async-trait = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-itertools = { workspace = true }
-serde_json = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+[project.optional-dependencies]
+test = ["pytest"]
 
-[dev-dependencies]
-regex = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "pyiceberg_core.pyiceberg_core_rust"
+
+[tool.ruff.lint]
+ignore = ["F403", "F405"]

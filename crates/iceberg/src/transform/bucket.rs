@@ -21,7 +21,7 @@ use arrow_array::ArrayRef;
 use arrow_schema::{DataType, TimeUnit};
 
 use super::TransformFunction;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 #[derive(Debug)]
 pub struct Bucket {
@@ -221,17 +221,19 @@ impl TransformFunction for Bucket {
     }
 
     fn transform_literal(&self, input: &Datum) -> crate::Result<Option<Datum>> {
-        let val = match input.literal() {
-            PrimitiveLiteral::Int(v) => self.bucket_int(*v),
-            PrimitiveLiteral::Long(v) => self.bucket_long(*v),
-            PrimitiveLiteral::Decimal(v) => self.bucket_decimal(*v),
-            PrimitiveLiteral::Date(v) => self.bucket_date(*v),
-            PrimitiveLiteral::Time(v) => self.bucket_time(*v),
-            PrimitiveLiteral::Timestamp(v) => self.bucket_timestamp(*v),
-            PrimitiveLiteral::String(v) => self.bucket_str(v.as_str()),
-            PrimitiveLiteral::Uuid(v) => self.bucket_bytes(v.as_ref()),
-            PrimitiveLiteral::Binary(v) => self.bucket_bytes(v.as_ref()),
-            PrimitiveLiteral::Fixed(v) => self.bucket_bytes(v.as_ref()),
+        let val = match (input.data_type(), input.literal()) {
+            (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => self.bucket_int(*v),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => self.bucket_long(*v),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => self.bucket_decimal(*v),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => self.bucket_date(*v),
+            (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => self.bucket_time(*v),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
+            (PrimitiveType::String, PrimitiveLiteral::String(v)) => self.bucket_str(v.as_str()),
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) => {
+                self.bucket_bytes(uuid::Uuid::from_u128(*v).as_ref())
+            }
+            (PrimitiveType::Binary, PrimitiveLiteral::Binary(v)) => self.bucket_bytes(v.as_ref()),
+            (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(v)) => self.bucket_bytes(v.as_ref()),
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -561,7 +563,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(prev)?,
             ]),
-            Some("name IN (6, 2)"),
+            Some("name IN (2, 6)"),
         )?;
 
         fixture.assert_projection(

@@ -15,28 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "iceberg-catalog-memory"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-rust-version = { workspace = true }
+from pyiceberg_core import hello_world
 
-categories = ["database"]
-description = "Apache Iceberg Rust Memory Catalog API"
-repository = { workspace = true }
-license = { workspace = true }
-keywords = ["iceberg", "memory", "catalog"]
 
-[dependencies]
-async-trait = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-itertools = { workspace = true }
-serde_json = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
-
-[dev-dependencies]
-regex = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+def test_hello_world():
+    hello_world()

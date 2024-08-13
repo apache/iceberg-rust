@@ -18,11 +18,14 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/catalog/*",
-  "crates/examples",
-  "crates/iceberg",
-  "crates/integrations/*",
-  "crates/test_utils",
+    "crates/catalog/*",
+    "crates/examples",
+    "crates/iceberg",
+    "crates/integrations/*",
+    "crates/test_utils",
+]
+exclude = [
+    "bindings/python"
 ]
 
 [workspace.package]
@@ -36,7 +39,7 @@ rust-version = "1.77.1"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
-apache-avro = "0.16"
+apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "52" }
 arrow-array = { version = "52" }
@@ -67,12 +70,13 @@ log = "^0.4"
 mockito = "^1"
 murmur3 = "0.5.2"
 once_cell = "1"
-opendal = "0.48"
+opendal = "0.49"
 ordered-float = "4.0.0"
 parquet = "52"
 pilota = "0.11.2"
 pretty_assertions = "1.4.0"
 port_scanner = "0.1.5"
+regex = "1.10.5"
 reqwest = { version = "^0.12", default-features = false, features = ["json"] }
 rust_decimal = "1.31.0"
 serde = { version = "^1.0", features = ["rc"] }
