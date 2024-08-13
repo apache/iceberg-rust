@@ -39,6 +39,7 @@ use crate::spec::{
     SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
+use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of [`FileScanTask`].
@@ -62,9 +63,7 @@ pub struct TableScanBuilder<'a> {
 
 impl<'a> TableScanBuilder<'a> {
     pub(crate) fn new(table: &'a Table) -> Self {
-        let num_cpus = std::thread::available_parallelism()
-            .expect("failed to get number of CPUs")
-            .get();
+        let num_cpus = available_parallelism().get();
 
         Self {
             table,

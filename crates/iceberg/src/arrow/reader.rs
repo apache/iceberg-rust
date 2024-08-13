@@ -46,6 +46,7 @@ use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::runtime::spawn;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, Schema};
+use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
 /// Builder to create ArrowReader
@@ -58,9 +59,7 @@ pub struct ArrowReaderBuilder {
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
     pub(crate) fn new(file_io: FileIO) -> Self {
-        let num_cpus = std::thread::available_parallelism()
-            .expect("failed to get number of CPUs")
-            .get();
+        let num_cpus = available_parallelism().get();
 
         ArrowReaderBuilder {
             batch_size: None,
@@ -109,16 +108,16 @@ impl ArrowReader {
     pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
         let batch_size = self.batch_size;
-        let max_concurrent_fetching_datafiles = self.concurrency_limit_data_files;
+        let concurrency_limit_data_files = self.concurrency_limit_data_files;
 
-        let (tx, rx) = channel(10);
+        let (tx, rx) = channel(concurrency_limit_data_files);
         let mut channel_for_error = tx.clone();
 
         spawn(async move {
             let result = tasks
                 .map(|task| Ok((task, file_io.clone(), tx.clone())))
                 .try_for_each_concurrent(
-                    max_concurrent_fetching_datafiles,
+                    concurrency_limit_data_files,
                     |(file_scan_task, file_io, tx)| async move {
                         match file_scan_task {
                             Ok(task) => {
