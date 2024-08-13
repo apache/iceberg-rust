@@ -38,6 +38,7 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
+use timestamp::nanoseconds_to_datetime;
 use uuid::Uuid;
 
 use super::datatypes::{PrimitiveType, Type};
@@ -45,7 +46,7 @@ use crate::error::Result;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
 use crate::spec::values::timestamp::microseconds_to_datetime;
-use crate::spec::values::timestamptz::microseconds_to_datetimetz;
+use crate::spec::values::timestamptz::{microseconds_to_datetimetz, nanoseconds_to_datetimetz};
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::{ensure_data_valid, Error, ErrorKind};
 
@@ -73,6 +74,10 @@ pub enum PrimitiveLiteral {
     Timestamp(i64),
     /// Timestamp with timezone
     Timestamptz(i64),
+    /// Timestamp in nanosecond precision without timezone
+    TimestampNs(i64),
+    /// Timestamp in nanosecond precision with timezone
+    TimestamptzNs(i64),
     /// UTF-8 bytes (without length)
     String(String),
     /// 16-byte big-endian value
@@ -332,6 +337,12 @@ impl Display for Datum {
             (_, PrimitiveLiteral::Timestamptz(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
+            (_, PrimitiveLiteral::TimestampNs(val)) => {
+                write!(f, "{}", nanoseconds_to_datetime(*val))
+            }
+            (_, PrimitiveLiteral::TimestamptzNs(val)) => {
+                write!(f, "{}", nanoseconds_to_datetimetz(*val))
+            }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (_, PrimitiveLiteral::Uuid(val)) => write!(f, "{}", val),
             (_, PrimitiveLiteral::Fixed(val)) => display_bytes(val, f),
@@ -406,6 +417,12 @@ impl Datum {
             PrimitiveType::Timestamptz => {
                 PrimitiveLiteral::Timestamptz(i64::from_le_bytes(bytes.try_into()?))
             }
+            PrimitiveType::TimestampNs => {
+                PrimitiveLiteral::TimestampNs(i64::from_le_bytes(bytes.try_into()?))
+            }
+            PrimitiveType::TimestamptzNs => {
+                PrimitiveLiteral::TimestampNs(i64::from_le_bytes(bytes.try_into()?))
+            }
             PrimitiveType::String => {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
             }
@@ -442,6 +459,8 @@ impl Datum {
             PrimitiveLiteral::Time(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Timestamp(val) => ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Timestamptz(val) => ByteBuf::from(val.to_le_bytes()),
+            PrimitiveLiteral::TimestampNs(val) => ByteBuf::from(val.to_be_bytes()),
+            PrimitiveLiteral::TimestamptzNs(val) => ByteBuf::from(val.to_be_bytes()),
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
             PrimitiveLiteral::Uuid(val) => ByteBuf::from(val.as_u128().to_be_bytes()),
             PrimitiveLiteral::Fixed(val) => ByteBuf::from(val.as_slice()),
@@ -1805,6 +1824,16 @@ impl Literal {
                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
                         .to_string(),
                 )),
+                PrimitiveLiteral::TimestampNs(val) => Ok(JsonValue::String(
+                    timestamp::nanoseconds_to_datetime(val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string(),
+                )),
+                PrimitiveLiteral::TimestamptzNs(val) => Ok(JsonValue::String(
+                    timestamptz::microseconds_to_datetimetz(val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                        .to_string(),
+                )),
                 PrimitiveLiteral::String(val) => Ok(JsonValue::String(val.clone())),
                 PrimitiveLiteral::Uuid(val) => Ok(JsonValue::String(val.to_string())),
                 PrimitiveLiteral::Fixed(val) => Ok(JsonValue::String(val.iter().fold(
@@ -1891,6 +1920,8 @@ impl Literal {
                 PrimitiveLiteral::Date(any) => Box::new(any),
                 PrimitiveLiteral::Time(any) => Box::new(any),
                 PrimitiveLiteral::Timestamp(any) => Box::new(any),
+                PrimitiveLiteral::TimestampNs(any) => Box::new(any),
+                PrimitiveLiteral::TimestamptzNs(any) => Box::new(any),
                 PrimitiveLiteral::Timestamptz(any) => Box::new(any),
                 PrimitiveLiteral::Fixed(any) => Box::new(any),
                 PrimitiveLiteral::Binary(any) => Box::new(any),
@@ -1962,6 +1993,10 @@ mod timestamp {
         // This shouldn't fail until the year 262000
         DateTime::from_timestamp_micros(micros).unwrap().naive_utc()
     }
+
+    pub(crate) fn nanoseconds_to_datetime(nanos: i64) -> NaiveDateTime {
+        DateTime::from_timestamp_nanos(nanos).naive_utc()
+    }
 }
 
 mod timestamptz {
@@ -1973,6 +2008,12 @@ mod timestamptz {
 
     pub(crate) fn microseconds_to_datetimetz(micros: i64) -> DateTime<Utc> {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
+
+        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+    }
+
+    pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
+        let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
 
         DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
     }
@@ -2201,6 +2242,8 @@ mod _serde {
                     super::PrimitiveLiteral::Time(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::Timestamp(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::Timestamptz(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::TimestampNs(v) => RawLiteralEnum::Long(v),
+                    super::PrimitiveLiteral::TimestamptzNs(v) => RawLiteralEnum::Long(v),
                     super::PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
                     super::PrimitiveLiteral::Uuid(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))

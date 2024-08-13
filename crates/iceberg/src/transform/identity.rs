@@ -38,7 +38,7 @@ impl TransformFunction for Identity {
 mod test {
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
-        Timestamptz, Uuid,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{NestedField, StructType, Transform};
@@ -81,6 +81,8 @@ mod test {
                 (Primitive(Time), Some(Primitive(Time))),
                 (Primitive(Timestamp), Some(Primitive(Timestamp))),
                 (Primitive(Timestamptz), Some(Primitive(Timestamptz))),
+                (Primitive(TimestampNs), Some(Primitive(TimestampNs))),
+                (Primitive(TimestamptzNs), Some(Primitive(TimestamptzNs))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,

@@ -159,6 +159,8 @@ impl Transform {
                         | PrimitiveType::Time
                         | PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
                         | PrimitiveType::String
                         | PrimitiveType::Uuid
                         | PrimitiveType::Fixed(_)
@@ -200,6 +202,8 @@ impl Transform {
                     match p {
                         PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
                         | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Date)),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
@@ -216,9 +220,10 @@ impl Transform {
             Transform::Hour => {
                 if let Type::Primitive(p) = input_type {
                     match p {
-                        PrimitiveType::Timestamp | PrimitiveType::Timestamptz => {
-                            Ok(Type::Primitive(PrimitiveType::Int))
-                        }
+                        PrimitiveType::Timestamp
+                        | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs => Ok(Type::Primitive(PrimitiveType::Int)),
                         _ => Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!("{input_type} is not a valid input type of {self} transform",),

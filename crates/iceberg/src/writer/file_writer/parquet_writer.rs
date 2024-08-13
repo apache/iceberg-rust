@@ -634,6 +634,18 @@ mod tests {
                 .into(),
                 NestedField::optional(
                     11,
+                    "timestamp_ns",
+                    Type::Primitive(PrimitiveType::TimestampNs),
+                )
+                .into(),
+                NestedField::optional(
+                    12,
+                    "timestamptz_ns",
+                    Type::Primitive(PrimitiveType::TimestamptzNs),
+                )
+                .into(),
+                NestedField::optional(
+                    13,
                     "decimal",
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: 10,
@@ -641,8 +653,8 @@ mod tests {
                     }),
                 )
                 .into(),
-                NestedField::optional(12, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
-                NestedField::optional(13, "fixed", Type::Primitive(PrimitiveType::Fixed(10)))
+                NestedField::optional(14, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(15, "fixed", Type::Primitive(PrimitiveType::Fixed(10)))
                     .into(),
             ])
             .build()

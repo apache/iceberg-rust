@@ -299,7 +299,7 @@ mod test {
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
-        Timestamptz, Uuid,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
@@ -342,6 +342,8 @@ mod test {
                 (Primitive(Time), None),
                 (Primitive(Timestamp), Some(Primitive(Date))),
                 (Primitive(Timestamptz), Some(Primitive(Date))),
+                (Primitive(TimestampNs), Some(Primitive(Date))),
+                (Primitive(TimestamptzNs), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,
@@ -392,6 +394,8 @@ mod test {
                 (Primitive(Time), None),
                 (Primitive(Timestamp), Some(Primitive(Date))),
                 (Primitive(Timestamptz), Some(Primitive(Date))),
+                (Primitive(TimestampNs), Some(Primitive(Date))),
+                (Primitive(TimestamptzNs), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,
@@ -442,6 +446,8 @@ mod test {
                 (Primitive(Time), None),
                 (Primitive(Timestamp), Some(Primitive(Date))),
                 (Primitive(Timestamptz), Some(Primitive(Date))),
+                (Primitive(TimestampNs), Some(Primitive(Date))),
+                (Primitive(TimestamptzNs), Some(Primitive(Date))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,
@@ -492,6 +498,8 @@ mod test {
                 (Primitive(Time), None),
                 (Primitive(Timestamp), Some(Primitive(Int))),
                 (Primitive(Timestamptz), Some(Primitive(Int))),
+                (Primitive(TimestampNs), Some(Primitive(Int))),
+                (Primitive(TimestamptzNs), Some(Primitive(Int))),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,

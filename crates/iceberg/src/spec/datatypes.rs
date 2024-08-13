@@ -254,8 +254,11 @@ impl PrimitiveType {
                 | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
                 | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
                 | (PrimitiveType::Timestamptz, PrimitiveLiteral::Timestamptz(_))
-                | (PrimitiveType::TimestampNs, PrimitiveLiteral::TimestampNs())
-                | (PrimitiveType::TimestamptzNs, PrimitiveLiteral::TimestamptzNs())
+                | (PrimitiveType::TimestampNs, PrimitiveLiteral::TimestampNs(_))
+                | (
+                    PrimitiveType::TimestamptzNs,
+                    PrimitiveLiteral::TimestamptzNs(_)
+                )
                 | (PrimitiveType::String, PrimitiveLiteral::String(_))
                 | (PrimitiveType::Uuid, PrimitiveLiteral::Uuid(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
