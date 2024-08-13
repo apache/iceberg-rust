@@ -1170,6 +1170,8 @@ mod tests {
             PrimitiveLiteral::Time(1),
             PrimitiveLiteral::Timestamp(1),
             PrimitiveLiteral::Timestamptz(1),
+            PrimitiveLiteral::TimestampNs(1),
+            PrimitiveLiteral::TimestamptzNs(1),
             PrimitiveLiteral::String("1".to_string()),
             PrimitiveLiteral::Uuid(Uuid::new_v4()),
             PrimitiveLiteral::Fixed(vec![1]),
