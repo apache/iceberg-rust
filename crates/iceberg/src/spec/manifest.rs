@@ -1499,7 +1499,6 @@ mod tests {
     use std::sync::Arc;
 
     use tempfile::TempDir;
-    use tokio::io::unix::AsyncFdTryNewError;
 
     use super::*;
     use crate::io::FileIOBuilder;
