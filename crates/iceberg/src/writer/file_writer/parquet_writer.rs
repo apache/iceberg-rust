@@ -337,6 +337,14 @@ impl MinMaxColAggregator {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_micros(v));
                 self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
+            (PrimitiveType::TimestampNs, Statistics::Int64(stat,)) => {
+                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamp_nanos(v));
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
+            }
+            (PrimitiveType::TimestamptzNs, Statistics::Int64(stat,)) => {
+                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_nanos(v));
+                self.update_state::<Int64Type>(field_id, &stat, convert_func)
+            }
             (
                 PrimitiveType::Decimal {
                     precision: _,
@@ -597,7 +605,7 @@ mod tests {
     use anyhow::Result;
     use arrow_array::types::Int64Type;
     use arrow_array::{
-        ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
+        Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray
     };
     use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
@@ -1106,11 +1114,17 @@ mod tests {
                 .with_timezone_utc(),
         ) as ArrayRef;
         let col11 = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(vec![Some(0), Some(1), None, Some(3)])
+        ) as ArrayRef;
+        let col12 = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(vec![Some(0), Some(1), None, Some(3)]).with_timezone_utc()
+        ) as ArrayRef;
+        let col13 = Arc::new(
             arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
                 .with_precision_and_scale(10, 5)
                 .unwrap(),
         ) as ArrayRef;
-        let col12 = Arc::new(
+        let col14 = Arc::new(
             arrow_array::FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 vec![
                     Some(Uuid::from_u128(0).as_bytes().to_vec()),
@@ -1123,7 +1137,7 @@ mod tests {
             )
             .unwrap(),
         ) as ArrayRef;
-        let col13 = Arc::new(
+        let col15 = Arc::new(
             arrow_array::FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 vec![
                     Some(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
@@ -1137,7 +1151,7 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
-            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
+            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13, col14, col15
         ])
         .unwrap();
 
@@ -1185,8 +1199,10 @@ mod tests {
                 (8, Datum::time_micros(0).unwrap()),
                 (9, Datum::timestamp_micros(0)),
                 (10, Datum::timestamptz_micros(0)),
+                (11, Datum::timestamp_nanos(0)),
+                (12, Datum::timestamptz_nanos(0)),
                 (
-                    11,
+                    13,
                     Datum::new(
                         PrimitiveType::Decimal {
                             precision: 10,
@@ -1195,10 +1211,8 @@ mod tests {
                         PrimitiveLiteral::Decimal(1)
                     )
                 ),
-                (12, Datum::uuid(Uuid::from_u128(0))),
-                (13, Datum::fixed(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
-                (12, Datum::uuid(Uuid::from_u128(0))),
-                (13, Datum::fixed(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+                (14, Datum::uuid(Uuid::from_u128(0))),
+                (15, Datum::fixed(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
             ])
         );
         assert_eq!(
@@ -1215,8 +1229,10 @@ mod tests {
                 (8, Datum::time_micros(3).unwrap()),
                 (9, Datum::timestamp_micros(3)),
                 (10, Datum::timestamptz_micros(3)),
+                (11, Datum::timestamp_nanos(3)),
+                (12, Datum::timestamptz_nanos(3)),
                 (
-                    11,
+                    13,
                     Datum::new(
                         PrimitiveType::Decimal {
                             precision: 10,
@@ -1225,9 +1241,9 @@ mod tests {
                         PrimitiveLiteral::Decimal(100)
                     )
                 ),
-                (12, Datum::uuid(Uuid::from_u128(3))),
+                (14, Datum::uuid(Uuid::from_u128(3))),
                 (
-                    13,
+                    15,
                     Datum::fixed(vec![21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
                 ),
             ])

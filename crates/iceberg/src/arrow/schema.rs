@@ -582,7 +582,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             )),
             crate::spec::PrimitiveType::TimestamptzNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Store timestamptz_ns as UTC
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00.00".into())),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             )),
             crate::spec::PrimitiveType::String => {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))

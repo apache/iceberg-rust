@@ -763,6 +763,23 @@ impl Datum {
         }
     }
 
+    /// Creates a timestamp from unix epoch in microseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamp_micros(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001");
+    /// ```
+    pub fn timestamp_nanos(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::TimestampNs,
+            literal: PrimitiveLiteral::TimestampNs(value),
+        }
+    }
+
     /// Creates a timestamp from [`DateTime`].
     ///
     /// Example:
@@ -818,6 +835,23 @@ impl Datum {
         Self {
             r#type: PrimitiveType::Timestamptz,
             literal: PrimitiveLiteral::Timestamptz(value),
+        }
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in microseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamptz_micros(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001 UTC");
+    /// ```
+    pub fn timestamptz_nanos(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::TimestamptzNs,
+            literal: PrimitiveLiteral::TimestamptzNs(value),
         }
     }
 
