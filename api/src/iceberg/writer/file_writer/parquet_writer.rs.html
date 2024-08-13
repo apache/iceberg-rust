@@ -1225,8 +1225,6 @@
 <a href="#1225" id="1225">1225</a>
 <a href="#1226" id="1226">1226</a>
 <a href="#1227" id="1227">1227</a>
-<a href="#1228" id="1228">1228</a>
-<a href="#1229" id="1229">1229</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1576,9 +1574,7 @@
                 <span class="kw">let </span>convert_func = |v: ByteArray| -&gt; <span class="prelude-ty">Result</span>&lt;Datum&gt; {
                     <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from_le_bytes(
-                            v.data().try_into().unwrap(),
-                        )),
+                        PrimitiveLiteral::Int128(i128::from_le_bytes(v.data().try_into().unwrap())),
                     ))
                 };
                 <span class="self">self</span>.update_state::&lt;ByteArrayType&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
@@ -1593,7 +1589,7 @@
                 <span class="kw">let </span>convert_func = |v: i32| {
                     <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from(v)),
+                        PrimitiveLiteral::Int128(i128::from(v)),
                     ))
                 };
                 <span class="self">self</span>.update_state::&lt;Int32Type&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
@@ -1608,7 +1604,7 @@
                 <span class="kw">let </span>convert_func = |v: i64| {
                     <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::new(
                         ty.clone(),
-                        PrimitiveLiteral::Decimal(i128::from(v)),
+                        PrimitiveLiteral::Int128(i128::from(v)),
                     ))
                 };
                 <span class="self">self</span>.update_state::&lt;Int64Type&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
@@ -2409,7 +2405,7 @@
                             precision: <span class="number">10</span>,
                             scale: <span class="number">5
                         </span>},
-                        PrimitiveLiteral::Decimal(<span class="number">1</span>)
+                        PrimitiveLiteral::Int128(<span class="number">1</span>)
                     )
                 ),
                 (<span class="number">12</span>, Datum::uuid(Uuid::from_u128(<span class="number">0</span>))),
@@ -2439,7 +2435,7 @@
                             precision: <span class="number">10</span>,
                             scale: <span class="number">5
                         </span>},
-                        PrimitiveLiteral::Decimal(<span class="number">100</span>)
+                        PrimitiveLiteral::Int128(<span class="number">100</span>)
                     )
                 ),
                 (<span class="number">12</span>, Datum::uuid(Uuid::from_u128(<span class="number">3</span>))),

@@ -2585,6 +2585,14 @@
 <a href="#2585" id="2585">2585</a>
 <a href="#2586" id="2586">2586</a>
 <a href="#2587" id="2587">2587</a>
+<a href="#2588" id="2588">2588</a>
+<a href="#2589" id="2589">2589</a>
+<a href="#2590" id="2590">2590</a>
+<a href="#2591" id="2591">2591</a>
+<a href="#2592" id="2592">2592</a>
+<a href="#2593" id="2593">2593</a>
+<a href="#2594" id="2594">2594</a>
+<a href="#2595" id="2595">2595</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2612,7 +2620,7 @@
 <span class="kw">use </span>chrono::{DateTime, Datelike, Duration};
 
 <span class="kw">use </span><span class="kw">super</span>::TransformFunction;
-<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveLiteral};
+<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
 <span class="doccomment">/// Hour in one second.
@@ -2655,10 +2663,12 @@
     }
 
     <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
-        <span class="kw">let </span>val = <span class="kw">match </span>input.literal() {
-            PrimitiveLiteral::Date(v) =&gt; Date32Type::to_naive_date(<span class="kw-2">*</span>v).year() - UNIX_EPOCH_YEAR,
-            PrimitiveLiteral::Timestamp(v) =&gt; <span class="self">Self</span>::timestamp_to_year(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
-            PrimitiveLiteral::Timestamptz(v) =&gt; <span class="self">Self</span>::timestamp_to_year(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; {
+                Date32Type::to_naive_date(<span class="kw-2">*</span>v).year() - UNIX_EPOCH_YEAR
+            }
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">Self</span>::timestamp_to_year(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) =&gt; <span class="self">Self</span>::timestamp_to_year(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
             <span class="kw">_ </span>=&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
                     <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
@@ -2724,13 +2734,15 @@
     }
 
     <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
-        <span class="kw">let </span>val = <span class="kw">match </span>input.literal() {
-            PrimitiveLiteral::Date(v) =&gt; {
+        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; {
                 (Date32Type::to_naive_date(<span class="kw-2">*</span>v).year() - UNIX_EPOCH_YEAR) * <span class="number">12
                     </span>+ Date32Type::to_naive_date(<span class="kw-2">*</span>v).month0() <span class="kw">as </span>i32
             }
-            PrimitiveLiteral::Timestamp(v) =&gt; <span class="self">Self</span>::timestamp_to_month(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
-            PrimitiveLiteral::Timestamptz(v) =&gt; <span class="self">Self</span>::timestamp_to_month(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">Self</span>::timestamp_to_month(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) =&gt; {
+                <span class="self">Self</span>::timestamp_to_month(<span class="kw-2">*</span>v)<span class="question-mark">?
+            </span>}
             <span class="kw">_ </span>=&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
                     <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
@@ -2808,10 +2820,12 @@
     }
 
     <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
-        <span class="kw">let </span>val = <span class="kw">match </span>input.literal() {
-            PrimitiveLiteral::Date(v) =&gt; <span class="kw-2">*</span>v,
-            PrimitiveLiteral::Timestamp(v) =&gt; <span class="self">Self</span>::day_timestamp_micro(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
-            PrimitiveLiteral::Timestamptz(v) =&gt; <span class="self">Self</span>::day_timestamp_micro(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; <span class="kw-2">*</span>v,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">Self</span>::day_timestamp_micro(<span class="kw-2">*</span>v)<span class="question-mark">?</span>,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) =&gt; {
+                <span class="self">Self</span>::day_timestamp_micro(<span class="kw-2">*</span>v)<span class="question-mark">?
+            </span>}
             <span class="kw">_ </span>=&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
                     <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
@@ -2859,9 +2873,11 @@
     }
 
     <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span><span class="kw">crate</span>::spec::Datum) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::spec::Datum&gt;&gt; {
-        <span class="kw">let </span>val = <span class="kw">match </span>input.literal() {
-            PrimitiveLiteral::Timestamp(v) =&gt; <span class="self">Self</span>::hour_timestamp_micro(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Timestamptz(v) =&gt; <span class="self">Self</span>::hour_timestamp_micro(<span class="kw-2">*</span>v),
+        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">Self</span>::hour_timestamp_micro(<span class="kw-2">*</span>v),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) =&gt; {
+                <span class="self">Self</span>::hour_timestamp_micro(<span class="kw-2">*</span>v)
+            }
             <span class="kw">_ </span>=&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
                     <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
@@ -3228,7 +3244,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (420034, 411288)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (411288, 420034)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -3881,7 +3897,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (-363, -364, -365)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (-363, -365, -364)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(

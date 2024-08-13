@@ -1164,11 +1164,6 @@
 <a href="#1164" id="1164">1164</a>
 <a href="#1165" id="1165">1165</a>
 <a href="#1166" id="1166">1166</a>
-<a href="#1167" id="1167">1167</a>
-<a href="#1168" id="1168">1168</a>
-<a href="#1169" id="1169">1169</a>
-<a href="#1170" id="1170">1170</a>
-<a href="#1171" id="1171">1171</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1416,14 +1411,14 @@
                 | (PrimitiveType::Long, PrimitiveLiteral::Long(<span class="kw">_</span>))
                 | (PrimitiveType::Float, PrimitiveLiteral::Float(<span class="kw">_</span>))
                 | (PrimitiveType::Double, PrimitiveLiteral::Double(<span class="kw">_</span>))
-                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Decimal(<span class="kw">_</span>))
-                | (PrimitiveType::Date, PrimitiveLiteral::Date(<span class="kw">_</span>))
-                | (PrimitiveType::Time, PrimitiveLiteral::Time(<span class="kw">_</span>))
-                | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(<span class="kw">_</span>))
-                | (PrimitiveType::Timestamptz, PrimitiveLiteral::Timestamptz(<span class="kw">_</span>))
+                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(<span class="kw">_</span>))
+                | (PrimitiveType::Date, PrimitiveLiteral::Int(<span class="kw">_</span>))
+                | (PrimitiveType::Time, PrimitiveLiteral::Long(<span class="kw">_</span>))
+                | (PrimitiveType::Timestamp, PrimitiveLiteral::Long(<span class="kw">_</span>))
+                | (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(<span class="kw">_</span>))
                 | (PrimitiveType::String, PrimitiveLiteral::String(<span class="kw">_</span>))
-                | (PrimitiveType::Uuid, PrimitiveLiteral::Uuid(<span class="kw">_</span>))
-                | (PrimitiveType::Fixed(<span class="kw">_</span>), PrimitiveLiteral::Fixed(<span class="kw">_</span>))
+                | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(<span class="kw">_</span>))
+                | (PrimitiveType::Fixed(<span class="kw">_</span>), PrimitiveLiteral::Binary(<span class="kw">_</span>))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(<span class="kw">_</span>))
         )
     }
@@ -2104,11 +2099,15 @@
             Type::Struct(StructType {
                 fields: <span class="macro">vec!</span>[
                     NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Uuid))
-                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                            Uuid::parse_str(<span class="string">"0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb"</span>).unwrap(),
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                            Uuid::parse_str(<span class="string">"0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb"</span>)
+                                .unwrap()
+                                .as_u128(),
                         )))
-                        .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                            Uuid::parse_str(<span class="string">"ec5911be-b0a7-458c-8438-c9a3e53cffae"</span>).unwrap(),
+                        .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                            Uuid::parse_str(<span class="string">"ec5911be-b0a7-458c-8438-c9a3e53cffae"</span>)
+                                .unwrap()
+                                .as_u128(),
                         )))
                         .into(),
                     NestedField::optional(<span class="number">2</span>, <span class="string">"data"</span>, Type::Primitive(PrimitiveType::Int)).into(),
@@ -2173,11 +2172,15 @@
 
         <span class="kw">let </span>struct_type = Type::Struct(StructType::new(<span class="macro">vec!</span>[
             NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Uuid))
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                    Uuid::parse_str(<span class="string">"0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb"</span>).unwrap(),
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    Uuid::parse_str(<span class="string">"0db3e2a8-9d1d-42b9-aa7b-74ebe558dceb"</span>)
+                        .unwrap()
+                        .as_u128(),
                 )))
-                .with_write_default(Literal::Primitive(PrimitiveLiteral::Uuid(
-                    Uuid::parse_str(<span class="string">"ec5911be-b0a7-458c-8438-c9a3e53cffae"</span>).unwrap(),
+                .with_write_default(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    Uuid::parse_str(<span class="string">"ec5911be-b0a7-458c-8438-c9a3e53cffae"</span>)
+                        .unwrap()
+                        .as_u128(),
                 )))
                 .into(),
             NestedField::optional(<span class="number">2</span>, <span class="string">"data"</span>, Type::Primitive(PrimitiveType::Int)).into(),
@@ -2298,45 +2301,32 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_primitive_type_compatitable() {
-        <span class="kw">let </span>types = <span class="macro">vec!</span>[
-            PrimitiveType::Boolean,
-            PrimitiveType::Int,
-            PrimitiveType::Long,
-            PrimitiveType::Float,
-            PrimitiveType::Double,
-            PrimitiveType::Decimal {
-                precision: <span class="number">9</span>,
-                scale: <span class="number">2</span>,
-            },
-            PrimitiveType::Date,
-            PrimitiveType::Time,
-            PrimitiveType::Timestamp,
-            PrimitiveType::Timestamptz,
-            PrimitiveType::String,
-            PrimitiveType::Uuid,
-            PrimitiveType::Fixed(<span class="number">8</span>),
-            PrimitiveType::Binary,
+        <span class="kw">let </span>pairs = <span class="macro">vec!</span>[
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(<span class="bool-val">true</span>)),
+            (PrimitiveType::Int, PrimitiveLiteral::Int(<span class="number">1</span>)),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (PrimitiveType::Float, PrimitiveLiteral::Float(<span class="number">1.0</span>.into())),
+            (PrimitiveType::Double, PrimitiveLiteral::Double(<span class="number">1.0</span>.into())),
+            (
+                PrimitiveType::Decimal {
+                    precision: <span class="number">9</span>,
+                    scale: <span class="number">2</span>,
+                },
+                PrimitiveLiteral::Int128(<span class="number">1</span>),
+            ),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(<span class="number">1</span>)),
+            (PrimitiveType::Time, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (
+                PrimitiveType::Uuid,
+                PrimitiveLiteral::UInt128(Uuid::new_v4().as_u128()),
+            ),
+            (PrimitiveType::Fixed(<span class="number">8</span>), PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">1</span>])),
+            (PrimitiveType::Binary, PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">1</span>])),
         ];
-        <span class="kw">let </span>literals = <span class="macro">vec!</span>[
-            PrimitiveLiteral::Boolean(<span class="bool-val">true</span>),
-            PrimitiveLiteral::Int(<span class="number">1</span>),
-            PrimitiveLiteral::Long(<span class="number">1</span>),
-            PrimitiveLiteral::Float(<span class="number">1.0</span>.into()),
-            PrimitiveLiteral::Double(<span class="number">1.0</span>.into()),
-            PrimitiveLiteral::Decimal(<span class="number">1</span>),
-            PrimitiveLiteral::Date(<span class="number">1</span>),
-            PrimitiveLiteral::Time(<span class="number">1</span>),
-            PrimitiveLiteral::Timestamp(<span class="number">1</span>),
-            PrimitiveLiteral::Timestamptz(<span class="number">1</span>),
-            PrimitiveLiteral::String(<span class="string">"1"</span>.to_string()),
-            PrimitiveLiteral::Uuid(Uuid::new_v4()),
-            PrimitiveLiteral::Fixed(<span class="macro">vec!</span>[<span class="number">1</span>]),
-            PrimitiveLiteral::Binary(<span class="macro">vec!</span>[<span class="number">1</span>]),
-        ];
-        <span class="kw">for </span>(i, t) <span class="kw">in </span>types.iter().enumerate() {
-            <span class="kw">for </span>(j, l) <span class="kw">in </span>literals.iter().enumerate() {
-                <span class="macro">assert_eq!</span>(i == j, t.compatible(l));
-            }
+        <span class="kw">for </span>(ty, literal) <span class="kw">in </span>pairs {
+            <span class="macro">assert!</span>(ty.compatible(<span class="kw-2">&amp;</span>literal));
         }
     }
 }

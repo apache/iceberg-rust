@@ -885,6 +885,8 @@
 <a href="#885" id="885">885</a>
 <a href="#886" id="886">886</a>
 <a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -908,7 +910,7 @@
 <span class="kw">use </span>arrow_schema::{DataType, TimeUnit};
 
 <span class="kw">use </span><span class="kw">super</span>::TransformFunction;
-<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveLiteral};
+<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Bucket {
@@ -1108,17 +1110,19 @@
     }
 
     <span class="kw">fn </span>transform_literal(<span class="kw-2">&amp;</span><span class="self">self</span>, input: <span class="kw-2">&amp;</span>Datum) -&gt; <span class="kw">crate</span>::Result&lt;<span class="prelude-ty">Option</span>&lt;Datum&gt;&gt; {
-        <span class="kw">let </span>val = <span class="kw">match </span>input.literal() {
-            PrimitiveLiteral::Int(v) =&gt; <span class="self">self</span>.bucket_int(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Long(v) =&gt; <span class="self">self</span>.bucket_long(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Decimal(v) =&gt; <span class="self">self</span>.bucket_decimal(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Date(v) =&gt; <span class="self">self</span>.bucket_date(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Time(v) =&gt; <span class="self">self</span>.bucket_time(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::Timestamp(v) =&gt; <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v),
-            PrimitiveLiteral::String(v) =&gt; <span class="self">self</span>.bucket_str(v.as_str()),
-            PrimitiveLiteral::Uuid(v) =&gt; <span class="self">self</span>.bucket_bytes(v.as_ref()),
-            PrimitiveLiteral::Binary(v) =&gt; <span class="self">self</span>.bucket_bytes(v.as_ref()),
-            PrimitiveLiteral::Fixed(v) =&gt; <span class="self">self</span>.bucket_bytes(v.as_ref()),
+        <span class="kw">let </span>val = <span class="kw">match </span>(input.data_type(), input.literal()) {
+            (PrimitiveType::Int, PrimitiveLiteral::Int(v)) =&gt; <span class="self">self</span>.bucket_int(<span class="kw-2">*</span>v),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_long(<span class="kw-2">*</span>v),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) =&gt; <span class="self">self</span>.bucket_decimal(<span class="kw-2">*</span>v),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; <span class="self">self</span>.bucket_date(<span class="kw-2">*</span>v),
+            (PrimitiveType::Time, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_time(<span class="kw-2">*</span>v),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v),
+            (PrimitiveType::String, PrimitiveLiteral::String(v)) =&gt; <span class="self">self</span>.bucket_str(v.as_str()),
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) =&gt; {
+                <span class="self">self</span>.bucket_bytes(uuid::Uuid::from_u128(<span class="kw-2">*</span>v).as_ref())
+            }
+            (PrimitiveType::Binary, PrimitiveLiteral::Binary(v)) =&gt; <span class="self">self</span>.bucket_bytes(v.as_ref()),
+            (PrimitiveType::Fixed(<span class="kw">_</span>), PrimitiveLiteral::Binary(v)) =&gt; <span class="self">self</span>.bucket_bytes(v.as_ref()),
             <span class="kw">_ </span>=&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
                     <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
@@ -1448,7 +1452,7 @@
                 Datum::decimal_from_str(curr)<span class="question-mark">?</span>,
                 Datum::decimal_from_str(prev)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (6, 2)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (2, 6)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(

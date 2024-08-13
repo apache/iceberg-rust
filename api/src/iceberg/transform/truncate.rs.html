@@ -968,7 +968,7 @@
                 <span class="kw">let </span>width = <span class="self">self</span>.width <span class="kw">as </span>i64;
                 Datum::long(<span class="self">Self</span>::truncate_i64(<span class="kw-2">*</span>v, width))
             })),
-            PrimitiveLiteral::Decimal(v) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>({
+            PrimitiveLiteral::Int128(v) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>({
                 <span class="kw">let </span>width = <span class="self">self</span>.width <span class="kw">as </span>i128;
                 Datum::decimal(<span class="self">Self</span>::truncate_decimal_i128(<span class="kw-2">*</span>v, width))<span class="question-mark">?
             </span>})),
@@ -1202,7 +1202,7 @@
                 Datum::decimal_from_str(curr)<span class="question-mark">?</span>,
                 Datum::decimal_from_str(next)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (10090, 9990, 9890)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (9890, 9990, 10090)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -1272,7 +1272,7 @@
                 Datum::decimal_from_str(curr)<span class="question-mark">?</span>,
                 Datum::decimal_from_str(next)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (9900, 10000, 10100)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (10000, 10100, 9900)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(

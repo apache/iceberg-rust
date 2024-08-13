@@ -3394,13 +3394,6 @@
 <a href="#3394" id="3394">3394</a>
 <a href="#3395" id="3395">3395</a>
 <a href="#3396" id="3396">3396</a>
-<a href="#3397" id="3397">3397</a>
-<a href="#3398" id="3398">3398</a>
-<a href="#3399" id="3399">3399</a>
-<a href="#3400" id="3400">3400</a>
-<a href="#3401" id="3401">3401</a>
-<a href="#3402" id="3402">3402</a>
-<a href="#3403" id="3403">3403</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3468,24 +3461,14 @@
     </span>Float(OrderedFloat&lt;f32&gt;),
     <span class="doccomment">/// Stored as 8-byte little-endian
     </span>Double(OrderedFloat&lt;f64&gt;),
-    <span class="doccomment">/// Stores days from the 1970-01-01 in an 4-byte little-endian int
-    </span>Date(i32),
-    <span class="doccomment">/// Stores microseconds from midnight in an 8-byte little-endian long
-    </span>Time(i64),
-    <span class="doccomment">/// Timestamp without timezone
-    </span>Timestamp(i64),
-    <span class="doccomment">/// Timestamp with timezone
-    </span>Timestamptz(i64),
     <span class="doccomment">/// UTF-8 bytes (without length)
     </span>String(String),
-    <span class="doccomment">/// 16-byte big-endian value
-    </span>Uuid(Uuid),
-    <span class="doccomment">/// Binary value
-    </span>Fixed(Vec&lt;u8&gt;),
     <span class="doccomment">/// Binary value (without length)
     </span>Binary(Vec&lt;u8&gt;),
-    <span class="doccomment">/// Stores unscaled value as big int. According to iceberg spec, the precision must less than 38(`MAX_DECIMAL_PRECISION`) , so i128 is suit here.
-    </span>Decimal(i128),
+    <span class="doccomment">/// Stored as 16-byte little-endian
+    </span>Int128(i128),
+    <span class="doccomment">/// Stored as 16-byte little-endian
+    </span>UInt128(u128),
 }
 
 <span class="kw">impl </span>PrimitiveLiteral {
@@ -3651,26 +3634,26 @@
                 PrimitiveType::Double,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Date(val),
-                PrimitiveLiteral::Date(other_val),
+                PrimitiveLiteral::Int(val),
+                PrimitiveLiteral::Int(other_val),
                 PrimitiveType::Date,
                 PrimitiveType::Date,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Time(val),
-                PrimitiveLiteral::Time(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Time,
                 PrimitiveType::Time,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Timestamp(val),
-                PrimitiveLiteral::Timestamp(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Timestamp,
                 PrimitiveType::Timestamp,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Timestamptz(val),
-                PrimitiveLiteral::Timestamptz(other_val),
+                PrimitiveLiteral::Long(val),
+                PrimitiveLiteral::Long(other_val),
                 PrimitiveType::Timestamptz,
                 PrimitiveType::Timestamptz,
             ) =&gt; val.partial_cmp(other_val),
@@ -3681,14 +3664,14 @@
                 PrimitiveType::String,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Uuid(val),
-                PrimitiveLiteral::Uuid(other_val),
+                PrimitiveLiteral::UInt128(val),
+                PrimitiveLiteral::UInt128(other_val),
                 PrimitiveType::Uuid,
                 PrimitiveType::Uuid,
-            ) =&gt; val.partial_cmp(other_val),
+            ) =&gt; Uuid::from_u128(<span class="kw-2">*</span>val).partial_cmp(<span class="kw-2">&amp;</span>Uuid::from_u128(<span class="kw-2">*</span>other_val)),
             (
-                PrimitiveLiteral::Fixed(val),
-                PrimitiveLiteral::Fixed(other_val),
+                PrimitiveLiteral::Binary(val),
+                PrimitiveLiteral::Binary(other_val),
                 PrimitiveType::Fixed(<span class="kw">_</span>),
                 PrimitiveType::Fixed(<span class="kw">_</span>),
             ) =&gt; val.partial_cmp(other_val),
@@ -3699,8 +3682,8 @@
                 PrimitiveType::Binary,
             ) =&gt; val.partial_cmp(other_val),
             (
-                PrimitiveLiteral::Decimal(val),
-                PrimitiveLiteral::Decimal(other_val),
+                PrimitiveLiteral::Int128(val),
+                PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
                     precision: <span class="kw">_</span>,
                     scale,
@@ -3723,28 +3706,33 @@
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
         <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.r#type, <span class="kw-2">&amp;</span><span class="self">self</span>.literal) {
             (<span class="kw">_</span>, PrimitiveLiteral::Boolean(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
-            (<span class="kw">_</span>, PrimitiveLiteral::Int(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
-            (<span class="kw">_</span>, PrimitiveLiteral::Long(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
+            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
             (<span class="kw">_</span>, PrimitiveLiteral::Float(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
             (<span class="kw">_</span>, PrimitiveLiteral::Double(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
-            (<span class="kw">_</span>, PrimitiveLiteral::Date(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, days_to_date(<span class="kw-2">*</span>val)),
-            (<span class="kw">_</span>, PrimitiveLiteral::Time(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, microseconds_to_time(<span class="kw-2">*</span>val)),
-            (<span class="kw">_</span>, PrimitiveLiteral::Timestamp(val)) =&gt; {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(val)) =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"{}"</span>, days_to_date(<span class="kw-2">*</span>val))
+            }
+            (PrimitiveType::Time, PrimitiveLiteral::Long(val)) =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"{}"</span>, microseconds_to_time(<span class="kw-2">*</span>val))
+            }
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) =&gt; {
                 <span class="macro">write!</span>(f, <span class="string">"{}"</span>, microseconds_to_datetime(<span class="kw-2">*</span>val))
             }
-            (<span class="kw">_</span>, PrimitiveLiteral::Timestamptz(val)) =&gt; {
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) =&gt; {
                 <span class="macro">write!</span>(f, <span class="string">"{}"</span>, microseconds_to_datetimetz(<span class="kw-2">*</span>val))
             }
             (<span class="kw">_</span>, PrimitiveLiteral::String(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">r#""{}""#</span>, val),
-            (<span class="kw">_</span>, PrimitiveLiteral::Uuid(val)) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, val),
-            (<span class="kw">_</span>, PrimitiveLiteral::Fixed(val)) =&gt; display_bytes(val, f),
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"{}"</span>, Uuid::from_u128(<span class="kw-2">*</span>val))
+            }
             (<span class="kw">_</span>, PrimitiveLiteral::Binary(val)) =&gt; display_bytes(val, f),
             (
                 PrimitiveType::Decimal {
                     precision: <span class="kw">_</span>,
                     scale,
                 },
-                PrimitiveLiteral::Decimal(val),
+                PrimitiveLiteral::Int128(val),
             ) =&gt; {
                 <span class="macro">write!</span>(f, <span class="string">"{}"</span>, Decimal::from_i128_with_scale(<span class="kw-2">*</span>val, <span class="kw-2">*</span>scale))
             }
@@ -3801,21 +3789,21 @@
             PrimitiveType::Double =&gt; {
                 PrimitiveLiteral::Double(OrderedFloat(f64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)))
             }
-            PrimitiveType::Date =&gt; PrimitiveLiteral::Date(i32::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
-            PrimitiveType::Time =&gt; PrimitiveLiteral::Time(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+            PrimitiveType::Date =&gt; PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+            PrimitiveType::Time =&gt; PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
             PrimitiveType::Timestamp =&gt; {
-                PrimitiveLiteral::Timestamp(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>))
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>))
             }
             PrimitiveType::Timestamptz =&gt; {
-                PrimitiveLiteral::Timestamptz(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>))
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>))
             }
             PrimitiveType::String =&gt; {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)<span class="question-mark">?</span>.to_string())
             }
             PrimitiveType::Uuid =&gt; {
-                PrimitiveLiteral::Uuid(Uuid::from_u128(u128::from_be_bytes(bytes.try_into()<span class="question-mark">?</span>)))
+                PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()<span class="question-mark">?</span>))
             }
-            PrimitiveType::Fixed(<span class="kw">_</span>) =&gt; PrimitiveLiteral::Fixed(Vec::from(bytes)),
+            PrimitiveType::Fixed(<span class="kw">_</span>) =&gt; PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary =&gt; PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal {
                 precision: <span class="kw">_</span>,
@@ -3841,15 +3829,10 @@
             PrimitiveLiteral::Long(val) =&gt; ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Float(val) =&gt; ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::Double(val) =&gt; ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Date(val) =&gt; ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Time(val) =&gt; ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamp(val) =&gt; ByteBuf::from(val.to_le_bytes()),
-            PrimitiveLiteral::Timestamptz(val) =&gt; ByteBuf::from(val.to_le_bytes()),
             PrimitiveLiteral::String(val) =&gt; ByteBuf::from(val.as_bytes()),
-            PrimitiveLiteral::Uuid(val) =&gt; ByteBuf::from(val.as_u128().to_be_bytes()),
-            PrimitiveLiteral::Fixed(val) =&gt; ByteBuf::from(val.as_slice()),
+            PrimitiveLiteral::UInt128(val) =&gt; ByteBuf::from(val.to_be_bytes()),
             PrimitiveLiteral::Binary(val) =&gt; ByteBuf::from(val.as_slice()),
-            PrimitiveLiteral::Decimal(<span class="kw">_</span>) =&gt; <span class="macro">todo!</span>(),
+            PrimitiveLiteral::Int128(<span class="kw">_</span>) =&gt; <span class="macro">todo!</span>(),
         }
     }
 
@@ -3979,12 +3962,12 @@
     /// let t = Datum::date(2);
     ///
     /// assert_eq!(&amp;format!("{t}"), "1970-01-03");
-    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Date(2)), t.into());
+    /// assert_eq!(Literal::Primitive(PrimitiveLiteral::Int(2)), t.into());
     /// ```
     </span><span class="kw">pub fn </span>date(days: i32) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             r#type: PrimitiveType::Date,
-            literal: PrimitiveLiteral::Date(days),
+            literal: PrimitiveLiteral::Int(days),
         }
     }
 
@@ -4071,7 +4054,7 @@
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             r#type: PrimitiveType::Time,
-            literal: PrimitiveLiteral::Time(value),
+            literal: PrimitiveLiteral::Long(value),
         })
     }
 
@@ -4083,7 +4066,7 @@
 
         <span class="self">Self </span>{
             r#type: PrimitiveType::Time,
-            literal: PrimitiveLiteral::Time(micro_secs),
+            literal: PrimitiveLiteral::Long(micro_secs),
         }
     }
 
@@ -4143,7 +4126,7 @@
     </span><span class="kw">pub fn </span>timestamp_micros(value: i64) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             r#type: PrimitiveType::Timestamp,
-            literal: PrimitiveLiteral::Timestamp(value),
+            literal: PrimitiveLiteral::Long(value),
         }
     }
 
@@ -4201,7 +4184,7 @@
     </span><span class="kw">pub fn </span>timestamptz_micros(value: i64) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             r#type: PrimitiveType::Timestamptz,
-            literal: PrimitiveLiteral::Timestamptz(value),
+            literal: PrimitiveLiteral::Long(value),
         }
     }
 
@@ -4271,7 +4254,7 @@
     </span><span class="kw">pub fn </span>uuid(uuid: Uuid) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             r#type: PrimitiveType::Uuid,
-            literal: PrimitiveLiteral::Uuid(uuid),
+            literal: PrimitiveLiteral::UInt128(uuid.as_u128()),
         }
     }
 
@@ -4310,7 +4293,7 @@
         <span class="kw">let </span>value: Vec&lt;u8&gt; = input.into_iter().collect();
         <span class="self">Self </span>{
             r#type: PrimitiveType::Fixed(value.len() <span class="kw">as </span>u64),
-            literal: PrimitiveLiteral::Fixed(value),
+            literal: PrimitiveLiteral::Binary(value),
         }
     }
 
@@ -4371,7 +4354,7 @@
         <span class="kw">if let </span>Type::Primitive(p) = r#type {
             <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 r#type: p,
-                literal: PrimitiveLiteral::Decimal(decimal.mantissa()),
+                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
             })
         } <span class="kw">else </span>{
             <span class="macro">unreachable!</span>(<span class="string">"Decimal type must be primitive."</span>)
@@ -4383,7 +4366,7 @@
         <span class="kw">match </span>target_type {
             Type::Primitive(target_primitive_type) =&gt; {
                 <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.literal, <span class="kw-2">&amp;</span><span class="self">self</span>.r#type, target_primitive_type) {
-                    (PrimitiveLiteral::Date(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; <span class="prelude-val">Ok</span>(Datum::int(<span class="kw-2">*</span>val)),
+                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; <span class="prelude-val">Ok</span>(Datum::int(<span class="kw-2">*</span>val)),
                     (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Date) =&gt; <span class="prelude-val">Ok</span>(Datum::date(<span class="kw-2">*</span>val)),
                     <span class="comment">// TODO: implement more type conversions
                     </span>(<span class="kw">_</span>, self_type, target_type) <span class="kw">if </span>self_type == target_type =&gt; <span class="prelude-val">Ok</span>(<span class="self">self</span>),
@@ -4645,7 +4628,7 @@
 
     <span class="doccomment">/// Creates date literal from number of days from unix epoch directly.
     </span><span class="kw">pub fn </span>date(days: i32) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Date(days))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Int(days))
     }
 
     <span class="doccomment">/// Creates a date in `%Y-%m-%d` format, assume in utc timezone.
@@ -4696,7 +4679,7 @@
 
     <span class="doccomment">/// Creates time in microseconds directly
     </span><span class="kw">pub fn </span>time(value: i64) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Time(value))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
     }
 
     <span class="doccomment">/// Creates time literal from [`chrono::NaiveTime`].
@@ -4759,12 +4742,12 @@
 
     <span class="doccomment">/// Creates a timestamp from unix epoch in microseconds.
     </span><span class="kw">pub fn </span>timestamp(value: i64) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Timestamp(value))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
     }
 
     <span class="doccomment">/// Creates a timestamp with timezone from unix epoch in microseconds.
     </span><span class="kw">pub fn </span>timestamptz(value: i64) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Timestamptz(value))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
     }
 
     <span class="doccomment">/// Creates a timestamp from [`DateTime`].
@@ -4824,7 +4807,7 @@
 
     <span class="doccomment">/// Creates uuid literal.
     </span><span class="kw">pub fn </span>uuid(uuid: Uuid) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Uuid(uuid))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::UInt128(uuid.as_u128()))
     }
 
     <span class="doccomment">/// Creates uuid from str. See [`Uuid::parse_str`].
@@ -4857,12 +4840,12 @@
     /// ```rust
     /// use iceberg::spec::{Literal, PrimitiveLiteral};
     /// let t1 = Literal::fixed(vec![1u8, 2u8]);
-    /// let t2 = Literal::Primitive(PrimitiveLiteral::Fixed(vec![1u8, 2u8]));
+    /// let t2 = Literal::Primitive(PrimitiveLiteral::Binary(vec![1u8, 2u8]));
     ///
     /// assert_eq!(t1, t2);
     /// ```
     </span><span class="kw">pub fn </span>fixed&lt;I: IntoIterator&lt;Item = u8&gt;&gt;(input: I) -&gt; <span class="self">Self </span>{
-        Literal::Primitive(PrimitiveLiteral::Fixed(input.into_iter().collect()))
+        Literal::Primitive(PrimitiveLiteral::Binary(input.into_iter().collect()))
     }
 
     <span class="doccomment">/// Creates a binary literal from bytes.
@@ -4882,7 +4865,7 @@
 
     <span class="doccomment">/// Creates a decimal literal.
     </span><span class="kw">pub fn </span>decimal(decimal: i128) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Decimal(decimal))
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Int128(decimal))
     }
 
     <span class="doccomment">/// Creates decimal literal from string. See [`Decimal::from_str_exact`].
@@ -5046,22 +5029,22 @@
                     ))<span class="question-mark">?</span>)),
                 ))),
                 (PrimitiveType::Date, JsonValue::String(s)) =&gt; {
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Date(
+                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Int(
                         date::date_to_days(<span class="kw-2">&amp;</span>NaiveDate::parse_from_str(<span class="kw-2">&amp;</span>s, <span class="string">"%Y-%m-%d"</span>)<span class="question-mark">?</span>),
                     ))))
                 }
                 (PrimitiveType::Time, JsonValue::String(s)) =&gt; {
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Time(
+                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Long(
                         time::time_to_microseconds(<span class="kw-2">&amp;</span>NaiveTime::parse_from_str(<span class="kw-2">&amp;</span>s, <span class="string">"%H:%M:%S%.f"</span>)<span class="question-mark">?</span>),
                     ))))
                 }
                 (PrimitiveType::Timestamp, JsonValue::String(s)) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(
-                    PrimitiveLiteral::Timestamp(timestamp::datetime_to_microseconds(
+                    PrimitiveLiteral::Long(timestamp::datetime_to_microseconds(
                         <span class="kw-2">&amp;</span>NaiveDateTime::parse_from_str(<span class="kw-2">&amp;</span>s, <span class="string">"%Y-%m-%dT%H:%M:%S%.f"</span>)<span class="question-mark">?</span>,
                     )),
                 ))),
                 (PrimitiveType::Timestamptz, JsonValue::String(s)) =&gt; {
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Timestamptz(
+                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Long(
                         timestamptz::datetimetz_to_microseconds(<span class="kw-2">&amp;</span>Utc.from_utc_datetime(
                             <span class="kw-2">&amp;</span>NaiveDateTime::parse_from_str(<span class="kw-2">&amp;</span>s, <span class="string">"%Y-%m-%dT%H:%M:%S%.f+00:00"</span>)<span class="question-mark">?</span>,
                         )),
@@ -5071,7 +5054,7 @@
                     <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::String(s))))
                 }
                 (PrimitiveType::Uuid, JsonValue::String(s)) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(
-                    PrimitiveLiteral::Uuid(Uuid::parse_str(<span class="kw-2">&amp;</span>s)<span class="question-mark">?</span>),
+                    PrimitiveLiteral::UInt128(Uuid::parse_str(<span class="kw-2">&amp;</span>s)<span class="question-mark">?</span>.as_u128()),
                 ))),
                 (PrimitiveType::Fixed(<span class="kw">_</span>), JsonValue::String(<span class="kw">_</span>)) =&gt; <span class="macro">todo!</span>(),
                 (PrimitiveType::Binary, JsonValue::String(<span class="kw">_</span>)) =&gt; <span class="macro">todo!</span>(),
@@ -5084,7 +5067,7 @@
                 ) =&gt; {
                     <span class="kw">let </span><span class="kw-2">mut </span>decimal = Decimal::from_str_exact(<span class="kw-2">&amp;</span>s)<span class="question-mark">?</span>;
                     decimal.rescale(<span class="kw-2">*</span>scale);
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Decimal(
+                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(PrimitiveLiteral::Int128(
                         decimal.mantissa(),
                     ))))
                 }
@@ -5180,51 +5163,58 @@
     /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
     </span><span class="kw">pub fn </span>try_into_json(<span class="self">self</span>, r#type: <span class="kw-2">&amp;</span>Type) -&gt; <span class="prelude-ty">Result</span>&lt;JsonValue&gt; {
         <span class="kw">match </span>(<span class="self">self</span>, r#type) {
-            (Literal::Primitive(prim), <span class="kw">_</span>) =&gt; <span class="kw">match </span>prim {
-                PrimitiveLiteral::Boolean(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Bool(val)),
-                PrimitiveLiteral::Int(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number((val).into())),
-                PrimitiveLiteral::Long(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number((val).into())),
-                PrimitiveLiteral::Float(val) =&gt; <span class="kw">match </span>Number::from_f64(val.<span class="number">0 </span><span class="kw">as </span>f64) {
-                    <span class="prelude-val">Some</span>(number) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number(number)),
-                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(JsonValue::Null),
-                },
-                PrimitiveLiteral::Double(val) =&gt; <span class="kw">match </span>Number::from_f64(val.<span class="number">0</span>) {
-                    <span class="prelude-val">Some</span>(number) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number(number)),
-                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(JsonValue::Null),
-                },
-                PrimitiveLiteral::Date(val) =&gt; {
+            (Literal::Primitive(prim), Type::Primitive(prim_type)) =&gt; <span class="kw">match </span>(prim_type, prim) {
+                (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(val)) =&gt; {
+                    <span class="prelude-val">Ok</span>(JsonValue::Bool(val))
+                }
+                (PrimitiveType::Int, PrimitiveLiteral::Int(val)) =&gt; {
+                    <span class="prelude-val">Ok</span>(JsonValue::Number((val).into()))
+                }
+                (PrimitiveType::Long, PrimitiveLiteral::Long(val)) =&gt; {
+                    <span class="prelude-val">Ok</span>(JsonValue::Number((val).into()))
+                }
+                (PrimitiveType::Float, PrimitiveLiteral::Float(val)) =&gt; {
+                    <span class="kw">match </span>Number::from_f64(val.<span class="number">0 </span><span class="kw">as </span>f64) {
+                        <span class="prelude-val">Some</span>(number) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number(number)),
+                        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(JsonValue::Null),
+                    }
+                }
+                (PrimitiveType::Double, PrimitiveLiteral::Double(val)) =&gt; {
+                    <span class="kw">match </span>Number::from_f64(val.<span class="number">0</span>) {
+                        <span class="prelude-val">Some</span>(number) =&gt; <span class="prelude-val">Ok</span>(JsonValue::Number(number)),
+                        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(JsonValue::Null),
+                    }
+                }
+                (PrimitiveType::Date, PrimitiveLiteral::Int(val)) =&gt; {
                     <span class="prelude-val">Ok</span>(JsonValue::String(date::days_to_date(val).to_string()))
                 }
-                PrimitiveLiteral::Time(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
+                (PrimitiveType::Time, PrimitiveLiteral::Long(val)) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
                     time::microseconds_to_time(val).to_string(),
                 )),
-                PrimitiveLiteral::Timestamp(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
+                (PrimitiveType::Timestamp, PrimitiveLiteral::Long(val)) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
                     timestamp::microseconds_to_datetime(val)
                         .format(<span class="string">"%Y-%m-%dT%H:%M:%S%.f"</span>)
                         .to_string(),
                 )),
-                PrimitiveLiteral::Timestamptz(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
+                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(
                     timestamptz::microseconds_to_datetimetz(val)
                         .format(<span class="string">"%Y-%m-%dT%H:%M:%S%.f+00:00"</span>)
                         .to_string(),
                 )),
-                PrimitiveLiteral::String(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(val.clone())),
-                PrimitiveLiteral::Uuid(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(val.to_string())),
-                PrimitiveLiteral::Fixed(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(val.iter().fold(
+                (PrimitiveType::String, PrimitiveLiteral::String(val)) =&gt; {
+                    <span class="prelude-val">Ok</span>(JsonValue::String(val.clone()))
+                }
+                (<span class="kw">_</span>, PrimitiveLiteral::UInt128(val)) =&gt; {
+                    <span class="prelude-val">Ok</span>(JsonValue::String(Uuid::from_u128(val).to_string()))
+                }
+                (<span class="kw">_</span>, PrimitiveLiteral::Binary(val)) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(val.iter().fold(
                     String::new(),
                     |<span class="kw-2">mut </span>acc, x| {
                         acc.push_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{:x}"</span>, x));
                         acc
                     },
                 ))),
-                PrimitiveLiteral::Binary(val) =&gt; <span class="prelude-val">Ok</span>(JsonValue::String(val.iter().fold(
-                    String::new(),
-                    |<span class="kw-2">mut </span>acc, x| {
-                        acc.push_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{:x}"</span>, x));
-                        acc
-                    },
-                ))),
-                PrimitiveLiteral::Decimal(val) =&gt; <span class="kw">match </span>r#type {
+                (<span class="kw">_</span>, PrimitiveLiteral::Int128(val)) =&gt; <span class="kw">match </span>r#type {
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _precision,
                         scale,
@@ -5237,6 +5227,10 @@
                         <span class="string">"The iceberg type for decimal literal must be decimal."</span>,
                     ))<span class="question-mark">?</span>,
                 },
+                <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::DataInvalid,
+                    <span class="string">"The iceberg value doesn't fit to the iceberg type."</span>,
+                )),
             },
             (Literal::Struct(s), Type::Struct(struct_type)) =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>id_and_value = Vec::with_capacity(struct_type.fields().len());
@@ -5291,15 +5285,10 @@
                 PrimitiveLiteral::Long(any) =&gt; Box::new(any),
                 PrimitiveLiteral::Float(any) =&gt; Box::new(any),
                 PrimitiveLiteral::Double(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Date(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Time(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Timestamp(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Timestamptz(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Fixed(any) =&gt; Box::new(any),
                 PrimitiveLiteral::Binary(any) =&gt; Box::new(any),
                 PrimitiveLiteral::String(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Uuid(any) =&gt; Box::new(any),
-                PrimitiveLiteral::Decimal(any) =&gt; Box::new(any),
+                PrimitiveLiteral::UInt128(any) =&gt; Box::new(any),
+                PrimitiveLiteral::Int128(any) =&gt; Box::new(any),
             },
             <span class="kw">_ </span>=&gt; <span class="macro">unimplemented!</span>(),
         }
@@ -5600,17 +5589,12 @@
                     <span class="kw">super</span>::PrimitiveLiteral::Long(v) =&gt; RawLiteralEnum::Long(v),
                     <span class="kw">super</span>::PrimitiveLiteral::Float(v) =&gt; RawLiteralEnum::Float(v.<span class="number">0</span>),
                     <span class="kw">super</span>::PrimitiveLiteral::Double(v) =&gt; RawLiteralEnum::Double(v.<span class="number">0</span>),
-                    <span class="kw">super</span>::PrimitiveLiteral::Date(v) =&gt; RawLiteralEnum::Int(v),
-                    <span class="kw">super</span>::PrimitiveLiteral::Time(v) =&gt; RawLiteralEnum::Long(v),
-                    <span class="kw">super</span>::PrimitiveLiteral::Timestamp(v) =&gt; RawLiteralEnum::Long(v),
-                    <span class="kw">super</span>::PrimitiveLiteral::Timestamptz(v) =&gt; RawLiteralEnum::Long(v),
                     <span class="kw">super</span>::PrimitiveLiteral::String(v) =&gt; RawLiteralEnum::String(v),
-                    <span class="kw">super</span>::PrimitiveLiteral::Uuid(v) =&gt; {
-                        RawLiteralEnum::Bytes(ByteBuf::from(v.as_u128().to_be_bytes()))
+                    <span class="kw">super</span>::PrimitiveLiteral::UInt128(v) =&gt; {
+                        RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
-                    <span class="kw">super</span>::PrimitiveLiteral::Fixed(v) =&gt; RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     <span class="kw">super</span>::PrimitiveLiteral::Binary(v) =&gt; RawLiteralEnum::Bytes(ByteBuf::from(v)),
-                    <span class="kw">super</span>::PrimitiveLiteral::Decimal(v) =&gt; {
+                    <span class="kw">super</span>::PrimitiveLiteral::Int128(v) =&gt; {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
                 },
@@ -6180,7 +6164,7 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Date(<span class="number">17486</span>)),
+            Literal::Primitive(PrimitiveLiteral::Int(<span class="number">17486</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Date),
         );
     }
@@ -6191,7 +6175,7 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Time(<span class="number">81068123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">81068123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Time),
         );
     }
@@ -6202,7 +6186,7 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Timestamp(<span class="number">1510871468123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">1510871468123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Timestamp),
         );
     }
@@ -6213,7 +6197,7 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Timestamptz(<span class="number">1510871468123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">1510871468123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Timestamptz),
         );
     }
@@ -6235,8 +6219,10 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Uuid(
-                Uuid::parse_str(<span class="string">"f79c3e09-677c-4bbd-a479-3f349cb785e7"</span>).unwrap(),
+            Literal::Primitive(PrimitiveLiteral::UInt128(
+                Uuid::parse_str(<span class="string">"f79c3e09-677c-4bbd-a479-3f349cb785e7"</span>)
+                    .unwrap()
+                    .as_u128(),
             )),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Uuid),
         );
@@ -6248,7 +6234,7 @@
 
         check_json_serde(
             record,
-            Literal::Primitive(PrimitiveLiteral::Decimal(<span class="number">1420</span>)),
+            Literal::Primitive(PrimitiveLiteral::Int128(<span class="number">1420</span>)),
             <span class="kw-2">&amp;</span>Type::decimal(<span class="number">28</span>, <span class="number">2</span>).unwrap(),
         );
     }
@@ -6415,7 +6401,7 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>avro_convert_test_date() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Date(<span class="number">17486</span>)),
+            Literal::Primitive(PrimitiveLiteral::Int(<span class="number">17486</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Date),
         );
     }
@@ -6423,7 +6409,7 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>avro_convert_test_time() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Time(<span class="number">81068123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">81068123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Time),
         );
     }
@@ -6431,7 +6417,7 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>avro_convert_test_timestamp() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Timestamp(<span class="number">1510871468123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">1510871468123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Timestamp),
         );
     }
@@ -6439,7 +6425,7 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>avro_convert_test_timestamptz() {
         check_convert_with_avro(
-            Literal::Primitive(PrimitiveLiteral::Timestamptz(<span class="number">1510871468123456</span>)),
+            Literal::Primitive(PrimitiveLiteral::Long(<span class="number">1510871468123456</span>)),
             <span class="kw-2">&amp;</span>Type::Primitive(PrimitiveType::Timestamptz),
         );
     }
