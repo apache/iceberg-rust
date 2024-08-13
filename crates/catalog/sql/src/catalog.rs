@@ -222,8 +222,8 @@ impl Catalog for SqlCatalog {
         );
 
         match parent {
-            Some(parent) => match self.namespace_exists(parent).await? {
-                true => {
+            Some(parent) => {
+                if self.namespace_exists(parent).await? {
                     let parent_str = parent.join(".");
                     let parent_table_namespaces_stmt = format!(
                         "{table_namespaces_stmt} AND {CATALOG_FIELD_TABLE_NAMESPACE} LIKE CONCAT(?, '%')"
@@ -245,23 +245,20 @@ impl Catalog for SqlCatalog {
                         )
                         .await?;
 
-                    Ok(namespace_rows
-                        .iter()
-                        .filter_map(|r| {
-                            let nsp = r.try_get::<String, _>(0).ok();
-                            nsp.and_then(|n| {
-                                if n == parent_str {
-                                    // Filter out itself
-                                    None
-                                } else {
-                                    NamespaceIdent::from_strs(n.split(".")).ok()
-                                }
-                            })
-                        })
-                        .collect())
+                    let mut namespaces = Vec::<NamespaceIdent>::with_capacity(namespace_rows.len());
+
+                    for row in namespace_rows {
+                        let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
+                        if nsp != parent_str {
+                            namespaces.push(NamespaceIdent::from_strs(nsp.split("."))?);
+                        }
+                    }
+
+                    Ok(namespaces)
+                } else {
+                    no_such_namespace_err(parent)
                 }
-                false => no_such_namespace_err(parent),
-            },
+            }
             None => {
                 let namespace_rows = self
                     .fetch_rows(
@@ -270,25 +267,18 @@ impl Catalog for SqlCatalog {
                     )
                     .await?;
 
-                Ok(namespace_rows
-                    .iter()
-                    .filter_map(|r| {
-                        let nsp = r.try_get::<String, _>(0).ok();
-                        nsp.and_then(|n| {
-                            // for each row, split a.b.c into a, b, c levels
-                            let mut levels = n.split(".").collect::<Vec<&str>>();
-                            if !levels.is_empty() {
-                                // only return first-level idents
-                                let first_level = levels.drain(..1).collect::<Vec<&str>>();
-                                NamespaceIdent::from_strs(first_level).ok()
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect::<HashSet<NamespaceIdent>>()
-                    .into_iter()
-                    .collect::<Vec<NamespaceIdent>>())
+                let mut namespaces = HashSet::<NamespaceIdent>::with_capacity(namespace_rows.len());
+
+                for row in namespace_rows.iter() {
+                    let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
+                    let mut levels = nsp.split(".").collect::<Vec<&str>>();
+                    if !levels.is_empty() {
+                        let first_level = levels.drain(..1).collect::<Vec<&str>>();
+                        namespaces.insert(NamespaceIdent::from_strs(first_level)?);
+                    }
+                }
+
+                Ok(namespaces.into_iter().collect::<Vec<NamespaceIdent>>())
             }
         }
     }
@@ -373,17 +363,18 @@ impl Catalog for SqlCatalog {
                 )
                 .await?;
 
-            let properties: HashMap<String, String> = namespace_props
-                .iter()
-                .filter_map(|r| {
-                    let key = r.try_get(NAMESPACE_FIELD_PROPERTY_KEY).ok();
-                    let value = r.try_get(NAMESPACE_FIELD_PROPERTY_VALUE).ok();
-                    match (key, value) {
-                        (Some(k), Some(v)) => Some((k, v)),
-                        _ => None,
-                    }
-                })
-                .collect();
+            let mut properties = HashMap::with_capacity(namespace_props.len());
+
+            for row in namespace_props {
+                let key = row
+                    .try_get::<String, _>(NAMESPACE_FIELD_PROPERTY_KEY)
+                    .map_err(from_sqlx_error)?;
+                let value = row
+                    .try_get::<String, _>(NAMESPACE_FIELD_PROPERTY_VALUE)
+                    .map_err(from_sqlx_error)?;
+
+                properties.insert(key, value);
+            }
 
             Ok(Namespace::with_properties(namespace.clone(), properties))
         } else {
