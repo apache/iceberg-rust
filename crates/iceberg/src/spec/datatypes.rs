@@ -225,6 +225,10 @@ pub enum PrimitiveType {
     Timestamp,
     /// Timestamp in microsecond precision, with timezone
     Timestamptz,
+    /// Timestamp in nanosecond precision, without timezone
+    TimestampNs,
+    /// Timestamp in nanosecond precision with timezone
+    TimestamptzNs,
     /// Arbitrary-length character sequences encoded in utf-8
     String,
     /// Universally Unique Identifiers, should use 16-byte fixed
@@ -250,6 +254,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
                 | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
                 | (PrimitiveType::Timestamptz, PrimitiveLiteral::Timestamptz(_))
+                | (PrimitiveType::TimestampNs, PrimitiveLiteral::TimestampNs())
+                | (PrimitiveType::TimestamptzNs, PrimitiveLiteral::TimestamptzNs())
                 | (PrimitiveType::String, PrimitiveLiteral::String(_))
                 | (PrimitiveType::Uuid, PrimitiveLiteral::Uuid(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
@@ -360,6 +366,8 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Time => write!(f, "time"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::Timestamptz => write!(f, "timestamptz"),
+            PrimitiveType::TimestampNs => write!(f, "timestamp_ns"),
+            PrimitiveType::TimestamptzNs => write!(f, "timestamptz_ns"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
@@ -1141,6 +1149,8 @@ mod tests {
             PrimitiveType::Time,
             PrimitiveType::Timestamp,
             PrimitiveType::Timestamptz,
+            PrimitiveType::TimestampNs,
+            PrimitiveType::TimestamptzNs,
             PrimitiveType::String,
             PrimitiveType::Uuid,
             PrimitiveType::Fixed(8),
