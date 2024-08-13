@@ -1562,6 +1562,18 @@
 <a href="#1562" id="1562">1562</a>
 <a href="#1563" id="1563">1563</a>
 <a href="#1564" id="1564">1564</a>
+<a href="#1565" id="1565">1565</a>
+<a href="#1566" id="1566">1566</a>
+<a href="#1567" id="1567">1567</a>
+<a href="#1568" id="1568">1568</a>
+<a href="#1569" id="1569">1569</a>
+<a href="#1570" id="1570">1570</a>
+<a href="#1571" id="1571">1571</a>
+<a href="#1572" id="1572">1572</a>
+<a href="#1573" id="1573">1573</a>
+<a href="#1574" id="1574">1574</a>
+<a href="#1575" id="1575">1575</a>
+<a href="#1576" id="1576">1576</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1872,18 +1884,26 @@
             </span>.plan_context
             .build_manifest_file_contexts(manifest_list, manifest_entry_ctx_tx)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>channel_for_manifest_error = file_scan_task_tx.clone();
+
         <span class="comment">// Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
         </span>spawn(<span class="kw">async move </span>{
-            futures::stream::iter(manifest_file_contexts)
+            <span class="kw">let </span>result = futures::stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| <span class="kw">async move </span>{
                     ctx.fetch_manifest_and_stream_manifest_entries().<span class="kw">await
                 </span>})
-                .<span class="kw">await
-        </span>});
+                .<span class="kw">await</span>;
+
+            <span class="kw">if let </span><span class="prelude-val">Err</span>(error) = result {
+                <span class="kw">let _ </span>= channel_for_manifest_error.send(<span class="prelude-val">Err</span>(error)).<span class="kw">await</span>;
+            }
+        });
+
+        <span class="kw">let </span><span class="kw-2">mut </span>channel_for_manifest_entry_error = file_scan_task_tx.clone();
 
         <span class="comment">// Process the [`ManifestEntry`] stream in parallel
         </span>spawn(<span class="kw">async move </span>{
-            manifest_entry_ctx_rx
+            <span class="kw">let </span>result = manifest_entry_ctx_rx
                 .map(|me_ctx| <span class="prelude-val">Ok</span>((me_ctx, file_scan_task_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
@@ -1894,8 +1914,12 @@
                         .<span class="kw">await
                     </span>},
                 )
-                .<span class="kw">await
-        </span>});
+                .<span class="kw">await</span>;
+
+            <span class="kw">if let </span><span class="prelude-val">Err</span>(error) = result {
+                <span class="kw">let _ </span>= channel_for_manifest_entry_error.send(<span class="prelude-val">Err</span>(error)).<span class="kw">await</span>;
+            }
+        });
 
         <span class="kw">return </span><span class="prelude-val">Ok</span>(file_scan_task_rx.boxed());
     }
