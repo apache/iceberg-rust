@@ -608,26 +608,38 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
 
 /// Convert Iceberg Datum to Arrow Datum.
 pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
-    match datum.literal() {
-        PrimitiveLiteral::Boolean(value) => Ok(Box::new(BooleanArray::new_scalar(*value))),
-        PrimitiveLiteral::Int(value) => Ok(Box::new(Int32Array::new_scalar(*value))),
-        PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
-        PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
-        PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
-        PrimitiveLiteral::String(value) => Ok(Box::new(StringArray::new_scalar(value.as_str()))),
-        PrimitiveLiteral::Timestamp(value) => {
+    match (datum.data_type(), datum.literal()) {
+        (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
+            Ok(Box::new(BooleanArray::new_scalar(*value)))
+        }
+        (PrimitiveType::Int, PrimitiveLiteral::Int(value)) => {
+            Ok(Box::new(Int32Array::new_scalar(*value)))
+        }
+        (PrimitiveType::Long, PrimitiveLiteral::Long(value)) => {
+            Ok(Box::new(Int64Array::new_scalar(*value)))
+        }
+        (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
+            Ok(Box::new(Float32Array::new_scalar(value.as_f32())))
+        }
+        (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
+            Ok(Box::new(Float64Array::new_scalar(value.as_f64())))
+        }
+        (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
+            Ok(Box::new(StringArray::new_scalar(value.as_str())))
+        }
+        (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
             Ok(Box::new(TimestampMicrosecondArray::new_scalar(*value)))
         }
-        PrimitiveLiteral::Timestamptz(value) => Ok(Box::new(Scalar::new(
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Box::new(Scalar::new(
             PrimitiveArray::<TimestampMicrosecondType>::new(vec![*value; 1].into(), None)
                 .with_timezone("UTC"),
         ))),
 
-        l => Err(Error::new(
+        (typ, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
                 "Converting datum from type {:?} to arrow not supported yet.",
-                l
+                typ
             ),
         )),
     }
