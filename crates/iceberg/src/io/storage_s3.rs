@@ -17,8 +17,9 @@
 
 use std::collections::HashMap;
 
+use opendal::raw::HttpClient;
 use opendal::services::S3Config;
-use opendal::Operator;
+use opendal::{Configurator, Operator};
 use url::Url;
 
 use crate::{Error, ErrorKind, Result};
@@ -106,7 +107,11 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
 }
 
 /// Build new opendal operator from give path.
-pub(crate) fn s3_config_build(cfg: &S3Config, path: &str) -> Result<Operator> {
+pub(crate) fn s3_config_build(
+    client: &reqwest::Client,
+    cfg: &S3Config,
+    path: &str,
+) -> Result<Operator> {
     let url = Url::parse(path)?;
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
@@ -115,7 +120,13 @@ pub(crate) fn s3_config_build(cfg: &S3Config, path: &str) -> Result<Operator> {
         )
     })?;
 
-    let mut cfg = cfg.clone();
-    cfg.bucket = bucket.to_string();
-    Ok(Operator::from_config(cfg)?.finish())
+    let builder = cfg
+        .clone()
+        .into_builder()
+        // Set bucket name.
+        .bucket(bucket)
+        // Set http client we want to use.
+        .http_client(HttpClient::with(client.clone()));
+
+    Ok(Operator::new(builder)?.finish())
 }
