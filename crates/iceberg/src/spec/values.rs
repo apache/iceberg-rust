@@ -421,7 +421,7 @@ impl Datum {
                 PrimitiveLiteral::TimestampNs(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::TimestamptzNs => {
-                PrimitiveLiteral::TimestampNs(i64::from_le_bytes(bytes.try_into()?))
+                PrimitiveLiteral::TimestamptzNs(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::String => {
                 PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
@@ -846,7 +846,7 @@ impl Datum {
     /// use iceberg::spec::Datum;
     /// let t = Datum::timestamptz_nanos(1000);
     ///
-    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001 UTC");
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.000001 UTC");
     /// ```
     pub fn timestamptz_nanos(value: i64) -> Self {
         Self {
@@ -1864,7 +1864,7 @@ impl Literal {
                         .to_string(),
                 )),
                 PrimitiveLiteral::TimestamptzNs(val) => Ok(JsonValue::String(
-                    timestamptz::microseconds_to_datetimetz(val)
+                    timestamptz::nanoseconds_to_datetimetz(val)
                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
                         .to_string(),
                 )),
@@ -2049,7 +2049,7 @@ mod timestamptz {
     pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
         let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
 
-        DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+        DateTime::from_timestamp(secs, rem as u32).unwrap()
     }
 }
 
