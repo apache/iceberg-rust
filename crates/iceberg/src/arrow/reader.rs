@@ -27,12 +27,11 @@ use arrow_array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
 use arrow_string::like::starts_with;
-use async_stream::try_stream;
 use bytes::Bytes;
 use fnv::FnvHashSet;
+use futures::channel::mpsc::{channel, Sender};
 use futures::future::BoxFuture;
-use futures::stream::StreamExt;
-use futures::{try_join, TryFutureExt};
+use futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter};
 use parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
@@ -44,23 +43,36 @@ use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::scan::{ArrowRecordBatchStream, FileScanTaskStream};
+use crate::runtime::spawn;
+use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, Schema};
+use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
     batch_size: Option<usize>,
     file_io: FileIO,
+    concurrency_limit_data_files: usize,
 }
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
     pub(crate) fn new(file_io: FileIO) -> Self {
+        let num_cpus = available_parallelism().get();
+
         ArrowReaderBuilder {
             batch_size: None,
             file_io,
+            concurrency_limit_data_files: num_cpus,
         }
+    }
+
+    /// Sets the max number of in flight data files that are being fetched
+    pub fn with_data_file_concurrency_limit(mut self, val: usize) -> Self {
+        self.concurrency_limit_data_files = val;
+
+        self
     }
 
     /// Sets the desired size of batches in the response
@@ -75,6 +87,7 @@ impl ArrowReaderBuilder {
         ArrowReader {
             batch_size: self.batch_size,
             file_io: self.file_io,
+            concurrency_limit_data_files: self.concurrency_limit_data_files,
         }
     }
 }
@@ -84,73 +97,113 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
+
+    /// the maximum number of data files that can be fetched at the same time
+    concurrency_limit_data_files: usize,
 }
 
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    pub fn read(self, mut tasks: FileScanTaskStream) -> crate::Result<ArrowRecordBatchStream> {
+    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
+        let batch_size = self.batch_size;
+        let concurrency_limit_data_files = self.concurrency_limit_data_files;
 
-        Ok(try_stream! {
-            while let Some(task_result) = tasks.next().await {
-                match task_result {
-                    Ok(task) => {
-                        // Collect Parquet column indices from field ids
-                        let mut collector = CollectFieldIdVisitor {
-                            field_ids: HashSet::default(),
-                        };
-                        if let Some(predicates) = task.predicate() {
-                            visit(&mut collector, predicates)?;
+        let (tx, rx) = channel(concurrency_limit_data_files);
+        let mut channel_for_error = tx.clone();
+
+        spawn(async move {
+            let result = tasks
+                .map(|task| Ok((task, file_io.clone(), tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_data_files,
+                    |(file_scan_task, file_io, tx)| async move {
+                        match file_scan_task {
+                            Ok(task) => {
+                                let file_path = task.data_file_path().to_string();
+
+                                spawn(async move {
+                                    Self::process_file_scan_task(task, batch_size, file_io, tx)
+                                        .await
+                                })
+                                .await
+                                .map_err(|e| e.with_context("file_path", file_path))
+                            }
+                            Err(err) => Err(err),
                         }
+                    },
+                )
+                .await;
 
-                        let parquet_file = file_io
-                            .new_input(task.data_file_path())?;
-
-                        let (parquet_metadata, parquet_reader) = try_join!(parquet_file.metadata(), parquet_file.reader())?;
-                        let arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
-
-                        let mut batch_stream_builder = ParquetRecordBatchStreamBuilder::new(arrow_file_reader)
-                            .await?;
-
-                        let parquet_schema = batch_stream_builder.parquet_schema();
-                        let arrow_schema = batch_stream_builder.schema();
-                        let projection_mask = self.get_arrow_projection_mask(task.project_field_ids(),task.schema(),parquet_schema, arrow_schema)?;
-                        batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
-
-                        let parquet_schema = batch_stream_builder.parquet_schema();
-                        let row_filter = self.get_row_filter(task.predicate(),parquet_schema, &collector)?;
-
-                        if let Some(row_filter) = row_filter {
-                            batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
-                        }
-
-                        if let Some(batch_size) = self.batch_size {
-                            batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
-                        }
-
-                        let mut batch_stream = batch_stream_builder.build()?;
-
-                        while let Some(batch) = batch_stream.next().await {
-                            yield batch?;
-                        }
-                    }
-                    Err(e) => {
-                        Err(e)?
-                    }
-                }
+            if let Err(error) = result {
+                let _ = channel_for_error.send(Err(error)).await;
             }
+        });
+
+        return Ok(rx.boxed());
+    }
+
+    async fn process_file_scan_task(
+        task: FileScanTask,
+        batch_size: Option<usize>,
+        file_io: FileIO,
+        mut tx: Sender<Result<RecordBatch>>,
+    ) -> Result<()> {
+        // Collect Parquet column indices from field ids
+        let mut collector = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
+
+        if let Some(predicates) = task.predicate() {
+            visit(&mut collector, predicates)?;
         }
-        .boxed())
+
+        let parquet_file = file_io.new_input(task.data_file_path())?;
+
+        let (parquet_metadata, parquet_reader) =
+            try_join!(parquet_file.metadata(), parquet_file.reader())?;
+        let arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+
+        let mut batch_stream_builder =
+            ParquetRecordBatchStreamBuilder::new(arrow_file_reader).await?;
+
+        let parquet_schema = batch_stream_builder.parquet_schema();
+        let arrow_schema = batch_stream_builder.schema();
+        let projection_mask = Self::get_arrow_projection_mask(
+            task.project_field_ids(),
+            task.schema(),
+            parquet_schema,
+            arrow_schema,
+        )?;
+        batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
+
+        let parquet_schema = batch_stream_builder.parquet_schema();
+        let row_filter = Self::get_row_filter(task.predicate(), parquet_schema, &collector)?;
+
+        if let Some(row_filter) = row_filter {
+            batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
+        }
+
+        if let Some(batch_size) = batch_size {
+            batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
+        }
+
+        let mut batch_stream = batch_stream_builder.build()?;
+
+        while let Some(batch) = batch_stream.try_next().await? {
+            tx.send(Ok(batch)).await?
+        }
+
+        Ok(())
     }
 
     fn get_arrow_projection_mask(
-        &self,
         field_ids: &[i32],
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
-    ) -> crate::Result<ProjectionMask> {
+    ) -> Result<ProjectionMask> {
         if field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
@@ -216,7 +269,6 @@ impl ArrowReader {
     }
 
     fn get_row_filter(
-        &self,
         predicates: Option<&BoundPredicate>,
         parquet_schema: &SchemaDescriptor,
         collector: &CollectFieldIdVisitor,
