@@ -73,6 +73,8 @@ All pull requests should be reviewed by at least one iceberg-rust committer.
 
 All pull requests are squash merged. We generally discourage large pull requests that are over 300-500 lines of diff. If you would like to propose a change that is larger we suggest coming onto [Iceberg's DEV mailing list](mailto:dev@iceberg.apache.org) or [Slack #rust Channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A) and discuss it with us. This way we can talk through the solution and discuss if a change that large is even needed! This will produce a quicker response to the change and likely produce code that aligns better with our process.
 
+When a pull request is under review, please avoid using force push as it makes it difficult for reviewer to track changes. If you need to keep the branch up to date with the main branch, consider using `git merge` instead. 
+
 ### CI
 
 Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in `.github/workflows`.
