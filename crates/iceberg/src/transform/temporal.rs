@@ -20,7 +20,9 @@ use std::sync::Arc;
 use arrow_arith::arity::binary;
 use arrow_arith::temporal::{date_part, DatePart};
 use arrow_array::types::Date32Type;
-use arrow_array::{Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray};
+use arrow_array::{
+    Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+};
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Datelike, Duration};
 
@@ -57,9 +59,7 @@ impl Year {
 
     #[inline]
     fn timestamp_to_year_nanos(timestamp: i64) -> Result<i32> {
-        Ok(DateTime::from_timestamp_nanos(timestamp)
-            .year()
-            - UNIX_EPOCH_YEAR)
+        Ok(DateTime::from_timestamp_nanos(timestamp).year() - UNIX_EPOCH_YEAR)
     }
 }
 
@@ -2432,7 +2432,10 @@ mod test {
         let timestamptz_ns = Datum::timestamptz_nanos(time);
         let res = transform.transform_literal(&timestamp_ns).unwrap().unwrap();
         assert_eq!(res, expect);
-        let res = transform.transform_literal(&timestamptz_ns).unwrap().unwrap();
+        let res = transform
+            .transform_literal(&timestamptz_ns)
+            .unwrap()
+            .unwrap();
         assert_eq!(res, expect);
     }
 
