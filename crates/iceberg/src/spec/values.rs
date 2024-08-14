@@ -1857,11 +1857,13 @@ impl Literal {
                         .format("%Y-%m-%dT%H:%M:%S%.f")
                         .to_string(),
                 )),
-                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
-                    timestamptz::nanoseconds_to_datetimetz(val)
-                        .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
-                        .to_string(),
-                )),
+                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
+                    Ok(JsonValue::String(
+                        timestamptz::nanoseconds_to_datetimetz(val)
+                            .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                            .to_string(),
+                    ))
+                }
                 (PrimitiveType::String, PrimitiveLiteral::String(val)) => {
                     Ok(JsonValue::String(val.clone()))
                 }

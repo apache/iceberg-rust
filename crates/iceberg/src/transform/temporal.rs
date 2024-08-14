@@ -81,10 +81,18 @@ impl TransformFunction for Year {
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
                 Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR
             }
-            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_micros(*v)?,
-            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_micros(*v)?,
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_nanos(*v)?,
-            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_nanos(*v)?,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_year_micros(*v)?
+            }
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_year_micros(*v)?
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_year_nanos(*v)?
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_year_nanos(*v)?
+            }
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -171,11 +179,15 @@ impl TransformFunction for Month {
                 (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
                     + Date32Type::to_naive_date(*v).month0() as i32
             }
-            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::timestamp_to_month_micros(*v)?,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_month_micros(*v)?
+            }
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
                 Self::timestamp_to_month_micros(*v)?
             }
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_month_nanos(*v)?,
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_month_nanos(*v)?
+            }
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
                 Self::timestamp_to_month_nanos(*v)?
             }
@@ -296,7 +308,9 @@ impl TransformFunction for Day {
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
                 Self::day_timestamp_micro(*v)?
             }
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::day_timestamp_nano(*v)?,
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Self::day_timestamp_nano(*v)?
+            }
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
                 Self::day_timestamp_nano(*v)?
             }
@@ -357,7 +371,9 @@ impl TransformFunction for Hour {
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
                 Self::hour_timestamp_micro(*v)
             }
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::hour_timestamp_nano(*v),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Self::hour_timestamp_nano(*v)
+            }
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
                 Self::hour_timestamp_nano(*v)
             }
