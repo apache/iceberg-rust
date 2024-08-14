@@ -2325,14 +2325,14 @@
         )<span class="question-mark">?</span>;
         avro_writer.add_user_metadata(
             <span class="string">"partition-spec"</span>.to_string(),
-            to_vec(<span class="kw-2">&amp;</span>manifest.metadata.partition_spec.fields).map_err(|err| {
+            to_vec(<span class="kw-2">&amp;</span>manifest.metadata.partition_spec.fields()).map_err(|err| {
                 Error::new(ErrorKind::DataInvalid, <span class="string">"Fail to serialize partition spec"</span>)
                     .with_source(err)
             })<span class="question-mark">?</span>,
         )<span class="question-mark">?</span>;
         avro_writer.add_user_metadata(
             <span class="string">"partition-spec-id"</span>.to_string(),
-            manifest.metadata.partition_spec.spec_id.to_string(),
+            manifest.metadata.partition_spec.spec_id().to_string(),
         )<span class="question-mark">?</span>;
         avro_writer.add_user_metadata(
             <span class="string">"format-version"</span>.to_string(),
@@ -2398,12 +2398,12 @@
         <span class="self">self</span>.output.write(Bytes::from(content)).<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>partition_summary =
-            <span class="self">self</span>.get_field_summary_vec(<span class="kw-2">&amp;</span>manifest.metadata.partition_spec.fields);
+            <span class="self">self</span>.get_field_summary_vec(manifest.metadata.partition_spec.fields());
 
         <span class="prelude-val">Ok</span>(ManifestFile {
             manifest_path: <span class="self">self</span>.output.location().to_string(),
             manifest_length: length <span class="kw">as </span>i64,
-            partition_spec_id: manifest.metadata.partition_spec.spec_id,
+            partition_spec_id: manifest.metadata.partition_spec.spec_id(),
             content: manifest.metadata.content,
             <span class="comment">// sequence_number and min_sequence_number with UNASSIGNED_SEQUENCE_NUMBER will be replace with
             // real sequence number in `ManifestListWriter`.

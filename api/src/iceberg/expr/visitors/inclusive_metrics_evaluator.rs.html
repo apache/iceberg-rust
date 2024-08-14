@@ -2156,6 +2156,7 @@
 <a href="#2156" id="2156">2156</a>
 <a href="#2157" id="2157">2157</a>
 <a href="#2158" id="2158">2158</a>
+<a href="#2159" id="2159">2159</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2653,8 +2654,8 @@
         UnaryExpression,
     };
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Struct, Transform, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
     <span class="kw">const </span>INT_MIN_VALUE: i32 = <span class="number">30</span>;
@@ -3814,14 +3815,15 @@
             .unwrap();
         <span class="kw">let </span>table_schema_ref = Arc::new(table_schema);
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>table_schema_ref)
             .with_spec_id(<span class="number">1</span>)
-            .with_fields(<span class="macro">vec!</span>[PartitionField::builder()
+            .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField::builder()
                 .source_id(<span class="number">1</span>)
                 .name(<span class="string">"a"</span>.to_string())
-                .field_id(<span class="number">1</span>)
+                .partition_id(<span class="number">1</span>)
                 .transform(Transform::Identity)
                 .build()])
+            .unwrap()
             .build()
             .unwrap();
         <span class="kw">let </span>partition_spec_ref = Arc::new(partition_spec);

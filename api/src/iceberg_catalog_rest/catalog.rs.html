@@ -3273,13 +3273,13 @@
             .properties(HashMap::from([(<span class="string">"owner"</span>.to_string(), <span class="string">"testx"</span>.to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .with_fields(<span class="macro">vec!</span>[UnboundPartitionField::builder()
+                    .add_partition_fields(<span class="macro">vec!</span>[UnboundPartitionField::builder()
                         .source_id(<span class="number">1</span>)
                         .transform(Transform::Truncate(<span class="number">3</span>))
                         .name(<span class="string">"id"</span>.to_string())
                         .build()])
-                    .build()
-                    .unwrap(),
+                    .unwrap()
+                    .build(),
             )
             .sort_order(
                 SortOrder::builder()

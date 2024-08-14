@@ -1115,22 +1115,6 @@
 <a href="#1115" id="1115">1115</a>
 <a href="#1116" id="1116">1116</a>
 <a href="#1117" id="1117">1117</a>
-<a href="#1118" id="1118">1118</a>
-<a href="#1119" id="1119">1119</a>
-<a href="#1120" id="1120">1120</a>
-<a href="#1121" id="1121">1121</a>
-<a href="#1122" id="1122">1122</a>
-<a href="#1123" id="1123">1123</a>
-<a href="#1124" id="1124">1124</a>
-<a href="#1125" id="1125">1125</a>
-<a href="#1126" id="1126">1126</a>
-<a href="#1127" id="1127">1127</a>
-<a href="#1128" id="1128">1128</a>
-<a href="#1129" id="1129">1129</a>
-<a href="#1130" id="1130">1130</a>
-<a href="#1131" id="1131">1131</a>
-<a href="#1132" id="1132">1132</a>
-<a href="#1133" id="1133">1133</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1362,7 +1346,7 @@
     <span class="doccomment">/// The schema of the table.
     </span><span class="kw">pub </span>schema: Schema,
     <span class="doccomment">/// The partition spec of the table, could be None.
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option, into))]
     </span><span class="kw">pub </span>partition_spec: <span class="prelude-ty">Option</span>&lt;UnboundPartitionSpec&gt;,
     <span class="doccomment">/// The sort order of the table.
     </span><span class="attr">#[builder(default, setter(strip_option))]
@@ -1609,7 +1593,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
     };
     <span class="kw">use crate</span>::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -1953,29 +1937,13 @@
         "#</span>,
             TableUpdate::AddSpec {
                 spec: UnboundPartitionSpec::builder()
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(<span class="number">4</span>)
-                            .name(<span class="string">"ts_day"</span>.to_string())
-                            .transform(Transform::Day)
-                            .build(),
-                    )
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(<span class="number">1</span>)
-                            .name(<span class="string">"id_bucket"</span>.to_string())
-                            .transform(Transform::Bucket(<span class="number">16</span>))
-                            .build(),
-                    )
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(<span class="number">2</span>)
-                            .name(<span class="string">"id_truncate"</span>.to_string())
-                            .transform(Transform::Truncate(<span class="number">4</span>))
-                            .build(),
-                    )
-                    .build()
-                    .unwrap(),
+                    .add_partition_field(<span class="number">4</span>, <span class="string">"ts_day"</span>.to_string(), Transform::Day)
+                    .unwrap()
+                    .add_partition_field(<span class="number">1</span>, <span class="string">"id_bucket"</span>.to_string(), Transform::Bucket(<span class="number">16</span>))
+                    .unwrap()
+                    .add_partition_field(<span class="number">2</span>, <span class="string">"id_truncate"</span>.to_string(), Transform::Truncate(<span class="number">4</span>))
+                    .unwrap()
+                    .build(),
             },
         );
     }

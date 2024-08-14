@@ -792,6 +792,8 @@
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1052,8 +1054,9 @@
         UnaryExpression,
     };
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionField,
-        PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        UnboundPartitionField,
     };
     <span class="kw">use </span><span class="kw">crate</span>::Result;
 
@@ -1068,14 +1071,15 @@
             ))])
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>spec = PartitionSpec::builder()
+        <span class="kw">let </span>spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
             .with_spec_id(<span class="number">1</span>)
-            .with_fields(<span class="macro">vec!</span>[PartitionField::builder()
+            .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField::builder()
                 .source_id(<span class="number">1</span>)
                 .name(<span class="string">"a"</span>.to_string())
-                .field_id(<span class="number">1</span>)
+                .partition_id(<span class="number">1</span>)
                 .transform(Transform::Identity)
                 .build()])
+            .unwrap()
             .build()
             .unwrap();
 
@@ -1092,7 +1096,7 @@
         <span class="kw">let </span>partition_fields = partition_type.fields().to_owned();
 
         <span class="kw">let </span>partition_schema = Schema::builder()
-            .with_schema_id(partition_spec.spec_id)
+            .with_schema_id(partition_spec.spec_id())
             .with_fields(partition_fields)
             .build()<span class="question-mark">?</span>;
 

@@ -1751,12 +1751,12 @@
 <span class="kw">use </span><span class="kw">super</span>::snapshot::{Snapshot, SnapshotReference, SnapshotRetention};
 <span class="kw">use super</span>::{
     PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, SnapshotRef, SortOrder, SortOrderRef,
+    DEFAULT_PARTITION_SPEC_ID,
 };
 <span class="kw">use </span><span class="kw">crate</span>::error::{timestamp_ms_to_utc, <span class="prelude-ty">Result</span>};
 <span class="kw">use crate</span>::{Error, ErrorKind, TableCreation};
 
 <span class="kw">static </span>MAIN_BRANCH: <span class="kw-2">&amp;</span>str = <span class="string">"main"</span>;
-<span class="kw">static </span>DEFAULT_SPEC_ID: i32 = <span class="number">0</span>;
 <span class="kw">static </span>DEFAULT_SORT_ORDER_ID: i64 = <span class="number">0</span>;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>EMPTY_SNAPSHOT_ID: i64 = -<span class="number">1</span>;
@@ -1906,8 +1906,8 @@
     <span class="doccomment">/// Get default partition spec
     </span><span class="attr">#[inline]
     </span><span class="kw">pub fn </span>default_partition_spec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PartitionSpecRef&gt; {
-        <span class="kw">if </span><span class="self">self</span>.default_spec_id == DEFAULT_SPEC_ID {
-            <span class="self">self</span>.partition_spec_by_id(DEFAULT_SPEC_ID)
+        <span class="kw">if </span><span class="self">self</span>.default_spec_id == DEFAULT_PARTITION_SPEC_ID {
+            <span class="self">self</span>.partition_spec_by_id(DEFAULT_PARTITION_SPEC_ID)
         } <span class="kw">else </span>{
             <span class="prelude-val">Some</span>(
                 <span class="self">self</span>.partition_spec_by_id(<span class="self">self</span>.default_spec_id)
@@ -2027,9 +2027,9 @@
                 ))
             }
             <span class="prelude-val">None </span>=&gt; HashMap::from([(
-                DEFAULT_SPEC_ID,
+                DEFAULT_PARTITION_SPEC_ID,
                 Arc::new(PartitionSpec {
-                    spec_id: DEFAULT_SPEC_ID,
+                    spec_id: DEFAULT_PARTITION_SPEC_ID,
                     fields: <span class="macro">vec!</span>[],
                 }),
             )]),
@@ -2066,7 +2066,7 @@
             current_schema_id: schema.schema_id(),
             schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
             partition_specs,
-            default_spec_id: DEFAULT_SPEC_ID,
+            default_spec_id: DEFAULT_PARTITION_SPEC_ID,
             last_partition_id: <span class="number">0</span>,
             properties,
             current_snapshot_id: <span class="prelude-val">None</span>,
@@ -2110,8 +2110,8 @@
     <span class="kw">use </span>uuid::Uuid;
 
     <span class="kw">use super</span>::{
-        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_SORT_ORDER_ID,
-        DEFAULT_SPEC_ID, MAIN_BRANCH,
+        FormatVersion, MetadataLog, SnapshotLog, TableMetadata, DEFAULT_PARTITION_SPEC_ID,
+        DEFAULT_SORT_ORDER_ID, MAIN_BRANCH,
     };
     <span class="kw">use </span><span class="kw">crate</span>::spec::schema::_serde::{SchemaV1, SchemaV2};
     <span class="kw">use </span><span class="kw">crate</span>::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
@@ -2287,7 +2287,7 @@
                     value
                         .partition_specs
                         .into_iter()
-                        .map(|x| (x.spec_id, Arc::new(x))),
+                        .map(|x| (x.spec_id(), Arc::new(x))),
                 ),
                 default_spec_id: value.default_spec_id,
                 last_partition_id: value.last_partition_id,
@@ -2362,12 +2362,12 @@
                     .partition_specs
                     .unwrap_or_else(|| {
                         <span class="macro">vec!</span>[PartitionSpec {
-                            spec_id: DEFAULT_SPEC_ID,
+                            spec_id: DEFAULT_PARTITION_SPEC_ID,
                             fields: value.partition_spec,
                         }]
                     })
                     .into_iter()
-                    .map(|x| (x.spec_id, Arc::new(x))),
+                    .map(|x| (x.spec_id(), Arc::new(x))),
             );
             <span class="prelude-val">Ok</span>(TableMetadata {
                 format_version: FormatVersion::V1,
@@ -2527,7 +2527,7 @@
                 partition_spec: v
                     .partition_specs
                     .get(<span class="kw-2">&amp;</span>v.default_spec_id)
-                    .map(|x| x.fields.clone())
+                    .map(|x| x.fields().to_vec())
                     .unwrap_or_default(),
                 partition_specs: <span class="prelude-val">Some</span>(
                     v.partition_specs
@@ -2654,7 +2654,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
         NestedField, NullOrder, Operation, PartitionField, PartitionSpec, PrimitiveType, Schema,
         Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-        Summary, Transform, Type,
+        Summary, Transform, Type, UnboundPartitionField,
     };
     <span class="kw">use </span><span class="kw">crate</span>::TableCreation;
 
@@ -2739,16 +2739,15 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
-            .with_spec_id(<span class="number">1</span>)
-            .with_partition_field(PartitionField {
+        <span class="kw">let </span>partition_spec = PartitionSpec {
+            spec_id: <span class="number">1</span>,
+            fields: <span class="macro">vec!</span>[PartitionField {
                 name: <span class="string">"ts_day"</span>.to_string(),
                 transform: Transform::Day,
                 source_id: <span class="number">4</span>,
                 field_id: <span class="number">1000</span>,
-            })
-            .build()
-            .unwrap();
+            }],
+        };
 
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V2,
@@ -2898,14 +2897,10 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
             .with_spec_id(<span class="number">0</span>)
-            .with_partition_field(PartitionField {
-                name: <span class="string">"vendor_id"</span>.to_string(),
-                transform: Transform::Identity,
-                source_id: <span class="number">1</span>,
-                field_id: <span class="number">1000</span>,
-            })
+            .add_partition_field(<span class="string">"vendor_id"</span>, <span class="string">"vendor_id"</span>, Transform::Identity)
+            .unwrap()
             .build()
             .unwrap();
 
@@ -3011,14 +3006,15 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema1)
             .with_spec_id(<span class="number">0</span>)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
                 transform: Transform::Identity,
                 source_id: <span class="number">1</span>,
-                field_id: <span class="number">1000</span>,
+                partition_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
             })
+            .unwrap()
             .build()
             .unwrap();
 
@@ -3133,14 +3129,15 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
             .with_spec_id(<span class="number">0</span>)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
                 transform: Transform::Identity,
                 source_id: <span class="number">1</span>,
-                field_id: <span class="number">1000</span>,
+                partition_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
             })
+            .unwrap()
             .build()
             .unwrap();
 
@@ -3212,14 +3209,15 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
             .with_spec_id(<span class="number">0</span>)
-            .with_partition_field(PartitionField {
+            .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
                 transform: Transform::Identity,
                 source_id: <span class="number">1</span>,
-                field_id: <span class="number">1000</span>,
+                partition_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
             })
+            .unwrap()
             .build()
             .unwrap();
 
@@ -3405,10 +3403,12 @@
             table_metadata.partition_specs,
             HashMap::from([(
                 <span class="number">0</span>,
-                Arc::new(PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[]
-                })
+                Arc::new(
+                    PartitionSpec::builder(table_metadata.schemas.get(<span class="kw-2">&amp;</span><span class="number">0</span>).unwrap())
+                        .with_spec_id(<span class="number">0</span>)
+                        .build()
+                        .unwrap()
+                )
             )])
         );
         <span class="macro">assert_eq!</span>(

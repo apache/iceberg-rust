@@ -1679,7 +1679,6 @@
 <a href="#1679" id="1679">1679</a>
 <a href="#1680" id="1680">1680</a>
 <a href="#1681" id="1681">1681</a>
-<a href="#1682" id="1682">1682</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2040,9 +2039,8 @@
 
         <span class="macro">assert_eq!</span>(metadata.current_schema().as_ref(), expected_schema);
 
-        <span class="kw">let </span>expected_partition_spec = PartitionSpec::builder()
+        <span class="kw">let </span>expected_partition_spec = PartitionSpec::builder(expected_schema)
             .with_spec_id(<span class="number">0</span>)
-            .with_fields(<span class="macro">vec!</span>[])
             .build()
             .unwrap();
 
