@@ -18,15 +18,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/catalog/*",
-    "crates/examples",
-    "crates/iceberg",
-    "crates/integrations/*",
-    "crates/test_utils",
+  "crates/catalog/*",
+  "crates/examples",
+  "crates/iceberg",
+  "crates/integrations/*",
+  "crates/test_utils",
 ]
-exclude = [
-    "bindings/python"
-]
+exclude = ["bindings/python"]
 
 [workspace.package]
 version = "0.2.0"
