@@ -107,9 +107,9 @@
 
 <span class="kw">use </span>async_trait::async_trait;
 <span class="kw">use </span>datafusion::arrow::datatypes::SchemaRef <span class="kw">as </span>ArrowSchemaRef;
+<span class="kw">use </span>datafusion::catalog::Session;
 <span class="kw">use </span>datafusion::datasource::{TableProvider, TableType};
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
-<span class="kw">use </span>datafusion::execution::context;
 <span class="kw">use </span>datafusion::logical_expr::Expr;
 <span class="kw">use </span>datafusion::physical_plan::ExecutionPlan;
 <span class="kw">use </span>iceberg::arrow::schema_to_arrow_schema;
@@ -161,7 +161,7 @@
 
     <span class="kw">async fn </span>scan(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _state: <span class="kw-2">&amp;</span>context::SessionState,
+        _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
         _projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
         _filters: <span class="kw-2">&amp;</span>[Expr],
         _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
