@@ -247,6 +247,7 @@ refactor: Polish the implementation of read parquet
 <p>All pull requests should be reviewed by at least one iceberg-rust committer.</p>
 <h4 id="merge-style"><a class="header" href="#merge-style">Merge Style</a></h4>
 <p>All pull requests are squash merged. We generally discourage large pull requests that are over 300-500 lines of diff. If you would like to propose a change that is larger we suggest coming onto <a href="mailto:dev@iceberg.apache.org">Iceberg's DEV mailing list</a> or <a href="https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A">Slack #rust Channel</a> and discuss it with us. This way we can talk through the solution and discuss if a change that large is even needed! This will produce a quicker response to the change and likely produce code that aligns better with our process.</p>
+<p>When a pull request is under review, please avoid using force push as it makes it difficult for reviewer to track changes. If you need to keep the branch up to date with the main branch, consider using <code>git merge</code> instead. </p>
 <h3 id="ci"><a class="header" href="#ci">CI</a></h3>
 <p>Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in <code>.github/workflows</code>.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
