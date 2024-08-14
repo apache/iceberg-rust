@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "storage-gcs")]
+use opendal::services::GcsConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
@@ -36,8 +38,14 @@ pub(crate) enum Storage {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
         scheme_str: String,
+        /// uses the same client for one FileIO Storage.
+        ///
+        /// TODO: allow users to configure this client.
+        client: reqwest::Client,
         config: Arc<S3Config>,
     },
+    #[cfg(feature = "storage-gcs")]
+    Gcs { config: Arc<GcsConfig> },
 }
 
 impl Storage {
@@ -54,7 +62,12 @@ impl Storage {
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
                 scheme_str,
+                client: reqwest::Client::new(),
                 config: super::s3_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-gcs")]
+            Scheme::Gcs => Ok(Self::Gcs {
+                config: super::gcs_config_parse(props)?.into(),
             }),
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -102,8 +115,12 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-s3")]
-            Storage::S3 { scheme_str, config } => {
-                let op = super::s3_config_build(config, path)?;
+            Storage::S3 {
+                scheme_str,
+                client,
+                config,
+            } => {
+                let op = super::s3_config_build(client, config, path)?;
                 let op_info = op.info();
 
                 // Check prefix of s3 path.
@@ -117,7 +134,24 @@ impl Storage {
                     ))
                 }
             }
-            #[cfg(all(not(feature = "storage-s3"), not(feature = "storage-fs")))]
+            #[cfg(feature = "storage-gcs")]
+            Storage::Gcs { config } => {
+                let operator = super::gcs_config_build(config, path)?;
+                let prefix = format!("gs://{}/", operator.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((operator, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid gcs url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
+            #[cfg(all(
+                not(feature = "storage-s3"),
+                not(feature = "storage-fs"),
+                not(feature = "storage-gcs")
+            ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "No storage service has been enabled",
@@ -131,6 +165,7 @@ impl Storage {
             "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
+            "gs" => Ok(Scheme::Gcs),
             s => Ok(s.parse::<Scheme>()?),
         }
     }

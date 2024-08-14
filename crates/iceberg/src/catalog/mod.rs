@@ -229,7 +229,7 @@ pub struct TableCreation {
     /// The schema of the table.
     pub schema: Schema,
     /// The partition spec of the table, could be None.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option, into))]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
@@ -476,7 +476,7 @@ mod tests {
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -820,29 +820,13 @@ mod tests {
         "#,
             TableUpdate::AddSpec {
                 spec: UnboundPartitionSpec::builder()
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(4)
-                            .name("ts_day".to_string())
-                            .transform(Transform::Day)
-                            .build(),
-                    )
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(1)
-                            .name("id_bucket".to_string())
-                            .transform(Transform::Bucket(16))
-                            .build(),
-                    )
-                    .with_unbound_partition_field(
-                        UnboundPartitionField::builder()
-                            .source_id(2)
-                            .name("id_truncate".to_string())
-                            .transform(Transform::Truncate(4))
-                            .build(),
-                    )
-                    .build()
-                    .unwrap(),
+                    .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                    .unwrap()
+                    .add_partition_field(1, "id_bucket".to_string(), Transform::Bucket(16))
+                    .unwrap()
+                    .add_partition_field(2, "id_truncate".to_string(), Transform::Truncate(4))
+                    .unwrap()
+                    .build(),
             },
         );
     }

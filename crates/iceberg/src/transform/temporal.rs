@@ -27,7 +27,7 @@ use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Datelike, Duration};
 
 use super::TransformFunction;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 /// Hour in one second.
@@ -77,12 +77,14 @@ impl TransformFunction for Year {
     }
 
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        let val = match input.literal() {
-            PrimitiveLiteral::Date(v) => Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR,
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year_micros(*v)?,
-            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_year_micros(*v)?,
-            PrimitiveLiteral::TimestampNs(v) => Self::timestamp_to_year_nanos(*v)?,
-            PrimitiveLiteral::TimestamptzNs(v) => Self::timestamp_to_year_nanos(*v)?,
+        let val = match (input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
+                Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR
+            }
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_micros(*v)?,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_micros(*v)?,
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_nanos(*v)?,
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_year_nanos(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -164,15 +166,19 @@ impl TransformFunction for Month {
     }
 
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        let val = match input.literal() {
-            PrimitiveLiteral::Date(v) => {
+        let val = match (input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
                 (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
                     + Date32Type::to_naive_date(*v).month0() as i32
             }
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month_micros(*v)?,
-            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_month_micros(*v)?,
-            PrimitiveLiteral::TimestampNs(v) => Self::timestamp_to_month_nanos(*v)?,
-            PrimitiveLiteral::TimestamptzNs(v) => Self::timestamp_to_month_nanos(*v)?,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::timestamp_to_month_micros(*v)?,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_month_micros(*v)?
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::timestamp_to_month_nanos(*v)?,
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Self::timestamp_to_month_nanos(*v)?
+            }
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -284,12 +290,16 @@ impl TransformFunction for Day {
     }
 
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        let val = match input.literal() {
-            PrimitiveLiteral::Date(v) => *v,
-            PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v)?,
-            PrimitiveLiteral::Timestamptz(v) => Self::day_timestamp_micro(*v)?,
-            PrimitiveLiteral::TimestampNs(v) => Self::day_timestamp_nano(*v)?,
-            PrimitiveLiteral::TimestamptzNs(v) => Self::day_timestamp_nano(*v)?,
+        let val = match (input.data_type(), input.literal()) {
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => *v,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::day_timestamp_micro(*v)?,
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Self::day_timestamp_micro(*v)?
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::day_timestamp_nano(*v)?,
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Self::day_timestamp_nano(*v)?
+            }
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -342,11 +352,15 @@ impl TransformFunction for Hour {
     }
 
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
-        let val = match input.literal() {
-            PrimitiveLiteral::Timestamp(v) => Self::hour_timestamp_micro(*v),
-            PrimitiveLiteral::Timestamptz(v) => Self::hour_timestamp_micro(*v),
-            PrimitiveLiteral::TimestampNs(v) => Self::hour_timestamp_nano(*v),
-            PrimitiveLiteral::TimestamptzNs(v) => Self::hour_timestamp_nano(*v),
+        let val = match (input.data_type(), input.literal()) {
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::hour_timestamp_micro(*v),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Self::hour_timestamp_micro(*v)
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::hour_timestamp_nano(*v),
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Self::hour_timestamp_nano(*v)
+            }
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -721,7 +735,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (420034, 411288)"),
+            Some("name IN (411288, 420034)"),
         )?;
 
         fixture.assert_projection(
@@ -1374,7 +1388,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (-363, -364, -365)"),
+            Some("name IN (-363, -365, -364)"),
         )?;
 
         fixture.assert_projection(

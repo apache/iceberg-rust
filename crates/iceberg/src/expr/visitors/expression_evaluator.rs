@@ -258,8 +258,9 @@ mod tests {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionField,
-        PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        UnboundPartitionField,
     };
     use crate::Result;
 
@@ -274,14 +275,15 @@ mod tests {
             ))])
             .build()?;
 
-        let spec = PartitionSpec::builder()
+        let spec = PartitionSpec::builder(&schema)
             .with_spec_id(1)
-            .with_fields(vec![PartitionField::builder()
+            .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
                 .name("a".to_string())
-                .field_id(1)
+                .partition_id(1)
                 .transform(Transform::Identity)
                 .build()])
+            .unwrap()
             .build()
             .unwrap();
 
@@ -298,7 +300,7 @@ mod tests {
         let partition_fields = partition_type.fields().to_owned();
 
         let partition_schema = Schema::builder()
-            .with_schema_id(partition_spec.spec_id)
+            .with_schema_id(partition_spec.spec_id())
             .with_fields(partition_fields)
             .build()?;
 

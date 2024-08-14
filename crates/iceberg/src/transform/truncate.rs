@@ -144,7 +144,7 @@ impl TransformFunction for Truncate {
                 let width = self.width as i64;
                 Datum::long(Self::truncate_i64(*v, width))
             })),
-            PrimitiveLiteral::Decimal(v) => Ok(Some({
+            PrimitiveLiteral::Int128(v) => Ok(Some({
                 let width = self.width as i128;
                 Datum::decimal(Self::truncate_decimal_i128(*v, width))?
             })),
@@ -380,7 +380,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (10090, 9990, 9890)"),
+            Some("name IN (9890, 9990, 10090)"),
         )?;
 
         fixture.assert_projection(
@@ -450,7 +450,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (9900, 10000, 10100)"),
+            Some("name IN (10000, 10100, 9900)"),
         )?;
 
         fixture.assert_projection(

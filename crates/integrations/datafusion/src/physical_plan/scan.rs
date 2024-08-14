@@ -72,6 +72,10 @@ impl IcebergTableScan {
 }
 
 impl ExecutionPlan for IcebergTableScan {
+    fn name(&self) -> &str {
+        "IcebergTableScan"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

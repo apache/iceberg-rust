@@ -469,23 +469,29 @@ impl Transform {
     /// `StartsWith`, `NotStartsWith`), the original datum is returned
     /// unmodified.
     fn adjust_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
-        let literal = datum.literal();
-
         let adjusted_boundary = match op {
-            PredicateOperator::LessThan => match literal {
-                PrimitiveLiteral::Int(v) => Some(Datum::int(v - 1)),
-                PrimitiveLiteral::Long(v) => Some(Datum::long(v - 1)),
-                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v - 1)?),
-                PrimitiveLiteral::Date(v) => Some(Datum::date(v - 1)),
-                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v - 1)),
+            PredicateOperator::LessThan => match (datum.data_type(), datum.literal()) {
+                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v - 1)),
+                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v - 1)),
+                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
+                    Some(Datum::decimal(v - 1)?)
+                }
+                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v - 1)),
+                (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamp_micros(v - 1))
+                }
                 _ => Some(datum.to_owned()),
             },
-            PredicateOperator::GreaterThan => match literal {
-                PrimitiveLiteral::Int(v) => Some(Datum::int(v + 1)),
-                PrimitiveLiteral::Long(v) => Some(Datum::long(v + 1)),
-                PrimitiveLiteral::Decimal(v) => Some(Datum::decimal(v + 1)?),
-                PrimitiveLiteral::Date(v) => Some(Datum::date(v + 1)),
-                PrimitiveLiteral::Timestamp(v) => Some(Datum::timestamp_micros(v + 1)),
+            PredicateOperator::GreaterThan => match (datum.data_type(), datum.literal()) {
+                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v + 1)),
+                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v + 1)),
+                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
+                    Some(Datum::decimal(v + 1)?)
+                }
+                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v + 1)),
+                (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamp_micros(v + 1))
+                }
                 _ => Some(datum.to_owned()),
             },
             PredicateOperator::Eq
@@ -560,7 +566,7 @@ impl Transform {
         transformed: &Datum,
     ) -> Option<AdjustedProjection> {
         let should_adjust = match self {
-            Transform::Day => matches!(original.literal(), PrimitiveLiteral::Timestamp(_)),
+            Transform::Day => matches!(original.data_type(), PrimitiveType::Timestamp),
             Transform::Year | Transform::Month => true,
             _ => false,
         };

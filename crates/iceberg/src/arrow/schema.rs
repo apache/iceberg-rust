@@ -20,10 +20,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::types::{validate_decimal_precision_and_scale, Decimal128Type};
+use arrow_array::types::{
+    validate_decimal_precision_and_scale, Decimal128Type, TimestampMicrosecondType,
+};
 use arrow_array::{
     BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
-    StringArray,
+    PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
@@ -613,18 +615,38 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
 
 /// Convert Iceberg Datum to Arrow Datum.
 pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send>> {
-    match datum.literal() {
-        PrimitiveLiteral::Boolean(value) => Ok(Box::new(BooleanArray::new_scalar(*value))),
-        PrimitiveLiteral::Int(value) => Ok(Box::new(Int32Array::new_scalar(*value))),
-        PrimitiveLiteral::Long(value) => Ok(Box::new(Int64Array::new_scalar(*value))),
-        PrimitiveLiteral::Float(value) => Ok(Box::new(Float32Array::new_scalar(value.as_f32()))),
-        PrimitiveLiteral::Double(value) => Ok(Box::new(Float64Array::new_scalar(value.as_f64()))),
-        PrimitiveLiteral::String(value) => Ok(Box::new(StringArray::new_scalar(value.as_str()))),
-        l => Err(Error::new(
+    match (datum.data_type(), datum.literal()) {
+        (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
+            Ok(Box::new(BooleanArray::new_scalar(*value)))
+        }
+        (PrimitiveType::Int, PrimitiveLiteral::Int(value)) => {
+            Ok(Box::new(Int32Array::new_scalar(*value)))
+        }
+        (PrimitiveType::Long, PrimitiveLiteral::Long(value)) => {
+            Ok(Box::new(Int64Array::new_scalar(*value)))
+        }
+        (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
+            Ok(Box::new(Float32Array::new_scalar(value.as_f32())))
+        }
+        (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
+            Ok(Box::new(Float64Array::new_scalar(value.as_f64())))
+        }
+        (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
+            Ok(Box::new(StringArray::new_scalar(value.as_str())))
+        }
+        (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
+            Ok(Box::new(TimestampMicrosecondArray::new_scalar(*value)))
+        }
+        (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(value)) => Ok(Box::new(Scalar::new(
+            PrimitiveArray::<TimestampMicrosecondType>::new(vec![*value; 1].into(), None)
+                .with_timezone("UTC"),
+        ))),
+
+        (typ, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
                 "Converting datum from type {:?} to arrow not supported yet.",
-                l
+                typ
             ),
         )),
     }
