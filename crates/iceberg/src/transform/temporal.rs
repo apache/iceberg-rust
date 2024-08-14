@@ -340,7 +340,7 @@ impl Hour {
 
     #[inline]
     fn hour_timestamp_nano(v: i64) -> i32 {
-        (v as f64 / 1000_000.0 / 1000.0 * HOUR_PER_SECOND) as i32
+        (v as f64 / 1_000_000.0 / 1000.0 * HOUR_PER_SECOND) as i32
     }
 }
 
