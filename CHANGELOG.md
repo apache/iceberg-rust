@@ -199,6 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * docs: Add an example to scan an iceberg table by @Xuanwo in https://github.com/apache/iceberg-rust/pull/545
 * Concurrent data file fetching and parallel RecordBatch processing by @sdd in https://github.com/apache/iceberg-rust/pull/515
 * doc: Add statement for contributors to avoid force push as much as possible by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/546
+* feat: Partition Binding and safe PartitionSpecBuilder by @c-thiel in https://github.com/apache/iceberg-rust/pull/491
 
 ## v0.2.0 - 2024-02-20
 
