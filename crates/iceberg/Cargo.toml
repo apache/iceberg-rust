@@ -30,11 +30,12 @@ keywords = ["iceberg"]
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
-storage-all = ["storage-memory", "storage-fs", "storage-s3"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
 storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
+storage-gcs = ["opendal/services-gcs"]
 
 async-std = ["dep:async-std"]
 tokio = ["dep:tokio"]
