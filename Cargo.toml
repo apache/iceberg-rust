@@ -27,7 +27,7 @@ members = [
 exclude = ["bindings/python"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org/"
 
@@ -47,49 +47,49 @@ arrow-select = { version = "52" }
 arrow-string = { version = "52" }
 async-stream = "0.3.5"
 async-trait = "0.1"
-async-std = "1.12.0"
+async-std = "1.12"
 aws-config = "1.1.8"
-aws-sdk-glue = "1.21.0"
+aws-sdk-glue = "1.21"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.5"
 chrono = "0.4.34"
 ctor = "0.2.8"
-derive_builder = "0.20.0"
+derive_builder = "0.20"
 either = "1"
 env_logger = "0.11.0"
 fnv = "1"
 futures = "0.3"
-iceberg = { version = "0.2.0", path = "./crates/iceberg" }
-iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
-iceberg-catalog-hms = { version = "0.2.0", path = "./crates/catalog/hms" }
-iceberg-catalog-memory = { version = "0.2.0", path = "./crates/catalog/memory" }
+iceberg = { version = "0.3.0", path = "./crates/iceberg" }
+iceberg-catalog-rest = { version = "0.3.0", path = "./crates/catalog/rest" }
+iceberg-catalog-hms = { version = "0.3.0", path = "./crates/catalog/hms" }
+iceberg-catalog-memory = { version = "0.3.0", path = "./crates/catalog/memory" }
 itertools = "0.13"
-log = "^0.4"
-mockito = "^1"
+log = "0.4"
+mockito = "1"
 murmur3 = "0.5.2"
 once_cell = "1"
 opendal = "0.49"
-ordered-float = "4.0.0"
+ordered-float = "4"
 parquet = "52"
 pilota = "0.11.2"
-pretty_assertions = "1.4.0"
+pretty_assertions = "1.4"
 port_scanner = "0.1.5"
 regex = "1.10.5"
-reqwest = { version = "^0.12", default-features = false, features = ["json"] }
-rust_decimal = "1.31.0"
-serde = { version = "^1.0", features = ["rc"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rust_decimal = "1.31"
+serde = { version = "1", features = ["rc"] }
 serde_bytes = "0.11.8"
-serde_derive = "^1.0"
-serde_json = "^1.0"
+serde_derive = "1"
+serde_json = "1"
 serde_repr = "0.1.16"
-serde_with = "3.4.0"
+serde_with = "3.4"
 tempfile = "3.8"
 tokio = { version = "1", default-features = false }
-typed-builder = "^0.19"
+typed-builder = "0.19"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1.6.1", features = ["v7"] }
 volo-thrift = "0.10"
-hive_metastore = "0.1.0"
+hive_metastore = "0.1"
 tera = "1"

@@ -21,8 +21,14 @@ import subprocess
 import os
 
 DIRS = [
-    "crates/iceberg", "crates/catalog/hms", "crates/catalog/rest",
-    "crates/catalog/glue"
+    "crates/iceberg",
+
+    "crates/catalog/glue", "crates/catalog/hms",
+    "crates/catalog/memory", "crates/catalog/rest",
+    "crates/catalog/sql",
+
+    "crates/integrations/datafusion"
+
 ]
 
 
