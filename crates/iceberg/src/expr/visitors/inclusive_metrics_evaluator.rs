@@ -495,8 +495,8 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionField,
-        PartitionSpec, PrimitiveType, Schema, Struct, Transform, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
     const INT_MIN_VALUE: i32 = 30;
@@ -1656,14 +1656,15 @@ mod test {
             .unwrap();
         let table_schema_ref = Arc::new(table_schema);
 
-        let partition_spec = PartitionSpec::builder()
+        let partition_spec = PartitionSpec::builder(&table_schema_ref)
             .with_spec_id(1)
-            .with_fields(vec![PartitionField::builder()
+            .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
                 .name("a".to_string())
-                .field_id(1)
+                .partition_id(1)
                 .transform(Transform::Identity)
                 .build()])
+            .unwrap()
             .build()
             .unwrap();
         let partition_spec_ref = Arc::new(partition_spec);
