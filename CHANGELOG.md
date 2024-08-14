@@ -84,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * feat: Read Parquet data file with projection by @viirya in https://github.com/apache/iceberg-rust/pull/245
 * Fix day timestamp micro by @marvinlanhenke in https://github.com/apache/iceberg-rust/pull/312
 * feat: support uri redirect in rest client by @TennyZhuang in https://github.com/apache/iceberg-rust/pull/310
-* refine: seperate parquet reader and arrow convert by @ZENOTME in https://github.com/apache/iceberg-rust/pull/313
+* refine: separate parquet reader and arrow convert by @ZENOTME in https://github.com/apache/iceberg-rust/pull/313
 * chore: upgrade to rust-version 1.77.1 by @marvinlanhenke in https://github.com/apache/iceberg-rust/pull/316
 * Support identifier warehouses by @Fokko in https://github.com/apache/iceberg-rust/pull/308
 * feat: Project transform by @marvinlanhenke in https://github.com/apache/iceberg-rust/pull/309
@@ -131,7 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * refactor: Upgrade hive_metastore to 0.1 by @Xuanwo in https://github.com/apache/iceberg-rust/pull/409
 * fix: Remove duplicate filter by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/414
 * Enhancement: refine the reader interface by @ZENOTME in https://github.com/apache/iceberg-rust/pull/401
-* refactor(catalog/rest): Split http client logic to seperate mod by @Xuanwo in https://github.com/apache/iceberg-rust/pull/423
+* refactor(catalog/rest): Split http client logic to separate mod by @Xuanwo in https://github.com/apache/iceberg-rust/pull/423
 * Remove #[allow(dead_code)] from the codebase by @vivek378521 in https://github.com/apache/iceberg-rust/pull/421
 * ci: use official typos github action by @shoothzj in https://github.com/apache/iceberg-rust/pull/426
 * feat: support lower_bound&&upper_bound for parquet writer by @ZENOTME in https://github.com/apache/iceberg-rust/pull/383
@@ -262,7 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * feat: support UnboundPartitionSpec by @my-vegetable-has-exploded in https://github.com/apache/iceberg-rust/pull/106
 * test: Add integration tests for rest catalog. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/109
 * chore(deps): Update opendal requirement from 0.42 to 0.43 by @dependabot in https://github.com/apache/iceberg-rust/pull/116
-* feat: suport read/write Manifest by @ZENOTME in https://github.com/apache/iceberg-rust/pull/79
+* feat: support read/write Manifest by @ZENOTME in https://github.com/apache/iceberg-rust/pull/79
 * test: Remove binary manifest list avro file by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/118
 * refactor: Conversion between literal and json should depends on type. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/120
 * fix: fix parse partitions in manifest_list by @ZENOTME in https://github.com/apache/iceberg-rust/pull/122
@@ -293,7 +293,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Fix: avro schema names for manifest and manifest_list by @JanKaul in https://github.com/apache/iceberg-rust/pull/182
 * feat: Bump hive_metastore to use pure rust thrift impl `volo` by @Xuanwo in https://github.com/apache/iceberg-rust/pull/174
 * feat: Bump version 0.2.0 to prepare for release. by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/181
-* fix: default_partition_spec using the partion_spec_id set by @odysa in https://github.com/apache/iceberg-rust/pull/190
+* fix: default_partition_spec using the partition_spec_id set by @odysa in https://github.com/apache/iceberg-rust/pull/190
 * Docs: Add required Cargo version to install guide by @manuzhang in https://github.com/apache/iceberg-rust/pull/191
 * chore(deps): Update opendal requirement from 0.44 to 0.45 by @dependabot in https://github.com/apache/iceberg-rust/pull/195
 
