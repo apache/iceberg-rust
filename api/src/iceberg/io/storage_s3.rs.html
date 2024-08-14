@@ -119,6 +119,17 @@
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -138,8 +149,9 @@
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
+<span class="kw">use </span>opendal::raw::HttpClient;
 <span class="kw">use </span>opendal::services::S3Config;
-<span class="kw">use </span>opendal::Operator;
+<span class="kw">use </span>opendal::{Configurator, Operator};
 <span class="kw">use </span>url::Url;
 
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
@@ -227,7 +239,11 @@
 }
 
 <span class="doccomment">/// Build new opendal operator from give path.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(cfg: <span class="kw-2">&amp;</span>S3Config, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(
+    client: <span class="kw-2">&amp;</span>reqwest::Client,
+    cfg: <span class="kw-2">&amp;</span>S3Config,
+    path: <span class="kw-2">&amp;</span>str,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
     <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
     <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
         Error::new(
@@ -236,8 +252,14 @@
         )
     })<span class="question-mark">?</span>;
 
-    <span class="kw">let </span><span class="kw-2">mut </span>cfg = cfg.clone();
-    cfg.bucket = bucket.to_string();
-    <span class="prelude-val">Ok</span>(Operator::from_config(cfg)<span class="question-mark">?</span>.finish())
+    <span class="kw">let </span>builder = cfg
+        .clone()
+        .into_builder()
+        <span class="comment">// Set bucket name.
+        </span>.bucket(bucket)
+        <span class="comment">// Set http client we want to use.
+        </span>.http_client(HttpClient::with(client.clone()));
+
+    <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
 }
 </code></pre></div></section></main></body></html>

@@ -135,6 +135,41 @@
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -154,6 +189,8 @@
 
 </span><span class="kw">use </span>std::sync::Arc;
 
+<span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
+</span><span class="kw">use </span>opendal::services::GcsConfig;
 <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
 </span><span class="kw">use </span>opendal::services::S3Config;
 <span class="kw">use </span>opendal::{Operator, Scheme};
@@ -173,8 +210,14 @@
         <span class="doccomment">/// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
         </span>scheme_str: String,
+        <span class="doccomment">/// uses the same client for one FileIO Storage.
+        ///
+        /// TODO: allow users to configure this client.
+        </span>client: reqwest::Client,
         config: Arc&lt;S3Config&gt;,
     },
+    <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
+    </span>Gcs { config: Arc&lt;GcsConfig&gt; },
 }
 
 <span class="kw">impl </span>Storage {
@@ -191,7 +234,12 @@
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
             </span>Scheme::S3 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::S3 {
                 scheme_str,
+                client: reqwest::Client::new(),
                 config: <span class="kw">super</span>::s3_config_parse(props)<span class="question-mark">?</span>.into(),
+            }),
+            <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
+            </span>Scheme::Gcs =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Gcs {
+                config: <span class="kw">super</span>::gcs_config_parse(props)<span class="question-mark">?</span>.into(),
             }),
             <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -239,8 +287,12 @@
                 }
             }
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
-            </span>Storage::S3 { scheme_str, config } =&gt; {
-                <span class="kw">let </span>op = <span class="kw">super</span>::s3_config_build(config, path)<span class="question-mark">?</span>;
+            </span>Storage::S3 {
+                scheme_str,
+                client,
+                config,
+            } =&gt; {
+                <span class="kw">let </span>op = <span class="kw">super</span>::s3_config_build(client, config, path)<span class="question-mark">?</span>;
                 <span class="kw">let </span>op_info = op.info();
 
                 <span class="comment">// Check prefix of s3 path.
@@ -254,7 +306,24 @@
                     ))
                 }
             }
-            <span class="attr">#[cfg(all(not(feature = <span class="string">"storage-s3"</span>), not(feature = <span class="string">"storage-fs"</span>)))]
+            <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
+            </span>Storage::Gcs { config } =&gt; {
+                <span class="kw">let </span>operator = <span class="kw">super</span>::gcs_config_build(config, path)<span class="question-mark">?</span>;
+                <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"gs://{}/"</span>, operator.info().name());
+                <span class="kw">if </span>path.starts_with(<span class="kw-2">&amp;</span>prefix) {
+                    <span class="prelude-val">Ok</span>((operator, <span class="kw-2">&amp;</span>path[prefix.len()..]))
+                } <span class="kw">else </span>{
+                    <span class="prelude-val">Err</span>(Error::new(
+                        ErrorKind::DataInvalid,
+                        <span class="macro">format!</span>(<span class="string">"Invalid gcs url: {}, should start with {}"</span>, path, prefix),
+                    ))
+                }
+            }
+            <span class="attr">#[cfg(all(
+                not(feature = <span class="string">"storage-s3"</span>),
+                not(feature = <span class="string">"storage-fs"</span>),
+                not(feature = <span class="string">"storage-gcs"</span>)
+            ))]
             </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::FeatureUnsupported,
                 <span class="string">"No storage service has been enabled"</span>,
@@ -268,6 +337,7 @@
             <span class="string">"memory" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Memory),
             <span class="string">"file" </span>| <span class="string">"" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Fs),
             <span class="string">"s3" </span>| <span class="string">"s3a" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::S3),
+            <span class="string">"gs" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Gcs),
             s =&gt; <span class="prelude-val">Ok</span>(s.parse::&lt;Scheme&gt;()<span class="question-mark">?</span>),
         }
     }
