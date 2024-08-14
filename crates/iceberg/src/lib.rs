@@ -15,7 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Native Rust implementation of Apache Iceberg
+//! Apache Iceberg Official Native Rust Implementation
+//!
+//! # Examples
+//!
+//! ## Scan A Table
+//!
+//! ```rust, no_run
+//! use futures::TryStreamExt;
+//! use iceberg::io::{FileIO, FileIOBuilder};
+//! use iceberg::{Catalog, Result, TableIdent};
+//! use iceberg_catalog_memory::MemoryCatalog;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Build your file IO.
+//!     let file_io = FileIOBuilder::new("memory").build()?;
+//!     // Connect to a catalog.
+//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     // Load table from catalog.
+//!     let table = catalog
+//!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
+//!         .await?;
+//!     // Build table scan.
+//!     let stream = table
+//!         .scan()
+//!         .select(["name", "id"])
+//!         .build()?
+//!         .to_arrow()
+//!         .await?;
+//!
+//!     // Consume this stream like arrow record batch stream.
+//!     let _data: Vec<_> = stream.try_collect().await?;
+//!     Ok(())
+//! }
+//! ```
 
 #![deny(missing_docs)]
 

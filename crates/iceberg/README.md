@@ -25,3 +25,35 @@
 This crate contains the official Native Rust implementation of [Apache Iceberg](https://rust.iceberg.apache.org/).
 
 See the [API documentation](https://docs.rs/iceberg/latest) for examples and the full API.
+
+## Usage
+
+```rust
+use futures::TryStreamExt;
+use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::{Catalog, Result, TableIdent};
+use iceberg_catalog_memory::MemoryCatalog;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Build your file IO.
+    let file_io = FileIOBuilder::new("memory").build()?;
+    // Connect to a catalog.
+    let catalog = MemoryCatalog::new(file_io, None);
+    // Load table from catalog.
+    let table = catalog
+        .load_table(&TableIdent::from_strs(["hello", "world"])?)
+        .await?;
+    // Build table scan.
+    let stream = table
+        .scan()
+        .select(["name", "id"])
+        .build()?
+        .to_arrow()
+        .await?;
+
+    // Consume this stream like arrow record batch stream.
+    let _data: Vec<_> = stream. try_collect().await?;
+    Ok(())
+}
+```
