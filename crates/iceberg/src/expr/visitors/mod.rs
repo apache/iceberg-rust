@@ -20,3 +20,5 @@ pub(crate) mod expression_evaluator;
 pub(crate) mod inclusive_metrics_evaluator;
 pub(crate) mod inclusive_projection;
 pub(crate) mod manifest_evaluator;
+pub(crate) mod page_index_evaluator;
+pub(crate) mod row_group_metrics_evaluator;
