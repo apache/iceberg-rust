@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow_arith::arity::binary;
 use arrow_arith::temporal::{date_part, DatePart};
 use arrow_array::types::Date32Type;
-use arrow_array::{Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
+use arrow_array::{Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray};
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Datelike, Duration};
 
@@ -34,6 +34,8 @@ const HOUR_PER_SECOND: f64 = 1.0_f64 / 3600.0_f64;
 const UNIX_EPOCH_YEAR: i32 = 1970;
 /// One second in micros.
 const MICROS_PER_SECOND: i64 = 1_000_000;
+/// One second in nanos.
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
@@ -41,7 +43,7 @@ pub struct Year;
 
 impl Year {
     #[inline]
-    fn timestamp_to_year(timestamp: i64) -> Result<i32> {
+    fn timestamp_to_year_micros(timestamp: i64) -> Result<i32> {
         Ok(DateTime::from_timestamp_micros(timestamp)
             .ok_or_else(|| {
                 Error::new(
@@ -49,6 +51,13 @@ impl Year {
                     "Fail to convert timestamp to date in year transform",
                 )
             })?
+            .year()
+            - UNIX_EPOCH_YEAR)
+    }
+
+    #[inline]
+    fn timestamp_to_year_nanos(timestamp: i64) -> Result<i32> {
+        Ok(DateTime::from_timestamp_nanos(timestamp)
             .year()
             - UNIX_EPOCH_YEAR)
     }
@@ -70,8 +79,10 @@ impl TransformFunction for Year {
     fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
         let val = match input.literal() {
             PrimitiveLiteral::Date(v) => Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR,
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year(*v)?,
-            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_year(*v)?,
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_year_micros(*v)?,
+            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_year_micros(*v)?,
+            PrimitiveLiteral::TimestampNs(v) => Self::timestamp_to_year_nanos(*v)?,
+            PrimitiveLiteral::TimestamptzNs(v) => Self::timestamp_to_year_nanos(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -92,7 +103,7 @@ pub struct Month;
 
 impl Month {
     #[inline]
-    fn timestamp_to_month(timestamp: i64) -> Result<i32> {
+    fn timestamp_to_month_micros(timestamp: i64) -> Result<i32> {
         // date: aaaa-aa-aa
         // unix epoch date: 1970-01-01
         // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
@@ -105,6 +116,22 @@ impl Month {
         })?;
         let unix_epoch_date = DateTime::from_timestamp_micros(0)
             .expect("0 timestamp from unix epoch should be valid");
+        if date > unix_epoch_date {
+            Ok((date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR))
+        } else {
+            let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
+            Ok(-delta)
+        }
+    }
+
+    #[inline]
+    fn timestamp_to_month_nanos(timestamp: i64) -> Result<i32> {
+        // date: aaaa-aa-aa
+        // unix epoch date: 1970-01-01
+        // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
+        // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
+        let date = DateTime::from_timestamp_nanos(timestamp);
+        let unix_epoch_date = DateTime::from_timestamp_nanos(0);
         if date > unix_epoch_date {
             Ok((date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR))
         } else {
@@ -142,8 +169,10 @@ impl TransformFunction for Month {
                 (Date32Type::to_naive_date(*v).year() - UNIX_EPOCH_YEAR) * 12
                     + Date32Type::to_naive_date(*v).month0() as i32
             }
-            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month(*v)?,
-            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_month(*v)?,
+            PrimitiveLiteral::Timestamp(v) => Self::timestamp_to_month_micros(*v)?,
+            PrimitiveLiteral::Timestamptz(v) => Self::timestamp_to_month_micros(*v)?,
+            PrimitiveLiteral::TimestampNs(v) => Self::timestamp_to_month_nanos(*v)?,
+            PrimitiveLiteral::TimestamptzNs(v) => Self::timestamp_to_month_nanos(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -192,6 +221,35 @@ impl Day {
 
         Ok(days)
     }
+
+    fn day_timestamp_nano(v: i64) -> Result<i32> {
+        let secs = v / NANOS_PER_SECOND;
+
+        let (nanos, offset) = if v >= 0 {
+            let nanos = (v.rem_euclid(NANOS_PER_SECOND)) as u32;
+            let offset = 0i64;
+            (nanos, offset)
+        } else {
+            let v = v + 1;
+            let nanos = (v.rem_euclid(NANOS_PER_SECOND)) as u32;
+            let offset = 1i64;
+            (nanos, offset)
+        };
+
+        let delta = Duration::new(secs, nanos).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Failed to create 'TimeDelta' from seconds {} and nanos {}",
+                    secs, nanos
+                ),
+            )
+        })?;
+
+        let days = (delta.num_days() - offset) as i32;
+
+        Ok(days)
+    }
 }
 
 impl TransformFunction for Day {
@@ -202,6 +260,11 @@ impl TransformFunction for Day {
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
                 .try_unary(|v| -> Result<i32> { Self::day_timestamp_micro(v) })?,
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .try_unary(|v| -> Result<i32> { Self::day_timestamp_nano(v) })?,
             DataType::Date32 => input
                 .as_any()
                 .downcast_ref::<Date32Array>()
@@ -225,6 +288,8 @@ impl TransformFunction for Day {
             PrimitiveLiteral::Date(v) => *v,
             PrimitiveLiteral::Timestamp(v) => Self::day_timestamp_micro(*v)?,
             PrimitiveLiteral::Timestamptz(v) => Self::day_timestamp_micro(*v)?,
+            PrimitiveLiteral::TimestampNs(v) => Self::day_timestamp_nano(*v)?,
+            PrimitiveLiteral::TimestamptzNs(v) => Self::day_timestamp_nano(*v)?,
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -247,6 +312,11 @@ impl Hour {
     #[inline]
     fn hour_timestamp_micro(v: i64) -> i32 {
         (v as f64 / 1000.0 / 1000.0 * HOUR_PER_SECOND) as i32
+    }
+
+    #[inline]
+    fn hour_timestamp_nano(v: i64) -> i32 {
+        (v as f64 / 1000_000.0 / 1000.0 * HOUR_PER_SECOND) as i32
     }
 }
 
@@ -275,6 +345,8 @@ impl TransformFunction for Hour {
         let val = match input.literal() {
             PrimitiveLiteral::Timestamp(v) => Self::hour_timestamp_micro(*v),
             PrimitiveLiteral::Timestamptz(v) => Self::hour_timestamp_micro(*v),
+            PrimitiveLiteral::TimestampNs(v) => Self::hour_timestamp_nano(*v),
+            PrimitiveLiteral::TimestamptzNs(v) => Self::hour_timestamp_nano(*v),
             _ => {
                 return Err(crate::Error::new(
                     crate::ErrorKind::FeatureUnsupported,
@@ -2323,6 +2395,47 @@ mod test {
         assert_eq!(res, expect);
     }
 
+    fn test_timestamp_ns_and_tz_transform(
+        time: &str,
+        transform: &BoxedTransformFunction,
+        expect: Datum,
+    ) {
+        let timestamp_ns = Datum::timestamp_nanos(
+            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap()
+                .and_utc()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let timestamptz_ns = Datum::timestamptz_nanos(
+            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
+                .unwrap()
+                .and_utc()
+                .timestamp_nanos_opt()
+                .unwrap(),
+        );
+        let res = transform.transform_literal(&timestamp_ns).unwrap().unwrap();
+        assert_eq!(res, expect);
+        let res = transform
+            .transform_literal(&timestamptz_ns)
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, expect);
+    }
+
+    fn test_timestamp_ns_and_tz_transform_using_i64(
+        time: i64,
+        transform: &BoxedTransformFunction,
+        expect: Datum,
+    ) {
+        let timestamp_ns = Datum::timestamp_nanos(time);
+        let timestamptz_ns = Datum::timestamptz_nanos(time);
+        let res = transform.transform_literal(&timestamp_ns).unwrap().unwrap();
+        assert_eq!(res, expect);
+        let res = transform.transform_literal(&timestamptz_ns).unwrap().unwrap();
+        assert_eq!(res, expect);
+    }
+
     #[test]
     fn test_transform_year_literal() {
         let year = Box::new(super::Year) as BoxedTransformFunction;
@@ -2338,6 +2451,14 @@ mod test {
             Datum::int(1970 - super::UNIX_EPOCH_YEAR),
         );
         test_timestamp_and_tz_transform("1969-01-01 00:00:00.00", &year, Datum::int(-1));
+
+        // Test TimestampNanosecond
+        test_timestamp_ns_and_tz_transform_using_i64(
+            186280000000,
+            &year,
+            Datum::int(1970 - super::UNIX_EPOCH_YEAR),
+        );
+        test_timestamp_ns_and_tz_transform("1969-01-01 00:00:00.00", &year, Datum::int(-1));
     }
 
     #[test]
@@ -2432,6 +2553,17 @@ mod test {
         test_timestamp_and_tz_transform("2017-12-01 00:00:00.00", &month, Datum::int(575));
         test_timestamp_and_tz_transform("1970-01-01 00:00:00.00", &month, Datum::int(0));
         test_timestamp_and_tz_transform("1969-12-31 00:00:00.00", &month, Datum::int(-1));
+
+        // Test TimestampNanosecond
+        test_timestamp_ns_and_tz_transform_using_i64(
+            186280000000,
+            &month,
+            Datum::int((1970 - super::UNIX_EPOCH_YEAR) * 12),
+        );
+        test_timestamp_ns_and_tz_transform("1969-12-01 23:00:00.00", &month, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("2017-12-01 00:00:00.00", &month, Datum::int(575));
+        test_timestamp_ns_and_tz_transform("1970-01-01 00:00:00.00", &month, Datum::int(0));
+        test_timestamp_ns_and_tz_transform("1969-12-31 00:00:00.00", &month, Datum::int(-1));
     }
 
     #[test]
@@ -2523,6 +2655,11 @@ mod test {
         test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17501));
         test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-2));
         test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
+
+        // Test TimestampNanosecond
+        test_timestamp_ns_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17));
+        test_timestamp_ns_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
     }
 
     #[test]
@@ -2591,5 +2728,9 @@ mod test {
         // Test TimestampMicrosecond
         test_timestamp_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
         test_timestamp_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
+
+        // Test TimestampNanosecond
+        test_timestamp_ns_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
+        test_timestamp_ns_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
     }
 }

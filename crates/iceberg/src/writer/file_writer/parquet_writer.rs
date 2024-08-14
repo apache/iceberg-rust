@@ -337,11 +337,11 @@ impl MinMaxColAggregator {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_micros(v));
                 self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
-            (PrimitiveType::TimestampNs, Statistics::Int64(stat,)) => {
+            (PrimitiveType::TimestampNs, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamp_nanos(v));
                 self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
-            (PrimitiveType::TimestamptzNs, Statistics::Int64(stat,)) => {
+            (PrimitiveType::TimestamptzNs, Statistics::Int64(stat)) => {
                 let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_nanos(v));
                 self.update_state::<Int64Type>(field_id, &stat, convert_func)
             }
@@ -605,7 +605,7 @@ mod tests {
     use anyhow::Result;
     use arrow_array::types::Int64Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray
+        Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
     };
     use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
@@ -1113,11 +1113,15 @@ mod tests {
             arrow_array::TimestampMicrosecondArray::from(vec![Some(0), Some(1), None, Some(3)])
                 .with_timezone_utc(),
         ) as ArrayRef;
-        let col11 = Arc::new(
-            arrow_array::TimestampNanosecondArray::from(vec![Some(0), Some(1), None, Some(3)])
-        ) as ArrayRef;
+        let col11 = Arc::new(arrow_array::TimestampNanosecondArray::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(3),
+        ])) as ArrayRef;
         let col12 = Arc::new(
-            arrow_array::TimestampNanosecondArray::from(vec![Some(0), Some(1), None, Some(3)]).with_timezone_utc()
+            arrow_array::TimestampNanosecondArray::from(vec![Some(0), Some(1), None, Some(3)])
+                .with_timezone_utc(),
         ) as ArrayRef;
         let col13 = Arc::new(
             arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
@@ -1151,7 +1155,8 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
-            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13, col14, col15
+            col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
+            col14, col15,
         ])
         .unwrap();
 

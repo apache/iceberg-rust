@@ -763,15 +763,15 @@ impl Datum {
         }
     }
 
-    /// Creates a timestamp from unix epoch in microseconds.
+    /// Creates a timestamp from unix epoch in nanoseconds.
     ///
     /// Example:
     ///
     /// ```rust
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamp_micros(1000);
+    /// let t = Datum::timestamp_nanos(1000);
     ///
-    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001");
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.000001");
     /// ```
     pub fn timestamp_nanos(value: i64) -> Self {
         Self {
@@ -838,13 +838,13 @@ impl Datum {
         }
     }
 
-    /// Creates a timestamp with timezone from unix epoch in microseconds.
+    /// Creates a timestamp with timezone from unix epoch in nanoseconds.
     ///
     /// Example:
     ///
     /// ```rust
     /// use iceberg::spec::Datum;
-    /// let t = Datum::timestamptz_micros(1000);
+    /// let t = Datum::timestamptz_nanos(1000);
     ///
     /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.001 UTC");
     /// ```

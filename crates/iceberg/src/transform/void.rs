@@ -37,7 +37,7 @@ impl TransformFunction for Void {
 mod test {
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
-        Timestamptz, TimestampNs, TimestamptzNs, Uuid,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{NestedField, StructType, Transform};
