@@ -65,6 +65,7 @@ futures = "0.3"
 iceberg = { version = "0.2.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.2.0", path = "./crates/catalog/rest" }
 iceberg-catalog-hms = { version = "0.2.0", path = "./crates/catalog/hms" }
+iceberg-catalog-memory = { version = "0.2.0", path = "./crates/catalog/memory" }
 itertools = "0.13"
 log = "^0.4"
 mockito = "^1"
