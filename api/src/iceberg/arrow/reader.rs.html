@@ -949,6 +949,58 @@
 <a href="#949" id="949">949</a>
 <a href="#950" id="950">950</a>
 <a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -978,12 +1030,11 @@
 <span class="kw">use </span>arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 <span class="kw">use </span>arrow_schema::{ArrowError, DataType, SchemaRef <span class="kw">as </span>ArrowSchemaRef};
 <span class="kw">use </span>arrow_string::like::starts_with;
-<span class="kw">use </span>async_stream::try_stream;
 <span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>fnv::FnvHashSet;
+<span class="kw">use </span>futures::channel::mpsc::{channel, Sender};
 <span class="kw">use </span>futures::future::BoxFuture;
-<span class="kw">use </span>futures::stream::StreamExt;
-<span class="kw">use </span>futures::{try_join, TryFutureExt};
+<span class="kw">use </span>futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 <span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter};
 <span class="kw">use </span>parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 <span class="kw">use </span>parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
@@ -995,24 +1046,37 @@
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference};
 <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileMetadata, FileRead};
-<span class="kw">use </span><span class="kw">crate</span>::scan::{ArrowRecordBatchStream, FileScanTaskStream};
+<span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
+<span class="kw">use </span><span class="kw">crate</span>::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, Schema};
+<span class="kw">use </span><span class="kw">crate</span>::utils::available_parallelism;
 <span class="kw">use crate</span>::{Error, ErrorKind};
 
 <span class="doccomment">/// Builder to create ArrowReader
 </span><span class="kw">pub struct </span>ArrowReaderBuilder {
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     file_io: FileIO,
+    concurrency_limit_data_files: usize,
 }
 
 <span class="kw">impl </span>ArrowReaderBuilder {
     <span class="doccomment">/// Create a new ArrowReaderBuilder
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(file_io: FileIO) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>num_cpus = available_parallelism().get();
+
         ArrowReaderBuilder {
             batch_size: <span class="prelude-val">None</span>,
             file_io,
+            concurrency_limit_data_files: num_cpus,
         }
     }
+
+    <span class="doccomment">/// Sets the max number of in flight data files that are being fetched
+    </span><span class="kw">pub fn </span>with_data_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, val: usize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.concurrency_limit_data_files = val;
+
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Sets the desired size of batches in the response
     /// to something other than the default
@@ -1026,6 +1090,7 @@
         ArrowReader {
             batch_size: <span class="self">self</span>.batch_size,
             file_io: <span class="self">self</span>.file_io,
+            concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
         }
     }
 }
@@ -1035,73 +1100,113 @@
 </span><span class="kw">pub struct </span>ArrowReader {
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     file_io: FileIO,
+
+    <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
+    </span>concurrency_limit_data_files: usize,
 }
 
 <span class="kw">impl </span>ArrowReader {
     <span class="doccomment">/// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    </span><span class="kw">pub fn </span>read(<span class="self">self</span>, <span class="kw-2">mut </span>tasks: FileScanTaskStream) -&gt; <span class="kw">crate</span>::Result&lt;ArrowRecordBatchStream&gt; {
+    </span><span class="kw">pub fn </span>read(<span class="self">self</span>, tasks: FileScanTaskStream) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="kw">let </span>file_io = <span class="self">self</span>.file_io.clone();
+        <span class="kw">let </span>batch_size = <span class="self">self</span>.batch_size;
+        <span class="kw">let </span>concurrency_limit_data_files = <span class="self">self</span>.concurrency_limit_data_files;
 
-        <span class="prelude-val">Ok</span>(<span class="macro">try_stream!</span> {
-            <span class="kw">while let </span><span class="prelude-val">Some</span>(task_result) = tasks.next().<span class="kw">await </span>{
-                <span class="kw">match </span>task_result {
-                    <span class="prelude-val">Ok</span>(task) =&gt; {
-                        <span class="comment">// Collect Parquet column indices from field ids
-                        </span><span class="kw">let </span><span class="kw-2">mut </span>collector = CollectFieldIdVisitor {
-                            field_ids: HashSet::default(),
-                        };
-                        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicates) = task.predicate() {
-                            visit(<span class="kw-2">&amp;mut </span>collector, predicates)<span class="question-mark">?</span>;
+        <span class="kw">let </span>(tx, rx) = channel(concurrency_limit_data_files);
+        <span class="kw">let </span><span class="kw-2">mut </span>channel_for_error = tx.clone();
+
+        spawn(<span class="kw">async move </span>{
+            <span class="kw">let </span>result = tasks
+                .map(|task| <span class="prelude-val">Ok</span>((task, file_io.clone(), tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_data_files,
+                    |(file_scan_task, file_io, tx)| <span class="kw">async move </span>{
+                        <span class="kw">match </span>file_scan_task {
+                            <span class="prelude-val">Ok</span>(task) =&gt; {
+                                <span class="kw">let </span>file_path = task.data_file_path().to_string();
+
+                                spawn(<span class="kw">async move </span>{
+                                    <span class="self">Self</span>::process_file_scan_task(task, batch_size, file_io, tx)
+                                        .<span class="kw">await
+                                </span>})
+                                .<span class="kw">await
+                                </span>.map_err(|e| e.with_context(<span class="string">"file_path"</span>, file_path))
+                            }
+                            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err),
                         }
+                    },
+                )
+                .<span class="kw">await</span>;
 
-                        <span class="kw">let </span>parquet_file = file_io
-                            .new_input(task.data_file_path())<span class="question-mark">?</span>;
-
-                        <span class="kw">let </span>(parquet_metadata, parquet_reader) = <span class="macro">try_join!</span>(parquet_file.metadata(), parquet_file.reader())<span class="question-mark">?</span>;
-                        <span class="kw">let </span>arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
-
-                        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream_builder = ParquetRecordBatchStreamBuilder::new(arrow_file_reader)
-                            .<span class="kw">await</span><span class="question-mark">?</span>;
-
-                        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
-                        <span class="kw">let </span>arrow_schema = batch_stream_builder.schema();
-                        <span class="kw">let </span>projection_mask = <span class="self">self</span>.get_arrow_projection_mask(task.project_field_ids(),task.schema(),parquet_schema, arrow_schema)<span class="question-mark">?</span>;
-                        batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
-
-                        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
-                        <span class="kw">let </span>row_filter = <span class="self">self</span>.get_row_filter(task.predicate(),parquet_schema, <span class="kw-2">&amp;</span>collector)<span class="question-mark">?</span>;
-
-                        <span class="kw">if let </span><span class="prelude-val">Some</span>(row_filter) = row_filter {
-                            batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
-                        }
-
-                        <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = <span class="self">self</span>.batch_size {
-                            batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
-                        }
-
-                        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream = batch_stream_builder.build()<span class="question-mark">?</span>;
-
-                        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = batch_stream.next().<span class="kw">await </span>{
-                            <span class="kw">yield </span>batch<span class="question-mark">?</span>;
-                        }
-                    }
-                    <span class="prelude-val">Err</span>(e) =&gt; {
-                        <span class="prelude-val">Err</span>(e)<span class="question-mark">?
-                    </span>}
-                }
+            <span class="kw">if let </span><span class="prelude-val">Err</span>(error) = result {
+                <span class="kw">let _ </span>= channel_for_error.send(<span class="prelude-val">Err</span>(error)).<span class="kw">await</span>;
             }
+        });
+
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(rx.boxed());
+    }
+
+    <span class="kw">async fn </span>process_file_scan_task(
+        task: FileScanTask,
+        batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        file_io: FileIO,
+        <span class="kw-2">mut </span>tx: Sender&lt;<span class="prelude-ty">Result</span>&lt;RecordBatch&gt;&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="comment">// Collect Parquet column indices from field ids
+        </span><span class="kw">let </span><span class="kw-2">mut </span>collector = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicates) = task.predicate() {
+            visit(<span class="kw-2">&amp;mut </span>collector, predicates)<span class="question-mark">?</span>;
         }
-        .boxed())
+
+        <span class="kw">let </span>parquet_file = file_io.new_input(task.data_file_path())<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>(parquet_metadata, parquet_reader) =
+            <span class="macro">try_join!</span>(parquet_file.metadata(), parquet_file.reader())<span class="question-mark">?</span>;
+        <span class="kw">let </span>arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+
+        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream_builder =
+            ParquetRecordBatchStreamBuilder::new(arrow_file_reader).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
+        <span class="kw">let </span>arrow_schema = batch_stream_builder.schema();
+        <span class="kw">let </span>projection_mask = <span class="self">Self</span>::get_arrow_projection_mask(
+            task.project_field_ids(),
+            task.schema(),
+            parquet_schema,
+            arrow_schema,
+        )<span class="question-mark">?</span>;
+        batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
+
+        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
+        <span class="kw">let </span>row_filter = <span class="self">Self</span>::get_row_filter(task.predicate(), parquet_schema, <span class="kw-2">&amp;</span>collector)<span class="question-mark">?</span>;
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(row_filter) = row_filter {
+            batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
+        }
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = batch_size {
+            batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
+        }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream = batch_stream_builder.build()<span class="question-mark">?</span>;
+
+        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = batch_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
+            tx.send(<span class="prelude-val">Ok</span>(batch)).<span class="kw">await</span><span class="question-mark">?
+        </span>}
+
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">fn </span>get_arrow_projection_mask(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
         field_ids: <span class="kw-2">&amp;</span>[i32],
         iceberg_schema_of_task: <span class="kw-2">&amp;</span>Schema,
         parquet_schema: <span class="kw-2">&amp;</span>SchemaDescriptor,
         arrow_schema: <span class="kw-2">&amp;</span>ArrowSchemaRef,
-    ) -&gt; <span class="kw">crate</span>::Result&lt;ProjectionMask&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;ProjectionMask&gt; {
         <span class="kw">if </span>field_ids.is_empty() {
             <span class="prelude-val">Ok</span>(ProjectionMask::all())
         } <span class="kw">else </span>{
@@ -1167,7 +1272,6 @@
     }
 
     <span class="kw">fn </span>get_row_filter(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
         predicates: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt;,
         parquet_schema: <span class="kw-2">&amp;</span>SchemaDescriptor,
         collector: <span class="kw-2">&amp;</span>CollectFieldIdVisitor,

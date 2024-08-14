@@ -1574,6 +1574,20 @@
 <a href="#1574" id="1574">1574</a>
 <a href="#1575" id="1575">1575</a>
 <a href="#1576" id="1576">1576</a>
+<a href="#1577" id="1577">1577</a>
+<a href="#1578" id="1578">1578</a>
+<a href="#1579" id="1579">1579</a>
+<a href="#1580" id="1580">1580</a>
+<a href="#1581" id="1581">1581</a>
+<a href="#1582" id="1582">1582</a>
+<a href="#1583" id="1583">1583</a>
+<a href="#1584" id="1584">1584</a>
+<a href="#1585" id="1585">1585</a>
+<a href="#1586" id="1586">1586</a>
+<a href="#1587" id="1587">1587</a>
+<a href="#1588" id="1588">1588</a>
+<a href="#1589" id="1589">1589</a>
+<a href="#1590" id="1590">1590</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1615,6 +1629,7 @@
     SchemaRef, SnapshotRef, TableMetadataRef,
 };
 <span class="kw">use </span><span class="kw">crate</span>::table::Table;
+<span class="kw">use </span><span class="kw">crate</span>::utils::available_parallelism;
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
 <span class="doccomment">/// A stream of [`FileScanTask`].
@@ -1631,15 +1646,14 @@
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     case_sensitive: bool,
     filter: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
-    concurrency_limit_manifest_files: usize,
+    concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
 }
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; TableScanBuilder&lt;<span class="lifetime">'a</span>&gt; {
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>num_cpus = std::thread::available_parallelism()
-            .expect(<span class="string">"failed to get number of CPUs"</span>)
-            .get();
+        <span class="kw">let </span>num_cpus = available_parallelism().get();
 
         <span class="self">Self </span>{
             table,
@@ -1648,8 +1662,9 @@
             batch_size: <span class="prelude-val">None</span>,
             case_sensitive: <span class="bool-val">true</span>,
             filter: <span class="prelude-val">None</span>,
-            concurrency_limit_manifest_files: num_cpus,
+            concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
+            concurrency_limit_manifest_files: num_cpus,
         }
     }
 
@@ -1700,18 +1715,25 @@
     </span><span class="kw">pub fn </span>with_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.concurrency_limit_manifest_files = limit;
         <span class="self">self</span>.concurrency_limit_manifest_entries = limit;
+        <span class="self">self</span>.concurrency_limit_data_files = limit;
         <span class="self">self
     </span>}
 
-    <span class="doccomment">/// Sets the manifest file concurrency limit for this scan
-    </span><span class="kw">pub fn </span>with_manifest_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.concurrency_limit_manifest_files = limit;
+    <span class="doccomment">/// Sets the data file concurrency limit for this scan
+    </span><span class="kw">pub fn </span>with_data_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.concurrency_limit_data_files = limit;
         <span class="self">self
     </span>}
 
     <span class="doccomment">/// Sets the manifest entry concurrency limit for this scan
     </span><span class="kw">pub fn </span>with_manifest_entry_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.concurrency_limit_manifest_entries = limit;
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Sets the manifest file concurrency limit for this scan
+    </span><span class="kw">pub fn </span>with_manifest_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.concurrency_limit_manifest_files = limit;
         <span class="self">self
     </span>}
 
@@ -1820,10 +1842,11 @@
         <span class="prelude-val">Ok</span>(TableScan {
             batch_size: <span class="self">self</span>.batch_size,
             column_names: <span class="self">self</span>.column_names,
-            concurrency_limit_manifest_files: <span class="self">self</span>.concurrency_limit_manifest_files,
             file_io: <span class="self">self</span>.table.file_io().clone(),
             plan_context,
+            concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: <span class="self">self</span>.concurrency_limit_manifest_entries,
+            concurrency_limit_manifest_files: <span class="self">self</span>.concurrency_limit_manifest_files,
         })
     }
 }
@@ -1842,6 +1865,10 @@
     <span class="doccomment">/// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     </span>concurrency_limit_manifest_entries: usize,
+
+    <span class="doccomment">/// The maximum number of [`ManifestEntry`]s that will
+    /// be processed in parallel
+    </span>concurrency_limit_data_files: usize,
 }
 
 <span class="doccomment">/// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -1926,7 +1953,8 @@
 
     <span class="doccomment">/// Returns an [`ArrowRecordBatchStream`].
     </span><span class="kw">pub async fn </span>to_arrow(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>arrow_reader_builder = ArrowReaderBuilder::new(<span class="self">self</span>.file_io.clone());
+        <span class="kw">let </span><span class="kw-2">mut </span>arrow_reader_builder = ArrowReaderBuilder::new(<span class="self">self</span>.file_io.clone())
+            .with_data_file_concurrency_limit(<span class="self">self</span>.concurrency_limit_data_files);
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = <span class="self">self</span>.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
