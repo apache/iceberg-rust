@@ -19,8 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::CatalogProvider;
+use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
