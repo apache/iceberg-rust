@@ -43,6 +43,11 @@ pub const S3_SSE_TYPE: &str = "s3.sse.type";
 pub const S3_SSE_KEY: &str = "s3.sse.key";
 /// S3 Server Side Encryption MD5.
 pub const S3_SSE_MD5: &str = "s3.sse.md5";
+/// If set, all AWS clients will assume a role of the given ARN, instead of using the default
+/// credential chain.
+pub const S3_ASSUME_ROLE_ARN: &str = "client.assume-role.arn";
+/// Optional external ID used to assume an IAM role.
+pub const S3_ASSUME_ROLE_EXTERNAL_ID: &str = "client.assume-role.external-id";
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -63,6 +68,13 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         if ["true", "True", "1"].contains(&path_style_access.as_str()) {
             cfg.enable_virtual_host_style = true;
         }
+    };
+
+    if let Some(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
+        cfg.role_arn = Some(arn);
+    }
+    if let Some(external_id) = m.remove(S3_ASSUME_ROLE_EXTERNAL_ID) {
+        cfg.external_id = Some(external_id);
     };
     let s3_sse_key = m.remove(S3_SSE_KEY);
     if let Some(sse_type) = m.remove(S3_SSE_TYPE) {
