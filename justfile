@@ -47,6 +47,7 @@ perf-run:
     cargo criterion --benches
 
 # download the "NYC Taxi" data required to populate the performance test suite
+# Original links to these files can be found at https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 perf-download-data:
     if [ ! -f ./crates/iceberg/testdata/performance/raw_data/yellow_tripdata_2024-01.parquet ]; then wget https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet -P crates/iceberg/testdata/performance/raw_data; fi
     if [ ! -f ./crates/iceberg/testdata/performance/raw_data/yellow_tripdata_2024-02.parquet ]; then wget https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-02.parquet -P crates/iceberg/testdata/performance/raw_data; fi
