@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         .await?;
 
     // Consume this stream like arrow record batch stream.
-    let _data: Vec<_> = stream. try_collect().await?;
+    let _data: Vec<_> = stream.try_collect().await?;
     Ok(())
 }
 ```
