@@ -142,6 +142,10 @@
 <a href="#142" id="142">142</a>
 <a href="#143" id="143">143</a>
 <a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -196,6 +200,8 @@
 </span><span class="kw">pub const </span>S3_ASSUME_ROLE_ARN: <span class="kw-2">&amp;</span>str = <span class="string">"client.assume-role.arn"</span>;
 <span class="doccomment">/// Optional external ID used to assume an IAM role.
 </span><span class="kw">pub const </span>S3_ASSUME_ROLE_EXTERNAL_ID: <span class="kw-2">&amp;</span>str = <span class="string">"client.assume-role.external-id"</span>;
+<span class="doccomment">/// Optional session name used to assume an IAM role.
+</span><span class="kw">pub const </span>S3_ASSUME_ROLE_SESSION_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"client.assume-role.session-name"</span>;
 
 <span class="doccomment">/// Parse iceberg props to s3 config.
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;S3Config&gt; {
@@ -220,12 +226,14 @@
             cfg.enable_virtual_host_style = <span class="bool-val">true</span>;
         }
     };
-
     <span class="kw">if let </span><span class="prelude-val">Some</span>(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
         cfg.role_arn = <span class="prelude-val">Some</span>(arn);
     }
     <span class="kw">if let </span><span class="prelude-val">Some</span>(external_id) = m.remove(S3_ASSUME_ROLE_EXTERNAL_ID) {
         cfg.external_id = <span class="prelude-val">Some</span>(external_id);
+    };
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(session_name) = m.remove(S3_ASSUME_ROLE_SESSION_NAME) {
+        cfg.role_session_name = <span class="prelude-val">Some</span>(session_name);
     };
     <span class="kw">let </span>s3_sse_key = m.remove(S3_SSE_KEY);
     <span class="kw">if let </span><span class="prelude-val">Some</span>(sse_type) = m.remove(S3_SSE_TYPE) {
