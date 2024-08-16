@@ -24,17 +24,17 @@ This project is used to build an iceberg-rust powered core for pyiceberg.
 ## Setup
 
 ```shell
-make install
+pip install hatch==1.12.0
 ```
 
 ## Build
 
 ```shell
-make develop
+hatch run dev:develop
 ```
 
 ## Test
 
 ```shell
-make test
+hatch run dev:test
 ```

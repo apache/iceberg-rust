@@ -78,6 +78,6 @@ jobs:
         shell: bash
         run: |
           set -e
-          make install
-          poetry run pip install dist/pyiceberg_core-*.whl --force-reinstall
-          make test
+          pip install hatch==1.12.0
+          hatch run dev:pip install dist/pyiceberg_core-*.whl --force-reinstall
+          hatch run dev:test

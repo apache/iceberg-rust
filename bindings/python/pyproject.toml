@@ -31,31 +31,6 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 
-# Duplicate section required: https://github.com/python-poetry/poetry/pull/9135
-[tool.poetry]
-name = "pyiceberg_core"
-version = "0.0.1"
-repository = "https://github.com/apache/iceberg-rust"
-description = "Apache Iceberg is an open table format for huge analytic datasets"
-authors = ["Apache Software Foundation <dev@iceberg.apache.org>"]
-license = "Apache License 2.0"
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Operating System :: OS Independent",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-]
-
-[tool.poetry.dependencies]
-python = "^3.8"
-
-[tool.poetry.dev-dependencies]
-maturin = "^1.0"
-pytest = "^8.3.2"
-pyarrow = "^17.0.0"
-
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
@@ -63,3 +38,15 @@ module-name = "pyiceberg_core.pyiceberg_core_rust"
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
+
+[tool.hatch.envs.dev]
+dependencies = [
+    "maturin>=1.0,<2.0",
+    "pytest>=8.3.2",
+    "pyarrow>=17.0.0",
+]
+
+[tool.hatch.envs.dev.scripts]
+develop = "maturin develop"
+build = "maturin build --out dist --sdist"
+test = "pytest"
