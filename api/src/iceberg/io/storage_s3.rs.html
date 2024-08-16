@@ -130,6 +130,18 @@
 <a href="#130" id="130">130</a>
 <a href="#131" id="131">131</a>
 <a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -179,6 +191,11 @@
 </span><span class="kw">pub const </span>S3_SSE_KEY: <span class="kw-2">&amp;</span>str = <span class="string">"s3.sse.key"</span>;
 <span class="doccomment">/// S3 Server Side Encryption MD5.
 </span><span class="kw">pub const </span>S3_SSE_MD5: <span class="kw-2">&amp;</span>str = <span class="string">"s3.sse.md5"</span>;
+<span class="doccomment">/// If set, all AWS clients will assume a role of the given ARN, instead of using the default
+/// credential chain.
+</span><span class="kw">pub const </span>S3_ASSUME_ROLE_ARN: <span class="kw-2">&amp;</span>str = <span class="string">"client.assume-role.arn"</span>;
+<span class="doccomment">/// Optional external ID used to assume an IAM role.
+</span><span class="kw">pub const </span>S3_ASSUME_ROLE_EXTERNAL_ID: <span class="kw-2">&amp;</span>str = <span class="string">"client.assume-role.external-id"</span>;
 
 <span class="doccomment">/// Parse iceberg props to s3 config.
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;S3Config&gt; {
@@ -202,6 +219,13 @@
         <span class="kw">if </span>[<span class="string">"true"</span>, <span class="string">"True"</span>, <span class="string">"1"</span>].contains(<span class="kw-2">&amp;</span>path_style_access.as_str()) {
             cfg.enable_virtual_host_style = <span class="bool-val">true</span>;
         }
+    };
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
+        cfg.role_arn = <span class="prelude-val">Some</span>(arn);
+    }
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(external_id) = m.remove(S3_ASSUME_ROLE_EXTERNAL_ID) {
+        cfg.external_id = <span class="prelude-val">Some</span>(external_id);
     };
     <span class="kw">let </span>s3_sse_key = m.remove(S3_SSE_KEY);
     <span class="kw">if let </span><span class="prelude-val">Some</span>(sse_type) = m.remove(S3_SSE_TYPE) {
