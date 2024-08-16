@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
-use iceberg::io::FileIOBuilder; 
+use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_memory::MemoryCatalog;
