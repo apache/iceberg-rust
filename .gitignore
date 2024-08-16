@@ -24,3 +24,5 @@ dist/*
 **/venv
 *.so
 *.pyc
+*.whl
+*.tar.gz

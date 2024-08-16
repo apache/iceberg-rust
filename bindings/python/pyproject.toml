@@ -19,6 +19,19 @@
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
+[project]
+name = "pyiceberg_core"
+version = "0.0.1"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+# Duplicate section required: https://github.com/python-poetry/poetry/pull/9135
 [tool.poetry]
 name = "pyiceberg_core"
 version = "0.0.1"
