@@ -441,9 +441,6 @@ impl ArrowReader {
                 // skip row groups that aren't present in selected_row_groups
                 if idx == selected_row_groups[selected_row_groups_idx] {
                     selected_row_groups_idx += 1;
-                    if selected_row_groups_idx == selected_row_groups.len() {
-                        break;
-                    }
                 } else {
                     continue;
                 }
@@ -459,6 +456,12 @@ impl ArrowReader {
             )?;
 
             results.push(selections_for_page);
+
+            if let Some(selected_row_groups) = selected_row_groups {
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+            }
         }
 
         Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
