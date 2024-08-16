@@ -78,6 +78,6 @@ jobs:
         shell: bash
         run: |
           set -e
-          pip install dist/pyiceberg_core-*.whl --force-reinstall
-          pip install pytest
-          pytest -v
+          make install
+          poetry run pip install dist/pyiceberg_core-*.whl --force-reinstall
+          make test
