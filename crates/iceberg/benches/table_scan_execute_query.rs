@@ -43,7 +43,7 @@ pub fn bench_read_all_files_some_rows(c: &mut Criterion) {
     let table = setup(&runtime);
     let scan = table
         .scan()
-        .with_filter(Reference::new("passenger_count").greater_than(Datum::double(1.0)))
+        .with_filter(Reference::new("fare_amount").greater_than(Datum::double(50.0)))
         .build()
         .unwrap();
     let tasks = create_file_plan(&runtime, scan);
@@ -98,7 +98,7 @@ pub fn bench_read_some_files_some_rows(c: &mut Criterion) {
                     .and(Reference::new("tpep_pickup_datetime").less_than(
                         Datum::timestamptz_from_str("2024-02-02T00:00:00.000 UTC").unwrap(),
                     ))
-                    .and(Reference::new("passenger_count").greater_than(Datum::double(1.0))),
+                    .and(Reference::new("fare_amount").greater_than(Datum::double(50.0))),
             )
             .build()
             .unwrap();

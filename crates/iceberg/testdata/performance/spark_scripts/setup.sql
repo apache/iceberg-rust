@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS nyc.taxis (
 USING iceberg
 PARTITIONED BY (days(tpep_pickup_datetime));
 
-ALTER TABLE nyc.taxis WRITE ORDERED BY tpep_pickup_datetime, passenger_count;
+
+ALTER TABLE nyc.taxis SET TBLPROPERTIES (
+    'write.parquet.row-group-size-bytes'='131072',
+    'write.parquet.page-row-limit'='200'
+);
+ALTER TABLE nyc.taxis WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY fare_amount;
 
 CREATE TEMPORARY VIEW parquetTable
 USING org.apache.spark.sql.parquet

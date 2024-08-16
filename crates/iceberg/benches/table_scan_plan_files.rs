@@ -57,7 +57,7 @@ async fn one_file_all_rows(table: &Table) {
 async fn all_files_some_rows(table: &Table) {
     let scan = table
         .scan()
-        .with_filter(Reference::new("passenger_count").equal_to(Datum::double(1.0)))
+        .with_filter(Reference::new("fare_amount").equal_to(Datum::double(50.0)))
         .build()
         .unwrap();
     let mut stream = scan.plan_files().await.unwrap();
@@ -79,7 +79,7 @@ async fn one_file_some_rows(table: &Table) {
                     .and(Reference::new("tpep_pickup_datetime").less_than(
                         Datum::timestamptz_from_str("2024-02-02T00:00:00.000 UTC").unwrap(),
                     ))
-                    .and(Reference::new("passenger_count").equal_to(Datum::double(1.0))),
+                    .and(Reference::new("fare_amount").equal_to(Datum::double(50.0))),
             )
             .build()
             .unwrap();
