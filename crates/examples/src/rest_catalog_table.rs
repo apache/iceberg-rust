@@ -17,53 +17,54 @@
 
 use std::collections::HashMap;
 
-use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::spec::{NestedField, PartitionSpecBuilder, PrimitiveType, Schema, Transform, Type};
 use iceberg::{Catalog, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 
-#[tokio::main]
-async fn main() {
-    // Create catalog
-    let config = RestCatalogConfig::builder()
-        .uri("http://localhost:8080".to_string())
-        .build();
+mod utils;
 
-    let catalog = RestCatalog::new(config);
-
-    // ANCHOR: create_table
-    let table_id = TableIdent::from_strs(["default", "t1"]).unwrap();
-
+fn get_table_creation(table_id: &TableIdent) -> TableCreation {
     let table_schema = Schema::builder()
         .with_fields(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            NestedField::optional(1, "a", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(3, "c", Type::Primitive(PrimitiveType::Boolean)).into(),
         ])
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
         .build()
         .unwrap();
 
-    // Create table
-    let table_creation = TableCreation::builder()
+    let p = PartitionSpecBuilder::new(&table_schema)
+        .add_partition_field("a", "bucket_a", Transform::Bucket(16))
+        .unwrap()
+        .add_partition_field("b", "b", Transform::Identity)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    TableCreation::builder()
         .name(table_id.name.clone())
         .schema(table_schema.clone())
+        .partition_spec(p)
         .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
-        .build();
+        .build()
+}
 
+#[tokio::main]
+async fn main() {
+    let catalog: RestCatalog = utils::get_rest_catalog();
+
+    let table_id = TableIdent::from_strs(["ns1", "t1"]).unwrap();
+    catalog.drop_table(&table_id).await.unwrap();
+
+    let table_creation = get_table_creation(&table_id);
     let table = catalog
         .create_table(&table_id.namespace, table_creation)
         .await
         .unwrap();
-
     println!("Table created: {:?}", table.metadata());
-    // ANCHOR_END: create_table
 
-    // ANCHOR: load_table
-    let table2 = catalog
-        .load_table(&TableIdent::from_strs(["default", "t2"]).unwrap())
-        .await
-        .unwrap();
+    let table2 = catalog.load_table(&table_id).await.unwrap();
     println!("{:?}", table2.metadata());
-    // ANCHOR_END: load_table
 }

@@ -19,16 +19,14 @@ use std::collections::HashMap;
 
 use iceberg::{Catalog, NamespaceIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use utils::get_rest_catalog;
+mod utils;
 
 #[tokio::main]
 async fn main() {
     // ANCHOR: create_catalog
     // Create catalog
-    let config = RestCatalogConfig::builder()
-        .uri("http://localhost:8080".to_string())
-        .build();
-
-    let catalog = RestCatalog::new(config);
+    let catalog = get_rest_catalog();
     // ANCHOR_END: create_catalog
 
     // ANCHOR: list_all_namespace
@@ -38,8 +36,7 @@ async fn main() {
     // ANCHOR_END: list_all_namespace
 
     // ANCHOR: create_namespace
-    let namespace_id =
-        NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap();
+    let namespace_id = NamespaceIdent::from_vec(vec!["ns1".to_string()]).unwrap();
     // Create namespace
     let ns = catalog
         .create_namespace(

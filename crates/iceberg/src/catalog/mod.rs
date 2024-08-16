@@ -28,8 +28,8 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
-    UnboundPartitionSpec, ViewRepresentations,
+    FormatVersion, PartitionSpec, Schema, Snapshot, SnapshotReference, SortOrder,
+    TableMetadataBuilder, UnboundPartitionSpec, ViewRepresentations,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -230,7 +230,7 @@ pub struct TableCreation {
     pub schema: Schema,
     /// The partition spec of the table, could be None.
     #[builder(default, setter(strip_option, into))]
-    pub partition_spec: Option<UnboundPartitionSpec>,
+    pub partition_spec: Option<PartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option))]
     pub sort_order: Option<SortOrder>,

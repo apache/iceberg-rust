@@ -22,6 +22,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
+use iceberg::spec::UnboundPartitionSpec;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
@@ -498,7 +499,7 @@ impl Catalog for RestCatalog {
                 name: creation.name,
                 location: creation.location,
                 schema: creation.schema,
-                partition_spec: creation.partition_spec,
+                partition_spec: creation.partition_spec.map(UnboundPartitionSpec::from),
                 write_order: creation.sort_order,
                 // We don't support stage create yet.
                 stage_create: Some(false),
