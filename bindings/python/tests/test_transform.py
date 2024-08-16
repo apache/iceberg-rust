@@ -20,22 +20,30 @@ from pyiceberg_core import bucket_transform
 import pytest
 import pyarrow as pa
 
+
 def test_bucket_pyarrow_array():
     arr = pa.array([1, 2])
     result = bucket_transform(arr, 10)
     expected = pa.array([6, 2], type=pa.int32())
     assert result == expected
-    
+
+
 def test_bucket_pyarrow_array_list_type_fails():
     arr = pa.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError, match=r"FeatureUnsupported => Unsupported data type for bucket transform"):
+    with pytest.raises(
+        ValueError,
+        match=r"FeatureUnsupported => Unsupported data type for bucket transform",
+    ):
         bucket_transform(arr, 10)
+
 
 def test_bucket_chunked_array():
     chunked = pa.chunked_array([pa.array([1, 2]), pa.array([3, 4])])
     result_chunks = []
     for arr in chunked.iterchunks():
         result_chunks.append(bucket_transform(arr, 10))
-    
-    expected = pa.chunked_array([pa.array([6, 2], type=pa.int32()), pa.array([5, 0], type=pa.int32())])
+
+    expected = pa.chunked_array(
+        [pa.array([6, 2], type=pa.int32()), pa.array([5, 0], type=pa.int32())]
+    )
     assert pa.chunked_array(result_chunks).equals(expected)
