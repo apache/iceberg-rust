@@ -38,7 +38,5 @@ log = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-ctor = { workspace = true }
-iceberg-catalog-hms = { workspace = true }
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-port_scanner = { workspace = true }
+iceberg-catalog-memory = { workspace = true }
+tempfile = { workspace = true }
