@@ -32,7 +32,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "pyarrow"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
