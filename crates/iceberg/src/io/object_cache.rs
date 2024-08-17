@@ -136,7 +136,7 @@ impl ObjectCache {
             CachedItem::ManifestList(arc_manifest_list) => Ok(arc_manifest_list),
             _ => Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("cached object for path '{:?}' is not a Manifest", key),
+                format!("cached object for path '{:?}' is not a manifest list", key),
             )),
         }
     }
