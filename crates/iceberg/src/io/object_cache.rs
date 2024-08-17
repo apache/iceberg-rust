@@ -93,7 +93,13 @@ impl ObjectCache {
             .entry_by_ref(&key)
             .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file))
             .await
-            .map_err(|err| Error::new(ErrorKind::Unexpected, err.as_ref().message()))?
+            .map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Failed to load manifest {}", manifest_file.manifest_path),
+                )
+                .with_source(err)
+            })?
             .into_value();
 
         match cache_entry {
