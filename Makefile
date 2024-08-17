@@ -57,3 +57,6 @@ unit-test: doc-test
 
 test: doc-test
 	cargo test --no-fail-fast --all-targets --all-features --workspace
+
+clean:
+	cargo clean
