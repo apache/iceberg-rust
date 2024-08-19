@@ -60,7 +60,10 @@ impl ObjectCache {
         } else {
             Self {
                 cache: moka::future::Cache::builder()
-                    .weigher(|_, val: &CachedItem| size_of_val(val) as u32)
+                    .weigher(|_, val: &CachedItem| match val {
+                        CachedItem::ManifestList(item) => size_of_val(item.as_ref()),
+                        CachedItem::Manifest(item) => size_of_val(item.as_ref()),
+                    } as u32)
                     .max_capacity(cache_size_bytes)
                     .build(),
                 file_io,
