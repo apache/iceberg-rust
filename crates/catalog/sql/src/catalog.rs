@@ -210,78 +210,53 @@ impl Catalog for SqlCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let table_namespaces_stmt = format!(
+        // UNION will remove duplicates.
+        let all_namespaces_stmt = format!(
             "SELECT {CATALOG_FIELD_TABLE_NAMESPACE}
              FROM {CATALOG_TABLE_NAME}
-             WHERE {CATALOG_FIELD_CATALOG_NAME} = ?"
-        );
-        let namespaces_stmt = format!(
-            "SELECT {NAMESPACE_FIELD_NAME}
+             WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+             UNION
+             SELECT {NAMESPACE_FIELD_NAME}
              FROM {NAMESPACE_TABLE_NAME}
              WHERE {CATALOG_FIELD_CATALOG_NAME} = ?"
         );
 
-        match parent {
-            Some(parent) => {
-                if self.namespace_exists(parent).await? {
-                    let parent_str = parent.join(".");
-                    let parent_table_namespaces_stmt = format!(
-                        "{table_namespaces_stmt} AND {CATALOG_FIELD_TABLE_NAMESPACE} LIKE CONCAT(?, '%')"
-                    );
-                    let parent_namespaces_stmt =
-                        format!("{namespaces_stmt} AND {NAMESPACE_FIELD_NAME} LIKE CONCAT(?, '%')");
+        let namespace_rows = self
+            .fetch_rows(&all_namespaces_stmt, vec![
+                Some(&self.name),
+                Some(&self.name),
+            ])
+            .await?;
 
-                    let namespace_rows = self
-                        .fetch_rows(
-                            &format!(
-                                "{parent_namespaces_stmt} UNION {parent_table_namespaces_stmt}"
-                            ),
-                            vec![
-                                Some(&self.name),
-                                Some(&parent_str),
-                                Some(&self.name),
-                                Some(&parent_str),
-                            ],
-                        )
-                        .await?;
+        let mut namespaces = HashSet::<NamespaceIdent>::with_capacity(namespace_rows.len());
 
-                    let mut namespaces =
-                        HashSet::<NamespaceIdent>::with_capacity(namespace_rows.len());
-
-                    for row in namespace_rows {
-                        let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
-                        // if parent = a, then we only want to see a.b, a.c returned.
-                        if nsp != parent_str {
-                            namespaces.insert(NamespaceIdent::from_strs(nsp.split("."))?);
-                        }
-                    }
-
-                    Ok(namespaces.into_iter().collect::<Vec<NamespaceIdent>>())
-                } else {
-                    no_such_namespace_err(parent)
-                }
-            }
-            None => {
-                let namespace_rows = self
-                    .fetch_rows(
-                        &format!("{namespaces_stmt} UNION {table_namespaces_stmt}"),
-                        vec![Some(&self.name), Some(&self.name)],
-                    )
-                    .await?;
-
-                let mut namespaces = HashSet::<NamespaceIdent>::with_capacity(namespace_rows.len());
+        if let Some(parent) = parent {
+            if self.namespace_exists(parent).await? {
+                let parent_str = parent.join(".");
 
                 for row in namespace_rows.iter() {
                     let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
-                    let mut levels = nsp.split(".").collect::<Vec<&str>>();
-                    if !levels.is_empty() {
-                        let first_level = levels.drain(..1).collect::<Vec<&str>>();
-                        namespaces.insert(NamespaceIdent::from_strs(first_level)?);
+                    // if parent = a, then we only want to see a.b, a.c returned.
+                    if nsp != parent_str && nsp.starts_with(&parent_str) {
+                        namespaces.insert(NamespaceIdent::from_strs(nsp.split("."))?);
                     }
                 }
 
                 Ok(namespaces.into_iter().collect::<Vec<NamespaceIdent>>())
+            } else {
+                no_such_namespace_err(parent)
             }
+        } else {
+            for row in namespace_rows.iter() {
+                let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
+                let mut levels = nsp.split(".").collect::<Vec<&str>>();
+                if !levels.is_empty() {
+                    let first_level = levels.drain(..1).collect::<Vec<&str>>();
+                    namespaces.insert(NamespaceIdent::from_strs(first_level)?);
+                }
+            }
+
+            Ok(namespaces.into_iter().collect::<Vec<NamespaceIdent>>())
         }
     }
 
