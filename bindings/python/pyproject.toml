@@ -31,9 +31,6 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 
-[project.optional-dependencies]
-test = ["pytest"]
-
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
@@ -41,3 +38,14 @@ module-name = "pyiceberg_core.pyiceberg_core_rust"
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
+
+[tool.hatch.envs.dev]
+dependencies = [
+    "maturin>=1.0,<2.0",
+    "pytest>=8.3.2",
+]
+
+[tool.hatch.envs.dev.scripts]
+develop = "maturin develop"
+build = "maturin build --out dist --sdist"
+test = "pytest"

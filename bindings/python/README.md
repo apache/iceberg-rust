@@ -24,21 +24,17 @@ This project is used to build an iceberg-rust powered core for pyiceberg.
 ## Setup
 
 ```shell
-python -m venv venv
-source ./venv/bin/activate
- 
-pip install maturin
+pip install hatch==1.12.0
 ```
 
 ## Build
 
 ```shell
-maturin develop
+hatch run dev:develop
 ```
 
 ## Test
 
 ```shell
-maturin develop -E test
-pytest -v
+hatch run dev:test
 ```
