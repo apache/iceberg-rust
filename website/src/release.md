@@ -322,7 +322,7 @@ git push origin ${iceberg_version}
 ### Publish artifacts to SVN RELEASE branch
 
 ```shell
-svn mv https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust/${release_version} https://dist.apache.org/repos/dist/release/iceberg/iceberg-rust/${iceberg_version} -m "Release ${iceberg_version}"
+svn mv https://dist.apache.org/repos/dist/dev/iceberg/iceberg-rust-${release_version} https://dist.apache.org/repos/dist/release/iceberg/iceberg-rust-${iceberg_version} -m "Release Apache Iceberg Rust ${iceberg_version}"
 ```
 
 ### Change Iceberg Rust Website download link
