@@ -28,9 +28,21 @@ fn hello_world() -> PyResult<String> {
 }
 
 #[pymodule]
-fn pyiceberg_core_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn submodule(_py: Python, module: &Bound<'_, PyModule>) -> PyResult<()> {
     use transform::bucket_transform;
+
+    module.add_wrapped(wrap_pyfunction!(bucket_transform))?;
+    Ok(())
+}
+
+#[pymodule]
+fn pyiceberg_core_rust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_world, m)?)?;
-    m.add_function(wrap_pyfunction!(bucket_transform, m)?)?;
+
+    // https://github.com/PyO3/pyo3/issues/759
+    let child_module = PyModule::new_bound(py, "pyiceberg_core.transform")?;
+    submodule(py, &child_module)?;
+    m.add("transform", child_module.clone())?;
+    py.import_bound("sys")?.getattr("modules")?.set_item("pyiceberg_core.transform", child_module)?;
     Ok(())
 }

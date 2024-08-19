@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from pyiceberg_core import bucket_transform
+from pyiceberg_core.transform import bucket_transform
 
 import pytest
 import pyarrow as pa
