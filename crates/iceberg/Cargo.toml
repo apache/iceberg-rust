@@ -82,7 +82,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["async_tokio", "async_futures"] }
+criterion = { version = "0.5", features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 futures-util = "0.3"
 iceberg-catalog-memory = { workspace = true }
