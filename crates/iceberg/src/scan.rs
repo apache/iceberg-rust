@@ -32,6 +32,7 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{
@@ -242,7 +243,7 @@ impl<'a> TableScanBuilder<'a> {
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            file_io: self.table.file_io().clone(),
+            object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
@@ -292,7 +293,7 @@ struct PlanContext {
     case_sensitive: bool,
     predicate: Option<Arc<Predicate>>,
     snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
-    file_io: FileIO,
+    object_cache: Arc<ObjectCache>,
     field_ids: Arc<Vec<i32>>,
 
     partition_filter_cache: Arc<PartitionFilterCache>,
@@ -454,8 +455,8 @@ struct ManifestFileContext {
     sender: Sender<ManifestEntryContext>,
 
     field_ids: Arc<Vec<i32>>,
-    file_io: FileIO,
     bound_predicates: Option<Arc<BoundPredicates>>,
+    object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
 }
@@ -477,24 +478,22 @@ impl ManifestFileContext {
     /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
     async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
-            file_io,
+            object_cache,
             manifest_file,
             bound_predicates,
             snapshot_schema,
             field_ids,
-            expression_evaluator_cache,
             mut sender,
+            expression_evaluator_cache,
             ..
         } = self;
 
-        let file_io_cloned = file_io.clone();
-        let manifest = manifest_file.load_manifest(&file_io_cloned).await?;
+        let manifest = object_cache.get_manifest(&manifest_file).await?;
 
-        let (entries, _) = manifest.consume();
-
-        for manifest_entry in entries.into_iter() {
+        for manifest_entry in manifest.entries() {
             let manifest_entry_context = ManifestEntryContext {
-                manifest_entry,
+                // TODO: refactor to avoid clone
+                manifest_entry: manifest_entry.clone(),
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -530,9 +529,10 @@ impl ManifestEntryContext {
 }
 
 impl PlanContext {
-    async fn get_manifest_list(&self) -> Result<ManifestList> {
-        self.snapshot
-            .load_manifest_list(&self.file_io, &self.table_metadata)
+    async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
+        self.object_cache
+            .as_ref()
+            .get_manifest_list(&self.snapshot, &self.table_metadata)
             .await
     }
 
@@ -559,19 +559,19 @@ impl PlanContext {
 
     fn build_manifest_file_contexts(
         &self,
-        manifest_list: ManifestList,
+        manifest_list: Arc<ManifestList>,
         sender: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
         let filtered_entries = manifest_list
-            .consume_entries()
-            .into_iter()
+            .entries()
+            .iter()
             .filter(|manifest_file| manifest_file.content == ManifestContentType::Data);
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         if self.predicate.is_some() {
             for manifest_file in filtered_entries {
-                let partition_bound_predicate = self.get_partition_filter(&manifest_file)?;
+                let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
                 // if it cannot contain any matching rows
@@ -581,7 +581,7 @@ impl PlanContext {
                         manifest_file.partition_spec_id,
                         partition_bound_predicate.clone(),
                     )
-                    .eval(&manifest_file)?
+                    .eval(manifest_file)?
                 {
                     let mfc = self.create_manifest_file_context(
                         manifest_file,
@@ -603,7 +603,7 @@ impl PlanContext {
 
     fn create_manifest_file_context(
         &self,
-        manifest_file: ManifestFile,
+        manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
     ) -> ManifestFileContext {
@@ -620,10 +620,10 @@ impl PlanContext {
             };
 
         ManifestFileContext {
-            manifest_file,
+            manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
-            file_io: self.file_io.clone(),
+            object_cache: self.object_cache.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
@@ -938,9 +938,10 @@ mod tests {
             let table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io)
+                .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .build();
+                .build()
+                .unwrap();
 
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
