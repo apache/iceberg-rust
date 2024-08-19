@@ -31,6 +31,4 @@ header:
     - '**/DEPENDENCIES.*.tsv'
     # Release distributions
     - 'dist/*'
-    # Generated content by poetry
-    - poetry.lock
   comment: on-failure
