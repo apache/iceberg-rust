@@ -2193,7 +2193,7 @@
     }
 
     <span class="doccomment">/// Consume this Manifest, returning its constituent parts
-    </span><span class="kw">pub fn </span>consume(<span class="self">self</span>) -&gt; (Vec&lt;ManifestEntryRef&gt;, ManifestMetadata) {
+    </span><span class="kw">pub fn </span>into_parts(<span class="self">self</span>) -&gt; (Vec&lt;ManifestEntryRef&gt;, ManifestMetadata) {
         <span class="kw">let </span><span class="self">Self </span>{ entries, metadata } = <span class="self">self</span>;
         (entries, metadata)
     }

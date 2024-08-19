@@ -507,10 +507,6 @@
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a>
-<a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -882,14 +878,12 @@
             .<span class="kw">await
             </span>.map_err(from_thrift_error)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>table = Table::builder()
+        Table::builder()
             .file_io(<span class="self">self</span>.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .build();
-
-        <span class="prelude-val">Ok</span>(table)
+            .build()
     }
 
     <span class="doccomment">/// Loads a table from the Hive Metastore and constructs a `Table` object
@@ -920,7 +914,7 @@
         <span class="kw">let </span>metadata_content = <span class="self">self</span>.file_io.new_input(<span class="kw-2">&amp;</span>metadata_location)<span class="question-mark">?</span>.read().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>metadata = serde_json::from_slice::&lt;TableMetadata&gt;(<span class="kw-2">&amp;</span>metadata_content)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>table = Table::builder()
+        Table::builder()
             .file_io(<span class="self">self</span>.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -928,9 +922,7 @@
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
-            .build();
-
-        <span class="prelude-val">Ok</span>(table)
+            .build()
     }
 
     <span class="doccomment">/// Asynchronously drops a table from the database.

@@ -1588,6 +1588,7 @@
 <a href="#1588" id="1588">1588</a>
 <a href="#1589" id="1589">1589</a>
 <a href="#1590" id="1590">1590</a>
+<a href="#1591" id="1591">1591</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1622,6 +1623,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::inclusive_projection::InclusiveProjection;
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::manifest_evaluator::ManifestEvaluator;
 <span class="kw">use </span><span class="kw">crate</span>::expr::{Bind, BoundPredicate, Predicate};
+<span class="kw">use </span><span class="kw">crate</span>::io::object_cache::ObjectCache;
 <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
 <span class="kw">use </span><span class="kw">crate</span>::spec::{
@@ -1832,7 +1834,7 @@
             case_sensitive: <span class="self">self</span>.case_sensitive,
             predicate: <span class="self">self</span>.filter.map(Arc::new),
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            file_io: <span class="self">self</span>.table.file_io().clone(),
+            object_cache: <span class="self">self</span>.table.object_cache(),
             field_ids: Arc::new(field_ids),
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
@@ -1882,7 +1884,7 @@
     case_sensitive: bool,
     predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;Predicate&gt;&gt;,
     snapshot_bound_predicate: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
-    file_io: FileIO,
+    object_cache: Arc&lt;ObjectCache&gt;,
     field_ids: Arc&lt;Vec&lt;i32&gt;&gt;,
 
     partition_filter_cache: Arc&lt;PartitionFilterCache&gt;,
@@ -2044,8 +2046,8 @@
     sender: Sender&lt;ManifestEntryContext&gt;,
 
     field_ids: Arc&lt;Vec&lt;i32&gt;&gt;,
-    file_io: FileIO,
     bound_predicates: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicates&gt;&gt;,
+    object_cache: Arc&lt;ObjectCache&gt;,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc&lt;ExpressionEvaluatorCache&gt;,
 }
@@ -2067,24 +2069,22 @@
     /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
     </span><span class="kw">async fn </span>fetch_manifest_and_stream_manifest_entries(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>ManifestFileContext {
-            file_io,
+            object_cache,
             manifest_file,
             bound_predicates,
             snapshot_schema,
             field_ids,
-            expression_evaluator_cache,
             <span class="kw-2">mut </span>sender,
+            expression_evaluator_cache,
             ..
         } = <span class="self">self</span>;
 
-        <span class="kw">let </span>file_io_cloned = file_io.clone();
-        <span class="kw">let </span>manifest = manifest_file.load_manifest(<span class="kw-2">&amp;</span>file_io_cloned).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>manifest = object_cache.get_manifest(<span class="kw-2">&amp;</span>manifest_file).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(entries, <span class="kw">_</span>) = manifest.consume();
-
-        <span class="kw">for </span>manifest_entry <span class="kw">in </span>entries.into_iter() {
+        <span class="kw">for </span>manifest_entry <span class="kw">in </span>manifest.entries() {
             <span class="kw">let </span>manifest_entry_context = ManifestEntryContext {
-                manifest_entry,
+                <span class="comment">// TODO: refactor to avoid clone
+                </span>manifest_entry: manifest_entry.clone(),
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -2120,9 +2120,10 @@
 }
 
 <span class="kw">impl </span>PlanContext {
-    <span class="kw">async fn </span>get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestList&gt; {
-        <span class="self">self</span>.snapshot
-            .load_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>.file_io, <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata)
+    <span class="kw">async fn </span>get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;ManifestList&gt;&gt; {
+        <span class="self">self</span>.object_cache
+            .as_ref()
+            .get_manifest_list(<span class="kw-2">&amp;</span><span class="self">self</span>.snapshot, <span class="kw-2">&amp;</span><span class="self">self</span>.table_metadata)
             .<span class="kw">await
     </span>}
 
@@ -2149,19 +2150,19 @@
 
     <span class="kw">fn </span>build_manifest_file_contexts(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        manifest_list: ManifestList,
+        manifest_list: Arc&lt;ManifestList&gt;,
         sender: Sender&lt;ManifestEntryContext&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt;&gt;&gt; {
         <span class="kw">let </span>filtered_entries = manifest_list
-            .consume_entries()
-            .into_iter()
+            .entries()
+            .iter()
             .filter(|manifest_file| manifest_file.content == ManifestContentType::Data);
 
         <span class="comment">// TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         </span><span class="kw">let </span><span class="kw-2">mut </span>filtered_mfcs = <span class="macro">vec!</span>[];
         <span class="kw">if </span><span class="self">self</span>.predicate.is_some() {
             <span class="kw">for </span>manifest_file <span class="kw">in </span>filtered_entries {
-                <span class="kw">let </span>partition_bound_predicate = <span class="self">self</span>.get_partition_filter(<span class="kw-2">&amp;</span>manifest_file)<span class="question-mark">?</span>;
+                <span class="kw">let </span>partition_bound_predicate = <span class="self">self</span>.get_partition_filter(manifest_file)<span class="question-mark">?</span>;
 
                 <span class="comment">// evaluate the ManifestFile against the partition filter. Skip
                 // if it cannot contain any matching rows
@@ -2171,7 +2172,7 @@
                         manifest_file.partition_spec_id,
                         partition_bound_predicate.clone(),
                     )
-                    .eval(<span class="kw-2">&amp;</span>manifest_file)<span class="question-mark">?
+                    .eval(manifest_file)<span class="question-mark">?
                 </span>{
                     <span class="kw">let </span>mfc = <span class="self">self</span>.create_manifest_file_context(
                         manifest_file,
@@ -2193,7 +2194,7 @@
 
     <span class="kw">fn </span>create_manifest_file_context(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        manifest_file: ManifestFile,
+        manifest_file: <span class="kw-2">&amp;</span>ManifestFile,
         partition_filter: <span class="prelude-ty">Option</span>&lt;Arc&lt;BoundPredicate&gt;&gt;,
         sender: Sender&lt;ManifestEntryContext&gt;,
     ) -&gt; ManifestFileContext {
@@ -2210,10 +2211,10 @@
             </span>};
 
         ManifestFileContext {
-            manifest_file,
+            manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
-            file_io: <span class="self">self</span>.file_io.clone(),
+            object_cache: <span class="self">self</span>.object_cache.clone(),
             snapshot_schema: <span class="self">self</span>.snapshot_schema.clone(),
             field_ids: <span class="self">self</span>.field_ids.clone(),
             expression_evaluator_cache: <span class="self">self</span>.expression_evaluator_cache.clone(),
@@ -2528,9 +2529,10 @@
             <span class="kw">let </span>table = Table::builder()
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs([<span class="string">"db"</span>, <span class="string">"table1"</span>]).unwrap())
-                .file_io(file_io)
+                .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .build();
+                .build()
+                .unwrap();
 
             <span class="self">Self </span>{
                 table_location: table_location.to_str().unwrap().to_string(),

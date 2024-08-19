@@ -2322,7 +2322,7 @@
             </span>.load_file_io(resp.metadata_location.as_deref(), resp.config)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>table = Table::builder()
+        Table::builder()
             .identifier(table_ident)
             .file_io(file_io)
             .metadata(resp.metadata)
@@ -2332,9 +2332,7 @@
                     <span class="string">"Metadata location missing in create table response!"</span>,
                 )
             })<span class="question-mark">?</span>)
-            .build();
-
-        <span class="prelude-val">Ok</span>(table)
+            .build()
     }
 
     <span class="doccomment">/// Load table from the catalog.
@@ -2366,9 +2364,9 @@
             .metadata(resp.metadata);
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(metadata_location) = resp.metadata_location {
-            <span class="prelude-val">Ok</span>(table_builder.metadata_location(metadata_location).build())
+            table_builder.metadata_location(metadata_location).build()
         } <span class="kw">else </span>{
-            <span class="prelude-val">Ok</span>(table_builder.build())
+            table_builder.build()
         }
     }
 
@@ -2467,12 +2465,12 @@
         <span class="kw">let </span>file_io = <span class="self">self
             </span>.load_file_io(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>resp.metadata_location), <span class="prelude-val">None</span>)
             .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(Table::builder()
+        Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
             .metadata(resp.metadata)
             .metadata_location(resp.metadata_location)
-            .build())
+            .build()
     }
 }
 
@@ -3467,6 +3465,7 @@
                 .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
                 .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
                 .build()
+                .unwrap()
         };
 
         <span class="kw">let </span>table = Transaction::new(<span class="kw-2">&amp;</span>table1)
@@ -3591,6 +3590,7 @@
                 .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
                 .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
                 .build()
+                .unwrap()
         };
 
         <span class="kw">let </span>table_result = Transaction::new(<span class="kw-2">&amp;</span>table1)

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["StaticTable","Table"]};
+window.SIDEBAR_ITEMS = {"struct":["StaticTable","Table","TableBuilder"]};

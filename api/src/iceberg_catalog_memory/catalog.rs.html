@@ -1676,9 +1676,6 @@
 <a href="#1676" id="1676">1676</a>
 <a href="#1677" id="1677">1677</a>
 <a href="#1678" id="1678">1678</a>
-<a href="#1679" id="1679">1679</a>
-<a href="#1680" id="1680">1680</a>
-<a href="#1681" id="1681">1681</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1890,14 +1887,12 @@
 
         root_namespace_state.insert_new_table(<span class="kw-2">&amp;</span>table_ident, metadata_location.clone())<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>table = Table::builder()
+        Table::builder()
             .file_io(<span class="self">self</span>.file_io.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident)
-            .build();
-
-        <span class="prelude-val">Ok</span>(table)
+            .build()
     }
 
     <span class="doccomment">/// Load table from the catalog.
@@ -1908,14 +1903,13 @@
         <span class="kw">let </span>input_file = <span class="self">self</span>.file_io.new_input(metadata_location)<span class="question-mark">?</span>;
         <span class="kw">let </span>metadata_content = input_file.read().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>metadata = serde_json::from_slice::&lt;TableMetadata&gt;(<span class="kw-2">&amp;</span>metadata_content)<span class="question-mark">?</span>;
-        <span class="kw">let </span>table = Table::builder()
+
+        Table::builder()
             .file_io(<span class="self">self</span>.file_io.clone())
             .metadata_location(metadata_location.clone())
             .metadata(metadata)
             .identifier(table_ident.clone())
-            .build();
-
-        <span class="prelude-val">Ok</span>(table)
+            .build()
     }
 
     <span class="doccomment">/// Drop a table from the catalog.

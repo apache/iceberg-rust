@@ -370,6 +370,8 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -606,6 +608,7 @@
             .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
             .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
             .build()
+            .unwrap()
     }
 
     <span class="kw">fn </span>make_v2_table() -&gt; Table {
@@ -624,6 +627,7 @@
             .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
             .file_io(FileIO::from_path(<span class="string">"/tmp"</span>).unwrap().build().unwrap())
             .build()
+            .unwrap()
     }
 
     <span class="attr">#[test]
