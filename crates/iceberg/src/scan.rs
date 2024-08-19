@@ -61,7 +61,6 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -79,7 +78,6 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
-            row_selection_enabled: false,
         }
     }
 
@@ -156,25 +154,6 @@ impl<'a> TableScanBuilder<'a> {
     /// keeps it the same, with performance degradation unlikely.
     pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
         self.row_group_filtering_enabled = row_group_filtering_enabled;
-        self
-    }
-
-    /// Determines whether to enable row selection.
-    /// When enabled, if a read is performed with a filter predicate,
-    /// then (for row groups that have not been skipped) the page index
-    /// for each row group in a parquet file is parsed and evaluated
-    /// against the filter predicate to determine if ranges of rows
-    /// within a row group can be skipped, based upon the page-level
-    /// statistics for each column.
-    ///
-    /// Defaults to being disabled. Enabling requires parsing the parquet page
-    /// index, which can be slow enough that parsing the page index outweighs any
-    /// gains from the reduced number of rows that need scanning.
-    /// It is recommended to experiment with partitioning, sorting, row group size,
-    /// page size, and page row limit Iceberg settings on the table being scanned in
-    /// order to get the best performance from using row selection.
-    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
-        self.row_selection_enabled = row_selection_enabled;
         self
     }
 
@@ -289,7 +268,6 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
         })
     }
 }
@@ -314,7 +292,6 @@ pub struct TableScan {
     concurrency_limit_data_files: usize,
 
     row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -401,8 +378,7 @@ impl TableScan {
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
             .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-            .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-            .with_row_selection_enabled(self.row_selection_enabled);
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
