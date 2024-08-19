@@ -59,7 +59,10 @@ impl ObjectCache {
             Self::with_disabled_cache(file_io)
         } else {
             Self {
-                cache: moka::future::Cache::new(cache_size_bytes),
+                cache: moka::future::Cache::builder()
+                    .weigher(|_, val: &CachedItem| size_of_val(val) as u32)
+                    .max_capacity(cache_size_bytes)
+                    .build(),
                 file_io,
                 cache_disabled: false,
             }
