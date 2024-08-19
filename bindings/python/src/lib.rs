@@ -40,6 +40,10 @@ fn pyiceberg_core_rust(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_world, m)?)?;
 
     // https://github.com/PyO3/pyo3/issues/759
+    // Submodules added through PyO3 cannot be imported in Python using
+    // the syntax: 'from parent.child import function'. 
+    // We need to add the submodule in sys.modules manually so that 
+    // Python can find it.
     let child_module = PyModule::new_bound(py, "pyiceberg_core.transform")?;
     submodule(py, &child_module)?;
     m.add("transform", child_module.clone())?;
