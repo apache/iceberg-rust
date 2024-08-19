@@ -516,7 +516,7 @@ impl Catalog for RestCatalog {
             .load_file_io(resp.metadata_location.as_deref(), resp.config)
             .await?;
 
-        let table = Table::builder()
+        Table::builder()
             .identifier(table_ident)
             .file_io(file_io)
             .metadata(resp.metadata)
@@ -526,9 +526,7 @@ impl Catalog for RestCatalog {
                     "Metadata location missing in create table response!",
                 )
             })?)
-            .build();
-
-        Ok(table)
+            .build()
     }
 
     /// Load table from the catalog.
@@ -560,9 +558,9 @@ impl Catalog for RestCatalog {
             .metadata(resp.metadata);
 
         if let Some(metadata_location) = resp.metadata_location {
-            Ok(table_builder.metadata_location(metadata_location).build())
+            table_builder.metadata_location(metadata_location).build()
         } else {
-            Ok(table_builder.build())
+            table_builder.build()
         }
     }
 
@@ -661,12 +659,12 @@ impl Catalog for RestCatalog {
         let file_io = self
             .load_file_io(Some(&resp.metadata_location), None)
             .await?;
-        Ok(Table::builder()
+        Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
             .metadata(resp.metadata)
             .metadata_location(resp.metadata_location)
-            .build())
+            .build()
     }
 }
 
@@ -1661,6 +1659,7 @@ mod tests {
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
                 .build()
+                .unwrap()
         };
 
         let table = Transaction::new(&table1)
@@ -1785,6 +1784,7 @@ mod tests {
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
                 .build()
+                .unwrap()
         };
 
         let table_result = Transaction::new(&table1)
