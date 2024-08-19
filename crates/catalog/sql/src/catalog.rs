@@ -164,7 +164,7 @@ impl SqlCatalog {
     }
 
     /// Fetch a vec of AnyRows from a given query
-    pub async fn fetch_rows(&self, query: &str, args: Vec<Option<&str>>) -> Result<Vec<AnyRow>> {
+    async fn fetch_rows(&self, query: &str, args: Vec<Option<&str>>) -> Result<Vec<AnyRow>> {
         let query_with_placeholders = self.replace_placeholders(query);
 
         let mut sqlx_query = sqlx::query(&query_with_placeholders);
@@ -179,7 +179,7 @@ impl SqlCatalog {
     }
 
     /// Execute statements in a transaction, provided or not
-    pub async fn execute(
+    async fn execute(
         &self,
         query: &str,
         args: Vec<Option<&str>>,
@@ -245,16 +245,18 @@ impl Catalog for SqlCatalog {
                         )
                         .await?;
 
-                    let mut namespaces = Vec::<NamespaceIdent>::with_capacity(namespace_rows.len());
+                    let mut namespaces =
+                        HashSet::<NamespaceIdent>::with_capacity(namespace_rows.len());
 
                     for row in namespace_rows {
                         let nsp = row.try_get::<String, _>(0).map_err(from_sqlx_error)?;
+                        // if parent = a, then we only want to see a.b, a.c returned.
                         if nsp != parent_str {
-                            namespaces.push(NamespaceIdent::from_strs(nsp.split("."))?);
+                            namespaces.insert(NamespaceIdent::from_strs(nsp.split("."))?);
                         }
                     }
 
-                    Ok(namespaces)
+                    Ok(namespaces.into_iter().collect::<Vec<NamespaceIdent>>())
                 } else {
                     no_such_namespace_err(parent)
                 }
