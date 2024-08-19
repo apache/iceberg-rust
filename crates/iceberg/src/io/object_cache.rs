@@ -340,7 +340,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let object_cache = ObjectCache::with_disabled_cache(fixture.table.file_io().clone());
+        let object_cache = ObjectCache::new(fixture.table.file_io().clone());
 
         // not in cache
         let result_manifest_list = object_cache
