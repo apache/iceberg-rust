@@ -474,6 +474,11 @@ impl Catalog for RestCatalog {
     }
 
     /// Create a new table inside the namespace.
+    ///
+    /// In the resulting table, if there are any config properties that
+    /// are present in both the response from the REST server and the
+    /// config provided when creating this `RestCatalog` instance then
+    /// the value provided locally to the `RestCatalog` will take precedence.
     async fn create_table(
         &self,
         namespace: &NamespaceIdent,
@@ -512,8 +517,15 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
+        let config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(self.user_config.props.clone().into_iter())
+            .collect();
+
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), resp.config)
+            .load_file_io(resp.metadata_location.as_deref(), Some(config))
             .await?;
 
         Table::builder()
@@ -530,6 +542,11 @@ impl Catalog for RestCatalog {
     }
 
     /// Load table from the catalog.
+    ///
+    /// If there are any config properties that are present in
+    /// both the response from the REST server and the config provided
+    /// when creating this `RestCatalog` instance then the value
+    /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
         let request = self
             .context()
@@ -548,8 +565,15 @@ impl Catalog for RestCatalog {
             .query::<LoadTableResponse, ErrorResponse, OK>(request)
             .await?;
 
+        let config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(self.user_config.props.clone().into_iter())
+            .collect();
+
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), resp.config)
+            .load_file_io(resp.metadata_location.as_deref(), Some(config))
             .await?;
 
         let table_builder = Table::builder()
