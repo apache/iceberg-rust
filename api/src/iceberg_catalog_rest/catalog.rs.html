@@ -1804,6 +1804,30 @@
 <a href="#1804" id="1804">1804</a>
 <a href="#1805" id="1805">1805</a>
 <a href="#1806" id="1806">1806</a>
+<a href="#1807" id="1807">1807</a>
+<a href="#1808" id="1808">1808</a>
+<a href="#1809" id="1809">1809</a>
+<a href="#1810" id="1810">1810</a>
+<a href="#1811" id="1811">1811</a>
+<a href="#1812" id="1812">1812</a>
+<a href="#1813" id="1813">1813</a>
+<a href="#1814" id="1814">1814</a>
+<a href="#1815" id="1815">1815</a>
+<a href="#1816" id="1816">1816</a>
+<a href="#1817" id="1817">1817</a>
+<a href="#1818" id="1818">1818</a>
+<a href="#1819" id="1819">1819</a>
+<a href="#1820" id="1820">1820</a>
+<a href="#1821" id="1821">1821</a>
+<a href="#1822" id="1822">1822</a>
+<a href="#1823" id="1823">1823</a>
+<a href="#1824" id="1824">1824</a>
+<a href="#1825" id="1825">1825</a>
+<a href="#1826" id="1826">1826</a>
+<a href="#1827" id="1827">1827</a>
+<a href="#1828" id="1828">1828</a>
+<a href="#1829" id="1829">1829</a>
+<a href="#1830" id="1830">1830</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2280,6 +2304,11 @@
     }
 
     <span class="doccomment">/// Create a new table inside the namespace.
+    ///
+    /// In the resulting table, if there are any config properties that
+    /// are present in both the response from the REST server and the
+    /// config provided when creating this `RestCatalog` instance then
+    /// the value provided locally to the `RestCatalog` will take precedence.
     </span><span class="kw">async fn </span>create_table(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
@@ -2318,8 +2347,15 @@
             .query::&lt;LoadTableResponse, ErrorResponse, OK&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
+        <span class="kw">let </span>config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(<span class="self">self</span>.user_config.props.clone().into_iter())
+            .collect();
+
         <span class="kw">let </span>file_io = <span class="self">self
-            </span>.load_file_io(resp.metadata_location.as_deref(), resp.config)
+            </span>.load_file_io(resp.metadata_location.as_deref(), <span class="prelude-val">Some</span>(config))
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         Table::builder()
@@ -2336,6 +2372,11 @@
     }
 
     <span class="doccomment">/// Load table from the catalog.
+    ///
+    /// If there are any config properties that are present in
+    /// both the response from the REST server and the config provided
+    /// when creating this `RestCatalog` instance then the value
+    /// provided locally to the `RestCatalog` will take precedence.
     </span><span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
         <span class="kw">let </span>request = <span class="self">self
             </span>.context()
@@ -2354,8 +2395,15 @@
             .query::&lt;LoadTableResponse, ErrorResponse, OK&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
+        <span class="kw">let </span>config = resp
+            .config
+            .unwrap_or_default()
+            .into_iter()
+            .chain(<span class="self">self</span>.user_config.props.clone().into_iter())
+            .collect();
+
         <span class="kw">let </span>file_io = <span class="self">self
-            </span>.load_file_io(resp.metadata_location.as_deref(), resp.config)
+            </span>.load_file_io(resp.metadata_location.as_deref(), <span class="prelude-val">Some</span>(config))
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>table_builder = Table::builder()
