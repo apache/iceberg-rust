@@ -28,14 +28,60 @@ fn to_py_err(err: iceberg::Error) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
 
-#[pyfunction]
-pub fn bucket_transform(array: PyObject, num_buckets: u32, py: Python) -> PyResult<PyObject> {
+#[pyclass]
+pub struct ArrowArrayTransform {
+}
+
+fn apply(array: PyObject, transform: Transform, py: Python) -> PyResult<PyObject> {
     // import
     let array = ArrayData::from_pyarrow_bound(array.bind(py))?;
     let array = make_array(array);
-    let bucket = create_transform_function(&Transform::Bucket(num_buckets)).map_err(to_py_err)?;
-    let array = bucket.transform(array).map_err(to_py_err)?;
+    let transform_function = create_transform_function(&transform).map_err(to_py_err)?;
+    let array = transform_function.transform(array).map_err(to_py_err)?;
     // export
     let array = array.into_data();
     array.to_pyarrow(py)
+}
+
+#[pymethods]
+impl ArrowArrayTransform {
+    #[staticmethod]
+    pub fn identity(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Identity, py)
+    }
+
+    #[staticmethod]
+    pub fn void(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Void, py)
+    }
+
+    #[staticmethod]
+    pub fn year(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Year, py)
+    }
+
+    #[staticmethod]
+    pub fn month(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Month, py)
+    }
+
+    #[staticmethod]
+    pub fn day(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Day, py)
+    }
+
+    #[staticmethod]
+    pub fn hour(array: PyObject, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Hour, py)
+    }
+
+    #[staticmethod]
+    pub fn bucket(array: PyObject, num_buckets: u32, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Bucket(num_buckets), py)
+    }
+
+    #[staticmethod]
+    pub fn truncate(array: PyObject, width: u32, py: Python) -> PyResult<PyObject> {
+        apply(array, Transform::Truncate(width), py)
+    }
 }
