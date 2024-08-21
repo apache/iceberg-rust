@@ -1570,6 +1570,11 @@ mod tests {
                             "v_ts_ntz",
                             Type::Primitive(PrimitiveType::Timestamp),
                         )),
+                        Arc::new(NestedField::optional(
+                            12,
+                            "v_ts_ns_ntz",
+                            Type::Primitive(PrimitiveType::TimestampNs
+                        ))),
                     ])
                     .build()
                     .unwrap(),
@@ -1678,6 +1683,11 @@ mod tests {
                             "v_ts_ntz",
                             Type::Primitive(PrimitiveType::Timestamp),
                         )),
+                        Arc::new(NestedField::optional(
+                            12,
+                            "v_ts_ns_ntz",
+                            Type::Primitive(PrimitiveType::TimestampNs
+                        )))
                     ])
                     .build()
                     .unwrap(),

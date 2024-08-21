@@ -174,7 +174,7 @@ mod test {
     use crate::expr::PredicateOperator;
     use crate::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String as StringType, Time, Timestamp,
-        Timestamptz, Uuid,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
@@ -219,6 +219,8 @@ mod test {
                 (Primitive(Time), None),
                 (Primitive(Timestamp), None),
                 (Primitive(Timestamptz), None),
+                (Primitive(TimestampNs), None),
+                (Primitive(TimestamptzNs), None),
                 (
                     Struct(StructType::new(vec![NestedField::optional(
                         1,

@@ -38,6 +38,7 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
+use timestamp::nanoseconds_to_datetime;
 use uuid::Uuid;
 
 use super::datatypes::{PrimitiveType, Type};
@@ -45,7 +46,7 @@ use crate::error::Result;
 use crate::spec::values::date::{date_from_naive_date, days_to_date, unix_epoch};
 use crate::spec::values::time::microseconds_to_time;
 use crate::spec::values::timestamp::microseconds_to_datetime;
-use crate::spec::values::timestamptz::microseconds_to_datetimetz;
+use crate::spec::values::timestamptz::{microseconds_to_datetimetz, nanoseconds_to_datetimetz};
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::{ensure_data_valid, Error, ErrorKind};
 
@@ -326,6 +327,12 @@ impl Display for Datum {
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(val)) => {
                 write!(f, "{}", microseconds_to_datetimetz(*val))
             }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{}", nanoseconds_to_datetime(*val))
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{}", nanoseconds_to_datetimetz(*val))
+            }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{}""#, val),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", Uuid::from_u128(*val))
@@ -399,6 +406,12 @@ impl Datum {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::Timestamptz => {
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+            }
+            PrimitiveType::TimestampNs => {
+                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+            }
+            PrimitiveType::TimestamptzNs => {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::String => {
@@ -734,6 +747,23 @@ impl Datum {
         }
     }
 
+    /// Creates a timestamp from unix epoch in nanoseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamp_nanos(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.000001");
+    /// ```
+    pub fn timestamp_nanos(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::TimestampNs,
+            literal: PrimitiveLiteral::Long(value),
+        }
+    }
+
     /// Creates a timestamp from [`DateTime`].
     ///
     /// Example:
@@ -788,6 +818,23 @@ impl Datum {
     pub fn timestamptz_micros(value: i64) -> Self {
         Self {
             r#type: PrimitiveType::Timestamptz,
+            literal: PrimitiveLiteral::Long(value),
+        }
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in nanoseconds.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// let t = Datum::timestamptz_nanos(1000);
+    ///
+    /// assert_eq!(&format!("{t}"), "1970-01-01 00:00:00.000001 UTC");
+    /// ```
+    pub fn timestamptz_nanos(value: i64) -> Self {
+        Self {
+            r#type: PrimitiveType::TimestamptzNs,
             literal: PrimitiveLiteral::Long(value),
         }
     }
@@ -1805,6 +1852,18 @@ impl Literal {
                         .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
                         .to_string(),
                 )),
+                (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(val)) => Ok(JsonValue::String(
+                    timestamp::nanoseconds_to_datetime(val)
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string(),
+                )),
+                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(val)) => {
+                    Ok(JsonValue::String(
+                        timestamptz::nanoseconds_to_datetimetz(val)
+                            .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                            .to_string(),
+                    ))
+                }
                 (PrimitiveType::String, PrimitiveLiteral::String(val)) => {
                     Ok(JsonValue::String(val.clone()))
                 }
@@ -1958,6 +2017,10 @@ mod timestamp {
         // This shouldn't fail until the year 262000
         DateTime::from_timestamp_micros(micros).unwrap().naive_utc()
     }
+
+    pub(crate) fn nanoseconds_to_datetime(nanos: i64) -> NaiveDateTime {
+        DateTime::from_timestamp_nanos(nanos).naive_utc()
+    }
 }
 
 mod timestamptz {
@@ -1971,6 +2034,12 @@ mod timestamptz {
         let (secs, rem) = (micros / 1_000_000, micros % 1_000_000);
 
         DateTime::from_timestamp(secs, rem as u32 * 1_000).unwrap()
+    }
+
+    pub(crate) fn nanoseconds_to_datetimetz(nanos: i64) -> DateTime<Utc> {
+        let (secs, rem) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
+
+        DateTime::from_timestamp(secs, rem as u32).unwrap()
     }
 }
 

@@ -225,6 +225,10 @@ pub enum PrimitiveType {
     Timestamp,
     /// Timestamp in microsecond precision, with timezone
     Timestamptz,
+    /// Timestamp in nanosecond precision, without timezone
+    TimestampNs,
+    /// Timestamp in nanosecond precision with timezone
+    TimestamptzNs,
     /// Arbitrary-length character sequences encoded in utf-8
     String,
     /// Universally Unique Identifiers, should use 16-byte fixed
@@ -250,6 +254,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Time, PrimitiveLiteral::Long(_))
                 | (PrimitiveType::Timestamp, PrimitiveLiteral::Long(_))
                 | (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(_))
+                | (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(_))
                 | (PrimitiveType::String, PrimitiveLiteral::String(_))
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
@@ -360,6 +366,8 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Time => write!(f, "time"),
             PrimitiveType::Timestamp => write!(f, "timestamp"),
             PrimitiveType::Timestamptz => write!(f, "timestamptz"),
+            PrimitiveType::TimestampNs => write!(f, "timestamp_ns"),
+            PrimitiveType::TimestamptzNs => write!(f, "timestamptz_ns"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
@@ -1152,6 +1160,8 @@ mod tests {
             (PrimitiveType::Time, PrimitiveLiteral::Long(1)),
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(1)),
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(1)),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(1)),
             (
                 PrimitiveType::Uuid,
                 PrimitiveLiteral::UInt128(Uuid::new_v4().as_u128()),
