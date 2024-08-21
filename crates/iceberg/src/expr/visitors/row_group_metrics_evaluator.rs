@@ -92,7 +92,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         let null_count = self.null_count(field_id);
         let value_count = self.value_count();
 
-        null_count.is_some() && null_count == Some(value_count)
+        null_count == Some(value_count)
     }
 
     fn may_contain_null(&self, field_id: i32) -> bool {
@@ -140,10 +140,37 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return Ok(None);
         };
 
-        Ok(Some(Datum::try_from_bytes(
-            stats.min_bytes(),
-            primitive_type,
-        )?))
+        if !stats.has_min_max_set() {
+            return Ok(None);
+        }
+
+        Ok(Some(match (primitive_type, stats) {
+            (PrimitiveType::Boolean, Statistics::Boolean(stats)) => Datum::bool(*stats.min()),
+            (PrimitiveType::Int, Statistics::Int32(stats)) => Datum::int(*stats.min()),
+            (PrimitiveType::Date, Statistics::Int32(stats)) => Datum::date(*stats.min()),
+            (PrimitiveType::Long, Statistics::Int64(stats)) => Datum::long(*stats.min()),
+            (PrimitiveType::Time, Statistics::Int64(stats)) => Datum::time_micros(*stats.min())?,
+            (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
+                Datum::timestamp_micros(*stats.min())
+            }
+            (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
+                Datum::timestamptz_micros(*stats.min())
+            }
+            (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.min()),
+            (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.min()),
+            (PrimitiveType::String, Statistics::ByteArray(stats)) => Datum::string(stats.min()),
+            // TODO:
+            //  * Decimal
+            //  * Uuid
+            //  * Fixed
+            //  * Binary
+            (primitive_type, _) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion of min value for column of type {} to iceberg type {} is not yet supported", stats.physical_type(), primitive_type)
+                ));
+            }
+        }))
     }
 
     fn max_value(&self, field_id: i32) -> Result<Option<Datum>> {
@@ -151,10 +178,37 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return Ok(None);
         };
 
-        Ok(Some(Datum::try_from_bytes(
-            stats.max_bytes(),
-            primitive_type,
-        )?))
+        if !stats.has_min_max_set() {
+            return Ok(None);
+        }
+
+        Ok(Some(match (primitive_type, stats) {
+            (PrimitiveType::Boolean, Statistics::Boolean(stats)) => Datum::bool(*stats.max()),
+            (PrimitiveType::Int, Statistics::Int32(stats)) => Datum::int(*stats.max()),
+            (PrimitiveType::Date, Statistics::Int32(stats)) => Datum::date(*stats.max()),
+            (PrimitiveType::Long, Statistics::Int64(stats)) => Datum::long(*stats.max()),
+            (PrimitiveType::Time, Statistics::Int64(stats)) => Datum::time_micros(*stats.max())?,
+            (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
+                Datum::timestamp_micros(*stats.max())
+            }
+            (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
+                Datum::timestamptz_micros(*stats.max())
+            }
+            (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.max()),
+            (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.max()),
+            (PrimitiveType::String, Statistics::ByteArray(stats)) => Datum::string(stats.max()),
+            // TODO:
+            //  * Decimal
+            //  * Uuid
+            //  * Fixed
+            //  * Binary
+            (primitive_type, _) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion of max value for column of type {} to iceberg type {} is not yet supported", stats.physical_type(), primitive_type)
+                ));
+            }
+        }))
     }
 
     fn visit_inequality(
