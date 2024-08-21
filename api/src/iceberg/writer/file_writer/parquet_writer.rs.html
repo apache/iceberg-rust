@@ -1225,6 +1225,39 @@
 <a href="#1225" id="1225">1225</a>
 <a href="#1226" id="1226">1226</a>
 <a href="#1227" id="1227">1227</a>
+<a href="#1228" id="1228">1228</a>
+<a href="#1229" id="1229">1229</a>
+<a href="#1230" id="1230">1230</a>
+<a href="#1231" id="1231">1231</a>
+<a href="#1232" id="1232">1232</a>
+<a href="#1233" id="1233">1233</a>
+<a href="#1234" id="1234">1234</a>
+<a href="#1235" id="1235">1235</a>
+<a href="#1236" id="1236">1236</a>
+<a href="#1237" id="1237">1237</a>
+<a href="#1238" id="1238">1238</a>
+<a href="#1239" id="1239">1239</a>
+<a href="#1240" id="1240">1240</a>
+<a href="#1241" id="1241">1241</a>
+<a href="#1242" id="1242">1242</a>
+<a href="#1243" id="1243">1243</a>
+<a href="#1244" id="1244">1244</a>
+<a href="#1245" id="1245">1245</a>
+<a href="#1246" id="1246">1246</a>
+<a href="#1247" id="1247">1247</a>
+<a href="#1248" id="1248">1248</a>
+<a href="#1249" id="1249">1249</a>
+<a href="#1250" id="1250">1250</a>
+<a href="#1251" id="1251">1251</a>
+<a href="#1252" id="1252">1252</a>
+<a href="#1253" id="1253">1253</a>
+<a href="#1254" id="1254">1254</a>
+<a href="#1255" id="1255">1255</a>
+<a href="#1256" id="1256">1256</a>
+<a href="#1257" id="1257">1257</a>
+<a href="#1258" id="1258">1258</a>
+<a href="#1259" id="1259">1259</a>
+<a href="#1260" id="1260">1260</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1564,6 +1597,14 @@
                 <span class="kw">let </span>convert_func = |v: i64| <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::timestamptz_micros(v));
                 <span class="self">self</span>.update_state::&lt;Int64Type&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
             }
+            (PrimitiveType::TimestampNs, Statistics::Int64(stat)) =&gt; {
+                <span class="kw">let </span>convert_func = |v: i64| <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::timestamp_nanos(v));
+                <span class="self">self</span>.update_state::&lt;Int64Type&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
+            }
+            (PrimitiveType::TimestamptzNs, Statistics::Int64(stat)) =&gt; {
+                <span class="kw">let </span>convert_func = |v: i64| <span class="prelude-ty">Result</span>::&lt;Datum&gt;::Ok(Datum::timestamptz_nanos(v));
+                <span class="self">self</span>.update_state::&lt;Int64Type&gt;(field_id, <span class="kw-2">&amp;</span>stat, convert_func)
+            }
             (
                 PrimitiveType::Decimal {
                     precision: <span class="kw">_</span>,
@@ -1822,7 +1863,7 @@
     <span class="kw">use </span>anyhow::Result;
     <span class="kw">use </span>arrow_array::types::Int64Type;
     <span class="kw">use </span>arrow_array::{
-        ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
+        Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
     };
     <span class="kw">use </span>arrow_schema::{DataType, SchemaRef <span class="kw">as </span>ArrowSchemaRef};
     <span class="kw">use </span>arrow_select::concat::concat_batches;
@@ -1859,6 +1900,18 @@
                 .into(),
                 NestedField::optional(
                     <span class="number">11</span>,
+                    <span class="string">"timestamp_ns"</span>,
+                    Type::Primitive(PrimitiveType::TimestampNs),
+                )
+                .into(),
+                NestedField::optional(
+                    <span class="number">12</span>,
+                    <span class="string">"timestamptz_ns"</span>,
+                    Type::Primitive(PrimitiveType::TimestamptzNs),
+                )
+                .into(),
+                NestedField::optional(
+                    <span class="number">13</span>,
                     <span class="string">"decimal"</span>,
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: <span class="number">10</span>,
@@ -1866,8 +1919,8 @@
                     }),
                 )
                 .into(),
-                NestedField::optional(<span class="number">12</span>, <span class="string">"uuid"</span>, Type::Primitive(PrimitiveType::Uuid)).into(),
-                NestedField::optional(<span class="number">13</span>, <span class="string">"fixed"</span>, Type::Primitive(PrimitiveType::Fixed(<span class="number">10</span>)))
+                NestedField::optional(<span class="number">14</span>, <span class="string">"uuid"</span>, Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(<span class="number">15</span>, <span class="string">"fixed"</span>, Type::Primitive(PrimitiveType::Fixed(<span class="number">10</span>)))
                     .into(),
             ])
             .build()
@@ -2318,12 +2371,22 @@
             arrow_array::TimestampMicrosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">0</span>), <span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">3</span>)])
                 .with_timezone_utc(),
         ) <span class="kw">as </span>ArrayRef;
-        <span class="kw">let </span>col11 = Arc::new(
+        <span class="kw">let </span>col11 = Arc::new(arrow_array::TimestampNanosecondArray::from(<span class="macro">vec!</span>[
+            <span class="prelude-val">Some</span>(<span class="number">0</span>),
+            <span class="prelude-val">Some</span>(<span class="number">1</span>),
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">Some</span>(<span class="number">3</span>),
+        ])) <span class="kw">as </span>ArrayRef;
+        <span class="kw">let </span>col12 = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">0</span>), <span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">3</span>)])
+                .with_timezone_utc(),
+        ) <span class="kw">as </span>ArrayRef;
+        <span class="kw">let </span>col13 = Arc::new(
             arrow_array::Decimal128Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">Some</span>(<span class="number">2</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">100</span>)])
                 .with_precision_and_scale(<span class="number">10</span>, <span class="number">5</span>)
                 .unwrap(),
         ) <span class="kw">as </span>ArrayRef;
-        <span class="kw">let </span>col12 = Arc::new(
+        <span class="kw">let </span>col14 = Arc::new(
             arrow_array::FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 <span class="macro">vec!</span>[
                     <span class="prelude-val">Some</span>(Uuid::from_u128(<span class="number">0</span>).as_bytes().to_vec()),
@@ -2336,7 +2399,7 @@
             )
             .unwrap(),
         ) <span class="kw">as </span>ArrayRef;
-        <span class="kw">let </span>col13 = Arc::new(
+        <span class="kw">let </span>col15 = Arc::new(
             arrow_array::FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 <span class="macro">vec!</span>[
                     <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>]),
@@ -2351,6 +2414,7 @@
         ) <span class="kw">as </span>ArrayRef;
         <span class="kw">let </span>to_write = RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[
             col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
+            col14, col15,
         ])
         .unwrap();
 
@@ -2398,8 +2462,10 @@
                 (<span class="number">8</span>, Datum::time_micros(<span class="number">0</span>).unwrap()),
                 (<span class="number">9</span>, Datum::timestamp_micros(<span class="number">0</span>)),
                 (<span class="number">10</span>, Datum::timestamptz_micros(<span class="number">0</span>)),
+                (<span class="number">11</span>, Datum::timestamp_nanos(<span class="number">0</span>)),
+                (<span class="number">12</span>, Datum::timestamptz_nanos(<span class="number">0</span>)),
                 (
-                    <span class="number">11</span>,
+                    <span class="number">13</span>,
                     Datum::new(
                         PrimitiveType::Decimal {
                             precision: <span class="number">10</span>,
@@ -2408,10 +2474,8 @@
                         PrimitiveLiteral::Int128(<span class="number">1</span>)
                     )
                 ),
-                (<span class="number">12</span>, Datum::uuid(Uuid::from_u128(<span class="number">0</span>))),
-                (<span class="number">13</span>, Datum::fixed(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>])),
-                (<span class="number">12</span>, Datum::uuid(Uuid::from_u128(<span class="number">0</span>))),
-                (<span class="number">13</span>, Datum::fixed(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>])),
+                (<span class="number">14</span>, Datum::uuid(Uuid::from_u128(<span class="number">0</span>))),
+                (<span class="number">15</span>, Datum::fixed(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>])),
             ])
         );
         <span class="macro">assert_eq!</span>(
@@ -2428,8 +2492,10 @@
                 (<span class="number">8</span>, Datum::time_micros(<span class="number">3</span>).unwrap()),
                 (<span class="number">9</span>, Datum::timestamp_micros(<span class="number">3</span>)),
                 (<span class="number">10</span>, Datum::timestamptz_micros(<span class="number">3</span>)),
+                (<span class="number">11</span>, Datum::timestamp_nanos(<span class="number">3</span>)),
+                (<span class="number">12</span>, Datum::timestamptz_nanos(<span class="number">3</span>)),
                 (
-                    <span class="number">11</span>,
+                    <span class="number">13</span>,
                     Datum::new(
                         PrimitiveType::Decimal {
                             precision: <span class="number">10</span>,
@@ -2438,9 +2504,9 @@
                         PrimitiveLiteral::Int128(<span class="number">100</span>)
                     )
                 ),
-                (<span class="number">12</span>, Datum::uuid(Uuid::from_u128(<span class="number">3</span>))),
+                (<span class="number">14</span>, Datum::uuid(Uuid::from_u128(<span class="number">3</span>))),
                 (
-                    <span class="number">13</span>,
+                    <span class="number">15</span>,
                     Datum::fixed(<span class="macro">vec!</span>[<span class="number">21</span>, <span class="number">22</span>, <span class="number">23</span>, <span class="number">24</span>, <span class="number">25</span>, <span class="number">26</span>, <span class="number">27</span>, <span class="number">28</span>, <span class="number">29</span>, <span class="number">30</span>])
                 ),
             ])

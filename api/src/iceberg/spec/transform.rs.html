@@ -691,6 +691,11 @@
 <a href="#691" id="691">691</a>
 <a href="#692" id="692">692</a>
 <a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -852,6 +857,8 @@
                         | PrimitiveType::Time
                         | PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
                         | PrimitiveType::String
                         | PrimitiveType::Uuid
                         | PrimitiveType::Fixed(<span class="kw">_</span>)
@@ -893,6 +900,8 @@
                     <span class="kw">match </span>p {
                         PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
                         | PrimitiveType::Date =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Date)),
                         <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                             ErrorKind::DataInvalid,
@@ -909,9 +918,10 @@
             Transform::Hour =&gt; {
                 <span class="kw">if let </span>Type::Primitive(p) = input_type {
                     <span class="kw">match </span>p {
-                        PrimitiveType::Timestamp | PrimitiveType::Timestamptz =&gt; {
-                            <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Int))
-                        }
+                        PrimitiveType::Timestamp
+                        | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Int)),
                         <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                             ErrorKind::DataInvalid,
                             <span class="macro">format!</span>(<span class="string">"{input_type} is not a valid input type of {self} transform"</span>,),

@@ -152,6 +152,8 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -191,7 +193,7 @@
 </span><span class="kw">mod </span>test {
     <span class="kw">use </span><span class="kw">crate</span>::spec::PrimitiveType::{
         Binary, Date, Decimal, Fixed, Int, Long, String <span class="kw">as </span>StringType, Time, Timestamp,
-        Timestamptz, Uuid,
+        TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     <span class="kw">use </span><span class="kw">crate</span>::spec::Type::{Primitive, Struct};
     <span class="kw">use </span><span class="kw">crate</span>::spec::{NestedField, StructType, Transform};
@@ -235,6 +237,8 @@
                 (Primitive(Time), <span class="prelude-val">Some</span>(Primitive(Time))),
                 (Primitive(Timestamp), <span class="prelude-val">Some</span>(Primitive(Timestamp))),
                 (Primitive(Timestamptz), <span class="prelude-val">Some</span>(Primitive(Timestamptz))),
+                (Primitive(TimestampNs), <span class="prelude-val">Some</span>(Primitive(TimestampNs))),
+                (Primitive(TimestamptzNs), <span class="prelude-val">Some</span>(Primitive(TimestamptzNs))),
                 (
                     Struct(StructType::new(<span class="macro">vec!</span>[NestedField::optional(
                         <span class="number">1</span>,

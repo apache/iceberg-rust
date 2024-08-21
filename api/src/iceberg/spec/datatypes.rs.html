@@ -1164,6 +1164,16 @@
 <a href="#1164" id="1164">1164</a>
 <a href="#1165" id="1165">1165</a>
 <a href="#1166" id="1166">1166</a>
+<a href="#1167" id="1167">1167</a>
+<a href="#1168" id="1168">1168</a>
+<a href="#1169" id="1169">1169</a>
+<a href="#1170" id="1170">1170</a>
+<a href="#1171" id="1171">1171</a>
+<a href="#1172" id="1172">1172</a>
+<a href="#1173" id="1173">1173</a>
+<a href="#1174" id="1174">1174</a>
+<a href="#1175" id="1175">1175</a>
+<a href="#1176" id="1176">1176</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1391,6 +1401,10 @@
     </span>Timestamp,
     <span class="doccomment">/// Timestamp in microsecond precision, with timezone
     </span>Timestamptz,
+    <span class="doccomment">/// Timestamp in nanosecond precision, without timezone
+    </span>TimestampNs,
+    <span class="doccomment">/// Timestamp in nanosecond precision with timezone
+    </span>TimestamptzNs,
     <span class="doccomment">/// Arbitrary-length character sequences encoded in utf-8
     </span>String,
     <span class="doccomment">/// Universally Unique Identifiers, should use 16-byte fixed
@@ -1416,6 +1430,8 @@
                 | (PrimitiveType::Time, PrimitiveLiteral::Long(<span class="kw">_</span>))
                 | (PrimitiveType::Timestamp, PrimitiveLiteral::Long(<span class="kw">_</span>))
                 | (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(<span class="kw">_</span>))
+                | (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(<span class="kw">_</span>))
+                | (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(<span class="kw">_</span>))
                 | (PrimitiveType::String, PrimitiveLiteral::String(<span class="kw">_</span>))
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(<span class="kw">_</span>))
                 | (PrimitiveType::Fixed(<span class="kw">_</span>), PrimitiveLiteral::Binary(<span class="kw">_</span>))
@@ -1526,6 +1542,8 @@
             PrimitiveType::Time =&gt; <span class="macro">write!</span>(f, <span class="string">"time"</span>),
             PrimitiveType::Timestamp =&gt; <span class="macro">write!</span>(f, <span class="string">"timestamp"</span>),
             PrimitiveType::Timestamptz =&gt; <span class="macro">write!</span>(f, <span class="string">"timestamptz"</span>),
+            PrimitiveType::TimestampNs =&gt; <span class="macro">write!</span>(f, <span class="string">"timestamp_ns"</span>),
+            PrimitiveType::TimestamptzNs =&gt; <span class="macro">write!</span>(f, <span class="string">"timestamptz_ns"</span>),
             PrimitiveType::String =&gt; <span class="macro">write!</span>(f, <span class="string">"string"</span>),
             PrimitiveType::Uuid =&gt; <span class="macro">write!</span>(f, <span class="string">"uuid"</span>),
             PrimitiveType::Fixed(size) =&gt; <span class="macro">write!</span>(f, <span class="string">"fixed({})"</span>, size),
@@ -2318,6 +2336,8 @@
             (PrimitiveType::Time, PrimitiveLiteral::Long(<span class="number">1</span>)),
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(<span class="number">1</span>)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(<span class="number">1</span>)),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(<span class="number">1</span>)),
             (
                 PrimitiveType::Uuid,
                 PrimitiveLiteral::UInt128(Uuid::new_v4().as_u128()),

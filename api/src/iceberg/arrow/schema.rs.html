@@ -1256,6 +1256,13 @@
 <a href="#1256" id="1256">1256</a>
 <a href="#1257" id="1257">1257</a>
 <a href="#1258" id="1258">1258</a>
+<a href="#1259" id="1259">1259</a>
+<a href="#1260" id="1260">1260</a>
+<a href="#1261" id="1261">1261</a>
+<a href="#1262" id="1262">1262</a>
+<a href="#1263" id="1263">1263</a>
+<a href="#1264" id="1264">1264</a>
+<a href="#1265" id="1265">1265</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1836,6 +1843,13 @@
             <span class="kw">crate</span>::spec::PrimitiveType::Timestamptz =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
                 <span class="comment">// Timestampz always stored as UTC
                 </span>DataType::Timestamp(TimeUnit::Microsecond, <span class="prelude-val">Some</span>(<span class="string">"+00:00"</span>.into())),
+            )),
+            <span class="kw">crate</span>::spec::PrimitiveType::TimestampNs =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
+                DataType::Timestamp(TimeUnit::Nanosecond, <span class="prelude-val">None</span>),
+            )),
+            <span class="kw">crate</span>::spec::PrimitiveType::TimestamptzNs =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
+                <span class="comment">// Store timestamptz_ns as UTC
+                </span>DataType::Timestamp(TimeUnit::Nanosecond, <span class="prelude-val">Some</span>(<span class="string">"+00:00"</span>.into())),
             )),
             <span class="kw">crate</span>::spec::PrimitiveType::String =&gt; {
                 <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))

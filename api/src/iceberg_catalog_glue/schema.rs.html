@@ -478,6 +478,8 @@
 <a href="#478" id="478">478</a>
 <a href="#479" id="479">479</a>
 <a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -644,6 +646,8 @@
             PrimitiveType::Double =&gt; <span class="string">"double"</span>.to_string(),
             PrimitiveType::Date =&gt; <span class="string">"date"</span>.to_string(),
             PrimitiveType::Timestamp =&gt; <span class="string">"timestamp"</span>.to_string(),
+            PrimitiveType::TimestampNs =&gt; <span class="string">"timestamp_ns"</span>.to_string(),
+            PrimitiveType::TimestamptzNs =&gt; <span class="string">"timestamptz_ns"</span>.to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid =&gt; {
                 <span class="string">"string"</span>.to_string()
             }

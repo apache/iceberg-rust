@@ -2096,6 +2096,16 @@
 <a href="#2096" id="2096">2096</a>
 <a href="#2097" id="2097">2097</a>
 <a href="#2098" id="2098">2098</a>
+<a href="#2099" id="2099">2099</a>
+<a href="#2100" id="2100">2100</a>
+<a href="#2101" id="2101">2101</a>
+<a href="#2102" id="2102">2102</a>
+<a href="#2103" id="2103">2103</a>
+<a href="#2104" id="2104">2104</a>
+<a href="#2105" id="2105">2105</a>
+<a href="#2106" id="2106">2106</a>
+<a href="#2107" id="2107">2107</a>
+<a href="#2108" id="2108">2108</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3668,6 +3678,11 @@
                             <span class="string">"v_ts_ntz"</span>,
                             Type::Primitive(PrimitiveType::Timestamp),
                         )),
+                        Arc::new(NestedField::optional(
+                            <span class="number">12</span>,
+                            <span class="string">"v_ts_ns_ntz"</span>,
+                            Type::Primitive(PrimitiveType::TimestampNs
+                        ))),
                     ])
                     .build()
                     .unwrap(),
@@ -3776,6 +3791,11 @@
                             <span class="string">"v_ts_ntz"</span>,
                             Type::Primitive(PrimitiveType::Timestamp),
                         )),
+                        Arc::new(NestedField::optional(
+                            <span class="number">12</span>,
+                            <span class="string">"v_ts_ns_ntz"</span>,
+                            Type::Primitive(PrimitiveType::TimestampNs
+                        )))
                     ])
                     .build()
                     .unwrap(),
