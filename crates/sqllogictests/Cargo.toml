@@ -1,0 +1,25 @@
+[package]
+name = "sqllogictests"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arrow-schema = { workspace = true }
+arrow-array= { workspace = true }
+async-trait = { workspace = true }
+sqllogictest = "0.21.0"
+datafusion = { workspace = true, default-features = true}
+datafusion-common = { workspace = true, default-features = true}
+thiserror = "1.0.63"
+sqlparser = {workspace = true}
+itertools = "0.13.0"
+half = "2.4.1"
+bigdecimal = "0.4.1"
+rust_decimal = { version = "1.27.0" }
+tempfile = { workspace = true }
+log = "0.4.22"
+tokio = "1.38.0"
