@@ -575,3 +575,209 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         ROW_GROUP_MIGHT_MATCH
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
+    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use parquet::file::statistics::Statistics;
+    use parquet::schema::types::{
+        ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
+    };
+
+    use super::RowGroupMetricsEvaluator;
+    use crate::expr::{Bind, Reference};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::Result;
+
+    #[test]
+    fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
+        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+
+        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(0).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_float".to_string()]),
+        ));
+        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(1).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_string".to_string()]),
+        ));
+
+        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
+            .set_num_rows(0)
+            .set_column_metadata(vec![
+                ColumnChunkMetaData::builder(column_1_desc_ptr).build()?,
+                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
+            ])
+            .build()?;
+
+        let iceberg_schema_ref = build_iceberg_schema()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_row_group_no_bounds_present() -> Result<()> {
+        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+
+        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(0).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_float".to_string()]),
+        ));
+        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(1).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_string".to_string()]),
+        ));
+
+        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
+            .set_num_rows(1)
+            .set_column_metadata(vec![
+                ColumnChunkMetaData::builder(column_1_desc_ptr).build()?,
+                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
+            ])
+            .build()?;
+
+        let iceberg_schema_ref = build_iceberg_schema()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_all_null_filter_gt() -> Result<()> {
+        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+
+        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(0).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_float".to_string()]),
+        ));
+        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(1).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_string".to_string()]),
+        ));
+
+        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
+            .set_num_rows(1)
+            .set_column_metadata(vec![
+                ColumnChunkMetaData::builder(column_1_desc_ptr)
+                    .set_num_values(1)
+                    .set_statistics(Statistics::float(None, None, None, 1, false))
+                    .build()?,
+                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
+            ])
+            .build()?;
+
+        let iceberg_schema_ref = build_iceberg_schema()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+
+        Ok(())
+    }
+
+    fn build_iceberg_schema() -> Result<Arc<Schema>> {
+        let iceberg_schema = Schema::builder()
+            .with_fields([
+                Arc::new(NestedField::new(
+                    1,
+                    "col_float",
+                    Type::Primitive(PrimitiveType::Float),
+                    true,
+                )),
+                Arc::new(NestedField::new(
+                    2,
+                    "col_string",
+                    Type::Primitive(PrimitiveType::String),
+                    true,
+                )),
+            ])
+            .build()?;
+        let iceberg_schema_ref = Arc::new(iceberg_schema);
+        Ok(iceberg_schema_ref)
+    }
+
+    fn build_parquet_schema_descriptor() -> Result<Arc<SchemaDescriptor>> {
+        let field_1 = Arc::new(
+            parquetSchemaType::primitive_type_builder("col_float", ParquetPhysicalType::FLOAT)
+                .with_id(Some(1))
+                .build()?,
+        );
+
+        let field_2 = Arc::new(
+            parquetSchemaType::primitive_type_builder(
+                "col_string",
+                ParquetPhysicalType::BYTE_ARRAY,
+            )
+            .with_id(Some(2))
+            .with_logical_type(Some(ParquetLogicalType::String))
+            .build()?,
+        );
+
+        let group_type = Arc::new(
+            parquetSchemaType::group_type_builder("all")
+                .with_id(Some(1000))
+                .with_fields(vec![field_1, field_2])
+                .build()?,
+        );
+
+        let schema_descriptor = SchemaDescriptor::new(group_type);
+        let schema_descriptor_arc = Arc::new(schema_descriptor);
+        Ok(schema_descriptor_arc)
+    }
+}
