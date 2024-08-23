@@ -1661,7 +1661,7 @@ mod test {
             .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
                 .name("a".to_string())
-                .partition_id(1)
+                .field_id(1)
                 .transform(Transform::Identity)
                 .build()])
             .unwrap()
