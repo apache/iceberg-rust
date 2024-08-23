@@ -302,7 +302,7 @@ mod tests {
                 UnboundPartitionField::builder()
                     .source_id(1)
                     .name("a".to_string())
-                    .partition_id(1)
+                    .field_id(1)
                     .transform(Transform::Identity)
                     .build(),
             )
@@ -386,7 +386,7 @@ mod tests {
                 UnboundPartitionField::builder()
                     .source_id(3)
                     .name("name_truncate".to_string())
-                    .partition_id(3)
+                    .field_id(3)
                     .transform(Transform::Truncate(4))
                     .build(),
             )
@@ -426,7 +426,7 @@ mod tests {
                 UnboundPartitionField::builder()
                     .source_id(1)
                     .name("a_bucket[7]".to_string())
-                    .partition_id(1)
+                    .field_id(1)
                     .transform(Transform::Bucket(7))
                     .build(),
             )
