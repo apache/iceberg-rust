@@ -1293,7 +1293,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                partition_id: Some(1000),
+                field_id: Some(1000),
             })
             .unwrap()
             .build()
@@ -1416,7 +1416,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                partition_id: Some(1000),
+                field_id: Some(1000),
             })
             .unwrap()
             .build()
@@ -1496,7 +1496,7 @@ mod tests {
                 name: "x".to_string(),
                 transform: Transform::Identity,
                 source_id: 1,
-                partition_id: Some(1000),
+                field_id: Some(1000),
             })
             .unwrap()
             .build()
