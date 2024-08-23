@@ -694,17 +694,17 @@ mod tests {
 		"spec-id": 1,
 		"fields": [ {
 			"source-id": 4,
-			"partition-id": 1000,
+			"field-id": 1000,
 			"name": "ts_day",
 			"transform": "day"
 			}, {
 			"source-id": 1,
-			"partition-id": 1001,
+			"field-id": 1001,
 			"name": "id_bucket",
 			"transform": "bucket[16]"
 			}, {
 			"source-id": 2,
-			"partition-id": 1002,
+			"field-id": 1002,
 			"name": "id_truncate",
 			"transform": "truncate[4]"
 			} ]
