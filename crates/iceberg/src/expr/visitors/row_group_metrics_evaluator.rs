@@ -158,7 +158,9 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             }
             (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.min()),
             (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.min()),
-            (PrimitiveType::String, Statistics::ByteArray(stats)) => Datum::string(stats.min()),
+            (PrimitiveType::String, Statistics::ByteArray(stats)) => {
+                Datum::string(stats.min().as_utf8()?)
+            }
             // TODO:
             //  * Decimal
             //  * Uuid
@@ -196,7 +198,9 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             }
             (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.max()),
             (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.max()),
-            (PrimitiveType::String, Statistics::ByteArray(stats)) => Datum::string(stats.max()),
+            (PrimitiveType::String, Statistics::ByteArray(stats)) => {
+                Datum::string(stats.max().as_utf8()?)
+            }
             // TODO:
             //  * Decimal
             //  * Uuid
@@ -582,6 +586,7 @@ mod tests {
     use std::sync::Arc;
 
     use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
+    use parquet::data_type::{AsBytes, ByteArray};
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use parquet::file::statistics::Statistics;
     use parquet::schema::types::{
@@ -595,36 +600,13 @@ mod tests {
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
-        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+        let row_group_metadata = create_row_group_metadata(0, 0, None, 0, None)?;
 
-        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(0).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_float".to_string()]),
-        ));
-        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(1).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_string".to_string()]),
-        ));
-
-        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
-            .set_num_rows(0)
-            .set_column_metadata(vec![
-                ColumnChunkMetaData::builder(column_1_desc_ptr).build()?,
-                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
-            ])
-            .build()?;
-
-        let iceberg_schema_ref = build_iceberg_schema()?;
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
             .greater_than(Datum::float(1.0))
             .bind(iceberg_schema_ref.clone(), false)?;
-
-        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
 
         let result = RowGroupMetricsEvaluator::eval(
             &filter,
@@ -640,36 +622,13 @@ mod tests {
 
     #[test]
     fn eval_true_for_row_group_no_bounds_present() -> Result<()> {
-        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+        let row_group_metadata = create_row_group_metadata(1, 1, None, 1, None)?;
 
-        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(0).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_float".to_string()]),
-        ));
-        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(1).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_string".to_string()]),
-        ));
-
-        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
-            .set_num_rows(1)
-            .set_column_metadata(vec![
-                ColumnChunkMetaData::builder(column_1_desc_ptr).build()?,
-                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
-            ])
-            .build()?;
-
-        let iceberg_schema_ref = build_iceberg_schema()?;
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
             .greater_than(Datum::float(1.0))
             .bind(iceberg_schema_ref.clone(), false)?;
-
-        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
 
         let result = RowGroupMetricsEvaluator::eval(
             &filter,
@@ -684,40 +643,20 @@ mod tests {
     }
 
     #[test]
-    fn eval_false_for_meta_all_null_filter_gt() -> Result<()> {
-        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+    fn eval_false_for_meta_all_null_filter_not_null() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 1, false)),
+            1,
+            None,
+        )?;
 
-        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(0).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_float".to_string()]),
-        ));
-        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
-            schema_descriptor_arc.column(1).self_type_ptr(),
-            1,
-            1,
-            ColumnPath::new(vec!["col_string".to_string()]),
-        ));
-
-        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
-            .set_num_rows(1)
-            .set_column_metadata(vec![
-                ColumnChunkMetaData::builder(column_1_desc_ptr)
-                    .set_num_values(1)
-                    .set_statistics(Statistics::float(None, None, None, 1, false))
-                    .build()?,
-                ColumnChunkMetaData::builder(column_2_desc_ptr).build()?,
-            ])
-            .build()?;
-
-        let iceberg_schema_ref = build_iceberg_schema()?;
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .greater_than(Datum::float(1.0))
+            .is_not_null()
             .bind(iceberg_schema_ref.clone(), false)?;
-
-        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
 
         let result = RowGroupMetricsEvaluator::eval(
             &filter,
@@ -727,29 +666,987 @@ mod tests {
         )?;
 
         assert_eq!(result, false);
-
         Ok(())
     }
 
-    fn build_iceberg_schema() -> Result<Arc<Schema>> {
+    #[test]
+    fn eval_true_for_meta_all_null_filter_is_null() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 1, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_null()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_none_null_filter_not_null() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_not_null()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_none_null_filter_is_null() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_null()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_all_nulls_filter_inequality() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 1, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_datum_nan_filter_inequality() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(f32::NAN))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_missing_bound_valid_other_bound_filter_inequality() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_failing_bound_filter_inequality() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(0.9), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_passing_bound_filter_inequality() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .greater_than(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_all_nulls_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(None, None, None, 1, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_lower_nan_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(f32::NAN), Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_lower_gt_than_datum_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(1.5), Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_upper_nan_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(f32::NAN), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_upper_lt_than_datum_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(0.5), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_good_bounds_than_datum_filter_eq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_bounds_eq_datum_filter_neq() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(Some(1.0), Some(1.0), None, 0, false)),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .not_equal_to(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_meta_all_nulls_filter_starts_with() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            Some(Statistics::byte_array(None, None, None, 1, false)),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_starts_with_non_string_filter_datum() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            Some(Statistics::byte_array(None, None, None, 0, false)),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .starts_with(Datum::float(1.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_starts_with_non_utf8_lower_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // min val of 0xff is not valid utf-8 string. Max val of 0x20 is valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from(vec![255u8])),
+                Some(ByteArray::from(vec![32u8])),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_starts_with_non_utf8_upper_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("ice".as_bytes())),
+                Some(ByteArray::from(vec![255u8])),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_starts_with_meta_all_nulls() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(None, None, None, 1, false)),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_starts_with_datum_below_min_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("id".as_bytes())),
+                Some(ByteArray::from("ie".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_starts_with_datum_above_max_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("h".as_bytes())),
+                Some(ByteArray::from("ib".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_starts_with_datum_between_bounds() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("h".as_bytes())),
+                Some(ByteArray::from("j".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_meta_all_nulls_filter_not_starts_with() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            Some(Statistics::byte_array(None, None, None, 1, false)),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_not_starts_with_non_utf8_lower_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // min val of 0xff is not valid utf-8 string. Max val of 0x20 is valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from(vec![255u8])),
+                Some(ByteArray::from(vec![32u8])),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_not_starts_with_non_utf8_upper_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("iceberg".as_bytes())),
+                Some(ByteArray::from(vec![255u8])),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_not_starts_with_no_min_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                None,
+                Some(ByteArray::from("iceberg".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_not_starts_with_datum_longer_min_max_bound() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("ice".as_bytes())),
+                Some(ByteArray::from("iceberg".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_not_starts_with_datum_matches_lower_no_upper() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("iceberg".as_bytes())),
+                None,
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_not_starts_with_datum_matches_lower_upper_shorter() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("iceberg".as_bytes())),
+                Some(ByteArray::from("icy".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_not_starts_with_datum_matches_lower_and_upper() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("iceberg".as_bytes())),
+                Some(ByteArray::from("iceberg".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("iceberg"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, false);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_not_in() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            // Max val of 0xFF is not valid utf8
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("iceberg".as_bytes())),
+                Some(ByteArray::from("iceberg".as_bytes())),
+                None,
+                0,
+                false,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .is_not_in([Datum::string("iceberg")])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, true);
+        Ok(())
+    }
+
+    fn build_iceberg_schema_and_field_map() -> Result<(Arc<Schema>, HashMap<i32, usize>)> {
         let iceberg_schema = Schema::builder()
             .with_fields([
                 Arc::new(NestedField::new(
                     1,
                     "col_float",
                     Type::Primitive(PrimitiveType::Float),
-                    true,
+                    false,
                 )),
                 Arc::new(NestedField::new(
                     2,
                     "col_string",
                     Type::Primitive(PrimitiveType::String),
-                    true,
+                    false,
                 )),
             ])
             .build()?;
         let iceberg_schema_ref = Arc::new(iceberg_schema);
-        Ok(iceberg_schema_ref)
+
+        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
+
+        Ok((iceberg_schema_ref, field_id_map))
     }
 
     fn build_parquet_schema_descriptor() -> Result<Arc<SchemaDescriptor>> {
@@ -779,5 +1676,52 @@ mod tests {
         let schema_descriptor = SchemaDescriptor::new(group_type);
         let schema_descriptor_arc = Arc::new(schema_descriptor);
         Ok(schema_descriptor_arc)
+    }
+
+    fn create_row_group_metadata(
+        num_rows: i64,
+        col_1_num_vals: i64,
+        col_1_stats: Option<Statistics>,
+        col_2_num_vals: i64,
+        col_2_stats: Option<Statistics>,
+    ) -> Result<RowGroupMetaData> {
+        let schema_descriptor_arc = build_parquet_schema_descriptor()?;
+
+        let column_1_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(0).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_float".to_string()]),
+        ));
+
+        let column_2_desc_ptr = Arc::new(ColumnDescriptor::new(
+            schema_descriptor_arc.column(1).self_type_ptr(),
+            1,
+            1,
+            ColumnPath::new(vec!["col_string".to_string()]),
+        ));
+
+        let mut col_1_meta =
+            ColumnChunkMetaData::builder(column_1_desc_ptr).set_num_values(col_1_num_vals);
+        if let Some(stats1) = col_1_stats {
+            col_1_meta = col_1_meta.set_statistics(stats1)
+        }
+
+        let mut col_2_meta =
+            ColumnChunkMetaData::builder(column_2_desc_ptr).set_num_values(col_2_num_vals);
+        if let Some(stats2) = col_2_stats {
+            col_2_meta = col_2_meta.set_statistics(stats2)
+        }
+
+        let row_group_metadata = RowGroupMetaData::builder(schema_descriptor_arc)
+            .set_num_rows(num_rows)
+            .set_column_metadata(vec![
+                col_1_meta.build()?,
+                // .set_statistics(Statistics::float(None, None, None, 1, false))
+                col_2_meta.build()?,
+            ])
+            .build();
+
+        Ok(row_group_metadata?)
     }
 }
