@@ -1,5 +1,5 @@
 [package]
-name = "sqllogictests"
+name = "sqllogictest"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -23,3 +23,12 @@ rust_decimal = { version = "1.27.0" }
 tempfile = { workspace = true }
 log = "0.4.22"
 tokio = "1.38.0"
+spark-connect-rs = "0.0.1-beta.5"
+anyhow = {workspace = true}
+toml = "0.8.19"
+url = {workspace = true}
+
+[[test]]
+harness = false
+name = "sqllogictests"
+path = "bin/sqllogictests.rs"

@@ -21,36 +21,36 @@ use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use sqllogictest::DBOutput;
 
-use super::{error::Result, normalize, DFSqlLogicTestError};
-
 use crate::engine::output::{DFColumnType, DFOutput};
+use crate::engine::normalize;
 
 pub struct DataFusionEngine {
     ctx: SessionContext,
-    relative_path: PathBuf,
 }
 
-impl DataFusionEngine {
-    pub fn new(ctx: SessionContext, relative_path: PathBuf) -> Self {
-        Self { ctx, relative_path }
+impl Default for DataFusionEngine {
+    fn default() -> Self {
+        let config = SessionConfig::new()
+            .with_target_partitions(4);
+
+        let ctx = SessionContext::new_with_config(config);
+
+        Self {
+            ctx
+        }
     }
 }
 
 #[async_trait]
 impl sqllogictest::AsyncDB for DataFusionEngine {
-    type Error = DFSqlLogicTestError;
+    type Error = anyhow::Error;
     type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        info!(
-            "[{}] Running query: \"{}\"",
-            self.relative_path.display(),
-            sql
-        );
+    async fn run(&mut self, sql: &str) -> anyhow::Result<DFOutput> {
         run_query(&self.ctx, sql).await
     }
 
@@ -69,7 +69,7 @@ impl sqllogictest::AsyncDB for DataFusionEngine {
     }
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> anyhow::Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await?;

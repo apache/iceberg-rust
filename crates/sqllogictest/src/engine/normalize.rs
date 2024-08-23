@@ -21,10 +21,10 @@ use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use arrow_array::{ArrayRef, RecordBatch};
-use crate::engines::output::DFColumnType;
+use crate::engine::output::DFColumnType;
 
-use super::super::conversion::*;
-use super::error::{DFSqlLogicTestError, Result};
+use crate::engine::conversion::*;
+use crate::engine::datafusion::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogicteset.
 pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
