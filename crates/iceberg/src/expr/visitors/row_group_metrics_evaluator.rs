@@ -616,7 +616,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
 
         Ok(())
     }
@@ -638,7 +638,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
 
         Ok(())
     }
@@ -666,7 +666,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -693,7 +693,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -720,7 +720,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -747,7 +747,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -774,7 +774,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -801,7 +801,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -828,7 +828,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -855,7 +855,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -882,7 +882,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -909,7 +909,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -936,7 +936,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -963,7 +963,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -990,7 +990,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1017,7 +1017,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1044,7 +1044,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1098,7 +1098,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         );
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1159,7 +1159,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         );
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         );
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1221,7 +1221,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1255,7 +1255,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1289,7 +1289,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1323,7 +1323,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1350,7 +1350,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1384,7 +1384,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         );
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1418,7 +1418,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         );
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1486,7 +1486,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1520,7 +1520,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1554,7 +1554,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1621,7 +1621,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1632,7 +1632,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(1.0), None, 0, false)),
+            Some(Statistics::float(Some(11.0), Some(12.0), None, 0, false)),
             1,
             None,
         )?;
@@ -1650,7 +1650,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1677,7 +1677,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1706,7 +1706,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1733,7 +1733,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1760,7 +1760,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1787,7 +1787,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, false);
+        assert!(!result);
         Ok(())
     }
 
@@ -1821,7 +1821,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert_eq!(result, true);
+        assert!(result);
         Ok(())
     }
 
@@ -1844,7 +1844,7 @@ mod tests {
             .build()?;
         let iceberg_schema_ref = Arc::new(iceberg_schema);
 
-        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)].into_iter());
+        let field_id_map = HashMap::from_iter([(1, 0), (2, 1)]);
 
         Ok((iceberg_schema_ref, field_id_map))
     }
