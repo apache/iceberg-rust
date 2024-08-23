@@ -84,5 +84,6 @@ ctor = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
+rand = "0.8"
 tempfile = { workspace = true }
 tera = { workspace = true }
