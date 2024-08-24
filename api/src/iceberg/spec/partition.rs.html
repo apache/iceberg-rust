@@ -1264,10 +1264,6 @@
 <a href="#1264" id="1264">1264</a>
 <a href="#1265" id="1265">1265</a>
 <a href="#1266" id="1266">1266</a>
-<a href="#1267" id="1267">1267</a>
-<a href="#1268" id="1268">1268</a>
-<a href="#1269" id="1269">1269</a>
-<a href="#1270" id="1270">1270</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1404,7 +1400,7 @@
     <span class="doccomment">/// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
     </span><span class="attr">#[builder(default, setter(strip_option))]
-    </span><span class="kw">pub </span>partition_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
+    </span><span class="kw">pub </span>field_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
     <span class="doccomment">/// A partition name.
     </span><span class="kw">pub </span>name: String,
     <span class="doccomment">/// A transform that is applied to the source column to produce a partition value.
@@ -1447,7 +1443,7 @@
     <span class="kw">fn </span>from(field: PartitionField) -&gt; <span class="self">Self </span>{
         UnboundPartitionField {
             source_id: field.source_id,
-            partition_id: <span class="prelude-val">Some</span>(field.field_id),
+            field_id: <span class="prelude-val">Some</span>(field.field_id),
             name: field.name,
             transform: field.transform,
         }
@@ -1494,7 +1490,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>field = UnboundPartitionField {
             source_id,
-            partition_id: <span class="prelude-val">None</span>,
+            field_id: <span class="prelude-val">None</span>,
             name: target_name.to_string(),
             transform: transformation,
         };
@@ -1516,8 +1512,8 @@
     <span class="kw">fn </span>add_partition_field_internal(<span class="kw-2">mut </span><span class="self">self</span>, field: UnboundPartitionField) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="self">self</span>.check_name_set_and_unique(<span class="kw-2">&amp;</span>field.name)<span class="question-mark">?</span>;
         <span class="self">self</span>.check_for_redundant_partitions(field.source_id, <span class="kw-2">&amp;</span>field.transform)<span class="question-mark">?</span>;
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_id) = field.partition_id {
-            <span class="self">self</span>.check_partition_id_unique(partition_id)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_field_id) = field.field_id {
+            <span class="self">self</span>.check_partition_id_unique(partition_field_id)<span class="question-mark">?</span>;
         }
         <span class="self">self</span>.fields.push(field);
         <span class="prelude-val">Ok</span>(<span class="self">self</span>)
@@ -1601,7 +1597,7 @@
             </span>.id;
         <span class="kw">let </span>field = UnboundPartitionField {
             source_id,
-            partition_id: <span class="prelude-val">None</span>,
+            field_id: <span class="prelude-val">None</span>,
             name: target_name.into(),
             transform,
         };
@@ -1611,15 +1607,15 @@
 
     <span class="doccomment">/// Add a new partition field to the partition spec.
     ///
-    /// If `partition_id` is set, it is used as the field id.
+    /// If partition field id is set, it is used as the field id.
     /// Otherwise, a new `field_id` is assigned.
     </span><span class="kw">pub fn </span>add_unbound_field(<span class="kw-2">mut </span><span class="self">self</span>, field: UnboundPartitionField) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="self">self</span>.check_name_set_and_unique(<span class="kw-2">&amp;</span>field.name)<span class="question-mark">?</span>;
         <span class="self">self</span>.check_for_redundant_partitions(field.source_id, <span class="kw-2">&amp;</span>field.transform)<span class="question-mark">?</span>;
         <span class="self">Self</span>::check_name_does_not_collide_with_schema(<span class="kw-2">&amp;</span>field, <span class="self">self</span>.schema)<span class="question-mark">?</span>;
         <span class="self">Self</span>::check_transform_compatibility(<span class="kw-2">&amp;</span>field, <span class="self">self</span>.schema)<span class="question-mark">?</span>;
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_id) = field.partition_id {
-            <span class="self">self</span>.check_partition_id_unique(partition_id)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_field_id) = field.field_id {
+            <span class="self">self</span>.check_partition_id_unique(partition_field_id)<span class="question-mark">?</span>;
         }
 
         <span class="comment">// Non-fallible from here
@@ -1657,7 +1653,7 @@
         // we skip it.
         </span><span class="kw">let </span>assigned_ids = fields
             .iter()
-            .filter_map(|f| f.partition_id)
+            .filter_map(|f| f.field_id)
             .collect::&lt;std::collections::HashSet&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="kw">fn </span>_check_add_1(prev: i32) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
@@ -1671,9 +1667,9 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>bound_fields = Vec::with_capacity(fields.len());
         <span class="kw">for </span>field <span class="kw">in </span>fields.into_iter() {
-            <span class="kw">let </span>partition_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_id) = field.partition_id {
-                last_assigned_field_id = std::cmp::max(last_assigned_field_id, partition_id);
-                partition_id
+            <span class="kw">let </span>partition_field_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(partition_field_id) = field.field_id {
+                last_assigned_field_id = std::cmp::max(last_assigned_field_id, partition_field_id);
+                partition_field_id
             } <span class="kw">else </span>{
                 last_assigned_field_id = _check_add_1(last_assigned_field_id)<span class="question-mark">?</span>;
                 <span class="kw">while </span>assigned_ids.contains(<span class="kw-2">&amp;</span>last_assigned_field_id) {
@@ -1684,7 +1680,7 @@
 
             bound_fields.push(PartitionField {
                 source_id: field.source_id,
-                field_id: partition_id,
+                field_id: partition_field_id,
                 name: field.name,
                 transform: field.transform,
             })
@@ -1814,11 +1810,7 @@
 
     <span class="doccomment">/// Check field / partition_id unique within the partition spec if set
     </span><span class="kw">fn </span>check_partition_id_unique(<span class="kw-2">&amp;</span><span class="self">self</span>, field_id: i32) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">if </span><span class="self">self
-            </span>.fields()
-            .iter()
-            .any(|f| f.partition_id == <span class="prelude-val">Some</span>(field_id))
-        {
+        <span class="kw">if </span><span class="self">self</span>.fields().iter().any(|f| f.field_id == <span class="prelude-val">Some</span>(field_id)) {
             <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::DataInvalid,
                 <span class="macro">format!</span>(
@@ -1968,17 +1960,17 @@
 		"spec-id": 1,
 		"fields": [ {
 			"source-id": 4,
-			"partition-id": 1000,
+			"field-id": 1000,
 			"name": "ts_day",
 			"transform": "day"
 			}, {
 			"source-id": 1,
-			"partition-id": 1001,
+			"field-id": 1001,
 			"name": "id_bucket",
 			"transform": "bucket[16]"
 			}, {
 			"source-id": 2,
-			"partition-id": 1002,
+			"field-id": 1002,
 			"name": "id_truncate",
 			"transform": "truncate[4]"
 			} ]
@@ -1989,17 +1981,17 @@
         <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1</span>), partition_spec.spec_id);
 
         <span class="macro">assert_eq!</span>(<span class="number">4</span>, partition_spec.fields[<span class="number">0</span>].source_id);
-        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1000</span>), partition_spec.fields[<span class="number">0</span>].partition_id);
+        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1000</span>), partition_spec.fields[<span class="number">0</span>].field_id);
         <span class="macro">assert_eq!</span>(<span class="string">"ts_day"</span>, partition_spec.fields[<span class="number">0</span>].name);
         <span class="macro">assert_eq!</span>(Transform::Day, partition_spec.fields[<span class="number">0</span>].transform);
 
         <span class="macro">assert_eq!</span>(<span class="number">1</span>, partition_spec.fields[<span class="number">1</span>].source_id);
-        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1001</span>), partition_spec.fields[<span class="number">1</span>].partition_id);
+        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1001</span>), partition_spec.fields[<span class="number">1</span>].field_id);
         <span class="macro">assert_eq!</span>(<span class="string">"id_bucket"</span>, partition_spec.fields[<span class="number">1</span>].name);
         <span class="macro">assert_eq!</span>(Transform::Bucket(<span class="number">16</span>), partition_spec.fields[<span class="number">1</span>].transform);
 
         <span class="macro">assert_eq!</span>(<span class="number">2</span>, partition_spec.fields[<span class="number">2</span>].source_id);
-        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1002</span>), partition_spec.fields[<span class="number">2</span>].partition_id);
+        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="number">1002</span>), partition_spec.fields[<span class="number">2</span>].field_id);
         <span class="macro">assert_eq!</span>(<span class="string">"id_truncate"</span>, partition_spec.fields[<span class="number">2</span>].name);
         <span class="macro">assert_eq!</span>(Transform::Truncate(<span class="number">4</span>), partition_spec.fields[<span class="number">2</span>].transform);
 
@@ -2016,7 +2008,7 @@
         <span class="macro">assert_eq!</span>(<span class="prelude-val">None</span>, partition_spec.spec_id);
 
         <span class="macro">assert_eq!</span>(<span class="number">4</span>, partition_spec.fields[<span class="number">0</span>].source_id);
-        <span class="macro">assert_eq!</span>(<span class="prelude-val">None</span>, partition_spec.fields[<span class="number">0</span>].partition_id);
+        <span class="macro">assert_eq!</span>(<span class="prelude-val">None</span>, partition_spec.fields[<span class="number">0</span>].field_id);
         <span class="macro">assert_eq!</span>(<span class="string">"ts_day"</span>, partition_spec.fields[<span class="number">0</span>].name);
         <span class="macro">assert_eq!</span>(Transform::Day, partition_spec.fields[<span class="number">0</span>].transform);
     }
@@ -2233,14 +2225,14 @@
         PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
                 name: <span class="string">"id"</span>.to_string(),
                 transform: Transform::Identity,
             })
             .unwrap()
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">2</span>,
-                partition_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
                 name: <span class="string">"id_bucket"</span>.to_string(),
                 transform: Transform::Bucket(<span class="number">16</span>),
             })
@@ -2274,14 +2266,14 @@
                 source_id: <span class="number">1</span>,
                 name: <span class="string">"id"</span>.to_string(),
                 transform: Transform::Identity,
-                partition_id: <span class="prelude-val">Some</span>(<span class="number">1012</span>),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1012</span>),
             })
             .unwrap()
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">2</span>,
                 name: <span class="string">"name_void"</span>.to_string(),
                 transform: Transform::Void,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
             })
             .unwrap()
             <span class="comment">// Should keep its ID even if its lower
@@ -2289,7 +2281,7 @@
                 source_id: <span class="number">3</span>,
                 name: <span class="string">"year"</span>.to_string(),
                 transform: Transform::Year,
-                partition_id: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1</span>),
             })
             .unwrap()
             .build()
@@ -2360,7 +2352,7 @@
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id"</span>.to_string(),
                 transform: Transform::Bucket(<span class="number">16</span>),
             })
@@ -2393,7 +2385,7 @@
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id"</span>.to_string(),
                 transform: Transform::Identity,
             })
@@ -2406,7 +2398,7 @@
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">2</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id"</span>.to_string(),
                 transform: Transform::Identity,
             })
@@ -2441,13 +2433,13 @@
             .add_unbound_fields(<span class="macro">vec!</span>[
                 UnboundPartitionField {
                     source_id: <span class="number">1</span>,
-                    partition_id: <span class="prelude-val">None</span>,
+                    field_id: <span class="prelude-val">None</span>,
                     name: <span class="string">"id_bucket"</span>.to_string(),
                     transform: Transform::Bucket(<span class="number">16</span>),
                 },
                 UnboundPartitionField {
                     source_id: <span class="number">2</span>,
-                    partition_id: <span class="prelude-val">None</span>,
+                    field_id: <span class="prelude-val">None</span>,
                     name: <span class="string">"name"</span>.to_string(),
                     transform: Transform::Identity,
                 },
@@ -2462,13 +2454,13 @@
             .add_unbound_fields(<span class="macro">vec!</span>[
                 UnboundPartitionField {
                     source_id: <span class="number">1</span>,
-                    partition_id: <span class="prelude-val">None</span>,
+                    field_id: <span class="prelude-val">None</span>,
                     name: <span class="string">"id_bucket"</span>.to_string(),
                     transform: Transform::Bucket(<span class="number">16</span>),
                 },
                 UnboundPartitionField {
                     source_id: <span class="number">4</span>,
-                    partition_id: <span class="prelude-val">None</span>,
+                    field_id: <span class="prelude-val">None</span>,
                     name: <span class="string">"name"</span>.to_string(),
                     transform: Transform::Identity,
                 },
@@ -2507,7 +2499,7 @@
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id_year"</span>.to_string(),
                 transform: Transform::Year,
             })
@@ -2520,7 +2512,7 @@
             .with_spec_id(<span class="number">1</span>)
             .add_partition_fields(<span class="macro">vec!</span>[UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id_bucket[16]"</span>.to_string(),
                 transform: Transform::Bucket(<span class="number">16</span>),
             }])
@@ -2531,7 +2523,7 @@
             spec_id: <span class="prelude-val">Some</span>(<span class="number">1</span>),
             fields: <span class="macro">vec!</span>[UnboundPartitionField {
                 source_id: <span class="number">1</span>,
-                partition_id: <span class="prelude-val">None</span>,
+                field_id: <span class="prelude-val">None</span>,
                 name: <span class="string">"id_bucket[16]"</span>.to_string(),
                 transform: Transform::Bucket(<span class="number">16</span>),
             }]

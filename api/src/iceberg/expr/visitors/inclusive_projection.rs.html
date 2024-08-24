@@ -757,7 +757,7 @@
                 UnboundPartitionField::builder()
                     .source_id(<span class="number">1</span>)
                     .name(<span class="string">"a"</span>.to_string())
-                    .partition_id(<span class="number">1</span>)
+                    .field_id(<span class="number">1</span>)
                     .transform(Transform::Identity)
                     .build(),
             )
@@ -841,7 +841,7 @@
                 UnboundPartitionField::builder()
                     .source_id(<span class="number">3</span>)
                     .name(<span class="string">"name_truncate"</span>.to_string())
-                    .partition_id(<span class="number">3</span>)
+                    .field_id(<span class="number">3</span>)
                     .transform(Transform::Truncate(<span class="number">4</span>))
                     .build(),
             )
@@ -881,7 +881,7 @@
                 UnboundPartitionField::builder()
                     .source_id(<span class="number">1</span>)
                     .name(<span class="string">"a_bucket[7]"</span>.to_string())
-                    .partition_id(<span class="number">1</span>)
+                    .field_id(<span class="number">1</span>)
                     .transform(Transform::Bucket(<span class="number">7</span>))
                     .build(),
             )

@@ -16,7 +16,7 @@ the highest field id used previously.</p>
     transform: <a class="enum" href="enum.Transform.html" title="enum iceberg::spec::Transform">Transform</a>,
 ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Add a new partition field to the partition spec.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.add_unbound_field" class="method"><a class="src rightside" href="../../src/iceberg/spec/partition.rs.html#346-358">source</a><h4 class="code-header">pub fn <a href="#method.add_unbound_field" class="fn">add_unbound_field</a>(self, field: <a class="struct" href="struct.UnboundPartitionField.html" title="struct iceberg::spec::UnboundPartitionField">UnboundPartitionField</a>) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Add a new partition field to the partition spec.</p>
-<p>If <code>partition_id</code> is set, it is used as the field id.
+<p>If partition field id is set, it is used as the field id.
 Otherwise, a new <code>field_id</code> is assigned.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.add_unbound_fields" class="method"><a class="src rightside" href="../../src/iceberg/spec/partition.rs.html#361-370">source</a><h4 class="code-header">pub fn <a href="#method.add_unbound_fields" class="fn">add_unbound_fields</a>(
     self,
