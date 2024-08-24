@@ -22,13 +22,21 @@ bigdecimal = "0.4.1"
 rust_decimal = { version = "1.27.0" }
 tempfile = { workspace = true }
 log = "0.4.22"
-tokio = "1.38.0"
 spark-connect-rs = "0.0.1-beta.5"
 anyhow = {workspace = true}
 toml = "0.8.19"
 url = {workspace = true}
+iceberg-datafusion = { path = "../integrations/datafusion" }
+iceberg-catalog-rest = { path = "../catalog/rest" }
+
+[dev-dependencies]
+tokio = "1.38.0"
+env_logger = { workspace = true }
+libtest-mimic = "0.7.3"
+iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+
 
 [[test]]
 harness = false
 name = "sqllogictests"
-path = "bin/sqllogictests.rs"
+path = "tests/sqllogictests.rs"

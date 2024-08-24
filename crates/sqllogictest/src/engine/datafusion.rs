@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use std::{path::PathBuf, time::Duration};
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use log::info;
 use sqllogictest::DBOutput;
-
-use crate::engine::output::{DFColumnType, DFOutput};
+use std::sync::Arc;
+use std::time::Duration;
+use anyhow::anyhow;
+use datafusion::catalog::CatalogProvider;
+use toml::Table;
+use iceberg_catalog_rest::RestCatalogConfig;
+use iceberg_datafusion::IcebergCatalogProvider;
 use crate::engine::normalize;
+use crate::engine::output::{DFColumnType, DFOutput};
 
 pub struct DataFusionEngine {
     ctx: SessionContext,
@@ -83,5 +86,32 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> anyhow::Resu
         Ok(DBOutput::StatementComplete(0))
     } else {
         Ok(DBOutput::Rows { types, rows })
+    }
+}
+
+impl DataFusionEngine {
+    pub async fn new(configs: &Table) -> anyhow::Result<Self> {
+        let config = SessionConfig::new()
+            .with_target_partitions(4);
+
+        let ctx = SessionContext::new_with_config(config);
+        ctx.register_catalog("demo", Self::create_catalog(configs).await?);
+
+        Ok(Self {
+            ctx
+        })
+    }
+
+    async fn create_catalog(configs: &Table) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+        let rest_catalog_url = configs.get("url")
+            .ok_or_else(anyhow!("url not found datafusion engine!"))?
+            .as_str()
+            .ok_or_else(anyhow!("url is not str"))?;
+
+        let rest_catalog = RestCatalogConfig::builder()
+            .uri(rest_catalog_url.to_string())
+            .build();
+
+       Ok(Arc::new(IcebergCatalogProvider::try_new(Arc::new(rest_catalog)).await?))
     }
 }

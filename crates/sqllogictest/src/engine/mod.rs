@@ -34,18 +34,19 @@ pub use datafusion::*;
 
 #[derive(Clone)]
 pub enum Engine {
-    DataFusion,
+    DataFusion(Arc<Table>),
     SparkSQL(Arc<Table>),
 }
 
 impl Engine {
     pub async fn new(typ: &str, configs: &Table) -> anyhow::Result<Self> {
+        let configs = Arc::new(configs.clone());
         match typ {
             "spark" => {
-                Ok(Engine::SparkSQL(Arc::new(configs.clone())))
+                Ok(Engine::SparkSQL(configs))
             }
             "datafusion" => {
-                Ok(Engine::DataFusion)
+                Ok(Engine::DataFusion(configs))
             }
             other => Err(anyhow!("Unknown engine type: {other}"))
         }
@@ -55,12 +56,13 @@ impl Engine {
         let absolute_file = format!("{}/testdata/slts/{}", env!("CARGO_MANIFEST_DIR"), slt_file);
 
         match self {
-            Engine::DataFusion => {
-                let runner = Runner::new(|| DataFusionEngine::default());
+            Engine::DataFusion(configs) => {
+                let configs = configs.clone();
+                let runner = Runner::new(async || DataFusionEngine::new(&*configs).await);
                 Self::run_with_runner(runner, absolute_file).await
             }
-            Engine::SparkSQL(t) => {
-                let configs = t.clone();
+            Engine::SparkSQL(configs) => {
+                let configs = configs.clone();
                 let runner = Runner::new(async || {
                     SparkSqlEngine::new(&*configs).await
                 });

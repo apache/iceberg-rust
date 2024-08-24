@@ -18,4 +18,4 @@
 // This lib contains codes copied from
 // [Apache Datafusion](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest)
 mod engine;
-mod schedule;
+pub mod schedule;

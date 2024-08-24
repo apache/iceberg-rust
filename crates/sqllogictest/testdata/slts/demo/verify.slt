@@ -1,0 +1,6 @@
+query II rowsort
+SELECT * FROM s1.t1;
+----
+1
+2
+3

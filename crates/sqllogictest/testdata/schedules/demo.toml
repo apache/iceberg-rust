@@ -1,10 +1,10 @@
 [engines]
 spark = { type = "spark", url = "sc://localhost:7077" }
-df = { type = "datafusion" }
+df = { type = "datafusion", url = "http://localhost:8181" }
 
 [[steps]]
 engine = "spark"
-filename = "prepare1.sql"
+filename = "prepare.slt"
 
 [[steps]]
 engine = "df"
