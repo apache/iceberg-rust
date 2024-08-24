@@ -28,10 +28,7 @@ rust-version = { workspace = true }
 futures.workspace = true
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
-iceberg-catalog-memory = { workspace = true }
 tokio = { version = "1", features = ["full"] }
-tmpfile = "0.0.2"
-tempfile.workspace = true
 
 [[example]]
 name = "rest-catalog-namespace"

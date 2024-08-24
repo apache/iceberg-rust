@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use iceberg::spec::{NestedField, PartitionSpecBuilder, PrimitiveType, Schema, Transform, Type};
 use iceberg::{Catalog, TableCreation, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg_catalog_rest::RestCatalog;
 
 mod utils;
 

@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 
 use iceberg::{Catalog, NamespaceIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use utils::get_rest_catalog;
 mod utils;
 

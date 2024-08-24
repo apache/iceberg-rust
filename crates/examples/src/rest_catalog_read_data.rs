@@ -17,7 +17,6 @@
 
 use futures::TryStreamExt;
 use iceberg::{Catalog, Result, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 mod utils;
 
 #[tokio::main]
