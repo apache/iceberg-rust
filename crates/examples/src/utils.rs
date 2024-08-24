@@ -20,7 +20,7 @@ use std::env;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 
 fn get_catalog_uri_from_env() -> String {
-    env::var("CATALOG_URI").unwrap_or("http://localhost:8080/".to_string())
+    env::var("CATALOG_URI").unwrap_or("http://localhost:8080".to_string())
 }
 
 pub fn get_rest_catalog() -> RestCatalog {

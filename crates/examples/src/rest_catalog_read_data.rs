@@ -23,7 +23,7 @@ mod utils;
 async fn main() -> Result<()> {
     let catalog = utils::get_rest_catalog();
 
-    // There should be a table `ns1.t1` pre-created with column name
+    // There should be a table `ns1.t1` pre-created with column name `a`,`b`,`c`
     let table_id = TableIdent::from_strs(["ns1", "t1"]).unwrap();
     let table = catalog.load_table(&table_id).await?;
 
