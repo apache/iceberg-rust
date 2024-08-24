@@ -25,7 +25,7 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-futures.workspace = true
+futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 tokio = { version = "1", features = ["full"] }
