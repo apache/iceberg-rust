@@ -701,9 +701,9 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use iceberg::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
-        UnboundPartitionField, UnboundPartitionSpec,
+        FormatVersion, NestedField, NullOrder, Operation, PartitionSpecBuilder, PrimitiveType,
+        Schema, Snapshot, SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform,
+        Type,
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
@@ -1471,33 +1471,28 @@ mod tests {
 
         let catalog = RestCatalog::new(RestCatalogConfig::builder().uri(server.url()).build());
 
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::new(&schema)
+            .add_partition_field("foo", "id", Transform::Truncate(3))
+            .unwrap()
+            .build()
+            .unwrap();
+
         let table_creation = TableCreation::builder()
             .name("test1".to_string())
-            .schema(
-                Schema::builder()
-                    .with_fields(vec![
-                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
-                            .into(),
-                        NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-                        NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean))
-                            .into(),
-                    ])
-                    .with_schema_id(1)
-                    .with_identifier_field_ids(vec![2])
-                    .build()
-                    .unwrap(),
-            )
+            .schema(schema)
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
-            .partition_spec(
-                UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![UnboundPartitionField::builder()
-                        .source_id(1)
-                        .transform(Transform::Truncate(3))
-                        .name("id".to_string())
-                        .build()])
-                    .unwrap()
-                    .build(),
-            )
+            .partition_spec(partition_spec)
             .sort_order(
                 SortOrder::builder()
                     .with_sort_field(
