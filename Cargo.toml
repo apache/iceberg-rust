@@ -86,7 +86,7 @@ serde_repr = "0.1.16"
 serde_with = "3.4"
 tempfile = "3.8"
 tokio = { version = "1", default-features = false }
-typed-builder = "0.19"
+typed-builder = "0.20"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1.6.1", features = ["v7"] }
