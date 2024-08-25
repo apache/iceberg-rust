@@ -31,7 +31,7 @@ keywords = ["iceberg", "sql", "catalog"]
 [dependencies]
 async-trait = { workspace = true }
 iceberg = { workspace = true }
-sqlx = { version = "0.8.0", features = ["any"], default-features = false }
+sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 typed-builder = { workspace = true }
 
 [dev-dependencies]
