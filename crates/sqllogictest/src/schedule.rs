@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::engine::Engine;
+use anyhow::anyhow;
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::Path;
-use anyhow::anyhow;
-use itertools::Itertools;
 use toml::{Table, Value};
-use toml::value::Array;
-use crate::engine::Engine;
 
 /// Schedule of engines to run tests.
 pub struct Schedule {

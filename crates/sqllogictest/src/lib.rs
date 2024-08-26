@@ -19,3 +19,5 @@
 // [Apache Datafusion](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest)
 mod engine;
 pub mod schedule;
+mod error;
+pub use error::*;

@@ -71,6 +71,8 @@ services:
       - AWS_REGION=us-east-1
       - SPARK_HOME=/opt/spark
       - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/spark/bin:/opt/spark/sbin
+      - HTTP_PROXY=http://host.docker.internal:7890
+      - HTTPS_PROXY=http://host.docker.internal:7890
     user: root
     links:
       - minio:icebergdata.minio

@@ -22,21 +22,30 @@ use itertools::Itertools;
 use spark_connect_rs::{SparkSession, SparkSessionBuilder};
 use sqllogictest::{AsyncDB, DBOutput};
 use std::time::Duration;
+use async_trait::async_trait;
 use toml::Table;
+use crate::error::*;
 
 /// SparkSql engine implementation for sqllogictest.
 pub struct SparkSqlEngine {
     session: SparkSession,
 }
 
+#[async_trait]
 impl AsyncDB for SparkSqlEngine {
-    type Error = anyhow::Error;
+    type Error = Error;
     type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> anyhow::Result<DBOutput<DFColumnType>> {
-        let results = self.session.sql(sql).await?.collect()?;
+    async fn run(&mut self, sql: &str) -> Result<DBOutput<DFColumnType>> {
+        let results = self.session
+            .sql(sql)
+            .await
+            .map_err(Box::new)?
+            .collect()
+            .await
+            .map_err(Box::new)?;
         let types = normalize::convert_schema_to_types(results.schema().fields());
-        let rows = crate::engine::normalize::convert_batches(results)?;
+        let rows = normalize::convert_batches(results)?;
 
         if rows.is_empty() && types.is_empty() {
             Ok(DBOutput::StatementComplete(0))
@@ -61,7 +70,7 @@ impl AsyncDB for SparkSqlEngine {
 }
 
 impl SparkSqlEngine {
-    pub async fn new(configs: &Table) -> anyhow::Result<Self> {
+    pub async fn new(configs: &Table) -> Result<Self> {
         let url = configs.get("url")
             .ok_or_else(|| anyhow!("url property doesn't exist for spark engine"))?
             .as_str()

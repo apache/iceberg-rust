@@ -15,19 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::Fields;
-use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::DataFusionError;
-use std::path::PathBuf;
-use std::sync::OnceLock;
-use arrow_array::{ArrayRef, RecordBatch};
 use crate::engine::output::DFColumnType;
+use anyhow::anyhow;
+use arrow_array::{ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray};
+use arrow_schema::{DataType, Fields};
+use datafusion::arrow::util::display::ArrayFormatter;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 
 use crate::engine::conversion::*;
-use crate::engine::datafusion::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogicteset.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> anyhow::Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
@@ -36,19 +34,17 @@ pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<Strin
         for batch in batches {
             // Verify schema
             if !schema.contains(&batch.schema()) {
-                return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                    format!(
+                return Err(anyhow!(
                         "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
                         &schema,
                         batch.schema()
                     ),
-                )));
+                );
             }
 
             let new_rows = convert_batch(batch)?
                 .into_iter()
-                .flat_map(expand_row)
-                .map(normalize_paths);
+                .flat_map(expand_row);
             rows.extend(new_rows);
         }
         Ok(rows)
@@ -77,7 +73,7 @@ pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<Strin
 ///   "|-- Projection: d.b, MAX(d.a) AS max_a",
 /// ]
 /// ```
-fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
+fn expand_row(mut row: Vec<String>) -> impl Iterator<Item=Vec<String>> {
     use itertools::Either;
     use std::iter::once;
 
@@ -115,65 +111,15 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
     }
 }
 
-/// normalize path references
-///
-/// ```text
-/// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
-/// ```
-///
-/// into:
-///
-/// ```text
-/// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
-/// ```
-fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
-    row.iter_mut().for_each(|s| {
-        let workspace_root: &str = workspace_root().as_ref();
-        if s.contains(workspace_root) {
-            *s = s.replace(workspace_root, "WORKSPACE_ROOT");
-        }
-    });
-    row
-}
-
-/// return the location of the datafusion checkout
-fn workspace_root() -> &'static object_store::path::Path {
-    static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
-    WORKSPACE_ROOT_LOCK.get_or_init(|| {
-        // e.g. /Software/datafusion/datafusion/core
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-        // e.g. /Software/datafusion/datafusion
-        let workspace_root = dir
-            .parent()
-            .expect("Can not find parent of datafusion/core")
-            // e.g. /Software/datafusion
-            .parent()
-            .expect("parent of datafusion")
-            .to_string_lossy();
-
-        let sanitized_workplace_root = if cfg!(windows) {
-            // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
-            // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
-            workspace_root
-                .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
-        } else {
-            workspace_root.to_string()
-        };
-
-        object_store::path::Path::parse(sanitized_workplace_root).unwrap()
-    })
-}
-
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
-fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
+fn convert_batch(batch: RecordBatch) -> anyhow::Result<Vec<Vec<String>>> {
     (0..batch.num_rows())
         .map(|row| {
             batch
                 .columns()
                 .iter()
                 .map(|col| cell_to_string(col, row))
-                .collect::<Result<Vec<String>>>()
+                .collect::<anyhow::Result<Vec<String>>>()
         })
         .collect()
 }
@@ -196,7 +142,7 @@ macro_rules! get_row_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 ///
-pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
+pub fn cell_to_string(col: &ArrayRef, row: usize) -> anyhow::Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
@@ -204,35 +150,35 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
         match col.data_type() {
             DataType::Null => Ok(NULL_STR.to_string()),
             DataType::Boolean => {
-                Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row)))
+                Ok(bool_to_str(get_row_value!(BooleanArray, col, row)))
             }
             DataType::Float16 => {
-                Ok(f16_to_str(get_row_value!(array::Float16Array, col, row)))
+                Ok(f16_to_str(get_row_value!(Float16Array, col, row)))
             }
             DataType::Float32 => {
-                Ok(f32_to_str(get_row_value!(array::Float32Array, col, row)))
+                Ok(f32_to_str(get_row_value!(Float32Array, col, row)))
             }
             DataType::Float64 => {
-                Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
+                Ok(f64_to_str(get_row_value!(Float64Array, col, row)))
             }
             DataType::Decimal128(precision, scale) => {
-                let value = get_row_value!(array::Decimal128Array, col, row);
+                let value = get_row_value!(Decimal128Array, col, row);
                 Ok(i128_to_str(value, precision, scale))
             }
             DataType::Decimal256(precision, scale) => {
-                let value = get_row_value!(array::Decimal256Array, col, row);
+                let value = get_row_value!(Decimal256Array, col, row);
                 Ok(i256_to_str(value, precision, scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
-                array::LargeStringArray,
+                LargeStringArray,
                 col,
                 row
             ))),
             DataType::Utf8 => {
-                Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
+                Ok(varchar_to_str(get_row_value!(StringArray, col, row)))
             }
             DataType::Utf8View => Ok(varchar_to_str(get_row_value!(
-                array::StringViewArray,
+                StringViewArray,
                 col,
                 row
             ))),
@@ -241,7 +187,6 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 Ok(f.unwrap().value(row).to_string())
             }
         }
-            .map_err(DFSqlLogicTestError::Arrow)
     }
 }
 
