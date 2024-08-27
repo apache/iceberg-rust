@@ -17,6 +17,9 @@
 
 use iceberg::io::FileIOBuilder;
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
+
+mod transform;
 
 #[pyfunction]
 fn hello_world() -> PyResult<String> {
@@ -24,8 +27,11 @@ fn hello_world() -> PyResult<String> {
     Ok("Hello, world!".to_string())
 }
 
+
 #[pymodule]
 fn pyiceberg_core_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_world, m)?)?;
+
+    m.add_class::<transform::ArrowArrayTransform>()?;
     Ok(())
 }
