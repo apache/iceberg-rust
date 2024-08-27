@@ -147,3 +147,39 @@ async fn test_provider_list_schema_names() -> Result<()> {
         .all(|item| result.contains(&item.to_string())));
     Ok(())
 }
+#[tokio::test]
+async fn test_table_scan() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("test_provider_list_table_names".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+    let creation = set_table_creation(temp_path(), "my_table")?;
+    let new_table = iceberg_catalog.create_table(&namespace, creation).await?;
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+    let ctx = SessionContext::new();
+
+    ctx.register_catalog("catalog", catalog);
+    let df = ctx
+        .sql("select * from catalog.test_provider_list_table_names.my_table where (foo > 1 and bar = 'test') or foo < 0 ")
+        .await
+        .unwrap();
+
+    let compute_result = df.collect().await;
+    if let Ok(df) = compute_result {
+        println!("==> compute_result OK: {:?}", df);
+    } else {
+        println!(
+            "==> compute_result ERROR: {:?}",
+            compute_result.err().unwrap()
+        );
+    }
+    let provider = ctx.catalog("catalog").unwrap();
+    let schema = provider.schema("test_provider_list_table_names").unwrap();
+
+    let expected = vec!["my_table"];
+    let result = schema.table_names();
+
+    assert_eq!(result, expected);
+
+    Ok(())
+}
