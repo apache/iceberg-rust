@@ -18,18 +18,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::physical_plan::scan::IcebergTableScan;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
-use datafusion::logical_expr::Expr;
-use datafusion::logical_expr::{BinaryExpr, TableProviderFilterPushDown};
+use datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
 use iceberg::{Catalog, NamespaceIdent, Result, TableIdent};
+
+use crate::physical_plan::scan::IcebergTableScan;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].

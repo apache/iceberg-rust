@@ -182,7 +182,6 @@ fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
 ///
 /// * `Some(Predicate)` if the expression could be successfully converted.
 /// * `None` if the expression couldn't be converted to an Iceberg predicate.
-///
 fn expr_to_predicate(expr: &Expr) -> Option<Predicate> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -206,7 +205,7 @@ fn expr_to_predicate(expr: &Expr) -> Option<Predicate> {
                     }
                 }
                 // Third option arm (inner OR), e.g. x < 1 OR y > 10
-                // if one is unsuported, we fail the predicate
+                // if one is unsupported, we fail the predicate
                 (Expr::BinaryExpr(left_expr), Operator::Or, Expr::BinaryExpr(right_expr)) => {
                     let left_pred = expr_to_predicate(&Expr::BinaryExpr(left_expr.clone()))?;
                     let right_pred = expr_to_predicate(&Expr::BinaryExpr(right_expr.clone()))?;
@@ -248,10 +247,11 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::DFSchema;
     use datafusion::prelude::SessionContext;
+
+    use super::*;
 
     fn create_test_schema() -> DFSchema {
         let arrow_schema = Schema::new(vec![
