@@ -23,6 +23,7 @@ use fnv::FnvHashSet;
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::statistics::Statistics;
 
+use crate::arrow::{get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum};
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
@@ -144,35 +145,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return Ok(None);
         }
 
-        Ok(Some(match (primitive_type, stats) {
-            (PrimitiveType::Boolean, Statistics::Boolean(stats)) => Datum::bool(*stats.min()),
-            (PrimitiveType::Int, Statistics::Int32(stats)) => Datum::int(*stats.min()),
-            (PrimitiveType::Date, Statistics::Int32(stats)) => Datum::date(*stats.min()),
-            (PrimitiveType::Long, Statistics::Int64(stats)) => Datum::long(*stats.min()),
-            (PrimitiveType::Time, Statistics::Int64(stats)) => Datum::time_micros(*stats.min())?,
-            (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
-                Datum::timestamp_micros(*stats.min())
-            }
-            (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
-                Datum::timestamptz_micros(*stats.min())
-            }
-            (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.min()),
-            (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.min()),
-            (PrimitiveType::String, Statistics::ByteArray(stats)) => {
-                Datum::string(stats.min().as_utf8()?)
-            }
-            // TODO:
-            //  * Decimal
-            //  * Uuid
-            //  * Fixed
-            //  * Binary
-            (primitive_type, _) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion of min value for column of type {} to iceberg type {} is not yet supported", stats.physical_type(), primitive_type)
-                ));
-            }
-        }))
+        get_parquet_stat_min_as_datum(&primitive_type, stats)
     }
 
     fn max_value(&self, field_id: i32) -> Result<Option<Datum>> {
@@ -184,35 +157,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return Ok(None);
         }
 
-        Ok(Some(match (primitive_type, stats) {
-            (PrimitiveType::Boolean, Statistics::Boolean(stats)) => Datum::bool(*stats.max()),
-            (PrimitiveType::Int, Statistics::Int32(stats)) => Datum::int(*stats.max()),
-            (PrimitiveType::Date, Statistics::Int32(stats)) => Datum::date(*stats.max()),
-            (PrimitiveType::Long, Statistics::Int64(stats)) => Datum::long(*stats.max()),
-            (PrimitiveType::Time, Statistics::Int64(stats)) => Datum::time_micros(*stats.max())?,
-            (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
-                Datum::timestamp_micros(*stats.max())
-            }
-            (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
-                Datum::timestamptz_micros(*stats.max())
-            }
-            (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.max()),
-            (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.max()),
-            (PrimitiveType::String, Statistics::ByteArray(stats)) => {
-                Datum::string(stats.max().as_utf8()?)
-            }
-            // TODO:
-            //  * Decimal
-            //  * Uuid
-            //  * Fixed
-            //  * Binary
-            (primitive_type, _) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion of max value for column of type {} to iceberg type {} is not yet supported", stats.physical_type(), primitive_type)
-                ));
-            }
-        }))
+        get_parquet_stat_max_as_datum(&primitive_type, stats)
     }
 
     fn visit_inequality(
