@@ -161,10 +161,9 @@ fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
         .reduce(Predicate::and)
 }
 
-/// Converts a DataFusion [`Expr`] to an Iceberg [`Predicate`].
+/// Recuresivly converting DataFusion filters ( in a [`Expr`]) to an Iceberg [`Predicate`].
 ///
-/// This function handles the conversion of certain DataFusion expression types
-/// to their corresponding Iceberg predicates. It supports the following cases:
+/// This function currently handles the conversion of DataFusion expression of the following types:
 ///
 /// 1. Simple binary expressions (e.g., "column < value")
 /// 2. Compound AND expressions (e.g., "x < 1 AND y > 10")
@@ -188,13 +187,13 @@ fn expr_to_predicate(expr: &Expr) -> Option<Predicate> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             match (left.as_ref(), op, right.as_ref()) {
-                // first option: x < 1
+                // First option arm (simple case), e.g. x < 1
                 (Expr::Column(col), op, Expr::Literal(lit)) => {
                     let reference = Reference::new(col.name.clone());
                     let datum = scalar_value_to_datum(lit)?;
                     Some(binary_op_to_predicate(reference, op, datum))
                 }
-                // second option (inner AND): x < 1 AND y > 10
+                // Second option arm (inner AND), e.g. x < 1 AND y > 10
                 // if its an AND expression and one predicate fails, we can still go with the other one
                 (left_expr, Operator::And, right_expr) => {
                     let left_pred = expr_to_predicate(&left_expr.clone());
@@ -206,8 +205,8 @@ fn expr_to_predicate(expr: &Expr) -> Option<Predicate> {
                         (None, None) => None,
                     }
                 }
-                // third option (inner OR): x < 1 OR y > 10
-                // if one is unsuported, we need to fail the predicate
+                // Third option arm (inner OR), e.g. x < 1 OR y > 10
+                // if one is unsuported, we fail the predicate
                 (Expr::BinaryExpr(left_expr), Operator::Or, Expr::BinaryExpr(right_expr)) => {
                     let left_pred = expr_to_predicate(&Expr::BinaryExpr(left_expr.clone()))?;
                     let right_pred = expr_to_predicate(&Expr::BinaryExpr(right_expr.clone()))?;
@@ -292,11 +291,11 @@ mod tests {
             .parse_sql_expr(sql, &df_schema)
             .unwrap();
         let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let inner_predicate = Predicate::and(
+        let expected_predicate = Predicate::and(
             Reference::new("foo").greater_than(Datum::long(1)),
             Reference::new("bar").equal_to(Datum::string("test")),
         );
-        assert_eq!(predicate, inner_predicate);
+        assert_eq!(predicate, expected_predicate);
     }
 
     #[test]
