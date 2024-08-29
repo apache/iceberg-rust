@@ -282,13 +282,13 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|(item, &row_count)| {
                     predicate(
-                        item.max.map(|val| {
+                        item.min.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
                             )
                         }),
-                        item.min.map(|val| {
+                        item.max.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
@@ -374,7 +374,7 @@ impl<'a> PageIndexEvaluator<'a> {
 
         self.calc_row_selection(
             field_id,
-            |max, min, null_count| {
+            |min, max, null_count| {
                 if matches!(null_count, PageNullCount::AllNull) {
                     return Ok(false);
                 }
@@ -846,19 +846,20 @@ mod tests {
 
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
+    use parquet::data_type::ByteArray;
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
-    use parquet::file::page_index::index::{Index, NativeIndex};
+    use parquet::file::page_index::index::{Index, NativeIndex, PageIndex};
     use parquet::file::statistics::Statistics;
     use parquet::format::{BoundaryOrder, PageLocation};
     use parquet::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as parquetSchemaType,
     };
+    use rand::{thread_rng, Rng};
 
     use super::{union_row_selections, PageIndexEvaluator};
-    // use rand::{thread_rng, Rng};
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
-    use crate::Result;
+    use crate::{ErrorKind, Result};
 
     #[test]
     fn test_union_row_selections() {
@@ -918,8 +919,8 @@ mod tests {
     }
 
     #[test]
-    fn eval_is_null_none_null_select_all_rows() -> Result<()> {
-        let row_group_metadata = create_row_group_metadata(0, 0, None, 0, None)?;
+    fn eval_is_null_select_only_pages_with_nulls() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
         let (column_index, offset_index) = create_page_index()?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -937,7 +938,327 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        let expected = vec![];
+        let expected = vec![
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(2048),
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_is_not_null_dont_select_pages_with_all_nulls() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_not_null()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::skip(1024), RowSelector::select(3072)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_is_nan_select_all() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_nan()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::select(4096)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_not_nan_select_all() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_not_nan()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::select(4096)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_nan_datum_all_rows_except_all_null_pages() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .less_than(Datum::float(f32::NAN))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::skip(1024), RowSelector::select(3072)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inequality_pages_containing_value_except_all_null_pages() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .less_than(Datum::float(5.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_eq_pages_containing_value_except_all_null_pages() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .equal_to(Datum::float(5.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+            RowSelector::skip(1024),
+            RowSelector::select(1024),
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_not_eq_all_rows() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .not_equal_to(Datum::float(5.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::select(4096)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_starts_with_error_float_col() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .starts_with(Datum::float(5.0))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        );
+
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::Unexpected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_starts_with_pages_containing_value_except_all_null_pages() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .starts_with(Datum::string("B"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![
+            RowSelector::select(512),
+            RowSelector::skip(3536),
+            RowSelector::select(48),
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_not_starts_with_pages_containing_value_except_pages_with_min_and_max_equal_to_prefix_and_all_null_pages(
+    ) -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .not_starts_with(Datum::string("DE"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![
+            RowSelector::select(512),
+            RowSelector::skip(512),
+            RowSelector::select(3072),
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_in_length_of_set_above_limit_all_rows() -> Result<()> {
+        let mut rng = thread_rng();
+
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in(std::iter::repeat_with(|| Datum::float(rng.gen_range(0.0..10.0))).take(1000))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![RowSelector::select(4096)];
 
         assert_eq!(result, expected);
 
@@ -1045,11 +1366,81 @@ mod tests {
     }
 
     fn create_page_index() -> Result<(Vec<Index>, Vec<Vec<PageLocation>>)> {
-        let idx = Index::FLOAT(NativeIndex::<f32> {
-            indexes: vec![],
+        let idx_float = Index::FLOAT(NativeIndex::<f32> {
+            indexes: vec![
+                PageIndex {
+                    min: None,
+                    max: None,
+                    null_count: Some(1024),
+                },
+                PageIndex {
+                    min: Some(0.0),
+                    max: Some(10.0),
+                    null_count: Some(0),
+                },
+                PageIndex {
+                    min: Some(10.0),
+                    max: Some(20.0),
+                    null_count: Some(1),
+                },
+                PageIndex {
+                    min: None,
+                    max: None,
+                    null_count: None,
+                },
+            ],
             boundary_order: BoundaryOrder(0), // UNORDERED
         });
 
-        Ok((vec![], vec![]))
+        let idx_string = Index::BYTE_ARRAY(NativeIndex::<ByteArray> {
+            indexes: vec![
+                PageIndex {
+                    min: Some("AA".into()),
+                    max: Some("DD".into()),
+                    null_count: Some(0),
+                },
+                PageIndex {
+                    min: Some("DE".into()),
+                    max: Some("DE".into()),
+                    null_count: Some(0),
+                },
+                PageIndex {
+                    min: Some("DF".into()),
+                    max: Some("UJ".into()),
+                    null_count: Some(1),
+                },
+                PageIndex {
+                    min: None,
+                    max: None,
+                    null_count: Some(48),
+                },
+                PageIndex {
+                    min: None,
+                    max: None,
+                    null_count: None,
+                },
+            ],
+            boundary_order: BoundaryOrder(0), // UNORDERED
+        });
+
+        let page_locs_float = vec![
+            PageLocation::new(0, 1024, 0),
+            PageLocation::new(1024, 1024, 1024),
+            PageLocation::new(2048, 1024, 2048),
+            PageLocation::new(3072, 1024, 3072),
+        ];
+
+        let page_locs_string = vec![
+            PageLocation::new(0, 512, 0),
+            PageLocation::new(512, 512, 512),
+            PageLocation::new(1024, 2976, 1024),
+            PageLocation::new(4000, 48, 4000),
+            PageLocation::new(4048, 48, 4048),
+        ];
+
+        Ok((vec![idx_float, idx_string], vec![
+            page_locs_float,
+            page_locs_string,
+        ]))
     }
 }
