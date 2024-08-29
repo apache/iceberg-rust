@@ -27,23 +27,20 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::arrow::AsyncArrowWriter;
-use parquet::data_type::{
-    BoolType, ByteArray, ByteArrayType, DataType as ParquetDataType, DoubleType, FixedLenByteArray,
-    FixedLenByteArrayType, FloatType, Int32Type, Int64Type,
-};
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::{from_thrift, Statistics, TypedStatistics};
+use parquet::file::statistics::{from_thrift, Statistics};
 use parquet::format::FileMetaData;
-use uuid::Uuid;
 
 use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
-use crate::arrow::DEFAULT_MAP_FIELD_NAME;
+use crate::arrow::{
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, DEFAULT_MAP_FIELD_NAME,
+};
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     visit_schema, DataFileBuilder, DataFileFormat, Datum, ListType, MapType, NestedFieldRef,
-    PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
+    PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
 };
 use crate::writer::CurrentFileStatus;
 use crate::{Error, ErrorKind, Result};
@@ -237,34 +234,26 @@ impl MinMaxColAggregator {
         }
     }
 
-    fn update_state<T: ParquetDataType>(
-        &mut self,
-        field_id: i32,
-        state: &TypedStatistics<T>,
-        convert_func: impl Fn(<T as ParquetDataType>::T) -> Result<Datum>,
-    ) {
-        if state.min_is_exact() {
-            let val = convert_func(state.min().clone()).unwrap();
-            self.lower_bounds
-                .entry(field_id)
-                .and_modify(|e| {
-                    if *e > val {
-                        *e = val.clone()
-                    }
-                })
-                .or_insert(val);
-        }
-        if state.max_is_exact() {
-            let val = convert_func(state.max().clone()).unwrap();
-            self.upper_bounds
-                .entry(field_id)
-                .and_modify(|e| {
-                    if *e < val {
-                        *e = val.clone()
-                    }
-                })
-                .or_insert(val);
-        }
+    fn update_state_min(&mut self, field_id: i32, datum: Datum) {
+        self.lower_bounds
+            .entry(field_id)
+            .and_modify(|e| {
+                if *e > datum {
+                    *e = datum.clone()
+                }
+            })
+            .or_insert(datum);
+    }
+
+    fn update_state_max(&mut self, field_id: i32, datum: Datum) {
+        self.upper_bounds
+            .entry(field_id)
+            .and_modify(|e| {
+                if *e > datum {
+                    *e = datum.clone()
+                }
+            })
+            .or_insert(datum);
     }
 
     fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
@@ -287,142 +276,28 @@ impl MinMaxColAggregator {
             ));
         };
 
-        match (&ty, value) {
-            (PrimitiveType::Boolean, Statistics::Boolean(stat)) => {
-                let convert_func = |v: bool| Result::<Datum>::Ok(Datum::bool(v));
-                self.update_state::<BoolType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Int, Statistics::Int32(stat)) => {
-                let convert_func = |v: i32| Result::<Datum>::Ok(Datum::int(v));
-                self.update_state::<Int32Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Long, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::long(v));
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Float, Statistics::Float(stat)) => {
-                let convert_func = |v: f32| Result::<Datum>::Ok(Datum::float(v));
-                self.update_state::<FloatType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Double, Statistics::Double(stat)) => {
-                let convert_func = |v: f64| Result::<Datum>::Ok(Datum::double(v));
-                self.update_state::<DoubleType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::String, Statistics::ByteArray(stat)) => {
-                let convert_func = |v: ByteArray| {
-                    Result::<Datum>::Ok(Datum::string(
-                        String::from_utf8(v.data().to_vec()).unwrap(),
-                    ))
-                };
-                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
-                let convert_func =
-                    |v: ByteArray| Result::<Datum>::Ok(Datum::binary(v.data().to_vec()));
-                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Date, Statistics::Int32(stat)) => {
-                let convert_func = |v: i32| Result::<Datum>::Ok(Datum::date(v));
-                self.update_state::<Int32Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Time, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Datum::time_micros(v);
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Timestamp, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamp_micros(v));
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Timestamptz, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_micros(v));
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::TimestampNs, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamp_nanos(v));
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::TimestamptzNs, Statistics::Int64(stat)) => {
-                let convert_func = |v: i64| Result::<Datum>::Ok(Datum::timestamptz_nanos(v));
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (
-                PrimitiveType::Decimal {
-                    precision: _,
-                    scale: _,
-                },
-                Statistics::ByteArray(stat),
-            ) => {
-                let convert_func = |v: ByteArray| -> Result<Datum> {
-                    Result::<Datum>::Ok(Datum::new(
-                        ty.clone(),
-                        PrimitiveLiteral::Int128(i128::from_le_bytes(v.data().try_into().unwrap())),
-                    ))
-                };
-                self.update_state::<ByteArrayType>(field_id, &stat, convert_func)
-            }
-            (
-                PrimitiveType::Decimal {
-                    precision: _,
-                    scale: _,
-                },
-                Statistics::Int32(stat),
-            ) => {
-                let convert_func = |v: i32| {
-                    Result::<Datum>::Ok(Datum::new(
-                        ty.clone(),
-                        PrimitiveLiteral::Int128(i128::from(v)),
-                    ))
-                };
-                self.update_state::<Int32Type>(field_id, &stat, convert_func)
-            }
-            (
-                PrimitiveType::Decimal {
-                    precision: _,
-                    scale: _,
-                },
-                Statistics::Int64(stat),
-            ) => {
-                let convert_func = |v: i64| {
-                    Result::<Datum>::Ok(Datum::new(
-                        ty.clone(),
-                        PrimitiveLiteral::Int128(i128::from(v)),
-                    ))
-                };
-                self.update_state::<Int64Type>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Uuid, Statistics::FixedLenByteArray(stat)) => {
-                let convert_func = |v: FixedLenByteArray| {
-                    if v.len() != 16 {
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            "Invalid length of uuid bytes.",
-                        ));
-                    }
-                    Ok(Datum::uuid(Uuid::from_bytes(
-                        v.data()[..16].try_into().unwrap(),
-                    )))
-                };
-                self.update_state::<FixedLenByteArrayType>(field_id, &stat, convert_func)
-            }
-            (PrimitiveType::Fixed(len), Statistics::FixedLenByteArray(stat)) => {
-                let convert_func = |v: FixedLenByteArray| {
-                    if v.len() != *len as usize {
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            "Invalid length of fixed bytes.",
-                        ));
-                    }
-                    Ok(Datum::fixed(v.data().to_vec()))
-                };
-                self.update_state::<FixedLenByteArrayType>(field_id, &stat, convert_func)
-            }
-            (ty, value) => {
+        if value.min_is_exact() {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {} is not match with field type {}.", value, ty),
-                ))
-            }
+                ));
+            };
+
+            self.update_state_min(field_id, min_datum);
         }
+
+        if value.max_is_exact() {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Statistics {} is not match with field type {}.", value, ty),
+                ));
+            };
+
+            self.update_state_max(field_id, max_datum);
+        }
+
         Ok(())
     }
 
@@ -609,6 +484,7 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
+    use uuid::Uuid;
 
     use super::*;
     use crate::io::FileIOBuilder;

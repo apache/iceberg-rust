@@ -60,6 +60,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -76,6 +77,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
+            row_group_filtering_enabled: true,
         }
     }
 
@@ -142,9 +144,16 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Sets the manifest file concurrency limit for this scan
-    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit_manifest_files = limit;
+    /// Determines whether to enable row group filtering.
+    /// When enabled, if a read is performed with a filter predicate,
+    /// then the metadata for each row group in the parquet file is
+    /// evaluated against the filter predicate and row groups
+    /// that cant contain matching rows will be skipped entirely.
+    ///
+    /// Defaults to enabled, as it generally improves performance or
+    /// keeps it the same, with performance degradation unlikely.
+    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
+        self.row_group_filtering_enabled = row_group_filtering_enabled;
         self
     }
 
@@ -258,6 +267,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+            row_group_filtering_enabled: self.row_group_filtering_enabled,
         })
     }
 }
@@ -280,6 +290,8 @@ pub struct TableScan {
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     concurrency_limit_data_files: usize,
+
+    row_group_filtering_enabled: bool,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -346,7 +358,7 @@ impl TableScan {
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
                     |(manifest_entry_context, tx)| async move {
-                        crate::runtime::spawn(async move {
+                        spawn(async move {
                             Self::process_manifest_entry(manifest_entry_context, tx).await
                         })
                         .await
@@ -365,7 +377,8 @@ impl TableScan {
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
-            .with_data_file_concurrency_limit(self.concurrency_limit_data_files);
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
