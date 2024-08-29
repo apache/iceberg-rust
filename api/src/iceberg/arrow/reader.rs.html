@@ -1001,6 +1001,86 @@
 <a href="#1001" id="1001">1001</a>
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a>
+<a href="#1021" id="1021">1021</a>
+<a href="#1022" id="1022">1022</a>
+<a href="#1023" id="1023">1023</a>
+<a href="#1024" id="1024">1024</a>
+<a href="#1025" id="1025">1025</a>
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a>
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a>
+<a href="#1048" id="1048">1048</a>
+<a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
+<a href="#1073" id="1073">1073</a>
+<a href="#1074" id="1074">1074</a>
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a>
+<a href="#1083" id="1083">1083</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1026,7 +1106,7 @@
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>arrow_arith::boolean::{and, is_not_null, is_null, not, or};
-<span class="kw">use </span>arrow_array::{ArrayRef, BooleanArray, RecordBatch};
+<span class="kw">use </span>arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 <span class="kw">use </span>arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 <span class="kw">use </span>arrow_schema::{ArrowError, DataType, SchemaRef <span class="kw">as </span>ArrowSchemaRef};
 <span class="kw">use </span>arrow_string::like::starts_with;
@@ -1035,7 +1115,7 @@
 <span class="kw">use </span>futures::channel::mpsc::{channel, Sender};
 <span class="kw">use </span>futures::future::BoxFuture;
 <span class="kw">use </span>futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
-<span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter};
+<span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 <span class="kw">use </span>parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 <span class="kw">use </span>parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 <span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
@@ -1044,6 +1124,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::arrow::{arrow_schema_to_schema, get_arrow_datum};
 <span class="kw">use </span><span class="kw">crate</span>::error::Result;
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+<span class="kw">use </span><span class="kw">crate</span>::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference};
 <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileMetadata, FileRead};
 <span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
@@ -1057,6 +1138,7 @@
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     file_io: FileIO,
     concurrency_limit_data_files: usize,
+    row_group_filtering_enabled: bool,
 }
 
 <span class="kw">impl </span>ArrowReaderBuilder {
@@ -1068,13 +1150,13 @@
             batch_size: <span class="prelude-val">None</span>,
             file_io,
             concurrency_limit_data_files: num_cpus,
+            row_group_filtering_enabled: <span class="bool-val">true</span>,
         }
     }
 
     <span class="doccomment">/// Sets the max number of in flight data files that are being fetched
     </span><span class="kw">pub fn </span>with_data_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, val: usize) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.concurrency_limit_data_files = val;
-
         <span class="self">self
     </span>}
 
@@ -1085,12 +1167,19 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Determines whether to enable row group filtering.
+    </span><span class="kw">pub fn </span>with_row_group_filtering_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_group_filtering_enabled: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.row_group_filtering_enabled = row_group_filtering_enabled;
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// Build the ArrowReader.
     </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; ArrowReader {
         ArrowReader {
             batch_size: <span class="self">self</span>.batch_size,
             file_io: <span class="self">self</span>.file_io,
             concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
+            row_group_filtering_enabled: <span class="self">self</span>.row_group_filtering_enabled,
         }
     }
 }
@@ -1103,6 +1192,8 @@
 
     <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
     </span>concurrency_limit_data_files: usize,
+
+    row_group_filtering_enabled: bool,
 }
 
 <span class="kw">impl </span>ArrowReader {
@@ -1112,6 +1203,7 @@
         <span class="kw">let </span>file_io = <span class="self">self</span>.file_io.clone();
         <span class="kw">let </span>batch_size = <span class="self">self</span>.batch_size;
         <span class="kw">let </span>concurrency_limit_data_files = <span class="self">self</span>.concurrency_limit_data_files;
+        <span class="kw">let </span>row_group_filtering_enabled = <span class="self">self</span>.row_group_filtering_enabled;
 
         <span class="kw">let </span>(tx, rx) = channel(concurrency_limit_data_files);
         <span class="kw">let </span><span class="kw-2">mut </span>channel_for_error = tx.clone();
@@ -1127,8 +1219,14 @@
                                 <span class="kw">let </span>file_path = task.data_file_path().to_string();
 
                                 spawn(<span class="kw">async move </span>{
-                                    <span class="self">Self</span>::process_file_scan_task(task, batch_size, file_io, tx)
-                                        .<span class="kw">await
+                                    <span class="self">Self</span>::process_file_scan_task(
+                                        task,
+                                        batch_size,
+                                        file_io,
+                                        tx,
+                                        row_group_filtering_enabled,
+                                    )
+                                    .<span class="kw">await
                                 </span>})
                                 .<span class="kw">await
                                 </span>.map_err(|e| e.with_context(<span class="string">"file_path"</span>, file_path))
@@ -1152,53 +1250,93 @@
         batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         file_io: FileIO,
         <span class="kw-2">mut </span>tx: Sender&lt;<span class="prelude-ty">Result</span>&lt;RecordBatch&gt;&gt;,
+        row_group_filtering_enabled: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="comment">// Collect Parquet column indices from field ids
-        </span><span class="kw">let </span><span class="kw-2">mut </span>collector = CollectFieldIdVisitor {
-            field_ids: HashSet::default(),
-        };
-
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicates) = task.predicate() {
-            visit(<span class="kw-2">&amp;mut </span>collector, predicates)<span class="question-mark">?</span>;
-        }
-
-        <span class="kw">let </span>parquet_file = file_io.new_input(task.data_file_path())<span class="question-mark">?</span>;
-
+        <span class="comment">// Get the metadata for the Parquet file we need to read and build
+        // a reader for the data within
+        </span><span class="kw">let </span>parquet_file = file_io.new_input(task.data_file_path())<span class="question-mark">?</span>;
         <span class="kw">let </span>(parquet_metadata, parquet_reader) =
             <span class="macro">try_join!</span>(parquet_file.metadata(), parquet_file.reader())<span class="question-mark">?</span>;
-        <span class="kw">let </span>arrow_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        <span class="kw">let </span>parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream_builder =
-            ParquetRecordBatchStreamBuilder::new(arrow_file_reader).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="comment">// Start creating the record batch stream, which wraps the parquet file reader
+        </span><span class="kw">let </span><span class="kw-2">mut </span>record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            parquet_file_reader,
+            <span class="comment">// Page index will be required in upcoming row selection PR
+            </span>ArrowReaderOptions::new().with_page_index(<span class="bool-val">false</span>),
+        )
+        .<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
-        <span class="kw">let </span>arrow_schema = batch_stream_builder.schema();
-        <span class="kw">let </span>projection_mask = <span class="self">Self</span>::get_arrow_projection_mask(
+        <span class="comment">// Create a projection mask for the batch stream to select which columns in the
+        // Parquet file that we want in the response
+        </span><span class="kw">let </span>projection_mask = <span class="self">Self</span>::get_arrow_projection_mask(
             task.project_field_ids(),
             task.schema(),
-            parquet_schema,
-            arrow_schema,
+            record_batch_stream_builder.parquet_schema(),
+            record_batch_stream_builder.schema(),
         )<span class="question-mark">?</span>;
-        batch_stream_builder = batch_stream_builder.with_projection(projection_mask);
-
-        <span class="kw">let </span>parquet_schema = batch_stream_builder.parquet_schema();
-        <span class="kw">let </span>row_filter = <span class="self">Self</span>::get_row_filter(task.predicate(), parquet_schema, <span class="kw-2">&amp;</span>collector)<span class="question-mark">?</span>;
-
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(row_filter) = row_filter {
-            batch_stream_builder = batch_stream_builder.with_row_filter(row_filter);
-        }
+        record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = batch_size {
-            batch_stream_builder = batch_stream_builder.with_batch_size(batch_size);
+            record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>batch_stream = batch_stream_builder.build()<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicate) = task.predicate() {
+            <span class="kw">let </span>(iceberg_field_ids, field_id_map) = <span class="self">Self</span>::build_field_id_set_and_map(
+                record_batch_stream_builder.parquet_schema(),
+                predicate,
+            )<span class="question-mark">?</span>;
 
-        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = batch_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
+            <span class="kw">let </span>row_filter = <span class="self">Self</span>::get_row_filter(
+                predicate,
+                record_batch_stream_builder.parquet_schema(),
+                <span class="kw-2">&amp;</span>iceberg_field_ids,
+                <span class="kw-2">&amp;</span>field_id_map,
+            )<span class="question-mark">?</span>;
+            record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
+
+            <span class="kw">let </span><span class="kw-2">mut </span>selected_row_groups = <span class="prelude-val">None</span>;
+            <span class="kw">if </span>row_group_filtering_enabled {
+                <span class="kw">let </span>result = <span class="self">Self</span>::get_selected_row_group_indices(
+                    predicate,
+                    record_batch_stream_builder.metadata(),
+                    <span class="kw-2">&amp;</span>field_id_map,
+                    task.schema(),
+                )<span class="question-mark">?</span>;
+
+                selected_row_groups = <span class="prelude-val">Some</span>(result);
+            }
+
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(selected_row_groups) = selected_row_groups {
+                record_batch_stream_builder =
+                    record_batch_stream_builder.with_row_groups(selected_row_groups);
+            }
+        }
+
+        <span class="comment">// Build the batch stream and send all the RecordBatches that it generates
+        // to the requester.
+        </span><span class="kw">let </span><span class="kw-2">mut </span>record_batch_stream = record_batch_stream_builder.build()<span class="question-mark">?</span>;
+        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = record_batch_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
             tx.send(<span class="prelude-val">Ok</span>(batch)).<span class="kw">await</span><span class="question-mark">?
         </span>}
 
         <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">fn </span>build_field_id_set_and_map(
+        parquet_schema: <span class="kw-2">&amp;</span>SchemaDescriptor,
+        predicate: <span class="kw-2">&amp;</span>BoundPredicate,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(HashSet&lt;i32&gt;, HashMap&lt;i32, usize&gt;)&gt; {
+        <span class="comment">// Collects all Iceberg field IDs referenced in the filter predicate
+        </span><span class="kw">let </span><span class="kw-2">mut </span>collector = CollectFieldIdVisitor {
+            field_ids: HashSet::default(),
+        };
+        visit(<span class="kw-2">&amp;mut </span>collector, predicate)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>iceberg_field_ids = collector.field_ids();
+        <span class="kw">let </span>field_id_map = build_field_id_map(parquet_schema)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>((iceberg_field_ids, field_id_map))
     }
 
     <span class="kw">fn </span>get_arrow_projection_mask(
@@ -1272,43 +1410,59 @@
     }
 
     <span class="kw">fn </span>get_row_filter(
-        predicates: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt;,
+        predicates: <span class="kw-2">&amp;</span>BoundPredicate,
         parquet_schema: <span class="kw-2">&amp;</span>SchemaDescriptor,
-        collector: <span class="kw-2">&amp;</span>CollectFieldIdVisitor,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;RowFilter&gt;&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicates) = predicates {
-            <span class="kw">let </span>field_id_map = build_field_id_map(parquet_schema)<span class="question-mark">?</span>;
+        iceberg_field_ids: <span class="kw-2">&amp;</span>HashSet&lt;i32&gt;,
+        field_id_map: <span class="kw-2">&amp;</span>HashMap&lt;i32, usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;RowFilter&gt; {
+        <span class="comment">// Collect Parquet column indices from field ids.
+        // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
+        </span><span class="kw">let </span><span class="kw-2">mut </span>column_indices = iceberg_field_ids
+            .iter()
+            .filter_map(|field_id| field_id_map.get(field_id).cloned())
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        column_indices.sort();
 
-            <span class="comment">// Collect Parquet column indices from field ids.
-            // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
-            </span><span class="kw">let </span><span class="kw-2">mut </span>column_indices = collector
-                .field_ids
-                .iter()
-                .filter_map(|field_id| field_id_map.get(field_id).cloned())
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="comment">// The converter that converts `BoundPredicates` to `ArrowPredicates`
+        </span><span class="kw">let </span><span class="kw-2">mut </span>converter = PredicateConverter {
+            parquet_schema,
+            column_map: field_id_map,
+            column_indices: <span class="kw-2">&amp;</span>column_indices,
+        };
 
-            column_indices.sort();
+        <span class="comment">// After collecting required leaf column indices used in the predicate,
+        // creates the projection mask for the Arrow predicates.
+        </span><span class="kw">let </span>projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
+        <span class="kw">let </span>predicate_func = visit(<span class="kw-2">&amp;mut </span>converter, predicates)<span class="question-mark">?</span>;
+        <span class="kw">let </span>arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
+        <span class="prelude-val">Ok</span>(RowFilter::new(<span class="macro">vec!</span>[Box::new(arrow_predicate)]))
+    }
 
-            <span class="comment">// The converter that converts `BoundPredicates` to `ArrowPredicates`
-            </span><span class="kw">let </span><span class="kw-2">mut </span>converter = PredicateConverter {
-                parquet_schema,
-                column_map: <span class="kw-2">&amp;</span>field_id_map,
-                column_indices: <span class="kw-2">&amp;</span>column_indices,
-            };
+    <span class="kw">fn </span>get_selected_row_group_indices(
+        predicate: <span class="kw-2">&amp;</span>BoundPredicate,
+        parquet_metadata: <span class="kw-2">&amp;</span>Arc&lt;ParquetMetaData&gt;,
+        field_id_map: <span class="kw-2">&amp;</span>HashMap&lt;i32, usize&gt;,
+        snapshot_schema: <span class="kw-2">&amp;</span>Schema,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+        <span class="kw">let </span>row_groups_metadata = parquet_metadata.row_groups();
+        <span class="kw">let </span><span class="kw-2">mut </span>results = Vec::with_capacity(row_groups_metadata.len());
 
-            <span class="comment">// After collecting required leaf column indices used in the predicate,
-            // creates the projection mask for the Arrow predicates.
-            </span><span class="kw">let </span>projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
-            <span class="kw">let </span>predicate_func = visit(<span class="kw-2">&amp;mut </span>converter, predicates)<span class="question-mark">?</span>;
-            <span class="kw">let </span>arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
-            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(RowFilter::new(<span class="macro">vec!</span>[Box::new(arrow_predicate)])))
-        } <span class="kw">else </span>{
-            <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+        <span class="kw">for </span>(idx, row_group_metadata) <span class="kw">in </span>row_groups_metadata.iter().enumerate() {
+            <span class="kw">if </span>RowGroupMetricsEvaluator::eval(
+                predicate,
+                row_group_metadata,
+                field_id_map,
+                snapshot_schema,
+            )<span class="question-mark">? </span>{
+                results.push(idx);
+            }
         }
+
+        <span class="prelude-val">Ok</span>(results)
     }
 }
 
-<span class="doccomment">/// Build the map of field id to Parquet column index in the schema.
+<span class="doccomment">/// Build the map of parquet field id to Parquet column index in the schema.
 </span><span class="kw">fn </span>build_field_id_map(parquet_schema: <span class="kw-2">&amp;</span>SchemaDescriptor) -&gt; <span class="prelude-ty">Result</span>&lt;HashMap&lt;i32, usize&gt;&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>column_map = HashMap::new();
     <span class="kw">for </span>(idx, field) <span class="kw">in </span>parquet_schema.columns().iter().enumerate() {
@@ -1346,6 +1500,12 @@
 <span class="doccomment">/// A visitor to collect field ids from bound predicates.
 </span><span class="kw">struct </span>CollectFieldIdVisitor {
     field_ids: HashSet&lt;i32&gt;,
+}
+
+<span class="kw">impl </span>CollectFieldIdVisitor {
+    <span class="kw">fn </span>field_ids(<span class="self">self</span>) -&gt; HashSet&lt;i32&gt; {
+        <span class="self">self</span>.field_ids
+    }
 }
 
 <span class="kw">impl </span>BoundPredicateVisitor <span class="kw">for </span>CollectFieldIdVisitor {

@@ -1589,6 +1589,19 @@
 <a href="#1589" id="1589">1589</a>
 <a href="#1590" id="1590">1590</a>
 <a href="#1591" id="1591">1591</a>
+<a href="#1592" id="1592">1592</a>
+<a href="#1593" id="1593">1593</a>
+<a href="#1594" id="1594">1594</a>
+<a href="#1595" id="1595">1595</a>
+<a href="#1596" id="1596">1596</a>
+<a href="#1597" id="1597">1597</a>
+<a href="#1598" id="1598">1598</a>
+<a href="#1599" id="1599">1599</a>
+<a href="#1600" id="1600">1600</a>
+<a href="#1601" id="1601">1601</a>
+<a href="#1602" id="1602">1602</a>
+<a href="#1603" id="1603">1603</a>
+<a href="#1604" id="1604">1604</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1651,6 +1664,7 @@
     concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
 }
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; TableScanBuilder&lt;<span class="lifetime">'a</span>&gt; {
@@ -1667,6 +1681,7 @@
             concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
+            row_group_filtering_enabled: <span class="bool-val">true</span>,
         }
     }
 
@@ -1733,9 +1748,16 @@
         <span class="self">self
     </span>}
 
-    <span class="doccomment">/// Sets the manifest file concurrency limit for this scan
-    </span><span class="kw">pub fn </span>with_manifest_file_concurrency_limit(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.concurrency_limit_manifest_files = limit;
+    <span class="doccomment">/// Determines whether to enable row group filtering.
+    /// When enabled, if a read is performed with a filter predicate,
+    /// then the metadata for each row group in the parquet file is
+    /// evaluated against the filter predicate and row groups
+    /// that cant contain matching rows will be skipped entirely.
+    ///
+    /// Defaults to enabled, as it generally improves performance or
+    /// keeps it the same, with performance degradation unlikely.
+    </span><span class="kw">pub fn </span>with_row_group_filtering_enabled(<span class="kw-2">mut </span><span class="self">self</span>, row_group_filtering_enabled: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.row_group_filtering_enabled = row_group_filtering_enabled;
         <span class="self">self
     </span>}
 
@@ -1849,6 +1871,7 @@
             concurrency_limit_data_files: <span class="self">self</span>.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: <span class="self">self</span>.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: <span class="self">self</span>.concurrency_limit_manifest_files,
+            row_group_filtering_enabled: <span class="self">self</span>.row_group_filtering_enabled,
         })
     }
 }
@@ -1871,6 +1894,8 @@
     <span class="doccomment">/// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     </span>concurrency_limit_data_files: usize,
+
+    row_group_filtering_enabled: bool,
 }
 
 <span class="doccomment">/// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -1937,7 +1962,7 @@
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
                     |(manifest_entry_context, tx)| <span class="kw">async move </span>{
-                        <span class="kw">crate</span>::runtime::spawn(<span class="kw">async move </span>{
+                        spawn(<span class="kw">async move </span>{
                             <span class="self">Self</span>::process_manifest_entry(manifest_entry_context, tx).<span class="kw">await
                         </span>})
                         .<span class="kw">await
@@ -1956,7 +1981,8 @@
     <span class="doccomment">/// Returns an [`ArrowRecordBatchStream`].
     </span><span class="kw">pub async fn </span>to_arrow(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>arrow_reader_builder = ArrowReaderBuilder::new(<span class="self">self</span>.file_io.clone())
-            .with_data_file_concurrency_limit(<span class="self">self</span>.concurrency_limit_data_files);
+            .with_data_file_concurrency_limit(<span class="self">self</span>.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(<span class="self">self</span>.row_group_filtering_enabled);
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = <span class="self">self</span>.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
