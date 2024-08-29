@@ -719,18 +719,30 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                     return Ok(false);
                 }
 
-                if let Some(lower_bound) = min {
-                    if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
-                        // if all values are less than lower bound, rows cannot match.
-                        return Ok(false);
+                match (min, max) {
+                    (Some(min), Some(max)) => {
+                        if literals
+                            .iter()
+                            .all(|datum| datum.lt(&min) || datum.gt(&max))
+                        {
+                            // if all values are outside the bounds, rows cannot match.
+                            return Ok(false);
+                        }
                     }
-                }
+                    (Some(min), _) => {
+                        if !literals.iter().any(|datum| datum.ge(&min)) {
+                            // if none of the values are greater than the min bound, rows cant match
+                            return Ok(false);
+                        }
+                    }
+                    (_, Some(max)) => {
+                        if !literals.iter().any(|datum| datum.le(&max)) {
+                            // if all values are greater than upper bound, rows cannot match.
+                            return Ok(false);
+                        }
+                    }
 
-                if let Some(upper_bound) = max {
-                    if !literals.iter().any(|datum| datum.le(&upper_bound)) {
-                        // if all values are greater than upper bound, rows cannot match.
-                        return Ok(false);
-                    }
+                    _ => {}
                 }
 
                 Ok(true)
@@ -1259,6 +1271,39 @@ mod tests {
         )?;
 
         let expected = vec![RowSelector::select(4096)];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_in_valid_set_size_some_rows() -> Result<()> {
+        let row_group_metadata = create_row_group_metadata(4096, 1000, None, 1000, None)?;
+        let (column_index, offset_index) = create_page_index()?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .is_in([Datum::string("AARDVARK"), Datum::string("ICEBERG")])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &column_index,
+            &offset_index,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        let expected = vec![
+            RowSelector::select(512),
+            RowSelector::skip(512),
+            RowSelector::select(2976),
+            RowSelector::skip(48),
+            RowSelector::select(48),
+        ];
 
         assert_eq!(result, expected);
 
