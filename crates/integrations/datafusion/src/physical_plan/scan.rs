@@ -233,15 +233,19 @@ fn binary_op_to_predicate(reference: Reference, op: &Operator, datum: Datum) -> 
 /// convert a DataFusion scalar value to an iceberg [`Datum`]
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
     match value {
-        ScalarValue::Int8(Some(v)) => Some(Datum::long(*v as i64)),
-        ScalarValue::Int16(Some(v)) => Some(Datum::long(*v as i64)),
-        ScalarValue::Int32(Some(v)) => Some(Datum::long(*v as i64)),
+        ScalarValue::Int8(Some(v)) => Some(Datum::int(*v)),
+        ScalarValue::Int16(Some(v)) => Some(Datum::int(*v)),
+        ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
         ScalarValue::Int64(Some(v)) => Some(Datum::long(*v)),
         ScalarValue::Float32(Some(v)) => Some(Datum::double(*v as f64)),
         ScalarValue::Float64(Some(v)) => Some(Datum::double(*v)),
         ScalarValue::Utf8(Some(v)) => Some(Datum::string(v.clone())),
+        ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
         // Add more cases as needed
-        _ => None,
+        _ => {
+            println!("unsupported scalar value: {:?}", value);
+            None
+        }
     }
 }
 
