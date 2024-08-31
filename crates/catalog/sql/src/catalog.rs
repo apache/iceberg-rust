@@ -274,14 +274,6 @@ impl Catalog for SqlCatalog {
             ));
         }
 
-        for i in 1..namespace.len() {
-            let parent_namespace = NamespaceIdent::from_vec(namespace[..i].to_vec())?;
-            let parent_exists = self.namespace_exists(&parent_namespace).await?;
-            if !parent_exists {
-                return no_such_namespace_err(&parent_namespace);
-            }
-        }
-
         let namespace_str = namespace.join(".");
         let insert = format!(
             "INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
@@ -808,28 +800,6 @@ mod tests {
             catalog.get_namespace(&namespace_ident_a_b_c).await.unwrap(),
             Namespace::with_properties(namespace_ident_a_b_c, default_properties())
         );
-    }
-
-    #[tokio::test]
-    async fn test_create_nested_namespace_throws_error_if_top_level_namespace_doesnt_exist() {
-        let warehouse_loc = temp_path();
-        let catalog = new_sql_catalog(warehouse_loc).await;
-
-        let nested_namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
-
-        assert_eq!(
-            catalog
-                .create_namespace(&nested_namespace_ident, HashMap::new())
-                .await
-                .unwrap_err()
-                .to_string(),
-            format!(
-                "Unexpected => No such namespace: {:?}",
-                NamespaceIdent::new("a".into())
-            )
-        );
-
-        assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![]);
     }
 
     #[tokio::test]
