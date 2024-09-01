@@ -76,13 +76,13 @@ impl TableProvider for IcebergTableProvider {
         &self,
         _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
             self.schema.clone(),
-            _filters,
+            filters,
         )))
     }
 
@@ -93,12 +93,9 @@ impl TableProvider for IcebergTableProvider {
     {
         let filter_support = filters
             .iter()
-            .map(|e| {
-                if let Expr::BinaryExpr(BinaryExpr { .. }) = e {
-                    TableProviderFilterPushDown::Inexact
-                } else {
-                    TableProviderFilterPushDown::Unsupported
-                }
+            .map(|e| match e {
+                Expr::BinaryExpr(BinaryExpr { .. }) => TableProviderFilterPushDown::Inexact,
+                _ => TableProviderFilterPushDown::Unsupported,
             })
             .collect::<Vec<TableProviderFilterPushDown>>();
 

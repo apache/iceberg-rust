@@ -16,3 +16,4 @@
 // under the License.
 
 pub(crate) mod scan;
+pub(crate) mod predicate_converter;

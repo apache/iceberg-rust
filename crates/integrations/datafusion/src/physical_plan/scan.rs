@@ -15,26 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-
+use super::predicate_converter::PredicateConverter;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::{BinaryExpr, Operator};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::prelude::Expr;
-use datafusion::scalar::ScalarValue;
 use futures::{Stream, TryStreamExt};
-use iceberg::expr::{Predicate, Reference};
-use iceberg::spec::Datum;
+use iceberg::expr::Predicate;
 use iceberg::table::Table;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::to_datafusion_error;
 
@@ -141,7 +138,6 @@ async fn get_batch_stream(
         scan_builder = scan_builder.with_filter(pred);
     }
     let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
-
     let stream = table_scan
         .to_arrow()
         .await
@@ -151,102 +147,11 @@ async fn get_batch_stream(
     Ok(Box::pin(stream))
 }
 
-/// convert DataFusion filters ([`Expr`]) to an iceberg [`Predicate`]
-/// if none of the filters could be converted, return `None`
-/// if the conversion was successful, return the converted predicates combined with an AND operator
+/// Converts DataFusion filters ([`Expr`]) to an iceberg [`Predicate`].
+/// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
+/// If the conversion was successful, return the converted predicates combined with an AND operator.
 fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
-    filters
-        .iter()
-        .filter_map(expr_to_predicate)
-        .reduce(Predicate::and)
-}
-
-/// Recuresivly converting DataFusion filters ( in a [`Expr`]) to an Iceberg [`Predicate`].
-///
-/// This function currently handles the conversion of DataFusion expression of the following types:
-///
-/// 1. Simple binary expressions (e.g., "column < value")
-/// 2. Compound AND expressions (e.g., "x < 1 AND y > 10")
-/// 3. Compound OR expressions (e.g., "x < 1 OR y > 10")
-///
-/// For AND expressions, if one part of the expression can't be converted,
-/// the function will still return a predicate for the part that can be converted.
-/// For OR expressions, if any part can't be converted, the entire expression
-/// will fail to convert.
-///
-/// # Arguments
-///
-/// * `expr` - A reference to a DataFusion [`Expr`] to be converted.
-///
-/// # Returns
-///
-/// * `Some(Predicate)` if the expression could be successfully converted.
-/// * `None` if the expression couldn't be converted to an Iceberg predicate.
-fn expr_to_predicate(expr: &Expr) -> Option<Predicate> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            match (left.as_ref(), op, right.as_ref()) {
-                // First option arm (simple case), e.g. x < 1
-                (Expr::Column(col), op, Expr::Literal(lit)) => {
-                    let reference = Reference::new(col.name.clone());
-                    let datum = scalar_value_to_datum(lit)?;
-                    Some(binary_op_to_predicate(reference, op, datum))
-                }
-                // Second option arm (inner AND), e.g. x < 1 AND y > 10
-                // if its an AND expression and one predicate fails, we can still go with the other one
-                (left_expr, Operator::And, right_expr) => {
-                    let left_pred = expr_to_predicate(&left_expr.clone());
-                    let right_pred = expr_to_predicate(&right_expr.clone());
-                    match (left_pred, right_pred) {
-                        (Some(left), Some(right)) => Some(Predicate::and(left, right)),
-                        (Some(left), None) => Some(left),
-                        (None, Some(right)) => Some(right),
-                        (None, None) => None,
-                    }
-                }
-                // Third option arm (inner OR), e.g. x < 1 OR y > 10
-                // if one is unsupported, we fail the predicate
-                (Expr::BinaryExpr(left_expr), Operator::Or, Expr::BinaryExpr(right_expr)) => {
-                    let left_pred = expr_to_predicate(&Expr::BinaryExpr(left_expr.clone()))?;
-                    let right_pred = expr_to_predicate(&Expr::BinaryExpr(right_expr.clone()))?;
-                    Some(Predicate::or(left_pred, right_pred))
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// convert the data fusion Exp to an iceberg [`Predicate`]
-fn binary_op_to_predicate(reference: Reference, op: &Operator, datum: Datum) -> Predicate {
-    match op {
-        Operator::Eq => reference.equal_to(datum),
-        Operator::NotEq => reference.not_equal_to(datum),
-        Operator::Lt => reference.less_than(datum),
-        Operator::LtEq => reference.less_than_or_equal_to(datum),
-        Operator::Gt => reference.greater_than(datum),
-        Operator::GtEq => reference.greater_than_or_equal_to(datum),
-        _ => Predicate::AlwaysTrue,
-    }
-}
-/// convert a DataFusion scalar value to an iceberg [`Datum`]
-fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
-    match value {
-        ScalarValue::Int8(Some(v)) => Some(Datum::int(*v)),
-        ScalarValue::Int16(Some(v)) => Some(Datum::int(*v)),
-        ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
-        ScalarValue::Int64(Some(v)) => Some(Datum::long(*v)),
-        ScalarValue::Float32(Some(v)) => Some(Datum::double(*v as f64)),
-        ScalarValue::Float64(Some(v)) => Some(Datum::double(*v)),
-        ScalarValue::Utf8(Some(v)) => Some(Datum::string(v.clone())),
-        ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
-        // Add more cases as needed
-        _ => {
-            println!("unsupported scalar value: {:?}", value);
-            None
-        }
-    }
+    PredicateConverter.visit_many(filters)
 }
 
 #[cfg(test)]
@@ -254,6 +159,8 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::DFSchema;
     use datafusion::prelude::SessionContext;
+    use iceberg::expr::Reference;
+    use iceberg::spec::Datum;
 
     use super::*;
 
@@ -266,6 +173,7 @@ mod tests {
     }
     fn create_test_schema_b() -> DFSchema {
         let arrow_schema = Schema::new(vec![
+            Field::new("dt", DataType::Date32, false),
             Field::new("xxx", DataType::Int32, false),
             Field::new("yyy", DataType::Utf8, false),
             Field::new("zzz", DataType::Int32, false),
@@ -375,6 +283,86 @@ mod tests {
             .unwrap();
         let predicate = convert_filters_to_predicate(&[expr]).unwrap();
         let expected_predicate = Reference::new("zzz").less_than(Datum::long(0));
+        assert_eq!(predicate, expected_predicate);
+    }
+    #[test]
+    fn test_predicate_conversion_with_unsupported_condition() {
+        let sql = "yyy is not null";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]);
+        assert_eq!(predicate, None);
+    }
+    #[test]
+    fn test_predicate_conversion_with_unsupported_condition_2() {
+        let sql = "yyy is not null and xxx > 1";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
+        let expected_predicate = Reference::new("xxx").greater_than(Datum::long(1));
+        assert_eq!(predicate, expected_predicate);
+    }
+    #[test]
+    fn test_predicate_conversion_with_date() {
+        let sql = "dt > date '2024-02-29' and xxx = 1";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
+        let expected_predicate = Predicate::and(
+            Reference::new("dt").greater_than(Datum::date_from_ymd(2024, 2, 29).unwrap()),
+            Reference::new("xxx").equal_to(Datum::long(1)),
+        );
+        assert_eq!(predicate, expected_predicate);
+    }
+    #[test]
+    fn test_predicate_conversion_with_date_or() {
+        let sql = "dt > date '2024-02-29' or xxx = 1";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
+        let expected_predicate = Predicate::or(
+            Reference::new("dt").greater_than(Datum::date_from_ymd(2024, 2, 29).unwrap()),
+            Reference::new("xxx").equal_to(Datum::long(1)),
+        );
+        assert_eq!(predicate, expected_predicate);
+    }
+    #[test]
+    fn test_predicate_conversion_with_unsupported_date() {
+        let sql = "dt > date '2024-02-29-08'";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]);
+        assert_eq!(predicate, None);
+    }
+    #[test]
+    fn test_predicate_conversion_with_unsupported_date_or() {
+        let sql = "dt > date '2024-02-29-08' or xxx = 1";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]);
+        assert_eq!(predicate, None);
+    }
+    #[test]
+    fn test_predicate_conversion_with_unsupported_date_and() {
+        let sql = "dt > date '2024-02-29-08' and xxx = 1";
+        let df_schema = create_test_schema_b();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
+        let expected_predicate = Reference::new("xxx").equal_to(Datum::long(1));
         assert_eq!(predicate, expected_predicate);
     }
 }
