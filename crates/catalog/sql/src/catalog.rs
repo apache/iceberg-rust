@@ -47,7 +47,14 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
-/// Sql catalog config
+/// A struct representing the SQL catalog configuration.
+///
+/// This struct contains various parameters that are used to configure a SQL catalog,
+/// such as the database URI, warehouse location, and file I/O settings.
+/// You are required to provide a `SqlBindStyle`, which determines how SQL statements will be bound to values in the catalog.
+/// The options available for this parameter include:
+/// - `SqlBindStyle::DollarNumeric`: Binds SQL statements using `$1`, `$2`, etc., as placeholders. This is for PostgreSQL databases.
+/// - `SqlBindStyle::QuestionMark`: Binds SQL statements using `?` as a placeholder. This is for MySQL and SQLite databases.
 #[derive(Debug, TypedBuilder)]
 pub struct SqlCatalogConfig {
     uri: String,
