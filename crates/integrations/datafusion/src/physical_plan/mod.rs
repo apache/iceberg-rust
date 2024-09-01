@@ -15,5 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod scan;
 pub(crate) mod predicate_converter;
+pub(crate) mod scan;

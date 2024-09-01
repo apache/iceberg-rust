@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::predicate_converter::PredicateConverter;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::error::Result as DFResult;
@@ -29,10 +32,8 @@ use datafusion::prelude::Expr;
 use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
 
+use super::predicate_converter::PredicateConverter;
 use crate::to_datafusion_error;
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
