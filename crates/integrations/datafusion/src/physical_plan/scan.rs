@@ -29,7 +29,7 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::prelude::Expr;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
@@ -168,15 +168,6 @@ mod tests {
         let arrow_schema = Schema::new(vec![
             Field::new("foo", DataType::Int32, false),
             Field::new("bar", DataType::Utf8, false),
-        ]);
-        DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
-    }
-    fn create_test_schema_b() -> DFSchema {
-        let arrow_schema = Schema::new(vec![
-            Field::new("dt", DataType::Date32, false),
-            Field::new("xxx", DataType::Int32, false),
-            Field::new("yyy", DataType::Utf8, false),
-            Field::new("zzz", DataType::Int32, false),
         ]);
         DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
     }
