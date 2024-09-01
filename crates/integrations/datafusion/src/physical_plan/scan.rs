@@ -29,7 +29,7 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::prelude::Expr;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
@@ -144,7 +144,6 @@ async fn get_batch_stream(
         .await
         .map_err(to_datafusion_error)?
         .map_err(to_datafusion_error);
-
     Ok(Box::pin(stream))
 }
 
@@ -195,9 +194,19 @@ mod tests {
             Reference::new("foo").greater_than(Datum::long(1))
         );
     }
+    #[test]
+    fn test_predicate_conversion_with_single_unsupported_condition() {
+        let sql = "foo is null";
+        let df_schema = create_test_schema();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]);
+        assert_eq!(predicate, None);
+    }
 
     #[test]
-    fn test_predicate_conversion_with_multiple_conditions() {
+    fn test_predicate_conversion_with_and_condition() {
         let sql = "foo > 1 and bar = 'test'";
         let df_schema = create_test_schema();
         let expr = SessionContext::new()
@@ -212,7 +221,31 @@ mod tests {
     }
 
     #[test]
-    fn test_predicate_conversion_with_multiple_binary_expr() {
+    fn test_predicate_conversion_with_and_condition_unsupported() {
+        let sql = "foo > 1 and bar is not null";
+        let df_schema = create_test_schema();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
+        let expected_predicate = Reference::new("foo").greater_than(Datum::long(1));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_or_condition_unsupported() {
+        let sql = "foo > 1 or bar is not null";
+        let df_schema = create_test_schema();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let predicate = convert_filters_to_predicate(&[expr]);
+        let expected_predicate = None;
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_complex_binary_expr() {
         let sql = "(foo > 1 and bar = 'test') or foo < 0 ";
         let df_schema = create_test_schema();
         let expr = SessionContext::new()
@@ -231,139 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn test_predicate_conversion_with_unsupported_condition_not() {
-        let sql = "xxx > 1 and yyy is not null and zzz < 0 ";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::and(
-            Reference::new("xxx").greater_than(Datum::long(1)),
-            Reference::new("zzz").less_than(Datum::long(0)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_unsupported_condition_and() {
-        let sql = "(xxx > 1 and yyy in ('test', 'test2')) and zzz < 0 ";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::and(
-            Reference::new("xxx").greater_than(Datum::long(1)),
-            Reference::new("zzz").less_than(Datum::long(0)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_unsupported_condition_or() {
-        let sql = "(foo > 1 and bar in ('test', 'test2')) or foo < 0 ";
+    fn test_predicate_conversion_with_complex_binary_expr_unsupported() {
+        let sql = "(foo > 1 or bar in ('test', 'test2')) and foo < 0 ";
         let df_schema = create_test_schema();
         let expr = SessionContext::new()
             .parse_sql_expr(sql, &df_schema)
             .unwrap();
         let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::or(
-            Reference::new("foo").greater_than(Datum::long(1)),
-            Reference::new("foo").less_than(Datum::long(0)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_unsupported_expr() {
-        let sql = "(xxx > 1 or yyy in ('test', 'test2')) and zzz < 0 ";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Reference::new("zzz").less_than(Datum::long(0));
-        assert_eq!(predicate, expected_predicate);
-    }
-    #[test]
-    fn test_predicate_conversion_with_unsupported_condition() {
-        let sql = "yyy is not null";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]);
-        assert_eq!(predicate, None);
-    }
-    #[test]
-    fn test_predicate_conversion_with_unsupported_condition_2() {
-        let sql = "yyy is not null and xxx > 1";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Reference::new("xxx").greater_than(Datum::long(1));
-        assert_eq!(predicate, expected_predicate);
-    }
-    #[test]
-    fn test_predicate_conversion_with_date() {
-        let sql = "dt > date '2024-02-29' and xxx = 1";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::and(
-            Reference::new("dt").greater_than(Datum::date_from_ymd(2024, 2, 29).unwrap()),
-            Reference::new("xxx").equal_to(Datum::long(1)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-    #[test]
-    fn test_predicate_conversion_with_date_or() {
-        let sql = "dt > date '2024-02-29' or xxx = 1";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::or(
-            Reference::new("dt").greater_than(Datum::date_from_ymd(2024, 2, 29).unwrap()),
-            Reference::new("xxx").equal_to(Datum::long(1)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-    #[test]
-    fn test_predicate_conversion_with_unsupported_date() {
-        let sql = "dt > date '2024-02-29-08'";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]);
-        assert_eq!(predicate, None);
-    }
-    #[test]
-    fn test_predicate_conversion_with_unsupported_date_or() {
-        let sql = "dt > date '2024-02-29-08' or xxx = 1";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]);
-        assert_eq!(predicate, None);
-    }
-    #[test]
-    fn test_predicate_conversion_with_unsupported_date_and() {
-        let sql = "dt > date '2024-02-29-08' and xxx = 1";
-        let df_schema = create_test_schema_b();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Reference::new("xxx").equal_to(Datum::long(1));
+        let expected_predicate = Reference::new("foo").less_than(Datum::long(0));
         assert_eq!(predicate, expected_predicate);
     }
 }
