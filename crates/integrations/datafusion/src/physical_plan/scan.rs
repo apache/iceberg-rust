@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
@@ -44,17 +45,25 @@ pub(crate) struct IcebergTableScan {
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
+    /// Projection column names
+    projection: Vec<String>,
 }
 
 impl IcebergTableScan {
     /// Creates a new [`IcebergTableScan`] object.
-    pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
+    pub(crate) fn new(
+        table: Table,
+        schema: ArrowSchemaRef,
+        projection: Option<&Vec<usize>>,
+    ) -> Self {
         let plan_properties = Self::compute_properties(schema.clone());
+        let projection = get_column_names(schema.clone(), projection);
 
         Self {
             table,
             schema,
             plan_properties,
+            projection,
         }
     }
 
@@ -100,7 +109,7 @@ impl ExecutionPlan for IcebergTableScan {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        let fut = get_batch_stream(self.table.clone());
+        let fut = get_batch_stream(self.table.clone(), self.projection.clone());
         let stream = futures::stream::once(fut).try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -116,7 +125,11 @@ impl DisplayAs for IcebergTableScan {
         _t: datafusion::physical_plan::DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "IcebergTableScan")
+        write!(
+            f,
+            "IcebergTableScan projection:[{}]",
+            self.projection.join(" ")
+        )
     }
 }
 
@@ -127,8 +140,13 @@ impl DisplayAs for IcebergTableScan {
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
 async fn get_batch_stream(
     table: Table,
+    column_names: Vec<String>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let table_scan = table.scan().build().map_err(to_datafusion_error)?;
+    let table_scan = table
+        .scan()
+        .select(column_names)
+        .build()
+        .map_err(to_datafusion_error)?;
 
     let stream = table_scan
         .to_arrow()
@@ -137,4 +155,19 @@ async fn get_batch_stream(
         .map_err(to_datafusion_error);
 
     Ok(Box::pin(stream))
+}
+
+fn get_column_names(schema: ArrowSchemaRef, projection: Option<&Vec<usize>>) -> Vec<String> {
+    if let Some(projection) = projection {
+        projection
+            .iter()
+            .map(|p| schema.field(*p).name().clone())
+            .collect::<Vec<String>>()
+    } else {
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<String>>()
+    }
 }
