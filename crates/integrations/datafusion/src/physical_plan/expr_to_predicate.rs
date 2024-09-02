@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::VecDeque;
+
 use datafusion::common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::Column;
 use datafusion::error::DataFusionError;
@@ -22,7 +24,6 @@ use datafusion::logical_expr::{Expr, Operator};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{Predicate, Reference};
 use iceberg::spec::Datum;
-use std::collections::VecDeque;
 
 pub struct ExprToPredicateVisitor {
     stack: VecDeque<Option<Predicate>>,
