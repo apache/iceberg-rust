@@ -43,8 +43,8 @@ fn get_iceberg_catalog() -> MemoryCatalog {
 
 fn get_struct_type() -> StructType {
     StructType::new(vec![
-        NestedField::required(13, "s_foo1", Type::Primitive(PrimitiveType::Int)).into(),
-        NestedField::required(14, "s_foo2", Type::Primitive(PrimitiveType::String)).into(),
+        NestedField::required(4, "s_foo1", Type::Primitive(PrimitiveType::Int)).into(),
+        NestedField::required(5, "s_foo2", Type::Primitive(PrimitiveType::String)).into(),
     ])
 }
 
@@ -174,7 +174,7 @@ async fn test_table_projection() -> Result<()> {
         .with_fields(vec![
             NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
             NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(0, "foo3", Type::Struct(get_struct_type())).into(),
+            NestedField::optional(3, "foo3", Type::Struct(get_struct_type())).into(),
         ])
         .build()?;
     let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
