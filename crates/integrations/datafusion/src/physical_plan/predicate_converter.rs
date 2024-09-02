@@ -102,7 +102,8 @@ impl PredicateConverter {
             .into_iter()
             .flatten()
             .collect();
-        match (op, preds.len()) {
+        let num_valid_preds = preds.len();
+        match (op, num_valid_preds) {
             (Operator::And, 1) => preds.first().cloned(),
             (Operator::And, 2) => Some(Predicate::and(preds[0].clone(), preds[1].clone())),
             (Operator::Or, 2) => Some(Predicate::or(preds[0].clone(), preds[1].clone())),
