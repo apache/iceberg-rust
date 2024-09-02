@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -33,7 +34,7 @@ use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
-use super::predicate_converter::PredicateConverter;
+use crate::physical_plan::expr_to_predicate::ExprToPredicateVisitor;
 use crate::to_datafusion_error;
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -151,118 +152,15 @@ async fn get_batch_stream(
 /// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
 /// If the conversion was successful, return the converted predicates combined with an AND operator.
 fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
-    PredicateConverter.visit_many(filters)
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::DFSchema;
-    use datafusion::prelude::SessionContext;
-    use iceberg::expr::Reference;
-    use iceberg::spec::Datum;
-
-    use super::*;
-
-    fn create_test_schema() -> DFSchema {
-        let arrow_schema = Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-            Field::new("bar", DataType::Utf8, false),
-        ]);
-        DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_single_condition() {
-        let sql = "foo > 1";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        assert_eq!(
-            predicate,
-            Reference::new("foo").greater_than(Datum::long(1))
-        );
-    }
-    #[test]
-    fn test_predicate_conversion_with_single_unsupported_condition() {
-        let sql = "foo is null";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]);
-        assert_eq!(predicate, None);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_and_condition() {
-        let sql = "foo > 1 and bar = 'test'";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Predicate::and(
-            Reference::new("foo").greater_than(Datum::long(1)),
-            Reference::new("bar").equal_to(Datum::string("test")),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_and_condition_unsupported() {
-        let sql = "foo > 1 and bar is not null";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Reference::new("foo").greater_than(Datum::long(1));
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_or_condition_unsupported() {
-        let sql = "foo > 1 or bar is not null";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]);
-        let expected_predicate = None;
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_complex_binary_expr() {
-        let sql = "(foo > 1 and bar = 'test') or foo < 0 ";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let inner_predicate = Predicate::and(
-            Reference::new("foo").greater_than(Datum::long(1)),
-            Reference::new("bar").equal_to(Datum::string("test")),
-        );
-        let expected_predicate = Predicate::or(
-            inner_predicate,
-            Reference::new("foo").less_than(Datum::long(0)),
-        );
-        assert_eq!(predicate, expected_predicate);
-    }
-
-    #[test]
-    fn test_predicate_conversion_with_complex_binary_expr_unsupported() {
-        let sql = "(foo > 1 or bar in ('test', 'test2')) and foo < 0 ";
-        let df_schema = create_test_schema();
-        let expr = SessionContext::new()
-            .parse_sql_expr(sql, &df_schema)
-            .unwrap();
-        let predicate = convert_filters_to_predicate(&[expr]).unwrap();
-        let expected_predicate = Reference::new("foo").less_than(Datum::long(0));
-        assert_eq!(predicate, expected_predicate);
-    }
+    filters
+        .iter()
+        .filter_map(|expr| {
+            let mut visitor = ExprToPredicateVisitor::new();
+            if expr.visit(&mut visitor).is_ok() {
+                visitor.get_predicate()
+            } else {
+                None
+            }
+        })
+        .reduce(Predicate::and)
 }
