@@ -917,8 +917,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Java/Python do not drop nested namespaces?"]
-    async fn test_dropping_a_namespace_also_drops_namespaces_nested_under_that_one() {
+    #[ignore = "drop_namespace not implemented"]
+    async fn test_dropping_a_namespace_does_not_drop_namespaces_nested_under_that_one() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
         let namespace_ident_a = NamespaceIdent::new("a".into());
@@ -929,7 +929,7 @@ mod tests {
 
         assert!(!catalog.namespace_exists(&namespace_ident_a).await.unwrap());
 
-        assert!(!catalog
+        assert!(catalog
             .namespace_exists(&namespace_ident_a_b)
             .await
             .unwrap());
