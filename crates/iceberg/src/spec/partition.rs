@@ -65,7 +65,7 @@ pub struct PartitionSpec {
 }
 
 impl PartitionSpec {
-    /// Create partition spec builer
+    /// Create partition spec builder
     pub fn builder(schema: &Schema) -> PartitionSpecBuilder {
         PartitionSpecBuilder::new(schema)
     }
@@ -152,7 +152,7 @@ pub struct UnboundPartitionSpec {
 }
 
 impl UnboundPartitionSpec {
-    /// Create unbound partition spec builer
+    /// Create unbound partition spec builder
     pub fn builder() -> UnboundPartitionSpecBuilder {
         UnboundPartitionSpecBuilder::default()
     }
