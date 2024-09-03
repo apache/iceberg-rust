@@ -38,6 +38,7 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FI
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use crate::arrow::record_batch_evolution_processor::RecordBatchEvolutionProcessor;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
@@ -209,6 +210,14 @@ impl ArrowReader {
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
+        // create a RecordBatchEvolutionProcessor if our task schema contains columns
+        // not present in the parquet file or whose types have been promoted
+        let record_batch_evolution_processor = RecordBatchEvolutionProcessor::build(
+            record_batch_stream_builder.schema(),
+            task.schema(),
+            task.project_field_ids(),
+        );
+
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
@@ -261,8 +270,16 @@ impl ArrowReader {
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let mut record_batch_stream = record_batch_stream_builder.build()?;
-        while let Some(batch) = record_batch_stream.try_next().await? {
-            tx.send(Ok(batch)).await?
+
+        if let Some(record_batch_evolution_processor) = record_batch_evolution_processor {
+            while let Some(batch) = record_batch_stream.try_next().await? {
+                tx.send(record_batch_evolution_processor.process_record_batch(batch))
+                    .await?
+            }
+        } else {
+            while let Some(batch) = record_batch_stream.try_next().await? {
+                tx.send(Ok(batch)).await?
+            }
         }
 
         Ok(())
