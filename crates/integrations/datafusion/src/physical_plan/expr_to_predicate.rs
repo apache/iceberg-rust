@@ -88,18 +88,17 @@ impl<'n> TreeNodeVisitor<'n> for ExprToPredicateVisitor {
     fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion, DataFusionError> {
         if let Expr::BinaryExpr(binary) = node {
             match (&*binary.left, &binary.op, &*binary.right) {
+                // process simple expressions (involving a column, operator and literal)
                 (Expr::Column(col), op, Expr::Literal(lit)) => {
                     let col_pred = self.convert_column_expr(col, op, lit);
                     self.stack.push_back(col_pred);
                 }
+                // process compound expressions (involving AND or OR and children)
                 (_left, op, _right) if matches!(op, Operator::And | Operator::Or) => {
                     let right_pred = self.stack.pop_back().flatten();
                     let left_pred = self.stack.pop_back().flatten();
-                    let valid_preds = [left_pred, right_pred]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>();
-                    let compound_pred = self.convert_compound_expr(&valid_preds, op);
+                    let children: Vec<_> = [left_pred, right_pred].into_iter().flatten().collect();
+                    let compound_pred = self.convert_compound_expr(&children, op);
                     self.stack.push_back(compound_pred);
                 }
                 _ => {}
