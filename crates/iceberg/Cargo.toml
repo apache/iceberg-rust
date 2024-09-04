@@ -44,6 +44,7 @@ tokio = ["dep:tokio"]
 anyhow = { workspace = true }
 apache-avro = { workspace = true }
 array-init = { workspace = true }
+arrow = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
 arrow-ord = { workspace = true }

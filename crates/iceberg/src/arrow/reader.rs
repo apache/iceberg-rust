@@ -216,7 +216,7 @@ impl ArrowReader {
             record_batch_stream_builder.schema(),
             task.schema(),
             task.project_field_ids(),
-        );
+        )?;
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
