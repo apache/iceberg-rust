@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::{Error, ErrorKind};
+use iceberg::{Error, ErrorKind, NamespaceIdent, Result};
 
 /// Format an sqlx error into iceberg error.
 pub fn from_sqlx_error(error: sqlx::Error) -> Error {
@@ -24,4 +24,11 @@ pub fn from_sqlx_error(error: sqlx::Error) -> Error {
         "operation failed for hitting sqlx error".to_string(),
     )
     .with_source(error)
+}
+
+pub fn no_such_namespace_err<T>(namespace: &NamespaceIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::Unexpected,
+        format!("No such namespace: {:?}", namespace),
+    ))
 }
