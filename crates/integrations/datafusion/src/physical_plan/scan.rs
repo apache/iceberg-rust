@@ -45,8 +45,8 @@ pub(crate) struct IcebergTableScan {
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
-    /// Projection column names
-    projection: Vec<String>,
+    /// Projection column names, None means all columns
+    projection: Option<Vec<String>>,
 }
 
 impl IcebergTableScan {
@@ -128,7 +128,9 @@ impl DisplayAs for IcebergTableScan {
         write!(
             f,
             "IcebergTableScan projection:[{}]",
-            self.projection.join(" ")
+            self.projection
+                .clone()
+                .map_or(String::new(), |v| v.join(","))
         )
     }
 }
@@ -140,13 +142,13 @@ impl DisplayAs for IcebergTableScan {
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
 async fn get_batch_stream(
     table: Table,
-    column_names: Vec<String>,
+    column_names: Option<Vec<String>>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let table_scan = table
-        .scan()
-        .select(column_names)
-        .build()
-        .map_err(to_datafusion_error)?;
+    let scan_builder = match column_names {
+        Some(column_names) => table.scan().select(column_names),
+        None => table.scan().select_all(),
+    };
+    let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
     let stream = table_scan
         .to_arrow()
@@ -157,17 +159,13 @@ async fn get_batch_stream(
     Ok(Box::pin(stream))
 }
 
-fn get_column_names(schema: ArrowSchemaRef, projection: Option<&Vec<usize>>) -> Vec<String> {
-    if let Some(projection) = projection {
-        projection
-            .iter()
+fn get_column_names(
+    schema: ArrowSchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<String>> {
+    projection.map(|v| {
+        v.iter()
             .map(|p| schema.field(*p).name().clone())
             .collect::<Vec<String>>()
-    } else {
-        schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<String>>()
-    }
+    })
 }

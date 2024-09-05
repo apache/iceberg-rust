@@ -205,7 +205,7 @@ async fn test_table_projection() -> Result<()> {
     assert_eq!(2, s.len());
     // the first row is logical_plan, the second row is physical_plan
     assert_eq!(
-        "IcebergTableScan projection:[foo1 foo2 foo3]",
+        "IcebergTableScan projection:[foo1,foo2,foo3]",
         s.value(1).trim()
     );
 
@@ -226,7 +226,7 @@ async fn test_table_projection() -> Result<()> {
         .downcast_ref::<StringArray>()
         .unwrap();
     assert_eq!(2, s.len());
-    assert_eq!("IcebergTableScan projection:[foo1 foo3]", s.value(1).trim());
+    assert_eq!("IcebergTableScan projection:[foo1,foo3]", s.value(1).trim());
 
     Ok(())
 }
