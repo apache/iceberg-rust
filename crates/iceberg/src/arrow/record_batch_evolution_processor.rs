@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arrow::compute::cast;
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
-    Int64Array, RecordBatch, StringArray,
+    Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
+    Int32Array, Int64Array, NullArray, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -12,10 +12,10 @@ use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{Literal, PrimitiveLiteral, Schema as IcebergSchema};
 use crate::{Error, ErrorKind, Result};
 
-/// Represents an operation that may need to be performed
+/// Represents an operation that needs to be performed
 /// to transform a RecordBatch coming from a Parquet file record
-/// batch stream to match a newer Iceberg schema that has evolved from
-/// the one that was used to write the parquet file.
+/// batch stream so that it conforms to an Iceberg schema that has
+/// evolved from the one that was used when the file was written.
 #[derive(Debug)]
 pub(crate) struct EvolutionOp {
     index: usize,
@@ -66,6 +66,9 @@ pub(crate) struct RecordBatchEvolutionProcessor {
 }
 
 impl RecordBatchEvolutionProcessor {
+    /// Fallibly try to build a RecordBatchEvolutionProcessor for a given parquet file schema
+    /// and Iceberg snapshot schema. Returns Ok(None) if the processor would not be required
+    /// due to the file schema already matching the snapshot schema
     pub(crate) fn build(
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
@@ -90,26 +93,31 @@ impl RecordBatchEvolutionProcessor {
 
     pub(crate) fn process_record_batch(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
         Ok(RecordBatch::try_new(
-            self.target_schema.clone(),
+            self.target_schema(),
             self.transform_columns(record_batch.columns())?,
         )?)
     }
 
+    // create the (possibly empty) list of `EvolutionOp`s that we need
+    // to apply to the arrays in a record batch with `source_schema` so
+    // that it matches the `snapshot_schema`
     fn generate_operations(
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
     ) -> Result<Vec<EvolutionOp>> {
-        // create the (possibly empty) list of `EvolutionOp`s that we need
-        // to apply to the arrays in a record batch with `source_schema` so
-        // that it matches the `snapshot_schema`
         let mut ops = vec![];
 
         let mapped_arrow_schema = schema_to_arrow_schema(snapshot_schema)?;
 
         let mut arrow_schema_index: usize = 0;
         for (projected_field_idx, &field_id) in projected_iceberg_field_ids.iter().enumerate() {
-            let iceberg_field = snapshot_schema.field_by_id(field_id).unwrap();
+            let iceberg_field = snapshot_schema.field_by_id(field_id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "projected field id not found in snapshot schema",
+                )
+            })?;
             let mapped_arrow_field = mapped_arrow_schema.field(projected_field_idx);
 
             let (arrow_field, add_op_required) =
@@ -118,10 +126,18 @@ impl RecordBatchEvolutionProcessor {
                     let arrow_field_id: i32 = arrow_field
                         .metadata()
                         .get(PARQUET_FIELD_ID_META_KEY)
-                        .unwrap()
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                "field ID not present in parquet metadata",
+                            )
+                        })?
                         .parse()
-                        .map_err(|_| {
-                            Error::new(ErrorKind::DataInvalid, "field id not parseable as an i32")
+                        .map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("field id not parseable as an i32: {}", e),
+                            )
                         })?;
                     (Some(arrow_field), arrow_field_id != field_id)
                 } else {
@@ -129,15 +145,19 @@ impl RecordBatchEvolutionProcessor {
                 };
 
             if add_op_required {
-                let default_value =
-                    if let Some(ref iceberg_default_value) = &iceberg_field.initial_default {
-                        let Literal::Primitive(prim_value) = iceberg_default_value else {
-                            panic!();
-                        };
-                        Some(prim_value.clone())
-                    } else {
-                        None
+                let default_value = if let Some(ref iceberg_default_value) =
+                    &iceberg_field.initial_default
+                {
+                    let Literal::Primitive(prim_value) = iceberg_default_value else {
+                        return Err(Error::new(
+                                ErrorKind::Unexpected,
+                                format!("Default value for column must be primitive type, but encountered {:?}", iceberg_default_value)
+                            ));
                     };
+                    Some(prim_value.clone())
+                } else {
+                    None
+                };
 
                 ops.push(EvolutionOp {
                     index: arrow_schema_index,
@@ -148,7 +168,7 @@ impl RecordBatchEvolutionProcessor {
                 })
             } else {
                 if !arrow_field
-                    .unwrap()
+                    .unwrap() // will never fail as we only get here if we have Some(field)
                     .data_type()
                     .equals_datatype(mapped_arrow_field.data_type())
                 {
@@ -207,26 +227,12 @@ impl RecordBatchEvolutionProcessor {
         num_rows: usize,
     ) -> Result<ArrayRef> {
         Ok(match (target_type, prim_lit) {
-            (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
-                Arc::new(StringArray::from(vec![value.clone(); num_rows]))
+            (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
+                Arc::new(BooleanArray::from(vec![*value; num_rows]))
             }
-            (DataType::Utf8, None) => {
-                let vals: Vec<Option<String>> = vec![None; num_rows];
-                Arc::new(StringArray::from(vals))
-            }
-            (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
-                Arc::new(Float32Array::from(vec![value.0; num_rows]))
-            }
-            (DataType::Float32, None) => {
-                let vals: Vec<Option<f32>> = vec![None; num_rows];
-                Arc::new(Float32Array::from(vals))
-            }
-            (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
-                Arc::new(Float64Array::from(vec![value.0; num_rows]))
-            }
-            (DataType::Float64, None) => {
-                let vals: Vec<Option<f64>> = vec![None; num_rows];
-                Arc::new(Float64Array::from(vals))
+            (DataType::Boolean, None) => {
+                let vals: Vec<Option<bool>> = vec![None; num_rows];
+                Arc::new(BooleanArray::from(vals))
             }
             (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => {
                 Arc::new(Int32Array::from(vec![*value; num_rows]))
@@ -242,8 +248,40 @@ impl RecordBatchEvolutionProcessor {
                 let vals: Vec<Option<i64>> = vec![None; num_rows];
                 Arc::new(Int64Array::from(vals))
             }
-            _ => {
-                todo!();
+            (DataType::Float32, Some(PrimitiveLiteral::Float(value))) => {
+                Arc::new(Float32Array::from(vec![value.0; num_rows]))
+            }
+            (DataType::Float32, None) => {
+                let vals: Vec<Option<f32>> = vec![None; num_rows];
+                Arc::new(Float32Array::from(vals))
+            }
+            (DataType::Float64, Some(PrimitiveLiteral::Double(value))) => {
+                Arc::new(Float64Array::from(vec![value.0; num_rows]))
+            }
+            (DataType::Float64, None) => {
+                let vals: Vec<Option<f64>> = vec![None; num_rows];
+                Arc::new(Float64Array::from(vals))
+            }
+            (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => {
+                Arc::new(StringArray::from(vec![value.clone(); num_rows]))
+            }
+            (DataType::Utf8, None) => {
+                let vals: Vec<Option<String>> = vec![None; num_rows];
+                Arc::new(StringArray::from(vals))
+            }
+            (DataType::Binary, Some(PrimitiveLiteral::Binary(value))) => {
+                Arc::new(BinaryArray::from_vec(vec![value; num_rows]))
+            }
+            (DataType::Binary, None) => {
+                let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
+                Arc::new(BinaryArray::from_opt_vec(vals))
+            }
+            (DataType::Null, _) => Arc::new(NullArray::new(num_rows)),
+            (dt, _) => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("unexpected target column type {}", dt),
+                ))
             }
         })
     }
