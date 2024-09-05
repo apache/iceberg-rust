@@ -25,15 +25,9 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-datafusion = { version = "41.0.0" }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
-iceberg-datafusion = { workspace = true }
 tokio = { version = "1", features = ["full"] }
-
-[[example]]
-name = "datafusion-read-data"
-path = "src/datafusion_read_data.rs"
 
 [[example]]
 name = "rest-catalog-namespace"
