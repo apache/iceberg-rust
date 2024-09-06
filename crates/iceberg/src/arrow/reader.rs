@@ -133,7 +133,7 @@ impl ArrowReader {
                     |(file_scan_task, file_io, tx)| async move {
                         match file_scan_task {
                             Ok(task) => {
-                                let file_path = task.data_file_path().to_string();
+                                let file_path = task.data_file().file_path.to_string();
 
                                 spawn(async move {
                                     Self::process_file_scan_task(
@@ -171,7 +171,7 @@ impl ArrowReader {
     ) -> Result<()> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
-        let parquet_file = file_io.new_input(task.data_file_path())?;
+        let parquet_file = file_io.new_input(&task.data_file().file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
         let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
