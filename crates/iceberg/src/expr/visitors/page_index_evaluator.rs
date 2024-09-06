@@ -119,7 +119,10 @@ impl<'a> PageIndexEvaluator<'a> {
     }
 
     fn skip_all_rows(&self) -> Result<RowSelection> {
-        Ok(vec![].into())
+        Ok(vec![RowSelector::skip(
+            self.row_group_metadata.num_rows() as usize
+        )]
+        .into())
     }
 
     fn calc_row_selection<F>(
@@ -173,6 +176,8 @@ impl<'a> PageIndexEvaluator<'a> {
             ));
         };
 
+        // TODO: cache row_counts to avoid recalcing if the same column
+        //       appears multiple times in the filter predicate
         let row_counts = self.calc_row_counts(offset_index);
 
         let Some(page_filter) = Self::apply_predicate_to_column_index(
@@ -200,10 +205,11 @@ impl<'a> PageIndexEvaluator<'a> {
         Ok(row_selectors.into())
     }
 
+    /// returns a list of row counts per page
     fn calc_row_counts(&self, offset_index: &[PageLocation]) -> Vec<usize> {
         let mut remaining_rows = self.row_group_metadata.num_rows() as usize;
+        let mut row_counts = Vec::with_capacity(self.offset_index.len());
 
-        let mut row_counts = Vec::with_capacity(self.column_index.len());
         for (idx, page_location) in offset_index.iter().enumerate() {
             let row_count = if idx < offset_index.len() - 1 {
                 let row_count = (offset_index[idx + 1].first_row_index
@@ -213,6 +219,7 @@ impl<'a> PageIndexEvaluator<'a> {
             } else {
                 remaining_rows
             };
+
             row_counts.push(row_count);
         }
 
