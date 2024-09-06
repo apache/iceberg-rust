@@ -5,7 +5,7 @@ use arrow_array::{
     Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
     Int32Array, Int64Array, NullArray, RecordBatch, StringArray,
 };
-use arrow_schema::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema_to_arrow_schema;
@@ -108,22 +108,27 @@ impl RecordBatchEvolutionProcessor {
     ) -> Result<Vec<EvolutionOp>> {
         let mut ops = vec![];
 
-        let mapped_arrow_schema = schema_to_arrow_schema(snapshot_schema)?;
+        let mapped_unprojected_arrow_schema = schema_to_arrow_schema(snapshot_schema)?;
+        // need to create a new arrow schema here by selecting fields from mapped_unprojected,
+        // in the order of the field ids in projected_iceberg_field_ids
 
-        let mut arrow_schema_index: usize = 0;
-        for (projected_field_idx, &field_id) in projected_iceberg_field_ids.iter().enumerate() {
-            let iceberg_field = snapshot_schema.field_by_id(field_id).ok_or_else(|| {
+        // right now the below is incorrect if projected_iceberg_field_ids skips any iceberg fields
+        // or re-orders any
+
+        for &projected_field_id in projected_iceberg_field_ids {
+            let iceberg_field = snapshot_schema.field_by_id(projected_field_id).ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "projected field id not found in snapshot schema",
                 )
             })?;
-            let mapped_arrow_field = mapped_arrow_schema.field(projected_field_idx);
+            let (mapped_arrow_field, _) = Self::get_arrow_field_with_field_id(&mapped_arrow_schema, projected_field_id)?;
+            let (orig_arrow_field, orig_arrow_field_idx) = Self::get_arrow_field_with_field_id(&source_schema, projected_field_id)?;
 
             let (arrow_field, add_op_required) =
-                if arrow_schema_index < source_schema.fields().len() {
-                    let arrow_field = source_schema.field(arrow_schema_index);
-                    let arrow_field_id: i32 = arrow_field
+                if source_schema_idx < source_schema.fields().len() {
+                    let orig_arrow_field = source_schema.field(source_schema_idx);
+                    let arrow_field_id: i32 = orig_arrow_field
                         .metadata()
                         .get(PARQUET_FIELD_ID_META_KEY)
                         .ok_or_else(|| {
@@ -139,7 +144,7 @@ impl RecordBatchEvolutionProcessor {
                                 format!("field id not parseable as an i32: {}", e),
                             )
                         })?;
-                    (Some(arrow_field), arrow_field_id != field_id)
+                    (Some(orig_arrow_field), arrow_field_id != projected_field_id)
                 } else {
                     (None, true)
                 };
@@ -160,7 +165,7 @@ impl RecordBatchEvolutionProcessor {
                 };
 
                 ops.push(EvolutionOp {
-                    index: arrow_schema_index,
+                    index: source_schema_idx,
                     action: EvolutionAction::Add {
                         value: default_value,
                         target_type: mapped_arrow_field.data_type().clone(),
@@ -173,18 +178,48 @@ impl RecordBatchEvolutionProcessor {
                     .equals_datatype(mapped_arrow_field.data_type())
                 {
                     ops.push(EvolutionOp {
-                        index: arrow_schema_index,
+                        index: source_schema_idx,
                         action: EvolutionAction::Promote {
                             target_type: mapped_arrow_field.data_type().clone(),
                         },
                     })
                 }
 
-                arrow_schema_index += 1;
+                source_schema_idx += 1;
             }
         }
 
         Ok(ops)
+    }
+
+    fn get_arrow_field_with_field_id(arrow_schema: &ArrowSchema, field_id: i32) -> Result<(FieldRef, usize)> {
+        for (field, idx) in arrow_schema.fields().enumerate().iter() {
+            let this_field_id: i32 = field
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "field ID not present in parquet metadata",
+                    )
+                })?
+                .parse()
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("field id not parseable as an i32: {}", e),
+                    )
+                })?;
+
+            if this_field_id == field_id {
+                return Ok((field.clone(), idx))
+            }
+        }
+
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            format!("field with id {} not found in parquet schema", field_id)
+        ))
     }
 
     fn transform_columns(
@@ -201,7 +236,7 @@ impl RecordBatchEvolutionProcessor {
         let mut col_idx = 0;
         let mut op_idx = 0;
         while op_idx < self.operations.len() || col_idx < columns.len() {
-            if self.operations[op_idx].index == col_idx {
+            if op_idx < self.operations.len() && self.operations[op_idx].index == col_idx {
                 match &self.operations[op_idx].action {
                     EvolutionAction::Add { target_type, value } => {
                         result.push(Self::create_column(target_type, value, num_rows)?);
