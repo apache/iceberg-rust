@@ -36,8 +36,8 @@ use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, Schema,
-    SchemaRef, SnapshotRef, TableMetadataRef,
+    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
+    ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -529,14 +529,19 @@ impl ManifestEntryContext {
     /// created from it
     fn into_file_scan_task(self) -> FileScanTask {
         FileScanTask {
-            data_file_path: self.manifest_entry.file_path().to_string(),
             start: 0,
             length: self.manifest_entry.file_size_in_bytes(),
+            record_count: Some(self.manifest_entry.record_count()),
+
+            data_file_path: self.manifest_entry.file_path().to_string(),
+            data_file_content: self.manifest_entry.content_type(),
+            data_file_format: self.manifest_entry.file_format(),
+
+            schema: self.snapshot_schema,
             project_field_ids: self.field_ids.to_vec(),
             predicate: self
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
-            schema: self.snapshot_schema,
         }
     }
 }
@@ -854,35 +859,30 @@ impl ExpressionEvaluatorCache {
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileScanTask {
-    data_file_path: String,
-    start: u64,
-    length: u64,
-    project_field_ids: Vec<i32>,
+    /// The start offset of the file to scan.
+    pub start: u64,
+    /// The length of the file to scan.
+    pub length: u64,
+    /// The number of records in the file to scan.
+    ///
+    /// This is an optional field, and only available if we are
+    /// reading the entire data file.
+    pub record_count: Option<u64>,
+
+    /// The data file path corresponding to the task.
+    pub data_file_path: String,
+    /// The content type of the file to scan.
+    pub data_file_content: DataContentType,
+    /// The format of the file to scan.
+    pub data_file_format: DataFileFormat,
+
+    /// The schema of the file to scan.
+    pub schema: SchemaRef,
+    /// The field ids to project.
+    pub project_field_ids: Vec<i32>,
+    /// The predicate to filter.
     #[serde(skip_serializing_if = "Option::is_none")]
-    predicate: Option<BoundPredicate>,
-    schema: SchemaRef,
-}
-
-impl FileScanTask {
-    /// Returns the data file path of this file scan task.
-    pub fn data_file_path(&self) -> &str {
-        &self.data_file_path
-    }
-
-    /// Returns the project field id of this file scan task.
-    pub fn project_field_ids(&self) -> &[i32] {
-        &self.project_field_ids
-    }
-
-    /// Returns the predicate of this file scan task.
-    pub fn predicate(&self) -> Option<&BoundPredicate> {
-        self.predicate.as_ref()
-    }
-
-    /// Returns the schema id of this file scan task.
-    pub fn schema(&self) -> &Schema {
-        &self.schema
-    }
+    pub predicate: Option<BoundPredicate>,
 }
 
 #[cfg(test)]
@@ -1219,17 +1219,17 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file_path().to_string());
+        tasks.sort_by_key(|t| t.data_file_path.to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file_path(),
+            tasks[0].data_file_path,
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file_path(),
+            tasks[1].data_file_path,
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
@@ -1582,22 +1582,28 @@ mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: None,
             schema: schema.clone(),
+            record_count: Some(100),
+            data_file_format: DataFileFormat::Parquet,
         };
         test_fn(task);
 
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: Some(BoundPredicate::AlwaysTrue),
             schema,
+            record_count: None,
+            data_file_format: DataFileFormat::Avro,
         };
         test_fn(task);
     }
