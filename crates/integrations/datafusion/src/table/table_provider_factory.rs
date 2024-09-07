@@ -31,6 +31,27 @@ use iceberg::{Error, ErrorKind, Result, TableIdent};
 use super::IcebergTableProvider;
 use crate::to_datafusion_error;
 
+/// A factory that implements DataFusion's `TableProviderFactory` to create `IcebergTableProvider` instances.
+///
+/// # Example
+///
+/// ```
+/// use datafusion::catalog::TableProviderFactory;
+/// use iceberg_datafusion::IcebergTableProviderFactory;
+///
+/// let factory = IcebergTableProviderFactory::new();
+/// // Use the factory to create a table provider for an Iceberg table
+/// ```
+///
+/// # Note
+/// This factory is designed to work with the DataFusion query engine,
+/// specifically for handling Iceberg tables in external table commands.
+/// Currently, this implementation supports only reading Iceberg tables, with
+/// the creation of new tables not yet available.
+///
+/// # Errors
+/// An error will be returned if any unsupported feature, such as partition columns,
+/// order expressions, constraints, or column defaults, is detected in the table creation command.
 #[derive(Default)]
 #[non_exhaustive]
 pub struct IcebergTableProviderFactory {}
@@ -76,39 +97,15 @@ fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
         ..
     } = cmd;
 
-    if !schema.fields().is_empty() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Schema specification is not supported",
-        ));
-    }
+    // Check if any of the fields violate the constraints in a single condition
+    let is_invalid = !schema.fields().is_empty()
+        || !table_partition_cols.is_empty()
+        || !order_exprs.is_empty()
+        || !constraints.is_empty()
+        || !column_defaults.is_empty();
 
-    if !table_partition_cols.is_empty() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Partition columns cannot be specified",
-        ));
-    }
-
-    if !order_exprs.is_empty() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Ordering clause is not supported",
-        ));
-    }
-
-    if !constraints.is_empty() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Constraints are not supported",
-        ));
-    }
-
-    if !column_defaults.is_empty() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Default values for columns are not supported",
-        ));
+    if is_invalid {
+        return Err(Error::new(ErrorKind::FeatureUnsupported, "Currently we only support reading existing icebergs tables in external table command. To create new table, please use catalog provider."));
     }
 
     Ok(())
@@ -129,13 +126,32 @@ async fn create_static_table(
 #[cfg(test)]
 mod tests {
 
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::catalog::TableProviderFactory;
     use datafusion::common::{Constraints, DFSchema};
     use datafusion::logical_expr::CreateExternalTable;
+    use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
 
     use super::*;
+
+    fn table_metadata_v2_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("x", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("y", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("z", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "3".to_string(),
+            )])),
+        ])
+    }
 
     #[tokio::test]
     async fn test_schema_of_created_table() {
@@ -169,12 +185,9 @@ mod tests {
             .await
             .expect("create table failed");
 
-        // Field { name: "x", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
-        // Field { name: "y", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
-        // Field { name: "z", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} }
+        let expected_schema = table_metadata_v2_schema();
         let actual_schema = table_provider.schema();
-        let expected_schema_str = "Field { name: \"x\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"PARQUET:field_id\": \"1\"} }, Field { name: \"y\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"PARQUET:field_id\": \"2\"} }, Field { name: \"z\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"PARQUET:field_id\": \"3\"} }";
 
-        assert_eq!(actual_schema.to_string(), expected_schema_str);
+        assert_eq!(actual_schema.as_ref(), &expected_schema);
     }
 }
