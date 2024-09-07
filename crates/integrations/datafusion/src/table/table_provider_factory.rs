@@ -135,8 +135,6 @@ impl TableProviderFactory for IcebergTableProviderFactory {
 }
 
 fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
-    println!("Checking command: {:?}", cmd);
-
     let CreateExternalTable {
         schema,
         table_partition_cols,
@@ -286,7 +284,6 @@ mod tests {
             table_ref,
             table_metadata_location()
         );
-        println!("{}", sql);
         let _df = ctx.sql(&sql).await.expect("create table failed");
 
         // Get the created external table
