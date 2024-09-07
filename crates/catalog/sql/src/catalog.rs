@@ -28,7 +28,7 @@ use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow}
 use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
 
-use crate::error::{from_sqlx_error, no_such_namespace_err};
+use crate::error::{from_sqlx_error, no_such_namespace_err, no_such_table_err};
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
 static CATALOG_FIELD_CATALOG_NAME: &str = "catalog_name";
@@ -472,16 +472,91 @@ impl Catalog for SqlCatalog {
         }
     }
 
-    async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
-        todo!()
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        let exists = self.namespace_exists(namespace).await?;
+        if exists {
+            // if there are tables in the namespace, don't allow drop.
+            let tables = self.list_tables(namespace).await?;
+            if !tables.is_empty() {
+                return Err(Error::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!(
+                        "Namespace {:?} is not empty. {} tables exist.",
+                        namespace,
+                        tables.len()
+                    ),
+                ));
+            }
+
+            self.execute(
+                &format!("DELETE FROM {NAMESPACE_TABLE_NAME} WHERE {NAMESPACE_FIELD_NAME} = ?"),
+                vec![Some(&namespace.join("."))],
+                None,
+            )
+            .await?;
+
+            Ok(())
+        } else {
+            no_such_namespace_err(namespace)
+        }
     }
 
-    async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        todo!()
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        let exists = self.namespace_exists(namespace).await?;
+        if exists {
+            let rows = self
+                .fetch_rows(
+                    &format!(
+                        "SELECT {CATALOG_FIELD_TABLE_NAME},
+                                {CATALOG_FIELD_TABLE_NAMESPACE}
+                         FROM {CATALOG_TABLE_NAME}
+                         WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                          AND {CATALOG_FIELD_CATALOG_NAME} = ?"
+                    ),
+                    vec![Some(&namespace.join(".")), Some(&self.name)],
+                )
+                .await?;
+
+            let mut tables = HashSet::<TableIdent>::with_capacity(rows.len());
+
+            for row in rows.iter() {
+                let tbl = row
+                    .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
+                    .map_err(from_sqlx_error)?;
+                let ns_strs = row
+                    .try_get::<String, _>(CATALOG_FIELD_TABLE_NAMESPACE)
+                    .map_err(from_sqlx_error)?;
+                let ns = NamespaceIdent::from_strs(ns_strs.split("."))?;
+                tables.insert(TableIdent::new(ns, tbl));
+            }
+
+            Ok(tables.into_iter().collect::<Vec<TableIdent>>())
+        } else {
+            no_such_namespace_err(namespace)
+        }
     }
 
-    async fn table_exists(&self, _identifier: &TableIdent) -> Result<bool> {
-        todo!()
+    async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
+        let namespace = identifier.namespace().join(".");
+        let table_name = identifier.name();
+        let table_counts = self
+            .fetch_rows(
+                &format!(
+                    "SELECT 1
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?"
+                ),
+                vec![Some(&namespace), Some(&self.name), Some(&table_name)],
+            )
+            .await?;
+
+        if !table_counts.is_empty() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
@@ -515,7 +590,8 @@ mod tests {
     use std::hash::Hash;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::{Catalog, Namespace, NamespaceIdent};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::{Catalog, Namespace, NamespaceIdent, TableIdent};
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
@@ -560,6 +636,18 @@ mod tests {
         for namespace_ident in namespace_idents {
             let _ = create_namespace(catalog, namespace_ident).await;
         }
+    }
+
+    fn simple_table_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![NestedField::required(
+                1,
+                "foo",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .into()])
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -810,7 +898,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_drop_namespace() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -823,7 +910,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_drop_nested_namespace() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -842,7 +928,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_drop_deeply_nested_namespace() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -875,7 +960,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_drop_namespace_throws_error_if_namespace_doesnt_exist() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -895,7 +979,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_drop_namespace_throws_error_if_nested_namespace_doesnt_exist() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -917,7 +1000,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "drop_namespace not implemented"]
     async fn test_dropping_a_namespace_does_not_drop_namespaces_nested_under_that_one() {
         let warehouse_loc = temp_path();
         let catalog = new_sql_catalog(warehouse_loc).await;
@@ -933,5 +1015,35 @@ mod tests {
             .namespace_exists(&namespace_ident_a_b)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_list_tables_returns_empty_vector() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        assert_eq!(catalog.list_tables(&namespace_ident).await.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_list_tables_throws_error_if_namespace_doesnt_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let non_existent_namespace_ident = NamespaceIdent::new("n1".into());
+
+        assert_eq!(
+            catalog
+                .list_tables(&non_existent_namespace_ident)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => No such namespace: {:?}",
+                non_existent_namespace_ident
+            ),
+        );
     }
 }
