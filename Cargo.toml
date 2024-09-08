@@ -41,7 +41,7 @@ apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "52" }
 arrow-array = { version = "52" }
-arrow-ord = { version = "52" }
+arrow-ord = { version = "53" }
 arrow-schema = { version = "52" }
 arrow-select = { version = "52" }
 arrow-string = { version = "52" }
