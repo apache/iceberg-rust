@@ -2049,7 +2049,7 @@
         <span class="kw">let </span>expected_sorted_order = SortOrder::builder()
             .with_order_id(<span class="number">0</span>)
             .with_fields(<span class="macro">vec!</span>[])
-            .build(expected_schema.clone())
+            .build(expected_schema)
             .unwrap();
 
         <span class="macro">assert_eq!</span>(
