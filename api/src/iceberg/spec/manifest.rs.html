@@ -2106,6 +2106,14 @@
 <a href="#2106" id="2106">2106</a>
 <a href="#2107" id="2107">2107</a>
 <a href="#2108" id="2108">2108</a>
+<a href="#2109" id="2109">2109</a>
+<a href="#2110" id="2110">2110</a>
+<a href="#2111" id="2111">2111</a>
+<a href="#2112" id="2112">2112</a>
+<a href="#2113" id="2113">2113</a>
+<a href="#2114" id="2114">2114</a>
+<a href="#2115" id="2115">2115</a>
+<a href="#2116" id="2116">2116</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2131,7 +2139,9 @@
 
 <span class="kw">use </span>apache_avro::{from_value, to_value, Reader <span class="kw">as </span>AvroReader, Writer <span class="kw">as </span>AvroWriter};
 <span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>serde_derive::{Deserialize, Serialize};
 <span class="kw">use </span>serde_json::to_vec;
+<span class="kw">use </span>serde_with::{DeserializeFromStr, SerializeDisplay};
 <span class="kw">use </span>typed_builder::TypedBuilder;
 
 <span class="kw">use </span><span class="self">self</span>::_const_schema::{manifest_schema_v1, manifest_schema_v2};
@@ -2974,6 +2984,12 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.data_file.file_path
     }
 
+    <span class="doccomment">/// Data file record count of the manifest entry.
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>record_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.data_file.record_count
+    }
+
     <span class="doccomment">/// Inherit data from manifest list, such as snapshot id, sequence number.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>inherit_data(<span class="kw-2">&amp;mut </span><span class="self">self</span>, snapshot_entry: <span class="kw-2">&amp;</span>ManifestFile) {
         <span class="kw">if </span><span class="self">self</span>.snapshot_id.is_none() {
@@ -3249,7 +3265,7 @@
 }
 <span class="doccomment">/// Type of content stored by the data file: data, equality deletes, or
 /// position deletes (all v1 files are data files)
-</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 </span><span class="kw">pub enum </span>DataContentType {
     <span class="doccomment">/// value: 0
     </span>Data = <span class="number">0</span>,
@@ -3276,7 +3292,7 @@
 }
 
 <span class="doccomment">/// Format of this data.
-</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
 </span><span class="kw">pub enum </span>DataFileFormat {
     <span class="doccomment">/// Avro file format: &lt;https://avro.apache.org/&gt;
     </span>Avro,

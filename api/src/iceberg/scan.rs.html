@@ -1602,6 +1602,12 @@
 <a href="#1602" id="1602">1602</a>
 <a href="#1603" id="1603">1603</a>
 <a href="#1604" id="1604">1604</a>
+<a href="#1605" id="1605">1605</a>
+<a href="#1606" id="1606">1606</a>
+<a href="#1607" id="1607">1607</a>
+<a href="#1608" id="1608">1608</a>
+<a href="#1609" id="1609">1609</a>
+<a href="#1610" id="1610">1610</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1640,8 +1646,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
 <span class="kw">use </span><span class="kw">crate</span>::spec::{
-    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, Schema,
-    SchemaRef, SnapshotRef, TableMetadataRef,
+    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
+    ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 <span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <span class="kw">use </span><span class="kw">crate</span>::utils::available_parallelism;
@@ -2133,14 +2139,19 @@
     /// created from it
     </span><span class="kw">fn </span>into_file_scan_task(<span class="self">self</span>) -&gt; FileScanTask {
         FileScanTask {
-            data_file_path: <span class="self">self</span>.manifest_entry.file_path().to_string(),
             start: <span class="number">0</span>,
             length: <span class="self">self</span>.manifest_entry.file_size_in_bytes(),
+            record_count: <span class="prelude-val">Some</span>(<span class="self">self</span>.manifest_entry.record_count()),
+
+            data_file_path: <span class="self">self</span>.manifest_entry.file_path().to_string(),
+            data_file_content: <span class="self">self</span>.manifest_entry.content_type(),
+            data_file_format: <span class="self">self</span>.manifest_entry.file_format(),
+
+            schema: <span class="self">self</span>.snapshot_schema,
             project_field_ids: <span class="self">self</span>.field_ids.to_vec(),
             predicate: <span class="self">self
                 </span>.bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
-            schema: <span class="self">self</span>.snapshot_schema,
         }
     }
 }
@@ -2458,35 +2469,30 @@
 <span class="doccomment">/// A task to scan part of file.
 </span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>FileScanTask {
-    data_file_path: String,
-    start: u64,
-    length: u64,
-    project_field_ids: Vec&lt;i32&gt;,
-    <span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-    </span>predicate: <span class="prelude-ty">Option</span>&lt;BoundPredicate&gt;,
-    schema: SchemaRef,
-}
+    <span class="doccomment">/// The start offset of the file to scan.
+    </span><span class="kw">pub </span>start: u64,
+    <span class="doccomment">/// The length of the file to scan.
+    </span><span class="kw">pub </span>length: u64,
+    <span class="doccomment">/// The number of records in the file to scan.
+    ///
+    /// This is an optional field, and only available if we are
+    /// reading the entire data file.
+    </span><span class="kw">pub </span>record_count: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 
-<span class="kw">impl </span>FileScanTask {
-    <span class="doccomment">/// Returns the data file path of this file scan task.
-    </span><span class="kw">pub fn </span>data_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.data_file_path
-    }
+    <span class="doccomment">/// The data file path corresponding to the task.
+    </span><span class="kw">pub </span>data_file_path: String,
+    <span class="doccomment">/// The content type of the file to scan.
+    </span><span class="kw">pub </span>data_file_content: DataContentType,
+    <span class="doccomment">/// The format of the file to scan.
+    </span><span class="kw">pub </span>data_file_format: DataFileFormat,
 
-    <span class="doccomment">/// Returns the project field id of this file scan task.
-    </span><span class="kw">pub fn </span>project_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i32] {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.project_field_ids
-    }
-
-    <span class="doccomment">/// Returns the predicate of this file scan task.
-    </span><span class="kw">pub fn </span>predicate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt; {
-        <span class="self">self</span>.predicate.as_ref()
-    }
-
-    <span class="doccomment">/// Returns the schema id of this file scan task.
-    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Schema {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
-    }
+    <span class="doccomment">/// The schema of the file to scan.
+    </span><span class="kw">pub </span>schema: SchemaRef,
+    <span class="doccomment">/// The field ids to project.
+    </span><span class="kw">pub </span>project_field_ids: Vec&lt;i32&gt;,
+    <span class="doccomment">/// The predicate to filter.
+    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
+    </span><span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;BoundPredicate&gt;,
 }
 
 <span class="attr">#[cfg(test)]
@@ -2823,17 +2829,17 @@
 
         <span class="macro">assert_eq!</span>(tasks.len(), <span class="number">2</span>);
 
-        tasks.sort_by_key(|t| t.data_file_path().to_string());
+        tasks.sort_by_key(|t| t.data_file_path.to_string());
 
         <span class="comment">// Check first task is added data file
         </span><span class="macro">assert_eq!</span>(
-            tasks[<span class="number">0</span>].data_file_path(),
+            tasks[<span class="number">0</span>].data_file_path,
             <span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span>fixture.table_location)
         );
 
         <span class="comment">// Check second task is existing data file
         </span><span class="macro">assert_eq!</span>(
-            tasks[<span class="number">1</span>].data_file_path(),
+            tasks[<span class="number">1</span>].data_file_path,
             <span class="macro">format!</span>(<span class="string">"{}/3.parquet"</span>, <span class="kw-2">&amp;</span>fixture.table_location)
         );
     }
@@ -3186,22 +3192,28 @@
         );
         <span class="kw">let </span>task = FileScanTask {
             data_file_path: <span class="string">"data_file_path"</span>.to_string(),
+            data_file_content: DataContentType::Data,
             start: <span class="number">0</span>,
             length: <span class="number">100</span>,
             project_field_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>],
             predicate: <span class="prelude-val">None</span>,
             schema: schema.clone(),
+            record_count: <span class="prelude-val">Some</span>(<span class="number">100</span>),
+            data_file_format: DataFileFormat::Parquet,
         };
         test_fn(task);
 
         <span class="comment">// with predicate
         </span><span class="kw">let </span>task = FileScanTask {
             data_file_path: <span class="string">"data_file_path"</span>.to_string(),
+            data_file_content: DataContentType::Data,
             start: <span class="number">0</span>,
             length: <span class="number">100</span>,
             project_field_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>],
             predicate: <span class="prelude-val">Some</span>(BoundPredicate::AlwaysTrue),
             schema,
+            record_count: <span class="prelude-val">None</span>,
+            data_file_format: DataFileFormat::Avro,
         };
         test_fn(task);
     }

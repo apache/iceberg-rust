@@ -1216,7 +1216,7 @@
                     |(file_scan_task, file_io, tx)| <span class="kw">async move </span>{
                         <span class="kw">match </span>file_scan_task {
                             <span class="prelude-val">Ok</span>(task) =&gt; {
-                                <span class="kw">let </span>file_path = task.data_file_path().to_string();
+                                <span class="kw">let </span>file_path = task.data_file_path.to_string();
 
                                 spawn(<span class="kw">async move </span>{
                                     <span class="self">Self</span>::process_file_scan_task(
@@ -1254,7 +1254,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="comment">// Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
-        </span><span class="kw">let </span>parquet_file = file_io.new_input(task.data_file_path())<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>parquet_file = file_io.new_input(<span class="kw-2">&amp;</span>task.data_file_path)<span class="question-mark">?</span>;
         <span class="kw">let </span>(parquet_metadata, parquet_reader) =
             <span class="macro">try_join!</span>(parquet_file.metadata(), parquet_file.reader())<span class="question-mark">?</span>;
         <span class="kw">let </span>parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
@@ -1270,8 +1270,8 @@
         <span class="comment">// Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
         </span><span class="kw">let </span>projection_mask = <span class="self">Self</span>::get_arrow_projection_mask(
-            task.project_field_ids(),
-            task.schema(),
+            <span class="kw-2">&amp;</span>task.project_field_ids,
+            <span class="kw-2">&amp;</span>task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
         )<span class="question-mark">?</span>;
@@ -1281,7 +1281,7 @@
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicate) = task.predicate() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(predicate) = <span class="kw-2">&amp;</span>task.predicate {
             <span class="kw">let </span>(iceberg_field_ids, field_id_map) = <span class="self">Self</span>::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
                 predicate,
@@ -1301,7 +1301,7 @@
                     predicate,
                     record_batch_stream_builder.metadata(),
                     <span class="kw-2">&amp;</span>field_id_map,
-                    task.schema(),
+                    <span class="kw-2">&amp;</span>task.schema,
                 )<span class="question-mark">?</span>;
 
                 selected_row_groups = <span class="prelude-val">Some</span>(result);
