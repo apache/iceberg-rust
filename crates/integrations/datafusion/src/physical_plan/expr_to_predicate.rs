@@ -81,29 +81,36 @@ impl ExprToPredicateVisitor {
 impl<'n> TreeNodeVisitor<'n> for ExprToPredicateVisitor {
     type Node = Expr;
 
-    fn f_down(&mut self, _node: &'n Self::Node) -> Result<TreeNodeRecursion, DataFusionError> {
+    fn f_down(&mut self, _node: &'n Expr) -> Result<TreeNodeRecursion, DataFusionError> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion, DataFusionError> {
-        if let Expr::BinaryExpr(binary) = node {
+    fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion, DataFusionError> {
+        if let Expr::BinaryExpr(binary) = expr {
             match (&*binary.left, &binary.op, &*binary.right) {
-                // process simple expressions (involving a column, operator and literal)
+                // process simple binary expressions, e.g. col > 1
                 (Expr::Column(col), op, Expr::Literal(lit)) => {
                     let col_pred = self.convert_column_expr(col, op, lit);
                     self.stack.push_back(col_pred);
                 }
-                // process compound expressions (involving AND or OR and children)
-                (_left, op, _right) if matches!(op, Operator::And | Operator::Or) => {
+                // // process reversed binary expressions, e.g. 1 < col
+                (Expr::Literal(lit), op, Expr::Column(col)) => {
+                    let col_pred = op
+                        .swap()
+                        .and_then(|negated_op| self.convert_column_expr(col, &negated_op, lit));
+                    self.stack.push_back(col_pred);
+                }
+                // process compound expressions (involving logical operators. e.g., AND or OR and children)
+                (_left, op, _right) if op.is_logic_operator() => {
                     let right_pred = self.stack.pop_back().flatten();
                     let left_pred = self.stack.pop_back().flatten();
                     let children: Vec<_> = [left_pred, right_pred].into_iter().flatten().collect();
                     let compound_pred = self.convert_compound_expr(&children, op);
                     self.stack.push_back(compound_pred);
                 }
-                _ => {}
+                _ => return Ok(TreeNodeRecursion::Continue),
             }
-        };
+        }
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -186,6 +193,22 @@ mod tests {
         expr.visit(&mut visitor).unwrap();
         let predicate = visitor.get_predicate();
         assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_single_condition_rev() {
+        let sql = "1 < foo";
+        let df_schema = create_test_schema();
+        let expr = SessionContext::new()
+            .parse_sql_expr(sql, &df_schema)
+            .unwrap();
+        let mut visitor = ExprToPredicateVisitor::new();
+        expr.visit(&mut visitor).unwrap();
+        let predicate = visitor.get_predicate().unwrap();
+        assert_eq!(
+            predicate,
+            Reference::new("foo").greater_than(Datum::long(1))
+        );
     }
     #[test]
     fn test_predicate_conversion_with_and_condition() {
