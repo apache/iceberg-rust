@@ -112,7 +112,7 @@ pub struct SortOrder {
 }
 
 impl SortOrder {
-    const UNSORTED_ORDER_ID: i64 = 0;
+    pub(crate) const UNSORTED_ORDER_ID: i64 = 0;
 
     /// Create sort order builder
     pub fn builder() -> SortOrderBuilder {

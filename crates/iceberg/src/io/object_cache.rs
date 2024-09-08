@@ -252,7 +252,7 @@ mod tests {
         async fn setup_manifest_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
-            let current_partition_spec = self.table.metadata().default_partition_spec().unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
             let data_file_manifest = ManifestWriter::new(
