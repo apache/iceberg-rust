@@ -36,6 +36,10 @@ pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
 pub const S3_SESSION_TOKEN: &str = "s3.session-token";
 /// S3 region.
 pub const S3_REGION: &str = "s3.region";
+/// Region to use for the S3 client.
+///
+/// This takes precedence over [`S3_REGION`].
+pub const CLIENT_REGION: &str = "client.region";
 /// S3 Path Style Access.
 pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// S3 Server Side Encryption Type.
@@ -71,6 +75,9 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         cfg.session_token = Some(session_token);
     };
     if let Some(region) = m.remove(S3_REGION) {
+        cfg.region = Some(region);
+    };
+    if let Some(region) = m.remove(CLIENT_REGION) {
         cfg.region = Some(region);
     };
     if let Some(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
