@@ -1977,7 +1977,7 @@
 
     <span class="doccomment">/// Append snapshot to table
     </span><span class="kw">pub fn </span>append_snapshot(<span class="kw-2">&amp;mut </span><span class="self">self</span>, snapshot: Snapshot) {
-        <span class="self">self</span>.last_updated_ms = snapshot.timestamp().timestamp_millis();
+        <span class="self">self</span>.last_updated_ms = snapshot.timestamp_ms();
         <span class="self">self</span>.last_sequence_number = snapshot.sequence_number();
 
         <span class="self">self</span>.refs
