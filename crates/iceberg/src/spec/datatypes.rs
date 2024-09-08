@@ -668,6 +668,12 @@ impl NestedField {
         self.write_default = Some(value);
         self
     }
+
+    /// Set the id of the field.
+    pub(crate) fn with_id(mut self, id: i32) -> Self {
+        self.id = id;
+        self
+    }
 }
 
 impl fmt::Display for NestedField {
