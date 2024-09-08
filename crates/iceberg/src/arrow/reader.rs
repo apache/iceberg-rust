@@ -133,7 +133,7 @@ impl ArrowReader {
                     |(file_scan_task, file_io, tx)| async move {
                         match file_scan_task {
                             Ok(task) => {
-                                let file_path = task.data_file_path().to_string();
+                                let file_path = task.data_file_path.to_string();
 
                                 spawn(async move {
                                     Self::process_file_scan_task(
@@ -171,7 +171,7 @@ impl ArrowReader {
     ) -> Result<()> {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
-        let parquet_file = file_io.new_input(task.data_file_path())?;
+        let parquet_file = file_io.new_input(&task.data_file_path)?;
         let (parquet_metadata, parquet_reader) =
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
         let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
@@ -187,8 +187,8 @@ impl ArrowReader {
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
         let projection_mask = Self::get_arrow_projection_mask(
-            task.project_field_ids(),
-            task.schema(),
+            &task.project_field_ids,
+            &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
         )?;
@@ -198,7 +198,7 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        if let Some(predicate) = task.predicate() {
+        if let Some(predicate) = &task.predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
                 predicate,
@@ -218,7 +218,7 @@ impl ArrowReader {
                     predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
-                    task.schema(),
+                    &task.schema,
                 )?;
 
                 selected_row_groups = Some(result);
