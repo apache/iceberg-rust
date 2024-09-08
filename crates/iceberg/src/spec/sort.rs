@@ -133,6 +133,14 @@ impl SortOrder {
     pub fn is_unsorted(&self) -> bool {
         self.fields.is_empty()
     }
+
+    /// Set the order id for the sort order
+    pub fn with_order_id(&self, order_id: i64) -> SortOrder {
+        SortOrder {
+            order_id,
+            fields: self.fields.clone(),
+        }
+    }
 }
 
 impl SortOrderBuilder {
@@ -160,13 +168,13 @@ impl SortOrderBuilder {
     }
 
     /// Creates a new bound sort order.
-    pub fn build(&self, schema: Schema) -> Result<SortOrder> {
+    pub fn build(&self, schema: &Schema) -> Result<SortOrder> {
         let unbound_sort_order = self.build_unbound()?;
         SortOrderBuilder::check_compatibility(unbound_sort_order, schema)
     }
 
     /// Returns the given sort order if it is compatible with the given schema
-    fn check_compatibility(sort_order: SortOrder, schema: Schema) -> Result<SortOrder> {
+    fn check_compatibility(sort_order: SortOrder, schema: &Schema) -> Result<SortOrder> {
         let sort_fields = &sort_order.fields;
         for sort_field in sort_fields {
             match schema.field_by_id(sort_field.source_id) {
@@ -291,6 +299,35 @@ mod tests {
     }
 
     #[test]
+    fn test_build_unbound_returns_correct_default_order_id_for_no_fields() {
+        assert_eq!(
+            SortOrder::builder()
+                .build_unbound()
+                .expect("Expected an Ok value")
+                .order_id,
+            SortOrder::UNSORTED_ORDER_ID
+        )
+    }
+
+    #[test]
+    fn test_build_unbound_returns_correct_default_order_id_for_fields() {
+        let sort_field = SortField::builder()
+            .source_id(2)
+            .direction(SortDirection::Ascending)
+            .null_order(NullOrder::First)
+            .transform(Transform::Identity)
+            .build();
+        assert_ne!(
+            SortOrder::builder()
+                .with_sort_field(sort_field.clone())
+                .build_unbound()
+                .expect("Expected an Ok value")
+                .order_id,
+            SortOrder::UNSORTED_ORDER_ID
+        )
+    }
+
+    #[test]
     fn test_build_unbound_should_return_unsorted_sort_order() {
         assert_eq!(
             SortOrder::builder()
@@ -367,7 +404,7 @@ mod tests {
                     .transform(Transform::Identity)
                     .build(),
             )
-            .build(schema);
+            .build(&schema);
 
         assert_eq!(
             sort_order_builder_result
@@ -406,7 +443,7 @@ mod tests {
                     .transform(Transform::Identity)
                     .build(),
             )
-            .build(schema);
+            .build(&schema);
 
         assert_eq!(
             sort_order_builder_result
@@ -438,7 +475,7 @@ mod tests {
                     .transform(Transform::Year)
                     .build(),
             )
-            .build(schema);
+            .build(&schema);
 
         assert_eq!(
             sort_order_builder_result
@@ -468,7 +505,7 @@ mod tests {
 
         let sort_order_builder_result = SortOrder::builder()
             .with_sort_field(sort_field.clone())
-            .build(schema);
+            .build(&schema);
 
         assert_eq!(
             sort_order_builder_result.expect("Expected an Ok value"),
