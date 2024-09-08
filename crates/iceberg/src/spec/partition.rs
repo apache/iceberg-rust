@@ -131,7 +131,7 @@ impl PartitionSpec {
     /// * Field names
     /// * Source column ids
     /// * Transforms
-    pub fn compatible_with(&self, other: &UnboundPartitionSpec) -> bool {
+    pub fn is_compatible_with(&self, other: &UnboundPartitionSpec) -> bool {
         if self.fields.len() != other.fields.len() {
             return false;
         }
@@ -1327,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compatible_with() {
+    fn test_is_compatible_with() {
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
@@ -1366,7 +1366,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec_1.compatible_with(&partition_spec_2.into_unbound()));
+        assert!(partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1405,7 +1405,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1448,7 +1448,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1505,7 +1505,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
     }
 
     #[test]
