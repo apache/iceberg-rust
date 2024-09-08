@@ -1593,7 +1593,7 @@ mod tests {
 
         assert_eq!(1000, spec.fields[0].field_id);
         assert_eq!(1001, spec.fields[1].field_id);
-        assert_eq!(spec.has_sequential_ids(), true);
+        assert!(spec.has_sequential_ids());
     }
 
     #[test]
@@ -1633,7 +1633,7 @@ mod tests {
 
         assert_eq!(999, spec.fields[0].field_id);
         assert_eq!(1000, spec.fields[1].field_id);
-        assert_eq!(spec.has_sequential_ids(), false);
+        assert!(!spec.has_sequential_ids());
     }
 
     #[test]
@@ -1673,6 +1673,6 @@ mod tests {
 
         assert_eq!(1000, spec.fields[0].field_id);
         assert_eq!(1002, spec.fields[1].field_id);
-        assert_eq!(spec.has_sequential_ids(), false);
+        assert!(!spec.has_sequential_ids());
     }
 }
