@@ -22,15 +22,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use _serde::SnapshotV2;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
-use crate::error::Result;
+use crate::error::{timestamp_ms_to_utc, Result};
 use crate::io::FileIO;
 use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
 use crate::{Error, ErrorKind};
+
+/// The ref name of the main branch of the table.
+pub const MAIN_BRANCH: &str = "main";
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
@@ -125,8 +128,14 @@ impl Snapshot {
     }
     /// Get the timestamp of when the snapshot was created
     #[inline]
-    pub fn timestamp(&self) -> DateTime<Utc> {
-        Utc.timestamp_millis_opt(self.timestamp_ms).unwrap()
+    pub fn timestamp(&self) -> Result<DateTime<Utc>> {
+        timestamp_ms_to_utc(self.timestamp_ms)
+    }
+
+    /// Get the timestamp of when the snapshot was created in milliseconds
+    #[inline]
+    pub fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
     }
 
     /// Get the schema id of this snapshot.
@@ -386,8 +395,9 @@ mod tests {
         assert_eq!(3051729675574597004, result.snapshot_id());
         assert_eq!(
             Utc.timestamp_millis_opt(1515100955770).unwrap(),
-            result.timestamp()
+            result.timestamp().unwrap()
         );
+        assert_eq!(1515100955770, result.timestamp_ms());
         assert_eq!(
             Summary {
                 operation: Operation::Append,
