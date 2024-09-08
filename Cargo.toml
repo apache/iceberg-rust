@@ -42,7 +42,7 @@ array-init = "2"
 arrow-arith = { version = "52" }
 arrow-array = { version = "52" }
 arrow-ord = { version = "52" }
-arrow-schema = { version = "52" }
+arrow-schema = { version = "53" }
 arrow-select = { version = "52" }
 arrow-string = { version = "52" }
 async-stream = "0.3.5"
