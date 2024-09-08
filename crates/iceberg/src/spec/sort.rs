@@ -135,10 +135,10 @@ impl SortOrder {
     }
 
     /// Set the order id for the sort order
-    pub fn with_order_id(&self, order_id: i64) -> SortOrder {
+    pub fn with_order_id(self, order_id: i64) -> SortOrder {
         SortOrder {
             order_id,
-            fields: self.fields.clone(),
+            fields: self.fields,
         }
     }
 }
