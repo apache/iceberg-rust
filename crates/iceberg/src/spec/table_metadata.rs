@@ -258,7 +258,7 @@ impl TableMetadata {
 
     /// Append snapshot to table
     pub fn append_snapshot(&mut self, snapshot: Snapshot) {
-        self.last_updated_ms = snapshot.timestamp().timestamp_millis();
+        self.last_updated_ms = snapshot.timestamp_ms();
         self.last_sequence_number = snapshot.sequence_number();
 
         self.refs

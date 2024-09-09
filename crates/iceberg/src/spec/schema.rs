@@ -117,11 +117,9 @@ impl SchemaBuilder {
 
     /// Builds the schema.
     pub fn build(mut self) -> Result<Schema> {
-        let mut highest_field_id = None;
         if let Some(start_from) = self.reassign_field_ids_from {
             let mut id_reassigner = ReassignFieldIds::new(start_from);
             self.fields = id_reassigner.reassign_field_ids(self.fields);
-            highest_field_id = Some(id_reassigner.next_field_id - 1);
 
             self.identifier_field_ids =
                 id_reassigner.apply_to_identifier_fields(self.identifier_field_ids)?;
@@ -132,8 +130,6 @@ impl SchemaBuilder {
 
         let r#struct = StructType::new(self.fields);
         let id_to_field = index_by_id(&r#struct)?;
-        let highest_field_id =
-            highest_field_id.unwrap_or(id_to_field.keys().max().cloned().unwrap_or(0));
 
         Self::validate_identifier_ids(
             &r#struct,
@@ -152,12 +148,13 @@ impl SchemaBuilder {
             .map(|(k, v)| (k.to_lowercase(), *v))
             .collect();
 
+        let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
+
         Ok(Schema {
             r#struct,
             schema_id: self.schema_id,
             highest_field_id,
             identifier_field_ids: self.identifier_field_ids,
-
             alias_to_id: self.alias_to_id,
             id_to_field,
 
@@ -1478,12 +1475,6 @@ table {
     }
 
     #[test]
-    fn test_highest_field_id() {
-        let schema = table_schema_nested();
-        assert_eq!(17, schema.highest_field_id());
-    }
-
-    #[test]
     fn test_schema_index_by_name() {
         let expected_name_to_id = HashMap::from(
             [
@@ -2376,6 +2367,21 @@ table {
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+    }
+
+    #[test]
+    fn test_highest_field_id() {
+        let schema = table_schema_nested();
+        assert_eq!(17, schema.highest_field_id());
+
+        let schema = table_schema_simple().0;
+        assert_eq!(3, schema.highest_field_id());
+    }
+
+    #[test]
+    fn test_highest_field_id_no_fields() {
+        let schema = Schema::builder().with_schema_id(1).build().unwrap();
+        assert_eq!(0, schema.highest_field_id());
     }
 
     #[test]
