@@ -146,6 +146,13 @@
 <a href="#146" id="146">146</a>
 <a href="#147" id="147">147</a>
 <a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -184,6 +191,10 @@
 </span><span class="kw">pub const </span>S3_SESSION_TOKEN: <span class="kw-2">&amp;</span>str = <span class="string">"s3.session-token"</span>;
 <span class="doccomment">/// S3 region.
 </span><span class="kw">pub const </span>S3_REGION: <span class="kw-2">&amp;</span>str = <span class="string">"s3.region"</span>;
+<span class="doccomment">/// Region to use for the S3 client.
+///
+/// This takes precedence over [`S3_REGION`].
+</span><span class="kw">pub const </span>CLIENT_REGION: <span class="kw-2">&amp;</span>str = <span class="string">"client.region"</span>;
 <span class="doccomment">/// S3 Path Style Access.
 </span><span class="kw">pub const </span>S3_PATH_STYLE_ACCESS: <span class="kw-2">&amp;</span>str = <span class="string">"s3.path-style-access"</span>;
 <span class="doccomment">/// S3 Server Side Encryption Type.
@@ -219,6 +230,9 @@
         cfg.session_token = <span class="prelude-val">Some</span>(session_token);
     };
     <span class="kw">if let </span><span class="prelude-val">Some</span>(region) = m.remove(S3_REGION) {
+        cfg.region = <span class="prelude-val">Some</span>(region);
+    };
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(region) = m.remove(CLIENT_REGION) {
         cfg.region = <span class="prelude-val">Some</span>(region);
     };
     <span class="kw">if let </span><span class="prelude-val">Some</span>(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
