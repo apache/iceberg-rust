@@ -106,8 +106,6 @@ impl SchemaBuilder {
 
     /// Builds the schema.
     pub fn build(self) -> Result<Schema> {
-        let highest_field_id = self.fields.iter().map(|f| f.id).max().unwrap_or(0);
-
         let field_id_to_accessor = self.build_accessors();
 
         let r#struct = StructType::new(self.fields);
@@ -130,12 +128,13 @@ impl SchemaBuilder {
             .map(|(k, v)| (k.to_lowercase(), *v))
             .collect();
 
+        let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
+
         Ok(Schema {
             r#struct,
             schema_id: self.schema_id,
             highest_field_id,
             identifier_field_ids: self.identifier_field_ids,
-
             alias_to_id: self.alias_to_id,
             id_to_field,
 
@@ -2228,5 +2227,14 @@ table {
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+    }
+
+    #[test]
+    fn test_highest_field_id() {
+        let schema = table_schema_nested();
+        assert_eq!(17, schema.highest_field_id());
+
+        let schema = table_schema_simple().0;
+        assert_eq!(3, schema.highest_field_id());
     }
 }
