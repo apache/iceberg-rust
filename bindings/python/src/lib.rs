@@ -20,6 +20,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
 mod transform;
+mod catalog;
 
 #[pyfunction]
 fn hello_world() -> PyResult<String> {
@@ -33,5 +34,6 @@ fn pyiceberg_core_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_world, m)?)?;
 
     m.add_class::<transform::ArrowArrayTransform>()?;
+    m.add_class::<catalog::PySqlCatalog>()?;
     Ok(())
 }

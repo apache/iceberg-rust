@@ -59,7 +59,7 @@ extern crate derive_builder;
 mod error;
 pub use error::{Error, ErrorKind, Result};
 
-mod catalog;
+pub mod catalog;
 
 pub use catalog::{
     Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement,
