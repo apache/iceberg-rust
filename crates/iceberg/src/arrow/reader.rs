@@ -212,11 +212,8 @@ impl ArrowReader {
 
         // create a RecordBatchEvolutionProcessor if our task schema contains columns
         // not present in the parquet file or whose types have been promoted
-        let record_batch_evolution_processor = RecordBatchEvolutionProcessor::build(
-            record_batch_stream_builder.schema(),
-            task.schema(),
-            task.project_field_ids(),
-        )?;
+        let mut record_batch_evolution_processor =
+            RecordBatchEvolutionProcessor::build(task.schema_ref(), task.project_field_ids());
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -271,15 +268,9 @@ impl ArrowReader {
         // to the requester.
         let mut record_batch_stream = record_batch_stream_builder.build()?;
 
-        if let Some(record_batch_evolution_processor) = record_batch_evolution_processor {
-            while let Some(batch) = record_batch_stream.try_next().await? {
-                tx.send(record_batch_evolution_processor.process_record_batch(batch))
-                    .await?
-            }
-        } else {
-            while let Some(batch) = record_batch_stream.try_next().await? {
-                tx.send(Ok(batch)).await?
-            }
+        while let Some(batch) = record_batch_stream.try_next().await? {
+            tx.send(record_batch_evolution_processor.process_record_batch(batch))
+                .await?
         }
 
         Ok(())
