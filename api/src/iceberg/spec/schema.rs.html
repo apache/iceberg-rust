@@ -2230,6 +2230,14 @@
 <a href="#2230" id="2230">2230</a>
 <a href="#2231" id="2231">2231</a>
 <a href="#2232" id="2232">2232</a>
+<a href="#2233" id="2233">2233</a>
+<a href="#2234" id="2234">2234</a>
+<a href="#2235" id="2235">2235</a>
+<a href="#2236" id="2236">2236</a>
+<a href="#2237" id="2237">2237</a>
+<a href="#2238" id="2238">2238</a>
+<a href="#2239" id="2239">2239</a>
+<a href="#2240" id="2240">2240</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2338,8 +2346,6 @@
 
     <span class="doccomment">/// Builds the schema.
     </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Schema&gt; {
-        <span class="kw">let </span>highest_field_id = <span class="self">self</span>.fields.iter().map(|f| f.id).max().unwrap_or(<span class="number">0</span>);
-
         <span class="kw">let </span>field_id_to_accessor = <span class="self">self</span>.build_accessors();
 
         <span class="kw">let </span>r#struct = StructType::new(<span class="self">self</span>.fields);
@@ -2362,12 +2368,13 @@
             .map(|(k, v)| (k.to_lowercase(), <span class="kw-2">*</span>v))
             .collect();
 
+        <span class="kw">let </span>highest_field_id = id_to_field.keys().max().cloned().unwrap_or(<span class="number">0</span>);
+
         <span class="prelude-val">Ok</span>(Schema {
             r#struct,
             schema_id: <span class="self">self</span>.schema_id,
             highest_field_id,
             identifier_field_ids: <span class="self">self</span>.identifier_field_ids,
-
             alias_to_id: <span class="self">self</span>.alias_to_id,
             id_to_field,
 
@@ -4460,6 +4467,15 @@ table {
         <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, selected, <span class="bool-val">true</span>);
         <span class="macro">assert!</span>(result.is_ok());
         <span class="macro">assert_eq!</span>(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_highest_field_id() {
+        <span class="kw">let </span>schema = table_schema_nested();
+        <span class="macro">assert_eq!</span>(<span class="number">17</span>, schema.highest_field_id());
+
+        <span class="kw">let </span>schema = table_schema_simple().<span class="number">0</span>;
+        <span class="macro">assert_eq!</span>(<span class="number">3</span>, schema.highest_field_id());
     }
 }
 </code></pre></div></section></main></body></html>
