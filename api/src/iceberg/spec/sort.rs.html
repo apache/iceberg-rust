@@ -630,7 +630,7 @@
 }
 
 <span class="kw">impl </span>SortOrder {
-    <span class="kw">const </span>UNSORTED_ORDER_ID: i64 = <span class="number">0</span>;
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>UNSORTED_ORDER_ID: i64 = <span class="number">0</span>;
 
     <span class="doccomment">/// Create sort order builder
     </span><span class="kw">pub fn </span>builder() -&gt; SortOrderBuilder {

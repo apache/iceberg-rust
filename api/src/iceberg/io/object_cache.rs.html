@@ -654,7 +654,7 @@
         <span class="kw">async fn </span>setup_manifest_files(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
             <span class="kw">let </span>current_snapshot = <span class="self">self</span>.table.metadata().current_snapshot().unwrap();
             <span class="kw">let </span>current_schema = current_snapshot.schema(<span class="self">self</span>.table.metadata()).unwrap();
-            <span class="kw">let </span>current_partition_spec = <span class="self">self</span>.table.metadata().default_partition_spec().unwrap();
+            <span class="kw">let </span>current_partition_spec = <span class="self">self</span>.table.metadata().default_partition_spec();
 
             <span class="comment">// Write data files
             </span><span class="kw">let </span>data_file_manifest = ManifestWriter::new(
