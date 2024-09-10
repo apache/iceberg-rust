@@ -39,3 +39,13 @@ pub fn no_such_table_err<T>(table_ident: &TableIdent) -> Result<T> {
         format!("No such table: {:?}", table_ident),
     ))
 }
+
+pub fn table_already_exists_err<T>(table_ident: &TableIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::Unexpected,
+        format!(
+            "Cannot create table {:?}. Table already exists.",
+            table_ident
+        ),
+    ))
+}
