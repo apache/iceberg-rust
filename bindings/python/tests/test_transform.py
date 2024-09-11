@@ -21,7 +21,6 @@ import pyarrow as pa
 import pytest
 from pyiceberg_core import transform
 
-
 def test_identity_transform():
     arr = pa.array([1, 2])
     result = transform.identity(arr)
@@ -89,3 +88,9 @@ def test_truncate_transform():
     result = transform.truncate(arr, 5)
     expected = pa.array(["this ", "hi my"])
     assert result == expected
+
+def test_identity_transform_with_direct_import():
+    from pyiceberg_core.transform import identity
+    arr = pa.array([1, 2])
+    result = identity(arr)
+    assert result == arr

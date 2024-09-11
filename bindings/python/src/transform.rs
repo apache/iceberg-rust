@@ -86,5 +86,8 @@ pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     this.add_function(wrap_pyfunction!(bucket, &this)?)?;
     this.add_function(wrap_pyfunction!(truncate, &this)?)?;
 
-    m.add_submodule(&this)
+    m.add_submodule(&this)?;
+    py.import_bound("sys")?
+        .getattr("modules")?
+        .set_item("pyiceberg_core.transform", this)
 }
