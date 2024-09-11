@@ -665,43 +665,57 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
 }
 
 macro_rules! get_parquet_stat_as_datum {
-    ($limit_type:ident) => {
+    ($limit_type:tt) => {
         paste::paste! {
         /// Gets the $limit_type value from a parquet Statistics struct, as a Datum
         pub(crate) fn [<get_parquet_stat_ $limit_type _as_datum>](
             primitive_type: &PrimitiveType, stats: &Statistics
         ) -> Result<Option<Datum>> {
-            Ok(Some(match (primitive_type, stats) {
-                (PrimitiveType::Boolean, Statistics::Boolean(stats)) => Datum::bool(*stats.$limit_type()),
-                (PrimitiveType::Int, Statistics::Int32(stats)) => Datum::int(*stats.$limit_type()),
-                (PrimitiveType::Date, Statistics::Int32(stats)) => Datum::date(*stats.$limit_type()),
-                (PrimitiveType::Long, Statistics::Int64(stats)) => Datum::long(*stats.$limit_type()),
-                (PrimitiveType::Time, Statistics::Int64(stats)) => Datum::time_micros(*stats.$limit_type())?,
+            Ok(match (primitive_type, stats) {
+                (PrimitiveType::Boolean, Statistics::Boolean(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::bool(*val)),
+                (PrimitiveType::Int, Statistics::Int32(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::int(*val)),
+                (PrimitiveType::Date, Statistics::Int32(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::date(*val)),
+                (PrimitiveType::Long, Statistics::Int64(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::long(*val)),
+                (PrimitiveType::Time, Statistics::Int64(stats)) => {
+                    let Some(val) = stats.[<$limit_type _opt>]() else {
+                        return Ok(None);
+                    };
+
+                    Some(Datum::time_micros(*val)?)
+                }
                 (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
-                    Datum::timestamp_micros(*stats.$limit_type())
+                    stats.[<$limit_type _opt>]().map(|val|Datum::timestamp_micros(*val))
                 }
                 (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
-                    Datum::timestamptz_micros(*stats.$limit_type())
+                    stats.[<$limit_type _opt>]().map(|val|Datum::timestamptz_micros(*val))
                 }
                 (PrimitiveType::TimestampNs, Statistics::Int64(stats)) => {
-                    Datum::timestamp_nanos(*stats.$limit_type())
+                    stats.[<$limit_type _opt>]().map(|val|Datum::timestamp_nanos(*val))
                 }
                 (PrimitiveType::TimestamptzNs, Statistics::Int64(stats)) => {
-                    Datum::timestamptz_nanos(*stats.$limit_type())
+                    stats.[<$limit_type _opt>]().map(|val|Datum::timestamptz_nanos(*val))
                 }
-                (PrimitiveType::Float, Statistics::Float(stats)) => Datum::float(*stats.$limit_type()),
-                (PrimitiveType::Double, Statistics::Double(stats)) => Datum::double(*stats.$limit_type()),
+                (PrimitiveType::Float, Statistics::Float(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::float(*val)),
+                (PrimitiveType::Double, Statistics::Double(stats)) => stats.[<$limit_type _opt>]().map(|val|Datum::double(*val)),
                 (PrimitiveType::String, Statistics::ByteArray(stats)) => {
-                    Datum::string(stats.$limit_type().as_utf8()?)
+                    let Some(val) = stats.[<$limit_type _opt>]() else {
+                        return Ok(None);
+                    };
+
+                    Some(Datum::string(val.as_utf8()?))
                 }
                 (PrimitiveType::Decimal {
                     precision: _,
                     scale: _,
                 }, Statistics::ByteArray(stats)) => {
-                    Datum::new(
+                    let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
+                        return Ok(None);
+                    };
+
+                    Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_le_bytes(stats.[<$limit_type _bytes>]().try_into()?)),
-                    )
+                        PrimitiveLiteral::Int128(i128::from_le_bytes(bytes.try_into()?)),
+                    ))
                 }
                 (
                 PrimitiveType::Decimal {
@@ -709,10 +723,12 @@ macro_rules! get_parquet_stat_as_datum {
                     scale: _,
                 },
                 Statistics::Int32(stats)) => {
-                    Datum::new(
-                        primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from(*stats.$limit_type())),
-                    )
+                    stats.[<$limit_type _opt>]().map(|val| {
+                        Datum::new(
+                            primitive_type.clone(),
+                            PrimitiveLiteral::Int128(i128::from(*val)),
+                        )
+                    })
                 }
 
                 (
@@ -722,40 +738,46 @@ macro_rules! get_parquet_stat_as_datum {
                     },
                     Statistics::Int64(stats),
                 ) => {
-                    Datum::new(
-                        primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from(*stats.$limit_type())),
-                    )
+                    stats.[<$limit_type _opt>]().map(|val| {
+                        Datum::new(
+                            primitive_type.clone(),
+                            PrimitiveLiteral::Int128(i128::from(*val)),
+                        )
+                    })
                 }
                 (PrimitiveType::Uuid, Statistics::FixedLenByteArray(stats)) => {
-                    let raw = stats.[<$limit_type _bytes>]();
-                    if raw.len() != 16 {
+                    let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
+                        return Ok(None);
+                    };
+                    if bytes.len() != 16 {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
                             "Invalid length of uuid bytes.",
                         ));
                     }
-                    Datum::uuid(Uuid::from_bytes(
-                        raw[..16].try_into().unwrap(),
-                    ))
+                    Some(Datum::uuid(Uuid::from_bytes(
+                        bytes[..16].try_into().unwrap(),
+                    )))
                 }
                 (PrimitiveType::Fixed(len), Statistics::FixedLenByteArray(stat)) => {
-                    let raw = stat.[<$limit_type _bytes>]();
-                    if raw.len() != *len as usize {
+                    let Some(bytes) = stat.[<$limit_type _bytes_opt>]() else {
+                        return Ok(None);
+                    };
+                    if bytes.len() != *len as usize {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
                             "Invalid length of fixed bytes.",
                         ));
                     }
-                    Datum::fixed(raw.to_vec())
+                    Some(Datum::fixed(bytes.to_vec()))
                 }
                 (PrimitiveType::Binary, Statistics::ByteArray(stat)) => {
-                    Datum::binary(stat.[<$limit_type _bytes>]().to_vec())
+                    return Ok(stat.[<$limit_type _bytes_opt>]().map(|bytes|Datum::binary(bytes.to_vec())))
                 }
                 _ => {
                     return Ok(None);
                 }
-            }))
+            })
             }
         }
     }
