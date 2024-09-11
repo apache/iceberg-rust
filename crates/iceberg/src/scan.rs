@@ -1582,6 +1582,8 @@ mod tests {
             schema: schema.clone(),
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
+            sequence_number: 0,
+            equality_ids: vec![],
         };
         test_fn(task);
 
@@ -1596,6 +1598,8 @@ mod tests {
             schema,
             record_count: None,
             data_file_format: DataFileFormat::Avro,
+            sequence_number: 0,
+            equality_ids: vec![],
         };
         test_fn(task);
     }
