@@ -31,10 +31,10 @@ keywords = ["iceberg", "sql", "catalog"]
 [dependencies]
 async-trait = { workspace = true }
 iceberg = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
