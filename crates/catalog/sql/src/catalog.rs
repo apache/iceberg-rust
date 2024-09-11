@@ -882,7 +882,7 @@ mod tests {
         let expected_sorted_order = SortOrder::builder()
             .with_order_id(0)
             .with_fields(vec![])
-            .build(expected_schema.clone())
+            .build(expected_schema)
             .unwrap();
 
         assert_eq!(
