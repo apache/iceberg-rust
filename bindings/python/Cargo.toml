@@ -32,5 +32,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 iceberg = { path = "../../crates/iceberg" }
-pyo3 = { version = "0.21.1", features = ["extension-module"] }
-arrow = { version = "52.2.0", features = ["pyarrow"] }
+pyo3 = { version = "0.21", features = ["extension-module"] }
+arrow = { version = "52", features = ["pyarrow"] }

@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
+use pyo3::PyErr;
 
-mod error;
-mod transform;
-
-#[pymodule]
-fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    transform::register_module(py, m)?;
-    Ok(())
+/// Convert an iceberg error to a python error
+pub fn to_py_err(err: iceberg::Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
 }

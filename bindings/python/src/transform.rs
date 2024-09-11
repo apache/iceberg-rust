@@ -15,24 +15,55 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{make_array, Array, ArrayData};
+use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use iceberg::spec::Transform;
 use iceberg::transform::create_transform_function;
+use pyo3::prelude::*;
 
-use arrow::{
-    array::{make_array, Array, ArrayData},
-};
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use crate::error::to_py_err;
 
-fn to_py_err(err: iceberg::Error) -> PyErr {
-    PyValueError::new_err(err.to_string())
+#[pyfunction]
+pub fn identity(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Identity)
 }
 
-#[pyclass]
-pub struct ArrowArrayTransform {
+#[pyfunction]
+pub fn void(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Void)
 }
 
-fn apply(array: PyObject, transform: Transform, py: Python) -> PyResult<PyObject> {
+#[pyfunction]
+pub fn year(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Year)
+}
+
+#[pyfunction]
+pub fn month(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Month)
+}
+
+#[pyfunction]
+pub fn day(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Day)
+}
+
+#[pyfunction]
+pub fn hour(py: Python, array: PyObject) -> PyResult<PyObject> {
+    apply(py, array, Transform::Hour)
+}
+
+#[pyfunction]
+pub fn bucket(py: Python, array: PyObject, num_buckets: u32) -> PyResult<PyObject> {
+    apply(py, array, Transform::Bucket(num_buckets))
+}
+
+#[pyfunction]
+pub fn truncate(py: Python, array: PyObject, width: u32) -> PyResult<PyObject> {
+    apply(py, array, Transform::Truncate(width))
+}
+
+fn apply(py: Python, array: PyObject, transform: Transform) -> PyResult<PyObject> {
     // import
     let array = ArrayData::from_pyarrow_bound(array.bind(py))?;
     let array = make_array(array);
@@ -43,45 +74,20 @@ fn apply(array: PyObject, transform: Transform, py: Python) -> PyResult<PyObject
     array.to_pyarrow(py)
 }
 
-#[pymethods]
-impl ArrowArrayTransform {
-    #[staticmethod]
-    pub fn identity(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Identity, py)
-    }
+pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let this = PyModule::new_bound(py, "transform")?;
 
-    #[staticmethod]
-    pub fn void(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Void, py)
-    }
+    this.add_function(wrap_pyfunction!(identity, &this)?)?;
+    this.add_function(wrap_pyfunction!(void, &this)?)?;
+    this.add_function(wrap_pyfunction!(year, &this)?)?;
+    this.add_function(wrap_pyfunction!(month, &this)?)?;
+    this.add_function(wrap_pyfunction!(day, &this)?)?;
+    this.add_function(wrap_pyfunction!(hour, &this)?)?;
+    this.add_function(wrap_pyfunction!(bucket, &this)?)?;
+    this.add_function(wrap_pyfunction!(truncate, &this)?)?;
 
-    #[staticmethod]
-    pub fn year(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Year, py)
-    }
-
-    #[staticmethod]
-    pub fn month(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Month, py)
-    }
-
-    #[staticmethod]
-    pub fn day(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Day, py)
-    }
-
-    #[staticmethod]
-    pub fn hour(array: PyObject, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Hour, py)
-    }
-
-    #[staticmethod]
-    pub fn bucket(array: PyObject, num_buckets: u32, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Bucket(num_buckets), py)
-    }
-
-    #[staticmethod]
-    pub fn truncate(array: PyObject, width: u32, py: Python) -> PyResult<PyObject> {
-        apply(array, Transform::Truncate(width), py)
-    }
+    m.add_submodule(&this)?;
+    py.import_bound("sys")?
+        .getattr("modules")?
+        .set_item("pyiceberg_core.transform", this)
 }
