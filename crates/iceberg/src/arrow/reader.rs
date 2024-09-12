@@ -236,7 +236,7 @@ impl ArrowReader {
         let mut record_batch_stream = record_batch_stream_builder.build()?;
         while let Some(batch) = record_batch_stream.try_next().await? {
             let batch = if let Some(reorder) = reorder.as_ref() {
-                batch.project(&reorder).expect("must be able to reorder")
+                batch.project(reorder).expect("must be able to reorder")
             } else {
                 batch
             };
