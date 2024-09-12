@@ -186,7 +186,8 @@ impl ArrowReader {
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
-        let projection_mask = Self::get_arrow_projection_mask(
+        // Since Parquet projection mask will lose the order of the columns, we need to reorder.
+        let (projection_mask, reorder) = Self::get_arrow_projection_mask(
             &task.project_field_ids,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
@@ -234,6 +235,11 @@ impl ArrowReader {
         // to the requester.
         let mut record_batch_stream = record_batch_stream_builder.build()?;
         while let Some(batch) = record_batch_stream.try_next().await? {
+            let batch = if let Some(reorder) = reorder.as_ref() {
+                batch.project(&reorder).expect("must be able to reorder")
+            } else {
+                batch
+            };
             tx.send(Ok(batch)).await?
         }
 
@@ -261,9 +267,9 @@ impl ArrowReader {
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
-    ) -> Result<ProjectionMask> {
+    ) -> Result<(ProjectionMask, Option<Vec<usize>>)> {
         if field_ids.is_empty() {
-            Ok(ProjectionMask::all())
+            Ok((ProjectionMask::all(), None))
         } else {
             // Build the map between field id and column index in Parquet schema.
             let mut column_map = HashMap::new();
@@ -322,7 +328,17 @@ impl ArrowReader {
                     ));
                 }
             }
-            Ok(ProjectionMask::leaves(parquet_schema, indices))
+
+            // projection mask is order by indices
+            let mut mask_indices = indices.clone();
+            mask_indices.sort_by_key(|&x| x);
+            // try to reorder the mask_indices to indices
+            let reorder = indices
+                .iter()
+                .map(|idx| mask_indices.iter().position(|&i| i == *idx).unwrap())
+                .collect::<Vec<_>>();
+
+            Ok((ProjectionMask::leaves(parquet_schema, indices), Some(reorder)))
         }
     }
 
