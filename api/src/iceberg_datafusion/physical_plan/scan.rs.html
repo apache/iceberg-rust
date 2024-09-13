@@ -138,6 +138,37 @@
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -158,6 +189,7 @@
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::pin::Pin;
 <span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::vec;
 
 <span class="kw">use </span>datafusion::arrow::array::RecordBatch;
 <span class="kw">use </span>datafusion::arrow::datatypes::SchemaRef <span class="kw">as </span>ArrowSchemaRef;
@@ -184,17 +216,25 @@
     <span class="doccomment">/// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     </span>plan_properties: PlanProperties,
+    <span class="doccomment">/// Projection column names, None means all columns
+    </span>projection: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 }
 
 <span class="kw">impl </span>IcebergTableScan {
     <span class="doccomment">/// Creates a new [`IcebergTableScan`] object.
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(table: Table, schema: ArrowSchemaRef) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(
+        table: Table,
+        schema: ArrowSchemaRef,
+        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+    ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>plan_properties = <span class="self">Self</span>::compute_properties(schema.clone());
+        <span class="kw">let </span>projection = get_column_names(schema.clone(), projection);
 
         <span class="self">Self </span>{
             table,
             schema,
             plan_properties,
+            projection,
         }
     }
 
@@ -240,7 +280,7 @@
         _partition: usize,
         _context: Arc&lt;TaskContext&gt;,
     ) -&gt; DFResult&lt;SendableRecordBatchStream&gt; {
-        <span class="kw">let </span>fut = get_batch_stream(<span class="self">self</span>.table.clone());
+        <span class="kw">let </span>fut = get_batch_stream(<span class="self">self</span>.table.clone(), <span class="self">self</span>.projection.clone());
         <span class="kw">let </span>stream = futures::stream::once(fut).try_flatten();
 
         <span class="prelude-val">Ok</span>(Box::pin(RecordBatchStreamAdapter::new(
@@ -256,7 +296,13 @@
         _t: datafusion::physical_plan::DisplayFormatType,
         f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter,
     ) -&gt; std::fmt::Result {
-        <span class="macro">write!</span>(f, <span class="string">"IcebergTableScan"</span>)
+        <span class="macro">write!</span>(
+            f,
+            <span class="string">"IcebergTableScan projection:[{}]"</span>,
+            <span class="self">self</span>.projection
+                .clone()
+                .map_or(String::new(), |v| v.join(<span class="string">","</span>))
+        )
     }
 }
 
@@ -267,8 +313,13 @@
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
 </span><span class="kw">async fn </span>get_batch_stream(
     table: Table,
+    column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 ) -&gt; DFResult&lt;Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = DFResult&lt;RecordBatch&gt;&gt; + Send&gt;&gt;&gt; {
-    <span class="kw">let </span>table_scan = table.scan().build().map_err(to_datafusion_error)<span class="question-mark">?</span>;
+    <span class="kw">let </span>scan_builder = <span class="kw">match </span>column_names {
+        <span class="prelude-val">Some</span>(column_names) =&gt; table.scan().select(column_names),
+        <span class="prelude-val">None </span>=&gt; table.scan().select_all(),
+    };
+    <span class="kw">let </span>table_scan = scan_builder.build().map_err(to_datafusion_error)<span class="question-mark">?</span>;
 
     <span class="kw">let </span>stream = table_scan
         .to_arrow()
@@ -277,5 +328,16 @@
         </span>.map_err(to_datafusion_error);
 
     <span class="prelude-val">Ok</span>(Box::pin(stream))
+}
+
+<span class="kw">fn </span>get_column_names(
+    schema: ArrowSchemaRef,
+    projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt; {
+    projection.map(|v| {
+        v.iter()
+            .map(|p| schema.field(<span class="kw-2">*</span>p).name().clone())
+            .collect::&lt;Vec&lt;String&gt;&gt;()
+    })
 }
 </code></pre></div></section></main></body></html>

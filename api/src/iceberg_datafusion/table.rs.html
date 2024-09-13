@@ -85,6 +85,7 @@
 <a href="#85" id="85">85</a>
 <a href="#86" id="86">86</a>
 <a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -162,13 +163,14 @@
     <span class="kw">async fn </span>scan(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
-        _projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+        projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
         _filters: <span class="kw-2">&amp;</span>[Expr],
         _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
         <span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
             <span class="self">self</span>.table.clone(),
             <span class="self">self</span>.schema.clone(),
+            projection,
         )))
     }
 }
