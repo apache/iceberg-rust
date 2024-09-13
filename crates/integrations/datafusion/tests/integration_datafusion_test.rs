@@ -19,11 +19,13 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::vec;
 
+use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::SessionContext;
 use iceberg::io::FileIOBuilder;
-use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_datafusion::IcebergCatalogProvider;
@@ -39,6 +41,13 @@ fn get_iceberg_catalog() -> MemoryCatalog {
     MemoryCatalog::new(file_io, Some(temp_path()))
 }
 
+fn get_struct_type() -> StructType {
+    StructType::new(vec![
+        NestedField::required(4, "s_foo1", Type::Primitive(PrimitiveType::Int)).into(),
+        NestedField::required(5, "s_foo2", Type::Primitive(PrimitiveType::String)).into(),
+    ])
+}
+
 async fn set_test_namespace(catalog: &MemoryCatalog, namespace: &NamespaceIdent) -> Result<()> {
     let properties = HashMap::new();
 
@@ -47,14 +56,21 @@ async fn set_test_namespace(catalog: &MemoryCatalog, namespace: &NamespaceIdent)
     Ok(())
 }
 
-fn set_table_creation(location: impl ToString, name: impl ToString) -> Result<TableCreation> {
-    let schema = Schema::builder()
-        .with_schema_id(0)
-        .with_fields(vec![
-            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
-        ])
-        .build()?;
+fn get_table_creation(
+    location: impl ToString,
+    name: impl ToString,
+    schema: Option<Schema>,
+) -> Result<TableCreation> {
+    let schema = match schema {
+        None => Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?,
+        Some(schema) => schema,
+    };
 
     let creation = TableCreation::builder()
         .location(location.to_string())
@@ -72,7 +88,7 @@ async fn test_provider_get_table_schema() -> Result<()> {
     let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
-    let creation = set_table_creation(temp_path(), "my_table")?;
+    let creation = get_table_creation(temp_path(), "my_table", None)?;
     iceberg_catalog.create_table(&namespace, creation).await?;
 
     let client = Arc::new(iceberg_catalog);
@@ -87,7 +103,7 @@ async fn test_provider_get_table_schema() -> Result<()> {
     let table = schema.table("my_table").await.unwrap().unwrap();
     let table_schema = table.schema();
 
-    let expected = [("foo", &DataType::Int32), ("bar", &DataType::Utf8)];
+    let expected = [("foo1", &DataType::Int32), ("foo2", &DataType::Utf8)];
 
     for (field, exp) in table_schema.fields().iter().zip(expected.iter()) {
         assert_eq!(field.name(), exp.0);
@@ -104,7 +120,7 @@ async fn test_provider_list_table_names() -> Result<()> {
     let namespace = NamespaceIdent::new("test_provider_list_table_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
-    let creation = set_table_creation(temp_path(), "my_table")?;
+    let creation = get_table_creation(temp_path(), "my_table", None)?;
     iceberg_catalog.create_table(&namespace, creation).await?;
 
     let client = Arc::new(iceberg_catalog);
@@ -130,7 +146,6 @@ async fn test_provider_list_schema_names() -> Result<()> {
     let namespace = NamespaceIdent::new("test_provider_list_schema_names".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
 
-    set_table_creation("test_provider_list_schema_names", "my_table")?;
     let client = Arc::new(iceberg_catalog);
     let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
 
@@ -145,5 +160,73 @@ async fn test_provider_list_schema_names() -> Result<()> {
     assert!(expected
         .iter()
         .all(|item| result.contains(&item.to_string())));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_projection() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("ns".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo1", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "foo2", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(3, "foo3", Type::Struct(get_struct_type())).into(),
+        ])
+        .build()?;
+    let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+    let table_df = ctx.table("catalog.ns.t1").await.unwrap();
+
+    let records = table_df
+        .clone()
+        .explain(false, false)
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(1, records.len());
+    let record = &records[0];
+    // the first column is plan_type, the second column plan string.
+    let s = record
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(2, s.len());
+    // the first row is logical_plan, the second row is physical_plan
+    assert_eq!(
+        "IcebergTableScan projection:[foo1,foo2,foo3]",
+        s.value(1).trim()
+    );
+
+    // datafusion doesn't support query foo3.s_foo1, use foo3 instead
+    let records = table_df
+        .select_columns(&["foo1", "foo3"])
+        .unwrap()
+        .explain(false, false)
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(1, records.len());
+    let record = &records[0];
+    let s = record
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(2, s.len());
+    assert_eq!("IcebergTableScan projection:[foo1,foo3]", s.value(1).trim());
+
     Ok(())
 }
