@@ -25,12 +25,8 @@ log = "0.4.22"
 rust_decimal = { version = "1.27.0" }
 spark-connect-rs = "0.0.1-beta.5"
 sqllogictest = "0.22"
-sqlparser = { workspace = true }
-tempfile = { workspace = true }
-thiserror = "1.0.63"
 tokio = "1.38.0"
 toml = "0.8.19"
-url = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
