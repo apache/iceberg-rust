@@ -22,8 +22,8 @@ members = [
   "crates/examples",
   "crates/iceberg",
   "crates/integrations/*",
-  "crates/test_utils",
   "crates/sqllogictests",
+  "crates/test_utils",
 ]
 exclude = ["bindings/python"]
 

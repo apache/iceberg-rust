@@ -1,41 +1,40 @@
 [package]
 name = "sqllogictests"
-version.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-rust-version.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
+anyhow = { workspace = true }
 arrow = { workspace = true }
 # For spark-connect-rs
-arrow_51 = { version = "51", package = "arrow"}
+arrow_51 = { version = "51", package = "arrow" }
 async-trait = { workspace = true }
-sqllogictest = "0.22"
-datafusion = { workspace = true, default-features = true}
-datafusion-common = { workspace = true, default-features = true}
-thiserror = "1.0.63"
-sqlparser = {workspace = true}
-itertools = "0.13.0"
-half = "2.4.1"
 bigdecimal = "0.4.1"
-rust_decimal = { version = "1.27.0" }
-tempfile = { workspace = true }
-log = "0.4.22"
-spark-connect-rs = "0.0.1-beta.5"
-anyhow = {workspace = true}
-toml = "0.8.19"
-url = {workspace = true}
-iceberg-datafusion = { path = "../integrations/datafusion" }
-iceberg-catalog-rest = { path = "../catalog/rest" }
-tokio = "1.38.0"
+datafusion = { workspace = true, default-features = true }
+datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
+half = "2.4.1"
+iceberg-catalog-rest = { path = "../catalog/rest" }
+iceberg-datafusion = { path = "../integrations/datafusion" }
+itertools = "0.13.0"
+log = "0.4.22"
+rust_decimal = { version = "1.27.0" }
+spark-connect-rs = "0.0.1-beta.5"
+sqllogictest = "0.22"
+sqlparser = { workspace = true }
+tempfile = { workspace = true }
+thiserror = "1.0.63"
+tokio = "1.38.0"
+toml = "0.8.19"
+url = { workspace = true }
 
 [dev-dependencies]
-libtest-mimic = "0.7.3"
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
-
+libtest-mimic = "0.7.3"
 
 [[test]]
 harness = false
