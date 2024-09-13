@@ -66,6 +66,7 @@ once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
+paste = { workspace = true }
 reqwest = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -84,5 +85,6 @@ ctor = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
+rand = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }

@@ -157,16 +157,7 @@ impl<'a> ReplaceSortOrderAction<'a> {
                 current_schema_id: self.tx.table.metadata().current_schema().schema_id() as i64,
             },
             TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: self
-                    .tx
-                    .table
-                    .metadata()
-                    .default_sort_order()
-                    .ok_or(Error::new(
-                        ErrorKind::Unexpected,
-                        "default sort order impossible to be none",
-                    ))?
-                    .order_id,
+                default_sort_order_id: self.tx.table.metadata().default_sort_order().order_id,
             },
         ];
 

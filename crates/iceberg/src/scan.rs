@@ -36,8 +36,8 @@ use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{
-    DataContentType, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, Schema,
-    SchemaRef, SnapshotRef, TableMetadataRef,
+    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
+    ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -60,6 +60,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -76,6 +77,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
+            row_group_filtering_enabled: true,
         }
     }
 
@@ -142,9 +144,16 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Sets the manifest file concurrency limit for this scan
-    pub fn with_manifest_file_concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit_manifest_files = limit;
+    /// Determines whether to enable row group filtering.
+    /// When enabled, if a read is performed with a filter predicate,
+    /// then the metadata for each row group in the parquet file is
+    /// evaluated against the filter predicate and row groups
+    /// that cant contain matching rows will be skipped entirely.
+    ///
+    /// Defaults to enabled, as it generally improves performance or
+    /// keeps it the same, with performance degradation unlikely.
+    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
+        self.row_group_filtering_enabled = row_group_filtering_enabled;
         self
     }
 
@@ -258,6 +267,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+            row_group_filtering_enabled: self.row_group_filtering_enabled,
         })
     }
 }
@@ -280,6 +290,8 @@ pub struct TableScan {
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     concurrency_limit_data_files: usize,
+
+    row_group_filtering_enabled: bool,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -346,7 +358,7 @@ impl TableScan {
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
                     |(manifest_entry_context, tx)| async move {
-                        crate::runtime::spawn(async move {
+                        spawn(async move {
                             Self::process_manifest_entry(manifest_entry_context, tx).await
                         })
                         .await
@@ -365,7 +377,8 @@ impl TableScan {
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
-            .with_data_file_concurrency_limit(self.concurrency_limit_data_files);
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -516,14 +529,19 @@ impl ManifestEntryContext {
     /// created from it
     fn into_file_scan_task(self) -> FileScanTask {
         FileScanTask {
-            data_file_path: self.manifest_entry.file_path().to_string(),
             start: 0,
             length: self.manifest_entry.file_size_in_bytes(),
+            record_count: Some(self.manifest_entry.record_count()),
+
+            data_file_path: self.manifest_entry.file_path().to_string(),
+            data_file_content: self.manifest_entry.content_type(),
+            data_file_format: self.manifest_entry.file_format(),
+
+            schema: self.snapshot_schema,
             project_field_ids: self.field_ids.to_vec(),
             predicate: self
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
-            schema: self.snapshot_schema,
         }
     }
 }
@@ -841,35 +859,30 @@ impl ExpressionEvaluatorCache {
 /// A task to scan part of file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileScanTask {
-    data_file_path: String,
-    start: u64,
-    length: u64,
-    project_field_ids: Vec<i32>,
+    /// The start offset of the file to scan.
+    pub start: u64,
+    /// The length of the file to scan.
+    pub length: u64,
+    /// The number of records in the file to scan.
+    ///
+    /// This is an optional field, and only available if we are
+    /// reading the entire data file.
+    pub record_count: Option<u64>,
+
+    /// The data file path corresponding to the task.
+    pub data_file_path: String,
+    /// The content type of the file to scan.
+    pub data_file_content: DataContentType,
+    /// The format of the file to scan.
+    pub data_file_format: DataFileFormat,
+
+    /// The schema of the file to scan.
+    pub schema: SchemaRef,
+    /// The field ids to project.
+    pub project_field_ids: Vec<i32>,
+    /// The predicate to filter.
     #[serde(skip_serializing_if = "Option::is_none")]
-    predicate: Option<BoundPredicate>,
-    schema: SchemaRef,
-}
-
-impl FileScanTask {
-    /// Returns the data file path of this file scan task.
-    pub fn data_file_path(&self) -> &str {
-        &self.data_file_path
-    }
-
-    /// Returns the project field id of this file scan task.
-    pub fn project_field_ids(&self) -> &[i32] {
-        &self.project_field_ids
-    }
-
-    /// Returns the predicate of this file scan task.
-    pub fn predicate(&self) -> Option<&BoundPredicate> {
-        self.predicate.as_ref()
-    }
-
-    /// Returns the schema id of this file scan task.
-    pub fn schema(&self) -> &Schema {
-        &self.schema
-    }
+    pub predicate: Option<BoundPredicate>,
 }
 
 #[cfg(test)]
@@ -966,7 +979,7 @@ mod tests {
                 .parent_snapshot(self.table.metadata())
                 .unwrap();
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
-            let current_partition_spec = self.table.metadata().default_partition_spec().unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
             let data_file_manifest = ManifestWriter::new(
@@ -1206,17 +1219,17 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file_path().to_string());
+        tasks.sort_by_key(|t| t.data_file_path.to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file_path(),
+            tasks[0].data_file_path,
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file_path(),
+            tasks[1].data_file_path,
             format!("{}/3.parquet", &fixture.table_location)
         );
     }
@@ -1569,22 +1582,28 @@ mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: None,
             schema: schema.clone(),
+            record_count: Some(100),
+            data_file_format: DataFileFormat::Parquet,
         };
         test_fn(task);
 
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            data_file_content: DataContentType::Data,
             start: 0,
             length: 100,
             project_field_ids: vec![1, 2, 3],
             predicate: Some(BoundPredicate::AlwaysTrue),
             schema,
+            record_count: None,
+            data_file_format: DataFileFormat::Avro,
         };
         test_fn(task);
     }

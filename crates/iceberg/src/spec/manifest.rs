@@ -23,7 +23,9 @@ use std::sync::Arc;
 
 use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
 use bytes::Bytes;
+use serde_derive::{Deserialize, Serialize};
 use serde_json::to_vec;
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 use typed_builder::TypedBuilder;
 
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
@@ -866,6 +868,12 @@ impl ManifestEntry {
         &self.data_file.file_path
     }
 
+    /// Data file record count of the manifest entry.
+    #[inline]
+    pub fn record_count(&self) -> u64 {
+        self.data_file.record_count
+    }
+
     /// Inherit data from manifest list, such as snapshot id, sequence number.
     pub(crate) fn inherit_data(&mut self, snapshot_entry: &ManifestFile) {
         if self.snapshot_id.is_none() {
@@ -1141,7 +1149,7 @@ impl DataFile {
 }
 /// Type of content stored by the data file: data, equality deletes, or
 /// position deletes (all v1 files are data files)
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum DataContentType {
     /// value: 0
     Data = 0,
@@ -1168,7 +1176,7 @@ impl TryFrom<i32> for DataContentType {
 }
 
 /// Format of this data.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
 pub enum DataFileFormat {
     /// Avro file format: <https://avro.apache.org/>
     Avro,

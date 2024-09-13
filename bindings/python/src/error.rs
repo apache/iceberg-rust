@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod bound_predicate_visitor;
-pub(crate) mod expression_evaluator;
-pub(crate) mod inclusive_metrics_evaluator;
-pub(crate) mod inclusive_projection;
-pub(crate) mod manifest_evaluator;
-pub(crate) mod row_group_metrics_evaluator;
+use pyo3::exceptions::PyValueError;
+use pyo3::PyErr;
+
+/// Convert an iceberg error to a python error
+pub fn to_py_err(err: iceberg::Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
+}

@@ -293,12 +293,8 @@ async fn test_create_table() {
     assert_eq!(table.metadata().format_version(), FormatVersion::V2);
     assert!(table.metadata().current_snapshot().is_none());
     assert!(table.metadata().history().is_empty());
-    assert!(table.metadata().default_sort_order().unwrap().is_unsorted());
-    assert!(table
-        .metadata()
-        .default_partition_spec()
-        .unwrap()
-        .is_unpartitioned());
+    assert!(table.metadata().default_sort_order().is_unsorted());
+    assert!(table.metadata().default_partition_spec().is_unpartitioned());
 }
 
 #[tokio::test]

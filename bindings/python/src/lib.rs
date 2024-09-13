@@ -15,17 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::io::FileIOBuilder;
 use pyo3::prelude::*;
 
-#[pyfunction]
-fn hello_world() -> PyResult<String> {
-    let _ = FileIOBuilder::new_fs_io().build().unwrap();
-    Ok("Hello, world!".to_string())
-}
+mod error;
+mod transform;
 
 #[pymodule]
-fn pyiceberg_core_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(hello_world, m)?)?;
+fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    transform::register_module(py, m)?;
     Ok(())
 }
