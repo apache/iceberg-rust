@@ -102,13 +102,11 @@ impl DockerCompose {
         let ip_result = get_cmd_output(cmd, format!("Get container ip of {container_name}"))
             .trim()
             .parse::<IpAddr>();
-        match ip_result {
-            Ok(ip) => ip,
-            Err(e) => {
-                log::error!("Invalid IP, {e}");
-                panic!("Failed to parse IP for {container_name}")
-            }
-        }
+
+        ip_result.unwrap_or_else(|e| {
+            log::error!("Invalid IP, {e}");
+            panic!("Failed to parse IP for {container_name}")
+        })
     }
 }
 
@@ -126,12 +124,12 @@ impl Drop for DockerCompose {
             "--remove-orphans",
         ]);
 
-        run_command(
-            cmd,
-            format!(
-                "Stopping docker compose in {}, project name: {}",
-                self.docker_compose_dir, self.project_name
-            ),
-        )
+        // run_command(
+        //     cmd,
+        //     format!(
+        //         "Stopping docker compose in {}, project name: {}",
+        //         self.docker_compose_dir, self.project_name
+        //     ),
+        // )
     }
 }

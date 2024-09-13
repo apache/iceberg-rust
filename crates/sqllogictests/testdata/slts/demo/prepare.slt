@@ -1,5 +1,5 @@
 statement ok
-CREATE SCHEMA s1 IF NOT EXISTS;
+CREATE SCHEMA IF NOT EXISTS s1 ;
 
 statement ok
 USE SCHEMA s1;

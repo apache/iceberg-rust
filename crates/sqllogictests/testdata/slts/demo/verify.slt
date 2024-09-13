@@ -1,5 +1,5 @@
 query II rowsort
-SELECT * FROM s1.t1;
+SELECT * FROM demo.s1.t1;
 ----
 1
 2
