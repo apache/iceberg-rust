@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,6 +109,12 @@ impl DataFusionEngine {
 
         let rest_catalog_config = RestCatalogConfig::builder()
             .uri(rest_catalog_url.to_string())
+            .props(HashMap::from([
+                ("s3.endpoint".to_string(), "http://localhost:9000".to_string()),
+                ("s3.access-key-id".to_string(), "admin".to_string()),
+                ("s3.secret-access-key".to_string(), "password".to_string()),
+                ("s3.region".to_string(), "us-east-1".to_string()),
+            ]))
             .build();
 
         let rest_catalog = RestCatalog::new(rest_catalog_config);

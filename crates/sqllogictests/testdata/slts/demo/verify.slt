@@ -1,4 +1,4 @@
-query II rowsort
+query I rowsort
 SELECT * FROM demo.s1.t1;
 ----
 1
