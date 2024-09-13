@@ -23,6 +23,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Fields};
 use arrow::util::display::ArrayFormatter;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+
 use crate::display::conversion::*;
 use crate::engine::output::DFColumnType;
 

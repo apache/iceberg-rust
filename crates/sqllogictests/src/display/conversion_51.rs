@@ -4,7 +4,6 @@ use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
 
-
 /// Represents a constant for NULL string in your database.
 pub const NULL_STR: &str = "NULL";
 

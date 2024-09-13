@@ -23,8 +23,8 @@ use spark_connect_rs::{SparkSession, SparkSessionBuilder};
 use sqllogictest::{AsyncDB, DBOutput};
 use toml::Table;
 
-use crate::engine::output::DFColumnType;
 use crate::display::normalize_51;
+use crate::engine::output::DFColumnType;
 use crate::error::{Error, Result};
 
 /// SparkSql engine implementation for sqllogictests.

@@ -16,13 +16,13 @@
 // under the License.
 
 use anyhow::anyhow;
-use arrow_51::util::display::{DurationFormat, FormatOptions};
 use arrow_51::array::{
     ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float16Array, Float32Array,
     Float64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
 };
 use arrow_51::datatypes::{DataType, Fields};
-use arrow_51::util::display::ArrayFormatter;
+use arrow_51::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
+
 use crate::display::conversion_51::*;
 use crate::engine::output::DFColumnType;
 
