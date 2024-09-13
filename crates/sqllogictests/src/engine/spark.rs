@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::engine::output::DFColumnType;
-use crate::engine::{normalize, DataFusionEngine};
+use std::time::Duration;
+
 use anyhow::anyhow;
-use itertools::Itertools;
+use async_trait::async_trait;
 use spark_connect_rs::{SparkSession, SparkSessionBuilder};
 use sqllogictest::{AsyncDB, DBOutput};
-use std::time::Duration;
-use async_trait::async_trait;
 use toml::Table;
-use crate::error::*;
 
-/// SparkSql engine implementation for sqllogictest.
+use crate::engine::output::DFColumnType;
+use crate::display::normalize_51;
+use crate::error::{Error, Result};
+
+/// SparkSql engine implementation for sqllogictests.
 pub struct SparkSqlEngine {
     session: SparkSession,
 }
@@ -37,15 +38,16 @@ impl AsyncDB for SparkSqlEngine {
     type ColumnType = DFColumnType;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput<DFColumnType>> {
-        let results = self.session
+        let results = self
+            .session
             .sql(sql)
             .await
-            .map_err(Box::new)?
+            .map_err(|e| anyhow!(e))?
             .collect()
             .await
-            .map_err(Box::new)?;
-        let types = normalize::convert_schema_to_types(results.schema().fields());
-        let rows = normalize::convert_batches(results)?;
+            .map_err(|e| anyhow!(e))?;
+        let types = normalize_51::convert_schema_to_types(results.schema().fields());
+        let rows = normalize_51::convert_batches(vec![results])?;
 
         if rows.is_empty() && types.is_empty() {
             Ok(DBOutput::StatementComplete(0))
@@ -71,7 +73,8 @@ impl AsyncDB for SparkSqlEngine {
 
 impl SparkSqlEngine {
     pub async fn new(configs: &Table) -> Result<Self> {
-        let url = configs.get("url")
+        let url = configs
+            .get("url")
             .ok_or_else(|| anyhow!("url property doesn't exist for spark engine"))?
             .as_str()
             .ok_or_else(|| anyhow!("url property is not a string for spark engine"))?;
@@ -79,7 +82,8 @@ impl SparkSqlEngine {
         let session = SparkSessionBuilder::remote(url)
             .app_name("SparkConnect")
             .build()
-            .await?;
+            .await
+            .map_err(|e| anyhow!(e))?;
 
         Ok(Self { session })
     }

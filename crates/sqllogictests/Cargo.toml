@@ -1,5 +1,5 @@
 [package]
-name = "sqllogictest"
+name = "sqllogictests"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -8,10 +8,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-arrow-schema = { workspace = true }
-arrow-array= { workspace = true }
+arrow = { workspace = true }
+# For spark-connect-rs
+arrow_51 = { version = "51", package = "arrow"}
 async-trait = { workspace = true }
-sqllogictest = "0.21.0"
+sqllogictest = "0.22"
 datafusion = { workspace = true, default-features = true}
 datafusion-common = { workspace = true, default-features = true}
 thiserror = "1.0.63"

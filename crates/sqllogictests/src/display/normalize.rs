@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::engine::output::DFColumnType;
 use anyhow::anyhow;
-use arrow_array::{ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray};
-use arrow_schema::{DataType, Fields};
-use datafusion::arrow::util::display::ArrayFormatter;
+use arrow::array::{
+    ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float16Array, Float32Array,
+    Float64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+};
+use arrow::datatypes::{DataType, Fields};
+use arrow::util::display::ArrayFormatter;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-
-use crate::engine::conversion::*;
+use crate::display::conversion::*;
+use crate::engine::output::DFColumnType;
 
 /// Converts `batches` to a result as expected by sqllogicteset.
 pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> anyhow::Result<Vec<Vec<String>>> {
@@ -35,16 +37,13 @@ pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> anyhow::Result<Vec<V
             // Verify schema
             if !schema.contains(&batch.schema()) {
                 return Err(anyhow!(
-                        "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                        &schema,
-                        batch.schema()
-                    ),
-                );
+                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                    &schema,
+                    batch.schema()
+                ));
             }
 
-            let new_rows = convert_batch(batch)?
-                .into_iter()
-                .flat_map(expand_row);
+            let new_rows = convert_batch(batch)?.into_iter().flat_map(expand_row);
             rows.extend(new_rows);
         }
         Ok(rows)
@@ -73,9 +72,10 @@ pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> anyhow::Result<Vec<V
 ///   "|-- Projection: d.b, MAX(d.a) AS max_a",
 /// ]
 /// ```
-fn expand_row(mut row: Vec<String>) -> impl Iterator<Item=Vec<String>> {
-    use itertools::Either;
+fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
     use std::iter::once;
+
+    use itertools::Either;
 
     // check last cell
     if let Some(cell) = row.pop() {
@@ -93,7 +93,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item=Vec<String>> {
             .enumerate()
             .map(|(idx, l)| {
                 // replace any leading spaces with '-' as
-                // `sqllogictest` ignores whitespace differences
+                // `sqllogictests` ignores whitespace differences
                 //
                 // See https://github.com/apache/datafusion/issues/6328
                 let content = l.trim_start();
@@ -141,7 +141,6 @@ macro_rules! get_row_value {
 /// [NULL Values and empty strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
-///
 pub fn cell_to_string(col: &ArrayRef, row: usize) -> anyhow::Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
@@ -149,18 +148,10 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> anyhow::Result<String> {
     } else {
         match col.data_type() {
             DataType::Null => Ok(NULL_STR.to_string()),
-            DataType::Boolean => {
-                Ok(bool_to_str(get_row_value!(BooleanArray, col, row)))
-            }
-            DataType::Float16 => {
-                Ok(f16_to_str(get_row_value!(Float16Array, col, row)))
-            }
-            DataType::Float32 => {
-                Ok(f32_to_str(get_row_value!(Float32Array, col, row)))
-            }
-            DataType::Float64 => {
-                Ok(f64_to_str(get_row_value!(Float64Array, col, row)))
-            }
+            DataType::Boolean => Ok(bool_to_str(get_row_value!(BooleanArray, col, row))),
+            DataType::Float16 => Ok(f16_to_str(get_row_value!(Float16Array, col, row))),
+            DataType::Float32 => Ok(f32_to_str(get_row_value!(Float32Array, col, row))),
+            DataType::Float64 => Ok(f64_to_str(get_row_value!(Float64Array, col, row))),
             DataType::Decimal128(precision, scale) => {
                 let value = get_row_value!(Decimal128Array, col, row);
                 Ok(i128_to_str(value, precision, scale))
@@ -169,19 +160,9 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> anyhow::Result<String> {
                 let value = get_row_value!(Decimal256Array, col, row);
                 Ok(i256_to_str(value, precision, scale))
             }
-            DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
-                LargeStringArray,
-                col,
-                row
-            ))),
-            DataType::Utf8 => {
-                Ok(varchar_to_str(get_row_value!(StringArray, col, row)))
-            }
-            DataType::Utf8View => Ok(varchar_to_str(get_row_value!(
-                StringViewArray,
-                col,
-                row
-            ))),
+            DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(LargeStringArray, col, row))),
+            DataType::Utf8 => Ok(varchar_to_str(get_row_value!(StringArray, col, row))),
+            DataType::Utf8View => Ok(varchar_to_str(get_row_value!(StringViewArray, col, row))),
             _ => {
                 let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
@@ -210,13 +191,10 @@ pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             | DataType::Float64
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => DFColumnType::Float,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                DFColumnType::Text
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DFColumnType::Text,
+            DataType::Date32 | DataType::Date64 | DataType::Time32(_) | DataType::Time64(_) => {
+                DFColumnType::DateTime
             }
-            DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_) => DFColumnType::DateTime,
             DataType::Timestamp(_, _) => DFColumnType::Timestamp,
             _ => DFColumnType::Another,
         })

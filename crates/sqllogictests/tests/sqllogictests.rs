@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
-use libtest_mimic::{Arguments, Trial};
-use tokio::runtime::Handle;
+
 use iceberg_test_utils::docker::DockerCompose;
-use sqllogictest::schedule::Schedule;
+use libtest_mimic::{Arguments, Trial};
+use sqllogictests::schedule::Schedule;
+use tokio::runtime::Handle;
 
 fn main() {
     env_logger::init();
@@ -36,23 +37,34 @@ fn main() {
 }
 
 fn start_docker() -> anyhow::Result<DockerCompose> {
-    let docker = DockerCompose::new("sqllogictests",
-                                    format!("{}/testdata/docker", env!("CARGO_MANIFEST_DIR")));
+    let docker = DockerCompose::new(
+        "sqllogictests",
+        format!("{}/testdata/docker", env!("CARGO_MANIFEST_DIR")),
+    );
     docker.run();
     Ok(docker)
 }
 
 fn collect_trials(handle: Handle) -> anyhow::Result<Vec<Trial>> {
     let schedule_files = collect_schedule_files()?;
-    log::debug!("Found {} schedule files: {}", schedule_files.len(), &schedule_files);
+    log::debug!(
+        "Found {} schedule files: {:?}",
+        schedule_files.len(),
+        &schedule_files
+    );
     let mut trials = Vec::with_capacity(schedule_files.len());
     for schedule_file in schedule_files {
         let h = handle.clone();
-        let trial_name = format!("Test schedule {}",
-                                 schedule_file.file_name()
-                                     .expect("Schedule file should have a name")
-                                     .to_string_lossy());
-        let trial = Trial::new(trial_name, move || h.block_on(run_schedule(schedule_file.clone())));
+        let trial_name = format!(
+            "Test schedule {}",
+            schedule_file
+                .file_name()
+                .expect("Schedule file should have a name")
+                .to_string_lossy()
+        );
+        let trial = Trial::test(trial_name, move || {
+            Ok(h.block_on(run_schedule(schedule_file.clone()))?)
+        });
         trials.push(trial);
     }
     Ok(trials)

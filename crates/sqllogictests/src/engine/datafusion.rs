@@ -15,22 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::RecordBatch;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::anyhow;
+use arrow::array::RecordBatch;
 use async_trait::async_trait;
+use datafusion::catalog::CatalogProvider;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use sqllogictest::{AsyncDB, DBOutput};
-use std::sync::Arc;
-use std::time::Duration;
-use anyhow::anyhow;
-use datafusion::catalog::CatalogProvider;
-use toml::Table;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_datafusion::IcebergCatalogProvider;
-use crate::engine::normalize;
+use sqllogictest::{AsyncDB, DBOutput};
+use toml::Table;
+
+use crate::display::normalize;
 use crate::engine::output::{DFColumnType, DFOutput};
-use crate::error::{Result, Error};
+use crate::error::{Error, Result};
 
 pub struct DataFusionEngine {
     ctx: SessionContext,
@@ -38,14 +40,11 @@ pub struct DataFusionEngine {
 
 impl Default for DataFusionEngine {
     fn default() -> Self {
-        let config = SessionConfig::new()
-            .with_target_partitions(4);
+        let config = SessionConfig::new().with_target_partitions(4);
 
         let ctx = SessionContext::new_with_config(config);
 
-        Self {
-            ctx
-        }
+        Self { ctx }
     }
 }
 
@@ -55,7 +54,7 @@ impl AsyncDB for DataFusionEngine {
     type ColumnType = DFColumnType;
 
     async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        run_query(&self.ctx, sql).await.map_err(Box::new)
+        Ok(run_query(&self.ctx, sql).await?)
     }
 
     /// Engine name of current database.
@@ -73,7 +72,7 @@ impl AsyncDB for DataFusionEngine {
     }
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> anyhow::Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await?;
@@ -92,19 +91,17 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOut
 
 impl DataFusionEngine {
     pub async fn new(configs: &Table) -> Result<Self> {
-        let config = SessionConfig::new()
-            .with_target_partitions(4);
+        let config = SessionConfig::new().with_target_partitions(4);
 
         let ctx = SessionContext::new_with_config(config);
         ctx.register_catalog("demo", Self::create_catalog(configs).await?);
 
-        Ok(Self {
-            ctx
-        })
+        Ok(Self { ctx })
     }
 
     async fn create_catalog(configs: &Table) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        let rest_catalog_url = configs.get("url")
+        let rest_catalog_url = configs
+            .get("url")
             .ok_or_else(|| anyhow!("url not found datafusion engine!"))?
             .as_str()
             .ok_or_else(|| anyhow!("url is not str"))?;
@@ -115,6 +112,8 @@ impl DataFusionEngine {
 
         let rest_catalog = RestCatalog::new(rest_catalog_config);
 
-        Ok(Arc::new(IcebergCatalogProvider::try_new(Arc::new(rest_catalog)).await?))
+        Ok(Arc::new(
+            IcebergCatalogProvider::try_new(Arc::new(rest_catalog)).await?,
+        ))
     }
 }
