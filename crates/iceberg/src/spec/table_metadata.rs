@@ -278,6 +278,18 @@ impl TableMetadata {
         self.snapshots
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
     }
+
+    /// update snapshot ref of table
+    #[inline]
+    pub fn update_snapshot_ref(&mut self, ref_name: String, reference: SnapshotReference) {
+        self.refs.insert(ref_name, reference);
+    }
+
+    /// Returns snapshot references.
+    #[inline]
+    pub fn snapshot_refs(&self) -> &HashMap<String, SnapshotReference> {
+        &self.refs
+    }
 }
 
 /// Manipulating table metadata.

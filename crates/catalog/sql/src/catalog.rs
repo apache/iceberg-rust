@@ -20,15 +20,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
+    TableUpdate,
 };
 use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
 use sqlx::{Any, AnyPool, Row, Transaction};
 use typed_builder::TypedBuilder;
+use uuid::Uuid;
 
-use crate::error::{from_sqlx_error, no_such_namespace_err};
+use crate::error::{
+    from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
+};
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
 static CATALOG_FIELD_CATALOG_NAME: &str = "catalog_name";
@@ -37,11 +42,14 @@ static CATALOG_FIELD_TABLE_NAMESPACE: &str = "table_namespace";
 static CATALOG_FIELD_METADATA_LOCATION_PROP: &str = "metadata_location";
 static CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static CATALOG_FIELD_RECORD_TYPE: &str = "iceberg_type";
+static CATALOG_FIELD_TABLE_RECORD_TYPE: &str = "TABLE";
 
 static NAMESPACE_TABLE_NAME: &str = "iceberg_namespace_properties";
 static NAMESPACE_FIELD_NAME: &str = "namespace";
 static NAMESPACE_FIELD_PROPERTY_KEY: &str = "property_key";
 static NAMESPACE_FIELD_PROPERTY_VALUE: &str = "property_value";
+
+static NAMESPACE_LOCATION_PROPERTY_KEY: &str = "location";
 
 static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if not provided
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
@@ -71,8 +79,8 @@ pub struct SqlCatalogConfig {
 pub struct SqlCatalog {
     name: String,
     connection: AnyPool,
-    _warehouse_location: String,
-    _fileio: FileIO,
+    warehouse_location: String,
+    fileio: FileIO,
     sql_bind_style: SqlBindStyle,
 }
 
@@ -142,8 +150,8 @@ impl SqlCatalog {
         Ok(SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
-            _warehouse_location: config.warehouse_location,
-            _fileio: config.file_io,
+            warehouse_location: config.warehouse_location,
+            fileio: config.file_io,
             sql_bind_style: config.sql_bind_style,
         })
     }
@@ -476,37 +484,285 @@ impl Catalog for SqlCatalog {
         todo!()
     }
 
-    async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        todo!()
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        if !self.namespace_exists(namespace).await? {
+            return no_such_namespace_err(namespace);
+        }
+
+        let query = format!(
+            "SELECT {CATALOG_FIELD_TABLE_NAME} FROM {CATALOG_TABLE_NAME} 
+             WHERE {CATALOG_FIELD_CATALOG_NAME} = ? 
+             AND {CATALOG_FIELD_TABLE_NAMESPACE} = ? 
+            AND (
+                {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+            OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+            )",
+        );
+
+        let namespace_name = namespace.join(".");
+        let args: Vec<Option<&str>> = vec![Some(&self.name), Some(&namespace_name)];
+        let query_result_rows = self.fetch_rows(&query, args).await?;
+        if query_result_rows.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut table_idents = Vec::with_capacity(query_result_rows.len());
+        for row in query_result_rows {
+            let table_name = row
+                .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
+                .map_err(from_sqlx_error)?;
+            table_idents.push(TableIdent::new(namespace.clone(), table_name));
+        }
+
+        Ok(table_idents)
     }
 
-    async fn table_exists(&self, _identifier: &TableIdent) -> Result<bool> {
-        todo!()
+    async fn table_exists(&self, identifier: &TableIdent) -> Result<bool> {
+        let namespace = identifier.namespace().join(".");
+        let table_name = identifier.name();
+        let catalog_name = self.name.as_str();
+        let query = format!("SELECT 1 FROM {CATALOG_TABLE_NAME} WHERE {CATALOG_FIELD_CATALOG_NAME} = ? AND {CATALOG_FIELD_TABLE_NAMESPACE} = ? AND {CATALOG_FIELD_TABLE_NAME} = ? AND ({CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' OR {CATALOG_FIELD_RECORD_TYPE} IS NULL) LIMIT 1");
+        let args = vec![
+            Some(catalog_name),
+            Some(namespace.as_str()),
+            Some(table_name),
+        ];
+
+        let table_counts = self.fetch_rows(&query, args).await?;
+
+        Ok(!table_counts.is_empty())
     }
 
-    async fn drop_table(&self, _identifier: &TableIdent) -> Result<()> {
-        todo!()
+    async fn drop_table(&self, identifier: &TableIdent) -> Result<()> {
+        if !self.table_exists(identifier).await? {
+            return no_such_table_err(identifier);
+        }
+
+        let namespace = identifier.namespace().join(".");
+        let table_name = identifier.name();
+        let catalog_name = self.name.as_str();
+
+        let delete = format!(
+            "DELETE FROM {CATALOG_TABLE_NAME} 
+             WHERE {CATALOG_FIELD_CATALOG_NAME} = ? 
+             AND {CATALOG_FIELD_TABLE_NAMESPACE} = ? 
+             AND {CATALOG_FIELD_TABLE_NAME} = ?
+             AND (
+                    {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                  )"
+        );
+
+        let args = vec![
+            Some(catalog_name),
+            Some(namespace.as_str()),
+            Some(table_name),
+        ];
+
+        self.execute(&delete, args, None).await?;
+
+        Ok(())
     }
 
-    async fn load_table(&self, _identifier: &TableIdent) -> Result<Table> {
-        todo!()
+    async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {
+        if !self.table_exists(identifier).await? {
+            return no_such_table_err(identifier);
+        }
+
+        let namespace = identifier.namespace().join(".");
+        let table_name = identifier.name();
+        let catalog_name = self.name.as_str();
+
+        let query = format!(
+            "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP} FROM {CATALOG_TABLE_NAME} 
+                                    WHERE {CATALOG_FIELD_CATALOG_NAME} = ? 
+                                    AND {CATALOG_FIELD_TABLE_NAMESPACE} = ? 
+                                    AND {CATALOG_FIELD_TABLE_NAME} = ?
+                                    AND (
+                                        {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL)
+                                    LIMIT 1
+                                    "
+        );
+
+        let args = vec![
+            Some(catalog_name),
+            Some(namespace.as_str()),
+            Some(table_name),
+        ];
+
+        let query_result_rows = self.fetch_rows(&query, args).await?;
+
+        if query_result_rows.is_empty() {
+            return no_such_table_err(identifier);
+        }
+
+        let row = query_result_rows.first().unwrap();
+        let metadata_location = row
+            .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
+            .map_err(from_sqlx_error)?;
+
+        let file = self.fileio.new_input(&metadata_location)?;
+        let metadata: TableMetadata = serde_json::from_slice(file.read().await?.as_ref())?;
+
+        Ok(Table::builder()
+            .file_io(self.fileio.clone())
+            .identifier(identifier.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .build()?)
     }
 
     async fn create_table(
         &self,
-        _namespace: &NamespaceIdent,
-        _creation: TableCreation,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
     ) -> Result<Table> {
-        todo!()
+        if !self.namespace_exists(namespace).await? {
+            return no_such_namespace_err(namespace);
+        }
+
+        let identifier = TableIdent::new(namespace.clone(), creation.name.clone());
+        if self.table_exists(&identifier).await? {
+            return table_already_exists_err(&identifier);
+        }
+
+        let new_table_name = creation.name.clone();
+
+        // build table location
+        let table_creation_localtion = match creation.location {
+            Some(location) => location,
+            None => {
+                let namespace_properties =
+                    self.get_namespace(namespace).await?.properties().clone();
+                match namespace_properties.get(NAMESPACE_LOCATION_PROPERTY_KEY) {
+                    Some(location) => {
+                        format!("{}/{}", location.clone(), new_table_name,)
+                    }
+                    None => {
+                        format!(
+                            "{}/{}/{}",
+                            self.warehouse_location.clone(),
+                            namespace.join("/"),
+                            new_table_name,
+                        )
+                    }
+                }
+            }
+        };
+
+        // build table metadata
+        let table_metadata = TableMetadataBuilder::from_table_creation(TableCreation {
+            location: Some(table_creation_localtion.clone()),
+            ..creation
+        })?
+        .build()?;
+
+        // serde table to json
+        let new_table_meta_localtion = metadata_path(&table_creation_localtion, Uuid::new_v4());
+        let file = self.fileio.new_output(&new_table_meta_localtion)?;
+        file.write(serde_json::to_vec(&table_metadata)?.into())
+            .await?;
+
+        let insert = format!(
+            "INSERT INTO {CATALOG_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE}) VALUES (?, ?, ?, ?, ?)"
+        );
+
+        let namespace_name = namespace.join(".");
+        let args: Vec<Option<&str>> = vec![
+            Some(&self.name),
+            Some(&namespace_name),
+            Some(&new_table_name),
+            Some(&new_table_meta_localtion),
+            Some(CATALOG_FIELD_TABLE_RECORD_TYPE),
+        ];
+
+        self.execute(&insert, args, None).await?;
+
+        Ok(Table::builder()
+            .file_io(self.fileio.clone())
+            .identifier(identifier)
+            .metadata_location(new_table_meta_localtion)
+            .metadata(table_metadata)
+            .build()?)
     }
 
     async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
         todo!()
     }
 
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        todo!()
+    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+        let identifier = commit.identifier().clone();
+        if !self.table_exists(&identifier).await? {
+            return no_such_table_err(&identifier);
+        }
+
+        // ReplaceSortOrder is currently not supported, so ignore the requirement here.
+        let _requirements = commit.take_requirements();
+        let table_updates = commit.take_updates();
+
+        let table = self.load_table(&identifier).await?;
+        let mut update_table_metadata = table.metadata().clone();
+
+        for table_update in table_updates {
+            match table_update {
+                TableUpdate::AddSnapshot { snapshot } => {
+                    update_table_metadata.append_snapshot(snapshot);
+                }
+
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    update_table_metadata.update_snapshot_ref(ref_name, reference);
+                }
+
+                _ => {
+                    unreachable!()
+                }
+            }
+        }
+
+        let new_table_meta_localtion = metadata_path(table.metadata().location(), Uuid::new_v4());
+        let file = self.fileio.new_output(&new_table_meta_localtion)?;
+        file.write(serde_json::to_vec(&update_table_metadata)?.into())
+            .await?;
+
+        let update = format!(
+            "UPDATE {CATALOG_TABLE_NAME} 
+             SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ? 
+             WHERE {CATALOG_FIELD_CATALOG_NAME} = ? 
+             AND {CATALOG_FIELD_TABLE_NAMESPACE} = ? 
+             AND {CATALOG_FIELD_TABLE_NAME} = ? 
+             AND (
+                    {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
+                    OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
+                  )"
+        );
+
+        let namespace_name = identifier.namespace().join(".");
+        let args: Vec<Option<&str>> = vec![
+            Some(&new_table_meta_localtion),
+            Some(&self.name),
+            Some(&namespace_name),
+            Some(identifier.name()),
+        ];
+
+        self.execute(&update, args, None).await?;
+
+        Ok(Table::builder()
+            .file_io(self.fileio.clone())
+            .identifier(identifier)
+            .metadata_location(new_table_meta_localtion)
+            .metadata(update_table_metadata)
+            .build()?)
     }
+}
+
+/// Generate the metadata path for a table
+#[inline]
+pub fn metadata_path(meta_data_location: &str, uuid: Uuid) -> String {
+    format!("{}/metadata/0-{}.metadata.json", meta_data_location, uuid)
 }
 
 #[cfg(test)]
@@ -515,11 +771,23 @@ mod tests {
     use std::hash::Hash;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::{Catalog, Namespace, NamespaceIdent};
+    use iceberg::spec::{
+        NestedField, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortOrder, Summary, Type, MAIN_BRANCH,
+    };
+    use iceberg::table::Table;
+    use iceberg::{
+        Catalog, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent, TableUpdate,
+    };
+    use itertools::Itertools;
+    use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
+    use crate::catalog::NAMESPACE_LOCATION_PROPERTY_KEY;
     use crate::{SqlBindStyle, SqlCatalog, SqlCatalogConfig};
+
+    const UUID_REGEX_STR: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
@@ -560,6 +828,77 @@ mod tests {
         for namespace_ident in namespace_idents {
             let _ = create_namespace(catalog, namespace_ident).await;
         }
+    }
+
+    fn simple_table_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![NestedField::required(
+                1,
+                "foo",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .into()])
+            .build()
+            .unwrap()
+    }
+
+    fn assert_table_eq(table: &Table, expected_table_ident: &TableIdent, expected_schema: &Schema) {
+        assert_eq!(table.identifier(), expected_table_ident);
+
+        let metadata = table.metadata();
+
+        assert_eq!(metadata.current_schema().as_ref(), expected_schema);
+
+        let expected_partition_spec = PartitionSpec::builder(expected_schema)
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            metadata
+                .partition_specs_iter()
+                .map(|p| p.as_ref())
+                .collect_vec(),
+            vec![&expected_partition_spec]
+        );
+
+        let expected_sorted_order = SortOrder::builder()
+            .with_order_id(0)
+            .with_fields(vec![])
+            .build(expected_schema)
+            .unwrap();
+
+        assert_eq!(
+            metadata
+                .sort_orders_iter()
+                .map(|s| s.as_ref())
+                .collect_vec(),
+            vec![&expected_sorted_order]
+        );
+
+        assert_eq!(metadata.properties(), &HashMap::new());
+
+        assert!(!table.readonly());
+    }
+
+    fn assert_table_metadata_location_matches(table: &Table, regex_str: &str) {
+        let actual = table.metadata_location().unwrap().to_string();
+        let regex = Regex::new(regex_str).unwrap();
+        assert!(regex.is_match(&actual))
+    }
+
+    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
+        let _ = catalog
+            .create_table(
+                &table_ident.namespace,
+                TableCreation::builder()
+                    .name(table_ident.name().into())
+                    .schema(simple_table_schema())
+                    .location(temp_path())
+                    .build(),
+            )
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -933,5 +1272,527 @@ mod tests {
             .namespace_exists(&namespace_ident_a_b)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_table_with_location() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let table_name = "abc";
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        assert_table_eq(
+            &catalog
+                .create_table(&namespace_ident, table_creation)
+                .await
+                .unwrap(),
+            &expected_table_ident,
+            &simple_table_schema(),
+        );
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+
+        assert!(table
+            .metadata_location()
+            .unwrap()
+            .to_string()
+            .starts_with(&location))
+    }
+
+    #[tokio::test]
+    async fn test_create_table_falls_back_to_namespace_location_if_table_location_is_missing() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let mut namespace_properties = HashMap::new();
+        let namespace_location = temp_path();
+        namespace_properties.insert(
+            NAMESPACE_LOCATION_PROPERTY_KEY.to_string(),
+            namespace_location.to_string(),
+        );
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        let expected_table_metadata_location_regex = format!(
+            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            namespace_location, UUID_REGEX_STR,
+        );
+
+        let table = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_in_nested_namespace_falls_back_to_nested_namespace_location_if_table_location_is_missing(
+    ) {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let mut namespace_properties = HashMap::new();
+        let namespace_location = temp_path();
+        namespace_properties.insert(
+            NAMESPACE_LOCATION_PROPERTY_KEY.to_string(),
+            namespace_location.to_string(),
+        );
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let nested_namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let mut nested_namespace_properties = HashMap::new();
+        let nested_namespace_location = temp_path();
+        nested_namespace_properties.insert(
+            NAMESPACE_LOCATION_PROPERTY_KEY.to_string(),
+            nested_namespace_location.to_string(),
+        );
+        catalog
+            .create_namespace(&nested_namespace_ident, nested_namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident =
+            TableIdent::new(nested_namespace_ident.clone(), table_name.into());
+        let expected_table_metadata_location_regex = format!(
+            "^{}/tbl1/metadata/0-{}.metadata.json$",
+            nested_namespace_location, UUID_REGEX_STR,
+        );
+
+        let table = catalog
+            .create_table(
+                &nested_namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
+    ) {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        // note: no location specified in namespace_properties
+        let namespace_properties = HashMap::new();
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        let expected_table_metadata_location_regex = format!(
+            "^{}/a/tbl1/metadata/0-{}.metadata.json$",
+            warehouse_loc, UUID_REGEX_STR
+        );
+
+        let table = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_in_nested_namespace_falls_back_to_warehouse_location_if_both_table_location_and_namespace_location_are_missing(
+    ) {
+        let warehouse_loc = temp_path();
+        let namespace_location = warehouse_loc.clone();
+        let catalog = new_sql_catalog(warehouse_loc).await;
+
+        let namespace_ident = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
+        let namespace_properties = HashMap::new();
+        catalog
+            .create_namespace(&namespace_ident, namespace_properties)
+            .await
+            .unwrap();
+
+        let table_name = "tbl1";
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        let expected_table_metadata_location_regex = format!(
+            "^{}/{}/{}/{}/metadata/0-{}.metadata.json$",
+            namespace_location, "a", "b", table_name, UUID_REGEX_STR,
+        );
+
+        let table = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name(table_name.into())
+                    .schema(simple_table_schema())
+                    // no location specified for table
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+        assert_table_metadata_location_matches(&table, &expected_table_metadata_location_regex);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_throws_error_if_table_with_same_name_already_exists() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_table(&catalog, &table_ident).await;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let location = tmp_dir.path().to_str().unwrap().to_string();
+
+        assert_eq!(
+            catalog
+                .create_table(
+                    &namespace_ident,
+                    TableCreation::builder()
+                        .name(table_name.into())
+                        .schema(simple_table_schema())
+                        .location(location)
+                        .build()
+                )
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Unexpected => Cannot create table {:?}. Table already exists.",
+                &table_ident
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drop_table_throws_error_if_table_not_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let err = catalog
+            .drop_table(&table_ident)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drop_table() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        catalog
+            .create_table(&namespace_ident, table_creation)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert_table_eq(&table, &table_ident, &simple_table_schema());
+
+        catalog.drop_table(&table_ident).await.unwrap();
+        let err = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_throws_error_if_table_not_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_commit = TableCommit::builder()
+            .ident(table_ident.clone())
+            .updates(vec![])
+            .requirements(vec![])
+            .build();
+        let err = catalog
+            .update_table(table_commit)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_add_snapshot() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let table_name = "abc";
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        assert_table_eq(
+            &catalog
+                .create_table(&namespace_ident, table_creation)
+                .await
+                .unwrap(),
+            &expected_table_ident,
+            &simple_table_schema(),
+        );
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+
+        let table_snapshots_iter = table.metadata().snapshots();
+        assert_eq!(0, table_snapshots_iter.count());
+
+        let add_snapshot = Snapshot::builder()
+            .with_snapshot_id(638933773299822130)
+            .with_timestamp_ms(1662532818843)
+            .with_sequence_number(1)
+            .with_schema_id(1)
+            .with_manifest_list("/home/iceberg/warehouse/ns/tbl1/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
+            .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
+            .build();
+
+        let table_update = TableUpdate::AddSnapshot {
+            snapshot: add_snapshot,
+        };
+        let requirements = vec![];
+        let table_commit = TableCommit::builder()
+            .ident(expected_table_ident.clone())
+            .updates(vec![table_update])
+            .requirements(requirements)
+            .build();
+        let table = catalog.update_table(table_commit).await.unwrap();
+        let snapshot_vec = table.metadata().snapshots().collect_vec();
+        assert_eq!(1, snapshot_vec.len());
+        let snapshot = &snapshot_vec[0];
+        assert_eq!(snapshot.snapshot_id(), 638933773299822130);
+        assert_eq!(snapshot.timestamp_ms(), 1662532818843);
+        assert_eq!(snapshot.sequence_number(), 1);
+        assert_eq!(snapshot.schema_id().unwrap(), 1);
+        assert_eq!(snapshot.manifest_list(), "/home/iceberg/warehouse/ns/tbl1/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro");
+        assert_eq!(snapshot.summary().operation, Operation::Append);
+        assert_eq!(
+            snapshot.summary().other,
+            HashMap::from_iter(vec![
+                (
+                    "spark.app.id".to_string(),
+                    "local-1662532784305".to_string()
+                ),
+                ("added-data-files".to_string(), "4".to_string()),
+                ("added-records".to_string(), "4".to_string()),
+                ("added-files-size".to_string(), "6001".to_string())
+            ])
+        );
+
+        let table_reload = catalog.load_table(&expected_table_ident).await.unwrap();
+        let snapshot_reload_vec = table_reload.metadata().snapshots().collect_vec();
+        assert_eq!(1, snapshot_reload_vec.len());
+        let snapshot_reload = &snapshot_reload_vec[0];
+        assert_eq!(snapshot, snapshot_reload);
+    }
+
+    #[tokio::test]
+    async fn test_update_table_set_snapshot_ref() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let table_name = "abc";
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        let expected_table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+
+        assert_table_eq(
+            &catalog
+                .create_table(&namespace_ident, table_creation)
+                .await
+                .unwrap(),
+            &expected_table_ident,
+            &simple_table_schema(),
+        );
+
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        assert_table_eq(&table, &expected_table_ident, &simple_table_schema());
+
+        let table_snapshots_iter = table.metadata().snapshots();
+        assert_eq!(0, table_snapshots_iter.count());
+
+        let snapshot_id = 638933773299822130;
+        let reference = SnapshotReference {
+            snapshot_id,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: Some(10),
+                max_snapshot_age_ms: Some(100),
+                max_ref_age_ms: Some(200),
+            },
+        };
+        let table_update_set_snapshot_ref = TableUpdate::SetSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string(),
+            reference: reference.clone(),
+        };
+
+        let add_snapshot = Snapshot::builder()
+            .with_snapshot_id(638933773299822130)
+            .with_timestamp_ms(1662532818843)
+            .with_sequence_number(1)
+            .with_schema_id(1)
+            .with_manifest_list("/home/iceberg/warehouse/ns/tbl1/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
+            .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
+            .build();
+        let table_update_add_snapshot = TableUpdate::AddSnapshot {
+            snapshot: add_snapshot,
+        };
+        let table_commit = TableCommit::builder()
+            .ident(expected_table_ident.clone())
+            .updates(vec![table_update_add_snapshot])
+            .requirements(vec![])
+            .build();
+        catalog.update_table(table_commit).await.unwrap();
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        let snapshot_vec = table.metadata().snapshots().collect_vec();
+        assert_eq!(1, snapshot_vec.len());
+        let snapshot = &snapshot_vec[0];
+        assert_eq!(snapshot.snapshot_id(), 638933773299822130);
+        assert_eq!(snapshot.timestamp_ms(), 1662532818843);
+        assert_eq!(snapshot.sequence_number(), 1);
+        assert_eq!(snapshot.schema_id().unwrap(), 1);
+        assert_eq!(snapshot.manifest_list(), "/home/iceberg/warehouse/ns/tbl1/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro");
+        assert_eq!(snapshot.summary().operation, Operation::Append);
+        assert_eq!(
+            snapshot.summary().other,
+            HashMap::from_iter(vec![
+                (
+                    "spark.app.id".to_string(),
+                    "local-1662532784305".to_string()
+                ),
+                ("added-data-files".to_string(), "4".to_string()),
+                ("added-records".to_string(), "4".to_string()),
+                ("added-files-size".to_string(), "6001".to_string())
+            ])
+        );
+
+        let snapshot_refs_map = table.metadata().snapshot_refs();
+        assert_eq!(1, snapshot_refs_map.len());
+        let snapshot_ref = snapshot_refs_map.get(MAIN_BRANCH).unwrap();
+        let basic_snapshot_ref = SnapshotReference {
+            snapshot_id,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            },
+        };
+        assert_eq!(snapshot_ref, &basic_snapshot_ref);
+
+        let table_commit = TableCommit::builder()
+            .ident(expected_table_ident.clone())
+            .updates(vec![table_update_set_snapshot_ref])
+            .requirements(vec![])
+            .build();
+        catalog.update_table(table_commit).await.unwrap();
+        let table = catalog.load_table(&expected_table_ident).await.unwrap();
+        let snapshot_refs_map = table.metadata().snapshot_refs();
+        assert_eq!(1, snapshot_refs_map.len());
+        let snapshot_ref = snapshot_refs_map.get(MAIN_BRANCH).unwrap();
+        assert_eq!(snapshot_ref, &reference);
     }
 }
