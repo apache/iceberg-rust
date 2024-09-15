@@ -44,7 +44,7 @@ arrow-array = { version = "52" }
 arrow-ord = { version = "52" }
 arrow-schema = { version = "52" }
 arrow-select = { version = "52" }
-arrow-string = { version = "52" }
+arrow-string = { version = "53" }
 async-stream = "0.3.5"
 async-trait = "0.1"
 async-std = "1.12"
