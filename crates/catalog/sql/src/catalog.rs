@@ -1543,10 +1543,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => Cannot create table {:?}. Table already exists.",
-                &table_ident
-            )
+            format!("Unexpected => Table {:?} already exists.", &table_ident)
         );
     }
 
@@ -1704,10 +1701,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!(
-                "Unexpected => Cannot create table {:? }. Table already exists.",
-                &dst_table_ident
-            ),
+            format!("Unexpected => Table {:?} already exists.", &dst_table_ident),
         );
     }
 }
