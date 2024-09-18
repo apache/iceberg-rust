@@ -30,7 +30,7 @@ use crate::{Error, ErrorKind};
 #[derive(Debug)]
 pub(crate) enum Storage {
     #[cfg(feature = "storage-memory")]
-    Memory,
+    Memory(Operator),
     #[cfg(feature = "storage-fs")]
     LocalFs,
     #[cfg(feature = "storage-s3")]
@@ -56,7 +56,7 @@ impl Storage {
 
         match scheme {
             #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory),
+            Scheme::Memory => Ok(Self::Memory(super::memory_config_build()?)),
             #[cfg(feature = "storage-fs")]
             Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
@@ -95,13 +95,11 @@ impl Storage {
         let path = path.as_ref();
         match self {
             #[cfg(feature = "storage-memory")]
-            Storage::Memory => {
-                let op = super::memory_config_build()?;
-
+            Storage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok((op, stripped))
+                    Ok((op.clone(), stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    Ok((op.clone(), &path[1..]))
                 }
             }
             #[cfg(feature = "storage-fs")]

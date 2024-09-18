@@ -332,6 +332,7 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
 
+    use bytes::Bytes;
     use futures::io::AllowStdIo;
     use futures::AsyncReadExt;
     use tempfile::TempDir;
@@ -443,5 +444,23 @@ mod tests {
 
         let io = FileIO::from_path("tmp/||c");
         assert!(io.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_memory_io() {
+        let io = FileIOBuilder::new("memory").build().unwrap();
+
+        let path = format!("{}/1.txt", TempDir::new().unwrap().path().to_str().unwrap());
+
+        let output_file = io.new_output(&path).unwrap();
+        output_file.write("test".into()).await.unwrap();
+
+        assert!(io.is_exist(&path.clone()).await.unwrap());
+        let input_file = io.new_input(&path).unwrap();
+        let content = input_file.read().await.unwrap();
+        assert_eq!(content, Bytes::from("test"));
+
+        io.delete(&path).await.unwrap();
+        assert!(!io.is_exist(&path).await.unwrap());
     }
 }
