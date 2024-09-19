@@ -36,8 +36,8 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    Datum, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
+    Datum, ListType, MapType, NestedField, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type,
 };
 use crate::{Error, ErrorKind};
 
@@ -46,7 +46,7 @@ pub(crate) const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 
 /// A post order arrow schema visitor.
 ///
-/// For order of methods called, please refer to [`visit_schema`].
+/// For order of methods called, please refer to [`to_iceberg_schema`].
 pub trait ArrowSchemaVisitor {
     /// Return type of this visitor on arrow field.
     type T;
@@ -93,157 +93,23 @@ pub trait ArrowSchemaVisitor {
     fn after_map_value(&mut self, _field: &Field) -> Result<()> {
         Ok(())
     }
-
-    /// Called after schema's type visited.
-    fn schema(&mut self, schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U>;
-
-    /// Called after struct's fields visited.
-    fn r#struct(&mut self, fields: &Fields, results: Vec<Self::T>) -> Result<Self::T>;
-
-    /// Called after list fields visited.
-    fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T>;
-
-    /// Called after map's key and value fields visited.
-    fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T>;
-
-    /// Called when see a primitive type.
-    fn primitive(&mut self, p: &DataType) -> Result<Self::T>;
-}
-
-/// Visiting a type in post order.
-fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Result<V::T> {
-    match r#type {
-        p if p.is_primitive()
-            || matches!(
-                p,
-                DataType::Boolean
-                    | DataType::Utf8
-                    | DataType::LargeUtf8
-                    | DataType::Binary
-                    | DataType::LargeBinary
-                    | DataType::FixedSizeBinary(_)
-            ) =>
-        {
-            visitor.primitive(p)
-        }
-        DataType::List(element_field) => visit_list(r#type, element_field, visitor),
-        DataType::LargeList(element_field) => visit_list(r#type, element_field, visitor),
-        DataType::FixedSizeList(element_field, _) => visit_list(r#type, element_field, visitor),
-        DataType::Map(field, _) => match field.data_type() {
-            DataType::Struct(fields) => {
-                if fields.len() != 2 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Map field must have exactly 2 fields",
-                    ));
-                }
-
-                let key_field = &fields[0];
-                let value_field = &fields[1];
-
-                let key_result = {
-                    visitor.before_map_key(key_field)?;
-                    let ret = visit_type(key_field.data_type(), visitor)?;
-                    visitor.after_map_key(key_field)?;
-                    ret
-                };
-
-                let value_result = {
-                    visitor.before_map_value(value_field)?;
-                    let ret = visit_type(value_field.data_type(), visitor)?;
-                    visitor.after_map_value(value_field)?;
-                    ret
-                };
-
-                visitor.map(r#type, key_result, value_result)
-            }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Map field must have struct type",
-            )),
-        },
-        DataType::Struct(fields) => visit_struct(fields, visitor),
-        other => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Cannot visit Arrow data type: {other}"),
-        )),
-    }
-}
-
-/// Visit list types in post order.
-#[allow(dead_code)]
-fn visit_list<V: ArrowSchemaVisitor>(
-    data_type: &DataType,
-    element_field: &Field,
-    visitor: &mut V,
-) -> Result<V::T> {
-    visitor.before_list_element(element_field)?;
-    let value = visit_type(element_field.data_type(), visitor)?;
-    visitor.after_list_element(element_field)?;
-    visitor.list(data_type, value)
-}
-
-/// Visit struct type in post order.
-#[allow(dead_code)]
-fn visit_struct<V: ArrowSchemaVisitor>(fields: &Fields, visitor: &mut V) -> Result<V::T> {
-    let mut results = Vec::with_capacity(fields.len());
-    for field in fields {
-        visitor.before_field(field)?;
-        let result = visit_type(field.data_type(), visitor)?;
-        visitor.after_field(field)?;
-        results.push(result);
-    }
-
-    visitor.r#struct(fields, results)
-}
-
-/// Visit schema in post order.
-#[allow(dead_code)]
-fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) -> Result<V::U> {
-    let mut results = Vec::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        visitor.before_field(field)?;
-        let result = visit_type(field.data_type(), visitor)?;
-        visitor.after_field(field)?;
-        results.push(result);
-    }
-    visitor.schema(schema, results)
 }
 
 /// Convert Arrow schema to ceberg schema.
 #[allow(dead_code)]
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
-    visit_schema(schema, &mut visitor)
+    visitor.convert_schema(schema)
 }
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-fn get_field_id(field: &Field) -> Result<i32> {
-    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-        return value.parse::<i32>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse field id".to_string(),
-            )
-            .with_context("value", value)
-            .with_source(e)
-        });
-    }
-    Err(Error::new(
-        ErrorKind::DataInvalid,
-        "Field id not found in metadata",
-    ))
-}
-
-fn get_field_doc(field: &Field) -> Option<String> {
-    if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
-        return Some(value.clone());
-    }
-    None
-}
-
 struct ArrowSchemaConverter;
+
+impl ArrowSchemaVisitor for ArrowSchemaConverter {
+    type T = Type;
+    type U = Schema;
+}
 
 impl ArrowSchemaConverter {
     #[allow(dead_code)]
@@ -251,120 +117,58 @@ impl ArrowSchemaConverter {
         Self {}
     }
 
-    fn convert_fields(fields: &Fields, field_results: &[Type]) -> Result<Vec<NestedFieldRef>> {
-        let mut results = Vec::with_capacity(fields.len());
-        for i in 0..fields.len() {
-            let field = &fields[i];
-            let field_type = &field_results[i];
-            let id = get_field_id(field)?;
-            let doc = get_field_doc(field);
-            let nested_field = NestedField {
-                id,
-                doc,
-                name: field.name().clone(),
-                required: !field.is_nullable(),
-                field_type: Box::new(field_type.clone()),
-                initial_default: None,
-                write_default: None,
-            };
-            results.push(Arc::new(nested_field));
+    /// Convert Arrow schema to Iceberg schema.
+    fn convert_schema(&mut self, schema: &ArrowSchema) -> Result<Schema> {
+        let mut fields = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            self.before_field(field)?;
+            let tp = self.convert_type(field.data_type())?;
+            self.after_field(field)?;
+            let iceberg_field = self.convert_field(field, &tp)?;
+            fields.push(Arc::new(iceberg_field));
         }
-        Ok(results)
-    }
-}
-
-impl ArrowSchemaVisitor for ArrowSchemaConverter {
-    type T = Type;
-    type U = Schema;
-
-    fn schema(&mut self, schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
-        let fields = Self::convert_fields(schema.fields(), &values)?;
-        let builder = Schema::builder().with_fields(fields);
-        builder.build()
+        Schema::builder().with_fields(fields).build()
     }
 
-    fn r#struct(&mut self, fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
-        let fields = Self::convert_fields(fields, &results)?;
-        Ok(Type::Struct(StructType::new(fields)))
-    }
-
-    fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
-        let element_field = match list {
-            DataType::List(element_field) => element_field,
-            DataType::LargeList(element_field) => element_field,
-            DataType::FixedSizeList(element_field, _) => element_field,
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "List type must have list data type",
-                ))
-            }
-        };
-
-        let id = get_field_id(element_field)?;
-        let doc = get_field_doc(element_field);
-        let mut element_field =
-            NestedField::list_element(id, value.clone(), !element_field.is_nullable());
-        if let Some(doc) = doc {
-            element_field = element_field.with_doc(doc);
-        }
-        let element_field = Arc::new(element_field);
-        Ok(Type::List(ListType { element_field }))
-    }
-
-    fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
-        match map {
-            DataType::Map(field, _) => match field.data_type() {
-                DataType::Struct(fields) => {
-                    if fields.len() != 2 {
-                        return Err(Error::new(
+    /// Convert Arrow field to Iceberg field.
+    fn convert_field(&self, field: &Field, field_type: &Type) -> Result<NestedField> {
+        let id = field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .map_or_else(
+                || {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Field id not found in metadata",
+                    ))
+                },
+                |value| {
+                    value.parse::<i32>().map_err(|e| {
+                        Error::new(
                             ErrorKind::DataInvalid,
-                            "Map field must have exactly 2 fields",
-                        ));
-                    }
+                            "Failed to parse field id".to_string(),
+                        )
+                        .with_context("value", value)
+                        .with_source(e)
+                    })
+                },
+            )?;
 
-                    let key_field = &fields[0];
-                    let value_field = &fields[1];
-
-                    let key_id = get_field_id(key_field)?;
-                    let key_doc = get_field_doc(key_field);
-                    let mut key_field = NestedField::map_key_element(key_id, key_value.clone());
-                    if let Some(doc) = key_doc {
-                        key_field = key_field.with_doc(doc);
-                    }
-                    let key_field = Arc::new(key_field);
-
-                    let value_id = get_field_id(value_field)?;
-                    let value_doc = get_field_doc(value_field);
-                    let mut value_field = NestedField::map_value_element(
-                        value_id,
-                        value.clone(),
-                        !value_field.is_nullable(),
-                    );
-                    if let Some(doc) = value_doc {
-                        value_field = value_field.with_doc(doc);
-                    }
-                    let value_field = Arc::new(value_field);
-
-                    Ok(Type::Map(MapType {
-                        key_field,
-                        value_field,
-                    }))
-                }
-                _ => Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Map field must have struct type",
-                )),
-            },
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Map type must have map data type",
-            )),
-        }
+        let doc = field.metadata().get(ARROW_FIELD_DOC_KEY).map(|x| x.into());
+        Ok(NestedField {
+            id,
+            doc,
+            name: field.name().clone(),
+            required: !field.is_nullable(),
+            field_type: Box::new(field_type.clone()),
+            initial_default: None,
+            write_default: None,
+        })
     }
 
-    fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
-        match p {
+    /// Convert Arrow data type to Iceberg type.
+    fn convert_type(&mut self, tp: &DataType) -> Result<Type> {
+        match tp {
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
             DataType::Int32 => Ok(Type::Primitive(PrimitiveType::Int)),
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
@@ -395,11 +199,78 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
             DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::Primitive(PrimitiveType::String)),
+            // list:
+            DataType::List(element_field)
+            | DataType::LargeList(element_field)
+            | DataType::FixedSizeList(element_field, _) => self.convert_list_type(element_field),
+
+            DataType::Map(field, _) => self.convert_map_type(field),
+            DataType::Struct(fields) => self.convert_struct_type(fields),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("Unsupported Arrow data type: {p}"),
+                format!("Unsupported Arrow data type: {tp}"),
             )),
         }
+    }
+
+    /// Convert Arrow list type to Iceberg list type.
+    fn convert_list_type(&mut self, field: &Field) -> Result<Type> {
+        // before_list_element
+        let tp = self.convert_type(field.data_type())?;
+        // after list element
+        let icebug_field = self.convert_field(field, &tp)?;
+        Ok(Type::List(ListType::new(icebug_field.into())))
+    }
+
+    /// Convert Arrow map type to Iceberg map type.
+    fn convert_map_type(&mut self, field: &Field) -> Result<Type> {
+        match field.data_type() {
+            DataType::Struct(fields) => {
+                if fields.len() != 2 {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Map field must have exactly 2 fields",
+                    ));
+                }
+
+                let key_field = {
+                    let field = &fields[0];
+                    self.before_map_key(field)?;
+                    let key_type = self.convert_type(field.data_type())?;
+                    self.after_map_key(field)?;
+                    self.convert_field(field, &key_type)?
+                };
+                let value_field = {
+                    let field = &fields[1];
+                    self.before_map_value(field)?;
+                    let value_type = self.convert_type(field.data_type())?;
+                    self.after_map_value(field)?;
+                    self.convert_field(field, &value_type)?
+                };
+
+                Ok(Type::Map(MapType::new(
+                    key_field.into(),
+                    value_field.into(),
+                )))
+            }
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Map field must have struct type",
+            )),
+        }
+    }
+
+    /// Convert Arrow struct type to Iceberg struct type.
+    fn convert_struct_type(&mut self, fields: &Fields) -> Result<Type> {
+        let mut ice_fields = Vec::with_capacity(fields.len());
+        for field in fields {
+            self.before_field(field)?;
+            let field_type = self.convert_type(field.data_type())?;
+            self.after_field(field)?;
+            let icebug_field = self.convert_field(field, &field_type)?;
+            ice_fields.push(Arc::new(icebug_field));
+        }
+        Ok(Type::Struct(StructType::new(ice_fields)))
     }
 }
 
@@ -759,7 +630,7 @@ impl TryFrom<&ArrowSchema> for crate::spec::Schema {
     type Error = Error;
 
     fn try_from(schema: &ArrowSchema) -> crate::Result<Self> {
-        arrow_schema_to_schema(schema)
+        ArrowSchemaConverter::new().convert_schema(schema)
     }
 }
 
