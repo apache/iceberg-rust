@@ -171,7 +171,6 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 }
 
 /// Visit list types in post order.
-#[allow(dead_code)]
 fn visit_list<V: ArrowSchemaVisitor>(
     data_type: &DataType,
     element_field: &Field,
@@ -184,7 +183,6 @@ fn visit_list<V: ArrowSchemaVisitor>(
 }
 
 /// Visit struct type in post order.
-#[allow(dead_code)]
 fn visit_struct<V: ArrowSchemaVisitor>(fields: &Fields, visitor: &mut V) -> Result<V::T> {
     let mut results = Vec::with_capacity(fields.len());
     for field in fields {
@@ -198,7 +196,6 @@ fn visit_struct<V: ArrowSchemaVisitor>(fields: &Fields, visitor: &mut V) -> Resu
 }
 
 /// Visit schema in post order.
-#[allow(dead_code)]
 fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) -> Result<V::U> {
     let mut results = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
@@ -211,10 +208,15 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
 }
 
 /// Convert Arrow schema to ceberg schema.
-#[allow(dead_code)]
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
+}
+
+/// Convert Arrow type to iceberg type.
+pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
+    let mut visitor = ArrowSchemaConverter::new();
+    visit_type(ty, &mut visitor)
 }
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
@@ -246,7 +248,6 @@ fn get_field_doc(field: &Field) -> Option<String> {
 struct ArrowSchemaConverter;
 
 impl ArrowSchemaConverter {
-    #[allow(dead_code)]
     fn new() -> Self {
         Self {}
     }
@@ -611,6 +612,15 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_schema(schema, &mut converter)? {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
+        _ => unreachable!(),
+    }
+}
+
+/// Convert iceberg type to an arrow type.
+pub fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
+    let mut converter = ToArrowSchemaConverter;
+    match crate::spec::visit_type(ty, &mut converter)? {
+        ArrowSchemaOrFieldOrType::Type(ty) => Ok(ty),
         _ => unreachable!(),
     }
 }
