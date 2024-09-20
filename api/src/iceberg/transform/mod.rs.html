@@ -212,7 +212,7 @@
 <span class="kw">mod </span>void;
 
 <span class="doccomment">/// TransformFunction is a trait that defines the interface for all transform functions.
-</span><span class="kw">pub trait </span>TransformFunction: Send {
+</span><span class="kw">pub trait </span>TransformFunction: Send + Sync {
     <span class="doccomment">/// transform will take an input array and transform it into a new array.
     /// The implementation of this function will need to check and downcast the input to specific
     /// type.
