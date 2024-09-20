@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["arrow_schema_to_schema","schema_to_arrow_schema"],"struct":["ArrowReader","ArrowReaderBuilder"],"trait":["ArrowSchemaVisitor"]};
+window.SIDEBAR_ITEMS = {"fn":["arrow_schema_to_schema","arrow_type_to_type","schema_to_arrow_schema","type_to_arrow_type"],"struct":["ArrowReader","ArrowReaderBuilder"],"trait":["ArrowSchemaVisitor"]};
