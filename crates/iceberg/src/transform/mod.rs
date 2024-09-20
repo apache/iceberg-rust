@@ -29,7 +29,7 @@ mod truncate;
 mod void;
 
 /// TransformFunction is a trait that defines the interface for all transform functions.
-pub trait TransformFunction: Send {
+pub trait TransformFunction: Send + Sync {
     /// transform will take an input array and transform it into a new array.
     /// The implementation of this function will need to check and downcast the input to specific
     /// type.
