@@ -1,0 +1,90 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::time::Duration;
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use spark_connect_rs::{SparkSession, SparkSessionBuilder};
+use sqllogictest::{AsyncDB, DBOutput};
+use toml::Table;
+
+use crate::display::normalize_51;
+use crate::engine::output::DFColumnType;
+use crate::error::{Error, Result};
+
+/// SparkSql engine implementation for sqllogictests.
+pub struct SparkSqlEngine {
+    session: SparkSession,
+}
+
+#[async_trait]
+impl AsyncDB for SparkSqlEngine {
+    type Error = Error;
+    type ColumnType = DFColumnType;
+
+    async fn run(&mut self, sql: &str) -> Result<DBOutput<DFColumnType>> {
+        let results = self
+            .session
+            .sql(sql)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .collect()
+            .await
+            .map_err(|e| anyhow!(e))?;
+        let types = normalize_51::convert_schema_to_types(results.schema().fields());
+        let rows = normalize_51::convert_batches(vec![results])?;
+
+        if rows.is_empty() && types.is_empty() {
+            Ok(DBOutput::StatementComplete(0))
+        } else {
+            Ok(DBOutput::Rows { types, rows })
+        }
+    }
+
+    /// Engine name of current database.
+    fn engine_name(&self) -> &str {
+        "SparkConnect"
+    }
+
+    /// [`DataFusionEngine`] calls this function to perform sleep.
+    ///
+    /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
+    /// but would block the current thread. If you are running in tokio runtime, you should override
+    /// this by `tokio::time::sleep`.
+    async fn sleep(dur: Duration) {
+        tokio::time::sleep(dur).await;
+    }
+}
+
+impl SparkSqlEngine {
+    pub async fn new(configs: &Table) -> Result<Self> {
+        let url = configs
+            .get("url")
+            .ok_or_else(|| anyhow!("url property doesn't exist for spark engine"))?
+            .as_str()
+            .ok_or_else(|| anyhow!("url property is not a string for spark engine"))?;
+
+        let session = SparkSessionBuilder::remote(url)
+            .app_name("SparkConnect")
+            .build()
+            .await
+            .map_err(|e| anyhow!(e))?;
+
+        Ok(Self { session })
+    }
+}

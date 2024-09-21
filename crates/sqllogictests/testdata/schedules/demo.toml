@@ -1,0 +1,12 @@
+[engines]
+spark = { type = "spark", url = "sc://localhost:15002" }
+df = { type = "datafusion", url = "http://localhost:8181" }
+
+[[steps]]
+engine = "spark"
+sql = "demo/prepare.slt"
+
+[[steps]]
+engine = "df"
+sql = "demo/verify.slt"
+

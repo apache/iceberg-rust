@@ -1,0 +1,11 @@
+statement ok
+CREATE SCHEMA IF NOT EXISTS s1 ;
+
+statement ok
+USE SCHEMA s1;
+
+statement ok
+CREATE TABLE t1 (id INTEGER);
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
