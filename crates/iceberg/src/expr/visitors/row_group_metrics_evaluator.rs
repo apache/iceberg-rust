@@ -1735,7 +1735,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert!(result);
+        assert!(!result);
         Ok(())
     }
 
