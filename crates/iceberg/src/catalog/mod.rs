@@ -133,6 +133,16 @@ impl NamespaceIdent {
     pub fn inner(self) -> Vec<String> {
         self.0
     }
+
+    /// Get the parent of this namespace.
+    /// Returns None if this namespace only has a single element and thus has no parent.
+    pub fn parent(&self) -> Option<Self> {
+        if self.0.len() <= 1 {
+            None
+        } else {
+            Some(Self(self.0[..self.0.len() - 1].to_vec()))
+        }
+    }
 }
 
 impl AsRef<Vec<String>> for NamespaceIdent {
@@ -479,6 +489,17 @@ mod tests {
         TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
+
+    #[test]
+    fn test_parent_namespace() {
+        let ns1 = NamespaceIdent::from_strs(vec!["ns1"]).unwrap();
+        let ns2 = NamespaceIdent::from_strs(vec!["ns1", "ns2"]).unwrap();
+        let ns3 = NamespaceIdent::from_strs(vec!["ns1", "ns2", "ns3"]).unwrap();
+
+        assert_eq!(ns1.parent(), None);
+        assert_eq!(ns2.parent(), Some(ns1.clone()));
+        assert_eq!(ns3.parent(), Some(ns2.clone()));
+    }
 
     #[test]
     fn test_create_table_id() {
