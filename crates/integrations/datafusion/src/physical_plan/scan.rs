@@ -22,6 +22,7 @@ use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -29,9 +30,12 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
+use datafusion::prelude::Expr;
 use futures::{Stream, TryStreamExt};
+use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
+use crate::physical_plan::expr_to_predicate::ExprToPredicateVisitor;
 use crate::to_datafusion_error;
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -47,6 +51,8 @@ pub(crate) struct IcebergTableScan {
     plan_properties: PlanProperties,
     /// Projection column names, None means all columns
     projection: Option<Vec<String>>,
+    /// Filters to apply to the table scan
+    predicates: Option<Predicate>,
 }
 
 impl IcebergTableScan {
@@ -55,15 +61,18 @@ impl IcebergTableScan {
         table: Table,
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
+        filters: &[Expr],
     ) -> Self {
         let plan_properties = Self::compute_properties(schema.clone());
         let projection = get_column_names(schema.clone(), projection);
+        let predicates = convert_filters_to_predicate(filters);
 
         Self {
             table,
             schema,
             plan_properties,
             projection,
+            predicates,
         }
     }
 
@@ -109,7 +118,11 @@ impl ExecutionPlan for IcebergTableScan {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        let fut = get_batch_stream(self.table.clone(), self.projection.clone());
+        let fut = get_batch_stream(
+            self.table.clone(),
+            self.projection.clone(),
+            self.predicates.clone(),
+        );
         let stream = futures::stream::once(fut).try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -143,11 +156,15 @@ impl DisplayAs for IcebergTableScan {
 async fn get_batch_stream(
     table: Table,
     column_names: Option<Vec<String>>,
+    predicates: Option<Predicate>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let scan_builder = match column_names {
+    let mut scan_builder = match column_names {
         Some(column_names) => table.scan().select(column_names),
         None => table.scan().select_all(),
     };
+    if let Some(pred) = predicates {
+        scan_builder = scan_builder.with_filter(pred);
+    }
     let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
     let stream = table_scan
@@ -155,10 +172,25 @@ async fn get_batch_stream(
         .await
         .map_err(to_datafusion_error)?
         .map_err(to_datafusion_error);
-
     Ok(Box::pin(stream))
 }
 
+/// Converts DataFusion filters ([`Expr`]) to an iceberg [`Predicate`].
+/// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
+/// If the conversion was successful, return the converted predicates combined with an AND operator.
+fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
+    filters
+        .iter()
+        .filter_map(|expr| {
+            let mut visitor = ExprToPredicateVisitor::new();
+            if expr.visit(&mut visitor).is_ok() {
+                visitor.get_predicate()
+            } else {
+                None
+            }
+        })
+        .reduce(Predicate::and)
+}
 fn get_column_names(
     schema: ArrowSchemaRef,
     projection: Option<&Vec<usize>>,

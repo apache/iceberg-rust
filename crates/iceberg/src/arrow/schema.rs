@@ -24,8 +24,8 @@ use arrow_array::types::{
     validate_decimal_precision_and_scale, Decimal128Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    BooleanArray, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
-    PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
+    BooleanArray, Date32Array, Datum as ArrowDatum, Float32Array, Float64Array, Int32Array,
+    Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
@@ -645,6 +645,9 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Box::new(StringArray::new_scalar(value.as_str())))
+        }
+        (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
+            Ok(Box::new(Date32Array::new_scalar(*value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
             Ok(Box::new(TimestampMicrosecondArray::new_scalar(*value)))
