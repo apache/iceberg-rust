@@ -445,6 +445,16 @@
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -479,16 +489,25 @@
 ///
 /// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
 /// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
+///
+/// Supported storages:
+///
+/// | Storage            | Feature Flag     | Schemes    |
+/// |--------------------|-------------------|------------|
+/// | Local file system  | `storage-fs`      | `file`     |
+/// | Memory             | `storage-memory`  | `memory`   |
+/// | S3                 | `storage-s3`      | `s3`, `s3a`|
+/// | GCS                | `storage-gcs`     | `gs`       |
 </span><span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub struct </span>FileIO {
     inner: Arc&lt;Storage&gt;,
 }
 
 <span class="kw">impl </span>FileIO {
-    <span class="doccomment">/// Try to infer file io scheme from path.
+    <span class="doccomment">/// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
-    /// If it's a valid url, for example http://example.org, url scheme will be used.
-    /// If it's not a valid url, will try to detect if it's a file path.
+    /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
+    /// - If it's not a valid url, will try to detect if it's a file path.
     ///
     /// Otherwise will return parsing error.
     </span><span class="kw">pub fn </span>from_path(path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="kw">crate</span>::Result&lt;FileIOBuilder&gt; {
@@ -558,6 +577,7 @@
 
 <span class="kw">impl </span>FileIOBuilder {
     <span class="doccomment">/// Creates a new builder with scheme.
+    /// See [`FileIO`] for supported schemes.
     </span><span class="kw">pub fn </span>new(scheme_str: <span class="kw">impl </span>ToString) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             scheme_str: <span class="prelude-val">Some</span>(scheme_str.to_string()),

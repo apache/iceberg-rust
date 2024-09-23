@@ -170,6 +170,7 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -241,7 +242,8 @@
             </span>Scheme::Gcs =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Gcs {
                 config: <span class="kw">super</span>::gcs_config_parse(props)<span class="question-mark">?</span>.into(),
             }),
-            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
+            <span class="comment">// Update doc on [`FileIO`] when adding new schemes.
+            </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::FeatureUnsupported,
                 <span class="macro">format!</span>(<span class="string">"Constructing file io from scheme: {scheme} not supported now"</span>,),
             )),
