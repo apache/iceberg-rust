@@ -1462,6 +1462,28 @@
 <a href="#1462" id="1462">1462</a>
 <a href="#1463" id="1463">1463</a>
 <a href="#1464" id="1464">1464</a>
+<a href="#1465" id="1465">1465</a>
+<a href="#1466" id="1466">1466</a>
+<a href="#1467" id="1467">1467</a>
+<a href="#1468" id="1468">1468</a>
+<a href="#1469" id="1469">1469</a>
+<a href="#1470" id="1470">1470</a>
+<a href="#1471" id="1471">1471</a>
+<a href="#1472" id="1472">1472</a>
+<a href="#1473" id="1473">1473</a>
+<a href="#1474" id="1474">1474</a>
+<a href="#1475" id="1475">1475</a>
+<a href="#1476" id="1476">1476</a>
+<a href="#1477" id="1477">1477</a>
+<a href="#1478" id="1478">1478</a>
+<a href="#1479" id="1479">1479</a>
+<a href="#1480" id="1480">1480</a>
+<a href="#1481" id="1481">1481</a>
+<a href="#1482" id="1482">1482</a>
+<a href="#1483" id="1483">1483</a>
+<a href="#1484" id="1484">1484</a>
+<a href="#1485" id="1485">1485</a>
+<a href="#1486" id="1486">1486</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2129,43 +2151,57 @@
 }
 
 <span class="macro">macro_rules!</span> get_parquet_stat_as_datum {
-    (<span class="macro-nonterminal">$limit_type</span>:ident) =&gt; {
+    (<span class="macro-nonterminal">$limit_type</span>:tt) =&gt; {
         <span class="macro">paste::paste!</span> {
         <span class="doccomment">/// Gets the $limit_type value from a parquet Statistics struct, as a Datum
         </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>[&lt;get_parquet_stat_ <span class="macro-nonterminal">$limit_type </span>_as_datum&gt;](
             primitive_type: <span class="kw-2">&amp;</span>PrimitiveType, stats: <span class="kw-2">&amp;</span>Statistics
         ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Datum&gt;&gt; {
-            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw">match </span>(primitive_type, stats) {
-                (PrimitiveType::Boolean, Statistics::Boolean(stats)) =&gt; Datum::bool(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
-                (PrimitiveType::Int, Statistics::Int32(stats)) =&gt; Datum::int(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
-                (PrimitiveType::Date, Statistics::Int32(stats)) =&gt; Datum::date(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
-                (PrimitiveType::Long, Statistics::Int64(stats)) =&gt; Datum::long(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
-                (PrimitiveType::Time, Statistics::Int64(stats)) =&gt; Datum::time_micros(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())<span class="question-mark">?</span>,
+            <span class="prelude-val">Ok</span>(<span class="kw">match </span>(primitive_type, stats) {
+                (PrimitiveType::Boolean, Statistics::Boolean(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::bool(<span class="kw-2">*</span>val)),
+                (PrimitiveType::Int, Statistics::Int32(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::int(<span class="kw-2">*</span>val)),
+                (PrimitiveType::Date, Statistics::Int32(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::date(<span class="kw-2">*</span>val)),
+                (PrimitiveType::Long, Statistics::Int64(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::long(<span class="kw-2">*</span>val)),
+                (PrimitiveType::Time, Statistics::Int64(stats)) =&gt; {
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(val) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+
+                    <span class="prelude-val">Some</span>(Datum::time_micros(<span class="kw-2">*</span>val)<span class="question-mark">?</span>)
+                }
                 (PrimitiveType::Timestamp, Statistics::Int64(stats)) =&gt; {
-                    Datum::timestamp_micros(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::timestamp_micros(<span class="kw-2">*</span>val))
                 }
                 (PrimitiveType::Timestamptz, Statistics::Int64(stats)) =&gt; {
-                    Datum::timestamptz_micros(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::timestamptz_micros(<span class="kw-2">*</span>val))
                 }
                 (PrimitiveType::TimestampNs, Statistics::Int64(stats)) =&gt; {
-                    Datum::timestamp_nanos(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::timestamp_nanos(<span class="kw-2">*</span>val))
                 }
                 (PrimitiveType::TimestamptzNs, Statistics::Int64(stats)) =&gt; {
-                    Datum::timestamptz_nanos(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::timestamptz_nanos(<span class="kw-2">*</span>val))
                 }
-                (PrimitiveType::Float, Statistics::Float(stats)) =&gt; Datum::float(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
-                (PrimitiveType::Double, Statistics::Double(stats)) =&gt; Datum::double(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>()),
+                (PrimitiveType::Float, Statistics::Float(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::float(<span class="kw-2">*</span>val)),
+                (PrimitiveType::Double, Statistics::Double(stats)) =&gt; stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val|Datum::double(<span class="kw-2">*</span>val)),
                 (PrimitiveType::String, Statistics::ByteArray(stats)) =&gt; {
-                    Datum::string(stats.<span class="macro-nonterminal">$limit_type</span>().as_utf8()<span class="question-mark">?</span>)
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(val) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+
+                    <span class="prelude-val">Some</span>(Datum::string(val.as_utf8()<span class="question-mark">?</span>))
                 }
                 (PrimitiveType::Decimal {
                     precision: <span class="kw">_</span>,
                     scale: <span class="kw">_</span>,
                 }, Statistics::ByteArray(stats)) =&gt; {
-                    Datum::new(
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+
+                    <span class="prelude-val">Some</span>(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_le_bytes(stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes&gt;]().try_into()<span class="question-mark">?</span>)),
-                    )
+                        PrimitiveLiteral::Int128(i128::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+                    ))
                 }
                 (
                 PrimitiveType::Decimal {
@@ -2173,10 +2209,12 @@
                     scale: <span class="kw">_</span>,
                 },
                 Statistics::Int32(stats)) =&gt; {
-                    Datum::new(
-                        primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())),
-                    )
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val| {
+                        Datum::new(
+                            primitive_type.clone(),
+                            PrimitiveLiteral::Int128(i128::from(<span class="kw-2">*</span>val)),
+                        )
+                    })
                 }
 
                 (
@@ -2186,40 +2224,46 @@
                     },
                     Statistics::Int64(stats),
                 ) =&gt; {
-                    Datum::new(
-                        primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from(<span class="kw-2">*</span>stats.<span class="macro-nonterminal">$limit_type</span>())),
-                    )
+                    stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_opt&gt;]().map(|val| {
+                        Datum::new(
+                            primitive_type.clone(),
+                            PrimitiveLiteral::Int128(i128::from(<span class="kw-2">*</span>val)),
+                        )
+                    })
                 }
                 (PrimitiveType::Uuid, Statistics::FixedLenByteArray(stats)) =&gt; {
-                    <span class="kw">let </span>raw = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes&gt;]();
-                    <span class="kw">if </span>raw.len() != <span class="number">16 </span>{
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+                    <span class="kw">if </span>bytes.len() != <span class="number">16 </span>{
                         <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                             ErrorKind::Unexpected,
                             <span class="string">"Invalid length of uuid bytes."</span>,
                         ));
                     }
-                    Datum::uuid(Uuid::from_bytes(
-                        raw[..<span class="number">16</span>].try_into().unwrap(),
-                    ))
+                    <span class="prelude-val">Some</span>(Datum::uuid(Uuid::from_bytes(
+                        bytes[..<span class="number">16</span>].try_into().unwrap(),
+                    )))
                 }
                 (PrimitiveType::Fixed(len), Statistics::FixedLenByteArray(stat)) =&gt; {
-                    <span class="kw">let </span>raw = stat.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes&gt;]();
-                    <span class="kw">if </span>raw.len() != <span class="kw-2">*</span>len <span class="kw">as </span>usize {
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stat.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+                    <span class="kw">if </span>bytes.len() != <span class="kw-2">*</span>len <span class="kw">as </span>usize {
                         <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                             ErrorKind::Unexpected,
                             <span class="string">"Invalid length of fixed bytes."</span>,
                         ));
                     }
-                    Datum::fixed(raw.to_vec())
+                    <span class="prelude-val">Some</span>(Datum::fixed(bytes.to_vec()))
                 }
                 (PrimitiveType::Binary, Statistics::ByteArray(stat)) =&gt; {
-                    Datum::binary(stat.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes&gt;]().to_vec())
+                    <span class="kw">return </span><span class="prelude-val">Ok</span>(stat.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]().map(|bytes|Datum::binary(bytes.to_vec())))
                 }
                 <span class="kw">_ </span>=&gt; {
                     <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
                 }
-            }))
+            })
             }
         }
     }
