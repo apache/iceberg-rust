@@ -137,11 +137,13 @@ impl NamespaceIdent {
     /// Get the parent of this namespace.
     /// Returns None if this namespace only has a single element and thus has no parent.
     pub fn parent(&self) -> Option<Self> {
-        if self.0.len() <= 1 {
-            None
-        } else {
-            Some(Self(self.0[..self.0.len() - 1].to_vec()))
-        }
+        self.0.split_last().and_then(|(_, parent)| {
+            if parent.is_empty() {
+                None
+            } else {
+                Some(Self(parent.to_vec()))
+            }
+        })
     }
 }
 
