@@ -20,6 +20,6 @@
 mod schema;
 pub use schema::*;
 mod reader;
-pub(crate) mod record_batch_evolution_processor;
+pub(crate) mod record_batch_transformer;
 
 pub use reader::*;
