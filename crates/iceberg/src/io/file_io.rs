@@ -32,16 +32,25 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// All path passed to `FileIO` must be absolute path starting with scheme string used to construct `FileIO`.
 /// For example, if you construct `FileIO` with `s3a` scheme, then all path passed to `FileIO` must start with `s3a://`.
+///
+/// Supported storages:
+///
+/// | Storage            | Feature Flag     | Schemes    |
+/// |--------------------|-------------------|------------|
+/// | Local file system  | `storage-fs`      | `file`     |
+/// | Memory             | `storage-memory`  | `memory`   |
+/// | S3                 | `storage-s3`      | `s3`, `s3a`|
+/// | GCS                | `storage-gcs`     | `gs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     inner: Arc<Storage>,
 }
 
 impl FileIO {
-    /// Try to infer file io scheme from path.
+    /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
-    /// If it's a valid url, for example http://example.org, url scheme will be used.
-    /// If it's not a valid url, will try to detect if it's a file path.
+    /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
+    /// - If it's not a valid url, will try to detect if it's a file path.
     ///
     /// Otherwise will return parsing error.
     pub fn from_path(path: impl AsRef<str>) -> crate::Result<FileIOBuilder> {
@@ -111,6 +120,7 @@ pub struct FileIOBuilder {
 
 impl FileIOBuilder {
     /// Creates a new builder with scheme.
+    /// See [`FileIO`] for supported schemes.
     pub fn new(scheme_str: impl ToString) -> Self {
         Self {
             scheme_str: Some(scheme_str.to_string()),

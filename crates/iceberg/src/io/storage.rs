@@ -69,6 +69,7 @@ impl Storage {
             Scheme::Gcs => Ok(Self::Gcs {
                 config: super::gcs_config_parse(props)?.into(),
             }),
+            // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("Constructing file io from scheme: {scheme} not supported now",),
