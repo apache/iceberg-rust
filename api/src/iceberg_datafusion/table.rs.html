@@ -86,6 +86,23 @@
 <a href="#86" id="86">86</a>
 <a href="#87" id="87">87</a>
 <a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
+<a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -111,7 +128,7 @@
 <span class="kw">use </span>datafusion::catalog::Session;
 <span class="kw">use </span>datafusion::datasource::{TableProvider, TableType};
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
-<span class="kw">use </span>datafusion::logical_expr::Expr;
+<span class="kw">use </span>datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
 <span class="kw">use </span>datafusion::physical_plan::ExecutionPlan;
 <span class="kw">use </span>iceberg::arrow::schema_to_arrow_schema;
 <span class="kw">use </span>iceberg::table::Table;
@@ -164,14 +181,31 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _state: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Session,
         projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
-        _filters: <span class="kw-2">&amp;</span>[Expr],
+        filters: <span class="kw-2">&amp;</span>[Expr],
         _limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; DFResult&lt;Arc&lt;<span class="kw">dyn </span>ExecutionPlan&gt;&gt; {
         <span class="prelude-val">Ok</span>(Arc::new(IcebergTableScan::new(
             <span class="self">self</span>.table.clone(),
             <span class="self">self</span>.schema.clone(),
             projection,
+            filters,
         )))
+    }
+
+    <span class="kw">fn </span>supports_filters_pushdown(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
+    ) -&gt; std::result::Result&lt;Vec&lt;TableProviderFilterPushDown&gt;, datafusion::error::DataFusionError&gt;
+    {
+        <span class="kw">let </span>filter_support = filters
+            .iter()
+            .map(|e| <span class="kw">match </span>e {
+                Expr::BinaryExpr(BinaryExpr { .. }) =&gt; TableProviderFilterPushDown::Inexact,
+                <span class="kw">_ </span>=&gt; TableProviderFilterPushDown::Unsupported,
+            })
+            .collect::&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt;();
+
+        <span class="prelude-val">Ok</span>(filter_support)
     }
 }
 </code></pre></div></section></main></body></html>

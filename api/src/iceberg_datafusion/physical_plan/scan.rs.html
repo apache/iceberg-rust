@@ -169,6 +169,38 @@
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -193,6 +225,7 @@
 
 <span class="kw">use </span>datafusion::arrow::array::RecordBatch;
 <span class="kw">use </span>datafusion::arrow::datatypes::SchemaRef <span class="kw">as </span>ArrowSchemaRef;
+<span class="kw">use </span>datafusion::common::tree_node::TreeNode;
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
 <span class="kw">use </span>datafusion::execution::{SendableRecordBatchStream, TaskContext};
 <span class="kw">use </span>datafusion::physical_expr::EquivalenceProperties;
@@ -200,9 +233,12 @@
 <span class="kw">use </span>datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
+<span class="kw">use </span>datafusion::prelude::Expr;
 <span class="kw">use </span>futures::{Stream, TryStreamExt};
+<span class="kw">use </span>iceberg::expr::Predicate;
 <span class="kw">use </span>iceberg::table::Table;
 
+<span class="kw">use </span><span class="kw">crate</span>::physical_plan::expr_to_predicate::ExprToPredicateVisitor;
 <span class="kw">use </span><span class="kw">crate</span>::to_datafusion_error;
 
 <span class="doccomment">/// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -218,6 +254,8 @@
     </span>plan_properties: PlanProperties,
     <span class="doccomment">/// Projection column names, None means all columns
     </span>projection: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    <span class="doccomment">/// Filters to apply to the table scan
+    </span>predicates: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
 }
 
 <span class="kw">impl </span>IcebergTableScan {
@@ -226,15 +264,18 @@
         table: Table,
         schema: ArrowSchemaRef,
         projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+        filters: <span class="kw-2">&amp;</span>[Expr],
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>plan_properties = <span class="self">Self</span>::compute_properties(schema.clone());
         <span class="kw">let </span>projection = get_column_names(schema.clone(), projection);
+        <span class="kw">let </span>predicates = convert_filters_to_predicate(filters);
 
         <span class="self">Self </span>{
             table,
             schema,
             plan_properties,
             projection,
+            predicates,
         }
     }
 
@@ -280,7 +321,11 @@
         _partition: usize,
         _context: Arc&lt;TaskContext&gt;,
     ) -&gt; DFResult&lt;SendableRecordBatchStream&gt; {
-        <span class="kw">let </span>fut = get_batch_stream(<span class="self">self</span>.table.clone(), <span class="self">self</span>.projection.clone());
+        <span class="kw">let </span>fut = get_batch_stream(
+            <span class="self">self</span>.table.clone(),
+            <span class="self">self</span>.projection.clone(),
+            <span class="self">self</span>.predicates.clone(),
+        );
         <span class="kw">let </span>stream = futures::stream::once(fut).try_flatten();
 
         <span class="prelude-val">Ok</span>(Box::pin(RecordBatchStreamAdapter::new(
@@ -314,11 +359,15 @@
 </span><span class="kw">async fn </span>get_batch_stream(
     table: Table,
     column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    predicates: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
 ) -&gt; DFResult&lt;Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = DFResult&lt;RecordBatch&gt;&gt; + Send&gt;&gt;&gt; {
-    <span class="kw">let </span>scan_builder = <span class="kw">match </span>column_names {
+    <span class="kw">let </span><span class="kw-2">mut </span>scan_builder = <span class="kw">match </span>column_names {
         <span class="prelude-val">Some</span>(column_names) =&gt; table.scan().select(column_names),
         <span class="prelude-val">None </span>=&gt; table.scan().select_all(),
     };
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(pred) = predicates {
+        scan_builder = scan_builder.with_filter(pred);
+    }
     <span class="kw">let </span>table_scan = scan_builder.build().map_err(to_datafusion_error)<span class="question-mark">?</span>;
 
     <span class="kw">let </span>stream = table_scan
@@ -326,10 +375,25 @@
         .<span class="kw">await
         </span>.map_err(to_datafusion_error)<span class="question-mark">?
         </span>.map_err(to_datafusion_error);
-
     <span class="prelude-val">Ok</span>(Box::pin(stream))
 }
 
+<span class="doccomment">/// Converts DataFusion filters ([`Expr`]) to an iceberg [`Predicate`].
+/// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
+/// If the conversion was successful, return the converted predicates combined with an AND operator.
+</span><span class="kw">fn </span>convert_filters_to_predicate(filters: <span class="kw-2">&amp;</span>[Expr]) -&gt; <span class="prelude-ty">Option</span>&lt;Predicate&gt; {
+    filters
+        .iter()
+        .filter_map(|expr| {
+            <span class="kw">let </span><span class="kw-2">mut </span>visitor = ExprToPredicateVisitor::new();
+            <span class="kw">if </span>expr.visit(<span class="kw-2">&amp;mut </span>visitor).is_ok() {
+                visitor.get_predicate()
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>}
+        })
+        .reduce(Predicate::and)
+}
 <span class="kw">fn </span>get_column_names(
     schema: ArrowSchemaRef,
     projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,

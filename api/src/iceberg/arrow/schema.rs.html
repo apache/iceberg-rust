@@ -1484,6 +1484,9 @@
 <a href="#1484" id="1484">1484</a>
 <a href="#1485" id="1485">1485</a>
 <a href="#1486" id="1486">1486</a>
+<a href="#1487" id="1487">1487</a>
+<a href="#1488" id="1488">1488</a>
+<a href="#1489" id="1489">1489</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1510,8 +1513,8 @@
     validate_decimal_precision_and_scale, Decimal128Type, TimestampMicrosecondType,
 };
 <span class="kw">use </span>arrow_array::{
-    BooleanArray, Datum <span class="kw">as </span>ArrowDatum, Float32Array, Float64Array, Int32Array, Int64Array,
-    PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
+    BooleanArray, Date32Array, Datum <span class="kw">as </span>ArrowDatum, Float32Array, Float64Array, Int32Array,
+    Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 <span class="kw">use </span>arrow_schema::{DataType, Field, Fields, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
 <span class="kw">use </span>bitvec::macros::internal::funty::Fundamental;
@@ -2131,6 +2134,9 @@
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) =&gt; {
             <span class="prelude-val">Ok</span>(Box::new(StringArray::new_scalar(value.as_str())))
+        }
+        (PrimitiveType::Date, PrimitiveLiteral::Int(value)) =&gt; {
+            <span class="prelude-val">Ok</span>(Box::new(Date32Array::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) =&gt; {
             <span class="prelude-val">Ok</span>(Box::new(TimestampMicrosecondArray::new_scalar(<span class="kw-2">*</span>value)))
