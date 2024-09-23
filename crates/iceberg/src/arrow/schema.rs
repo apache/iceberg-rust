@@ -208,7 +208,6 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
 }
 
 /// Convert Arrow schema to Iceberg schema.
-// #[allow(dead_code)]
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
