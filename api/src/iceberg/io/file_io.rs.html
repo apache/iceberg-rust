@@ -455,6 +455,42 @@
 <a href="#455" id="455">455</a>
 <a href="#456" id="456">456</a>
 <a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -528,18 +564,40 @@
     }
 
     <span class="doccomment">/// Deletes file.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     </span><span class="kw">pub async fn </span>delete(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(op.delete(relative_path).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
+    <span class="doccomment">/// Remove the path and all nested dirs and files recursively.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    </span><span class="kw">pub async fn </span>remove_all(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(op.remove_all(relative_path).<span class="kw">await</span><span class="question-mark">?</span>)
+    }
+
     <span class="doccomment">/// Check file exists.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     </span><span class="kw">pub async fn </span>is_exist(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
         <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(op.is_exist(relative_path).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="doccomment">/// Creates input file.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     </span><span class="kw">pub fn </span>new_input(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;InputFile&gt; {
         <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
         <span class="kw">let </span>path = path.as_ref().to_string();
@@ -552,6 +610,10 @@
     }
 
     <span class="doccomment">/// Creates output file.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     </span><span class="kw">pub fn </span>new_output(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;OutputFile&gt; {
         <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
         <span class="kw">let </span>path = path.as_ref().to_string();
@@ -795,7 +857,7 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-    <span class="kw">use </span>std::fs::File;
+    <span class="kw">use </span>std::fs::{create_dir_all, File};
     <span class="kw">use </span>std::io::Write;
     <span class="kw">use </span>std::path::Path;
 
@@ -810,6 +872,7 @@
     }
 
     <span class="kw">fn </span>write_to_file&lt;P: AsRef&lt;Path&gt;&gt;(s: <span class="kw-2">&amp;</span>str, path: P) {
+        create_dir_all(path.as_ref().parent().unwrap()).unwrap();
         <span class="kw">let </span><span class="kw-2">mut </span>f = File::create(path).unwrap();
         <span class="macro">write!</span>(f, <span class="string">"{s}"</span>).unwrap();
     }
@@ -846,16 +909,24 @@
     </span><span class="kw">async fn </span>test_delete_local_file() {
         <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
 
-        <span class="kw">let </span>file_name = <span class="string">"a.txt"</span>;
-        <span class="kw">let </span>content = <span class="string">"Iceberg loves rust."</span>;
-
-        <span class="kw">let </span>full_path = <span class="macro">format!</span>(<span class="string">"{}/{}"</span>, tmp_dir.path().to_str().unwrap(), file_name);
-        write_to_file(content, <span class="kw-2">&amp;</span>full_path);
+        <span class="kw">let </span>a_path = <span class="macro">format!</span>(<span class="string">"{}/{}"</span>, tmp_dir.path().to_str().unwrap(), <span class="string">"a.txt"</span>);
+        <span class="kw">let </span>sub_dir_path = <span class="macro">format!</span>(<span class="string">"{}/sub"</span>, tmp_dir.path().to_str().unwrap());
+        <span class="kw">let </span>b_path = <span class="macro">format!</span>(<span class="string">"{}/{}"</span>, sub_dir_path, <span class="string">"b.txt"</span>);
+        <span class="kw">let </span>c_path = <span class="macro">format!</span>(<span class="string">"{}/{}"</span>, sub_dir_path, <span class="string">"c.txt"</span>);
+        write_to_file(<span class="string">"Iceberg loves rust."</span>, <span class="kw-2">&amp;</span>a_path);
+        write_to_file(<span class="string">"Iceberg loves rust."</span>, <span class="kw-2">&amp;</span>b_path);
+        write_to_file(<span class="string">"Iceberg loves rust."</span>, <span class="kw-2">&amp;</span>c_path);
 
         <span class="kw">let </span>file_io = create_local_file_io();
-        <span class="macro">assert!</span>(file_io.is_exist(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap());
-        file_io.delete(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap();
-        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
+
+        file_io.remove_all(<span class="kw-2">&amp;</span>sub_dir_path).<span class="kw">await</span>.unwrap();
+        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>b_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>c_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
+
+        file_io.delete(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap();
+        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
     }
 
     <span class="attr">#[tokio::test]
@@ -868,6 +939,7 @@
         <span class="kw">let </span>file_io = create_local_file_io();
         <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap());
         <span class="macro">assert!</span>(file_io.delete(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.is_ok());
+        <span class="macro">assert!</span>(file_io.remove_all(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.is_ok());
     }
 
     <span class="attr">#[tokio::test]
