@@ -1115,6 +1115,29 @@
 <a href="#1115" id="1115">1115</a>
 <a href="#1116" id="1116">1116</a>
 <a href="#1117" id="1117">1117</a>
+<a href="#1118" id="1118">1118</a>
+<a href="#1119" id="1119">1119</a>
+<a href="#1120" id="1120">1120</a>
+<a href="#1121" id="1121">1121</a>
+<a href="#1122" id="1122">1122</a>
+<a href="#1123" id="1123">1123</a>
+<a href="#1124" id="1124">1124</a>
+<a href="#1125" id="1125">1125</a>
+<a href="#1126" id="1126">1126</a>
+<a href="#1127" id="1127">1127</a>
+<a href="#1128" id="1128">1128</a>
+<a href="#1129" id="1129">1129</a>
+<a href="#1130" id="1130">1130</a>
+<a href="#1131" id="1131">1131</a>
+<a href="#1132" id="1132">1132</a>
+<a href="#1133" id="1133">1133</a>
+<a href="#1134" id="1134">1134</a>
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1250,6 +1273,18 @@
     </span><span class="kw">pub fn </span>inner(<span class="self">self</span>) -&gt; Vec&lt;String&gt; {
         <span class="self">self</span>.<span class="number">0
     </span>}
+
+    <span class="doccomment">/// Get the parent of this namespace.
+    /// Returns None if this namespace only has a single element and thus has no parent.
+    </span><span class="kw">pub fn </span>parent(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="self">self</span>.<span class="number">0</span>.split_last().and_then(|(<span class="kw">_</span>, parent)| {
+            <span class="kw">if </span>parent.is_empty() {
+                <span class="prelude-val">None
+            </span>} <span class="kw">else </span>{
+                <span class="prelude-val">Some</span>(<span class="self">Self</span>(parent.to_vec()))
+            }
+        })
+    }
 }
 
 <span class="kw">impl </span>AsRef&lt;Vec&lt;String&gt;&gt; <span class="kw">for </span>NamespaceIdent {
@@ -1596,6 +1631,17 @@
         TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
     };
     <span class="kw">use crate</span>::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_parent_namespace() {
+        <span class="kw">let </span>ns1 = NamespaceIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>]).unwrap();
+        <span class="kw">let </span>ns2 = NamespaceIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"ns2"</span>]).unwrap();
+        <span class="kw">let </span>ns3 = NamespaceIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"ns2"</span>, <span class="string">"ns3"</span>]).unwrap();
+
+        <span class="macro">assert_eq!</span>(ns1.parent(), <span class="prelude-val">None</span>);
+        <span class="macro">assert_eq!</span>(ns2.parent(), <span class="prelude-val">Some</span>(ns1.clone()));
+        <span class="macro">assert_eq!</span>(ns3.parent(), <span class="prelude-val">Some</span>(ns2.clone()));
+    }
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_create_table_id() {
