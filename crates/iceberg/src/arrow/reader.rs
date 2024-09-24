@@ -190,7 +190,7 @@ impl ArrowReader {
             try_join!(parquet_file.metadata(), parquet_file.reader())?;
         let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
 
-        let should_load_page_index = row_selection_enabled && task.predicate().is_some();
+        let should_load_page_index = row_selection_enabled && task.predicate.is_some();
 
         // Start creating the record batch stream, which wraps the parquet file reader
         let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
@@ -245,7 +245,7 @@ impl ArrowReader {
                     record_batch_stream_builder.metadata(),
                     &selected_row_groups,
                     &field_id_map,
-                    task.schema(),
+                    &task.schema,
                 )?;
 
                 record_batch_stream_builder =
