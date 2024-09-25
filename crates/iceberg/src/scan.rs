@@ -197,10 +197,7 @@ impl<'a> TableScanBuilder<'a> {
                 .metadata()
                 .current_snapshot()
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        "Can't scan table without snapshots",
-                    )
+                    Error::new(ErrorKind::Unexpected, "Can't scan table without snapshots")
                 })?
                 .clone(),
         };
