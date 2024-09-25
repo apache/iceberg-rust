@@ -32,8 +32,10 @@ use fnv::FnvHashSet;
 use futures::channel::mpsc::{channel, Sender};
 use futures::future::BoxFuture;
 use futures::{try_join, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
+};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
@@ -47,10 +49,34 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::runtime::spawn;
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
+use crate::scan::{
+    ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream,
+};
 use crate::spec::{Datum, Schema};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
+
+// TODO: move to its own file, only here temporarily
+// Represents a parsed Delete file that can be safely stored
+// in the Object Cache.
+#[allow(dead_code)]
+enum Deletes {
+    // Positional delete files are parsed into a map of
+    // filename to a sorted list of row indices
+    Positional(HashMap<String, Vec<u64>>),
+
+    // Equality delete files are initially parsed solely as an
+    // unprocessed list of `RecordBatch`es from the equality
+    // delete files.
+    // I don't think we can do better than this by
+    // storing a Predicate (because the equality deletes use the
+    // field_id rather than the field name, so if we keep this as
+    // a Predicate then a field name change would break it).
+    // Similarly I don't think we can store this as a BoundPredicate
+    // as the column order could be different across different data
+    // files and so the accessor in the bound predicate could be invalid).
+    Equality(Vec<RecordBatch>),
+}
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -176,6 +202,47 @@ impl ArrowReader {
         return Ok(rx.boxed());
     }
 
+    // retrieve all delete files concurrently from FileIO and parse them
+    // into `Deletes` objects
+    async fn get_deletes(
+        _delete_file_entries: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
+    ) -> Vec<Deletes> {
+        // TODO: implementation
+        vec![]
+    }
+
+    fn get_positional_delete_indexes(data_file_path: &str, deletes: &[Deletes]) -> Vec<usize> {
+        let mut results = vec![];
+        deletes.iter().for_each(|d| {
+            if let Deletes::Positional(map) = d {
+                if let Some(indices) = map.get(data_file_path) {
+                    results.extend(indices.iter().map(|&i| i as usize));
+                }
+            }
+        });
+
+        results
+    }
+
+    fn get_equality_deletes(_delete_files: &[Deletes]) -> Result<Option<BoundPredicate>> {
+        let result = None;
+
+        // TODO:
+        //   reject DeleteFiles that are not equality deletes
+        //    * for each delete file:
+        //      * set `file_predicate` = AlwaysTrue
+        //      * for each row in the file:
+        //          * for each cell in the row:
+        //              * create a predicate of the form `field` = `val`
+        //                  where `field` is the column name and `val` is the value
+        //                  of the cell
+        //              * Bind this predicate to the table schema to get a `BoundPredicate`
+        //              * set file_predicate = file_predicate.and(bound_predicate_for_cell)
+        //      * set result = result.or(file_predicate)
+
+        Ok(result)
+    }
+
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
@@ -184,6 +251,10 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<()> {
+        // start gathering the delete files
+        let delete_file_tasks = task.deletes.clone();
+        let delete_files_fut = spawn(async { Self::get_deletes(delete_file_tasks).await });
+
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(&task.data_file_path)?;
@@ -220,49 +291,106 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        if let Some(predicate) = &task.predicate {
+        let delete_files = delete_files_fut.await;
+        let delete_predicate = Self::get_equality_deletes(&delete_files)?;
+
+        // As well as the optional predicate supplied in the FileScanTask,
+        // if there are any equality delete files that apply to this file,
+        // we also need to construct a predicate that will implement the filtering
+        // that they require. If both are present, we logical-AND them together
+        // to form a single filter predicate that we can pass to
+        // Arrow's RecordBatchStreamBuilder.
+        let final_predicate = match (&task.predicate, delete_predicate) {
+            (None, None) => None,
+            (Some(predicate), None) => Some(predicate.clone()),
+            (None, Some(ref predicate)) => Some(predicate.clone()),
+            (Some(filter_predicate), Some(delete_predicate)) => {
+                Some(filter_predicate.clone().and(delete_predicate.clone()))
+            }
+        };
+
+        // Just as above with the row filter, there are two possible sources
+        // for potential lists of selected RowGroup indices and `RowSelection`s.
+        // Lists of selected RowGroup indices can come from two sources:
+        //   * As above, when there are equality delete files that are applicable;
+        //   * When there is a scan predicate
+        //  and row_group_filtering_enabled = true.
+        // `RowSelection`s can be created in either or both of the following cases:
+        //   * When there are positional delete files that are applicable;
+        //   * When there is a scan predicate and row_selection_enabled = true
+        // Note that, in the former case we only perform row group filtering when
+        // there is a scan predicate AND row_group_filtering_enabled = true,
+        // but we perform row selection filtering if there are applicable
+        // equality delete files OR (there is a scan predicate AND row_selection_enabled),
+        // since it is expected that the mos efficient way to apply positional deletes will
+        // always be by using a `RowSelection`.
+        let mut selected_row_group_indices = None;
+        let mut row_selection = None;
+
+        if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                predicate,
+                &predicate,
             )?;
 
             let row_filter = Self::get_row_filter(
-                predicate,
+                &predicate,
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
             )?;
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
-            let mut selected_row_groups = None;
             if row_group_filtering_enabled {
                 let result = Self::get_selected_row_group_indices(
-                    predicate,
+                    &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     &task.schema,
                 )?;
 
-                selected_row_groups = Some(result);
+                selected_row_group_indices = Some(result);
             }
 
             if row_selection_enabled {
-                let row_selection = Self::get_row_selection(
-                    predicate,
+                row_selection = Some(Self::get_predicate_row_selection(
+                    &predicate,
                     record_batch_stream_builder.metadata(),
-                    &selected_row_groups,
+                    &selected_row_group_indices,
                     &field_id_map,
                     &task.schema,
-                )?;
-
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_selection(row_selection);
+                )?);
             }
+        }
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_groups(selected_row_groups);
-            }
+        let positional_delete_indexes =
+            Self::get_positional_delete_indexes(&task.data_file_path, &delete_files);
+
+        if !positional_delete_indexes.is_empty() {
+            let delete_row_selection = Self::get_deleted_row_selection(
+                record_batch_stream_builder.metadata(),
+                &selected_row_group_indices,
+                &positional_delete_indexes,
+            )?;
+
+            // merge the row selection from the delete files with the row selection
+            // from the filter predicate, if there is one from the filter predicate
+            row_selection = match row_selection {
+                None => Some(delete_row_selection),
+                Some(filter_row_selection) => {
+                    Some(filter_row_selection.intersection(&delete_row_selection))
+                }
+            };
+        }
+
+        if let Some(row_selection) = row_selection {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_selection(row_selection);
+        }
+
+        if let Some(selected_row_group_indices) = selected_row_group_indices {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
@@ -415,7 +543,7 @@ impl ArrowReader {
         Ok(results)
     }
 
-    fn get_row_selection(
+    fn get_predicate_row_selection(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
         selected_row_groups: &Option<Vec<usize>>,
@@ -474,6 +602,64 @@ impl ArrowReader {
         }
 
         Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
+    }
+
+    fn get_deleted_row_selection(
+        parquet_metadata: &Arc<ParquetMetaData>,
+        selected_row_groups: &Option<Vec<usize>>,
+        positional_delete_indexes: &[usize],
+    ) -> Result<RowSelection> {
+        let Some(offset_index) = parquet_metadata.offset_index() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Parquet file metadata does not contain an offset index",
+            ));
+        };
+
+        let /*mut*/ selected_row_groups_idx = 0;
+
+        let page_index = offset_index
+            .iter()
+            .enumerate()
+            .zip(parquet_metadata.row_groups());
+
+        let results: Vec<RowSelector> = Vec::new();
+        let mut current_page_base_idx: usize = 0;
+        for ((idx, _offset_index), row_group_metadata) in page_index {
+            let page_num_rows = row_group_metadata.num_rows() as usize;
+            let _next_page_base_idx = current_page_base_idx + page_num_rows;
+
+            if let Some(selected_row_groups) = selected_row_groups {
+                // skip row groups that aren't present in selected_row_groups
+                if idx == selected_row_groups[selected_row_groups_idx] {
+                    // selected_row_groups_idx += 1;
+                } else {
+                    current_page_base_idx += page_num_rows;
+                    continue;
+                }
+            }
+
+            let Some(_next_delete_row_idx) = positional_delete_indexes.last() else {
+                break;
+            };
+
+            // TODO: logic goes here to create `RowSelection`s for the
+            //   current page, based on popping delete indices that are
+            //   on this page
+            break;
+            // while *next_delete_row_idx < next_page_base_idx {
+            // }
+
+            // if let Some(selected_row_groups) = selected_row_groups {
+            //     if selected_row_groups_idx == selected_row_groups.len() {
+            //         break;
+            //     }
+            // }
+            //
+            // current_page_base_idx += page_num_rows;
+        }
+
+        Ok(results.into())
     }
 }
 

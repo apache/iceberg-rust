@@ -511,6 +511,16 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    deletes: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
+}
+
+impl ManifestFileContext {
+    fn with_deletes(self, deletes: Arc<Vec<FileScanTaskDeleteFile>>) -> Self {
+        Self {
+            deletes: Some(deletes),
+            ..self
+        }
+    }
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -523,6 +533,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
+    deletes: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
 }
 
 impl ManifestFileContext {
@@ -537,6 +548,7 @@ impl ManifestFileContext {
             field_ids,
             mut sender,
             expression_evaluator_cache,
+            deletes,
             ..
         } = self;
 
@@ -544,13 +556,14 @@ impl ManifestFileContext {
 
         for manifest_entry in manifest.entries() {
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid clone
+                // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
+                deletes: deletes.clone(),
             };
 
             sender
@@ -581,6 +594,9 @@ impl ManifestEntryContext {
             predicate: self
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
+
+            // TODO
+            deletes: self.deletes,
         }
     }
 }
@@ -619,15 +635,19 @@ impl PlanContext {
         manifest_list: Arc<ManifestList>,
         sender: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
-        let filtered_entries = manifest_list
+        let manifest_files = manifest_list
             .entries()
             .iter()
-            .filter(|manifest_file| manifest_file.content == ManifestContentType::Data);
+            // .filter(|manifest_file| manifest_file.content == ManifestContentType::Data)
+        ;
+
+        let mut delete_files = vec![];
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
+
         if self.predicate.is_some() {
-            for manifest_file in filtered_entries {
+            for manifest_file in manifest_files {
                 let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
@@ -640,22 +660,38 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
-                    let mfc = self.create_manifest_file_context(
-                        manifest_file,
-                        Some(partition_bound_predicate),
-                        sender.clone(),
-                    );
-                    filtered_mfcs.push(Ok(mfc));
+                    if manifest_file.content == ManifestContentType::Data {
+                        let mfc = self.create_manifest_file_context(
+                            manifest_file,
+                            Some(partition_bound_predicate),
+                            sender.clone(),
+                        );
+                        filtered_mfcs.push(Ok(mfc));
+                    } else {
+                        delete_files.push(FileScanTaskDeleteFile {
+                            file_path: manifest_file.manifest_path.clone(),
+                        });
+                    }
                 }
             }
         } else {
-            for manifest_file in filtered_entries {
-                let mfc = self.create_manifest_file_context(manifest_file, None, sender.clone());
-                filtered_mfcs.push(Ok(mfc));
+            for manifest_file in manifest_files {
+                if manifest_file.content == ManifestContentType::Data {
+                    let mfc =
+                        self.create_manifest_file_context(manifest_file, None, sender.clone());
+                    filtered_mfcs.push(Ok(mfc));
+                } else {
+                    delete_files.push(FileScanTaskDeleteFile {
+                        file_path: manifest_file.manifest_path.clone(),
+                    });
+                }
             }
         }
 
-        Ok(Box::new(filtered_mfcs.into_iter()))
+        let deletes = Arc::new(delete_files);
+        Ok(Box::new(filtered_mfcs.into_iter().map(move |mfc| {
+            mfc.map(|mfc| mfc.with_deletes(deletes.clone()))
+        })))
     }
 
     fn create_manifest_file_context(
@@ -684,6 +720,7 @@ impl PlanContext {
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
+            deletes: None,
         }
     }
 }
@@ -910,8 +947,10 @@ pub struct FileScanTask {
 
     /// The data file path corresponding to the task.
     pub data_file_path: String,
+
     /// The content type of the file to scan.
     pub data_file_content: DataContentType,
+
     /// The format of the file to scan.
     pub data_file_format: DataFileFormat,
 
@@ -922,6 +961,16 @@ pub struct FileScanTask {
     /// The predicate to filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate: Option<BoundPredicate>,
+
+    /// The list of delete files that may need to be applied to this data file
+    pub deletes: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
+}
+
+/// A task to scan part of file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileScanTaskDeleteFile {
+    /// The delete file path
+    pub file_path: String,
 }
 
 impl FileScanTask {
@@ -1857,6 +1906,7 @@ mod tests {
             schema: schema.clone(),
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
+            deletes: None,
         };
         test_fn(task);
 
@@ -1871,6 +1921,7 @@ mod tests {
             schema,
             record_count: None,
             data_file_format: DataFileFormat::Avro,
+            deletes: None,
         };
         test_fn(task);
     }
