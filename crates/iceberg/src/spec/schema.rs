@@ -507,8 +507,7 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         }
 
         fn field(&mut self, field: &NestedFieldRef, _value: ()) -> Result<()> {
-            self.0.insert(field.id, field.clone());
-            Ok(())
+            try_insert_field(&mut self.0, field.id, field.clone())
         }
 
         fn r#struct(&mut self, _struct: &StructType, _results: Vec<Self::T>) -> Result<Self::T> {
@@ -516,15 +515,16 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         }
 
         fn list(&mut self, list: &ListType, _value: Self::T) -> Result<Self::T> {
-            self.0
-                .insert(list.element_field.id, list.element_field.clone());
-            Ok(())
+            try_insert_field(
+                &mut self.0,
+                list.element_field.id,
+                list.element_field.clone(),
+            )
         }
 
         fn map(&mut self, map: &MapType, _key_value: Self::T, _value: Self::T) -> Result<Self::T> {
-            self.0.insert(map.key_field.id, map.key_field.clone());
-            self.0.insert(map.value_field.id, map.value_field.clone());
-            Ok(())
+            try_insert_field(&mut self.0, map.key_field.id, map.key_field.clone())?;
+            try_insert_field(&mut self.0, map.value_field.id, map.value_field.clone())
         }
 
         fn primitive(&mut self, _: &PrimitiveType) -> Result<Self::T> {
@@ -980,6 +980,21 @@ struct ReassignFieldIds {
     old_to_new_id: HashMap<i32, i32>,
 }
 
+fn try_insert_field<V>(map: &mut HashMap<i32, V>, field_id: i32, value: V) -> Result<()> {
+    map.insert(field_id, value).map_or_else(
+        || Ok(()),
+        |_| {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Found duplicate 'field.id' {}. Field ids must be unique.",
+                    field_id
+                ),
+            ))
+        },
+    )
+}
+
 // We are not using the visitor here, as post order traversal is not desired.
 // Instead we want to re-assign all fields on one level first before diving deeper.
 impl ReassignFieldIds {
@@ -995,17 +1010,7 @@ impl ReassignFieldIds {
         let outer_fields = fields
             .into_iter()
             .map(|field| {
-                self
-                    .old_to_new_id
-                    .insert(field.id, self.next_field_id)
-                    .map_or_else(|| Ok(()),                     |_| Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Error reassigning field ids: Found duplicate 'field.id' {}. Field ids must be unique.",
-                            field.id
-                        ))
-                    ))?;
-
+                try_insert_field(&mut self.old_to_new_id, field.id, self.next_field_id)?;
                 let new_field = Arc::unwrap_or_clone(field).with_id(self.next_field_id);
                 self.increase_next_field_id()?;
                 Ok(Arc::new(new_field))
@@ -2563,20 +2568,35 @@ table {
     fn test_reassign_ids_fails_with_duplicate_ids() {
         let reassigned_schema = Schema::builder()
             .with_schema_id(1)
-            .with_identifier_field_ids(vec![3])
+            .with_identifier_field_ids(vec![5])
             .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
             .with_fields(vec![
-                NestedField::optional(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
                 NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
             ])
             .with_reassigned_field_ids(0)
             .build()
             .unwrap_err();
 
-        assert!(reassigned_schema
-            .message()
-            .contains("Found duplicate 'field.id' 3"));
+        assert!(reassigned_schema.message().contains("'field.id' 3"));
+    }
+
+    #[test]
+    fn test_field_ids_must_be_unique() {
+        let reassigned_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![5])
+            .with_alias(BiHashMap::from_iter(vec![("bar_alias".to_string(), 3)]))
+            .with_fields(vec![
+                NestedField::required(5, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()
+            .unwrap_err();
+
+        assert!(reassigned_schema.message().contains("'field.id' 3"));
     }
 
     #[test]
