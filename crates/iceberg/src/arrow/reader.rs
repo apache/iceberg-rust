@@ -47,8 +47,12 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, PrimitiveType, Schema};
+use crate::scan::{
+    ArrowRecordBatchStream, FileScanTask, FileScanTaskStream,
+};
+use crate::spec::{
+    Datum, PrimitiveType, Schema,
+};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -712,10 +716,14 @@ impl PredicateConverter<'_> {
             let index = self
                 .column_indices
                 .iter()
-                .position(|&idx| idx == *column_idx).ok_or(Error::new(ErrorKind::DataInvalid, format!(
-                    "Leave column `{}` in predicates cannot be found in the required column indices.",
-                    reference.field().name
-                )))?;
+                .position(|&idx| idx == *column_idx)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                reference.field().name
+            ),
+                ))?;
 
             Ok(Some(index))
         } else {
