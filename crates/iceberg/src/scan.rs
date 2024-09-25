@@ -916,7 +916,9 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+    use arrow_array::{
+        ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
+    };
     use futures::{stream, TryStreamExt};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -1113,10 +1115,29 @@ mod tests {
                             PARQUET_FIELD_ID_META_KEY.to_string(),
                             "4".to_string(),
                         )])),
+                    arrow_schema::Field::new("dbl", arrow_schema::DataType::Float64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "5".to_string(),
+                        )])),
+                    arrow_schema::Field::new("i32", arrow_schema::DataType::Int32, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "6".to_string(),
+                        )])),
+                    arrow_schema::Field::new("i64", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "7".to_string(),
+                        )])),
+                    arrow_schema::Field::new("bool", arrow_schema::DataType::Boolean, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "8".to_string(),
+                        )])),
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
-            // 4 columns:
             // x: [1, 1, 1, 1, ...]
             let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
 
@@ -1139,8 +1160,34 @@ mod tests {
             values.append(vec!["Iceberg"; 512].as_mut());
             let col4 = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
 
-            let to_write =
-                RecordBatch::try_new(schema.clone(), vec![col1, col2, col3, col4]).unwrap();
+            // dbl:
+            let mut values = vec![100.0f64; 512];
+            values.append(vec![150.0f64; 12].as_mut());
+            values.append(vec![200.0f64; 500].as_mut());
+            let col5 = Arc::new(Float64Array::from_iter_values(values)) as ArrayRef;
+
+            // i32:
+            let mut values = vec![100i32; 512];
+            values.append(vec![150i32; 12].as_mut());
+            values.append(vec![200i32; 500].as_mut());
+            let col6 = Arc::new(Int32Array::from_iter_values(values)) as ArrayRef;
+
+            // i64:
+            let mut values = vec![100i64; 512];
+            values.append(vec![150i64; 12].as_mut());
+            values.append(vec![200i64; 500].as_mut());
+            let col7 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
+
+            // bool:
+            let mut values = vec![false; 512];
+            values.append(vec![true; 512].as_mut());
+            let values: BooleanArray = values.into();
+            let col8 = Arc::new(values) as ArrayRef;
+
+            let to_write = RecordBatch::try_new(schema.clone(), vec![
+                col1, col2, col3, col4, col5, col6, col7, col8,
+            ])
+            .unwrap();
 
             // Write the Parquet files
             let props = WriterProperties::builder()
@@ -1218,6 +1265,7 @@ mod tests {
         let table_scan = table
             .scan()
             .snapshot_id(3051729675574597004)
+            .with_row_selection_enabled(true)
             .build()
             .unwrap();
         assert_eq!(table_scan.snapshot().snapshot_id(), 3051729675574597004);
@@ -1229,7 +1277,13 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture.table.scan().build().unwrap();
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
         let mut tasks = table_scan
             .plan_files()
             .await
@@ -1264,7 +1318,12 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture.table.scan().build().unwrap();
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
 
@@ -1282,7 +1341,12 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture.table.scan().build().unwrap();
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
 
         let mut plan_task: Vec<_> = table_scan
             .plan_files()
@@ -1315,7 +1379,13 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture.table.scan().select(["x", "z"]).build().unwrap();
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
 
@@ -1340,7 +1410,9 @@ mod tests {
         // Filter: y < 3
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").less_than(Datum::long(3));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1366,7 +1438,9 @@ mod tests {
         // Filter: y >= 5
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1385,6 +1459,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_double_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: dbl == 150.0
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("dbl").equal_to(Datum::double(150.0f64));
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 12);
+
+        let col = batches[0].column_by_name("dbl").unwrap();
+        let f64_arr = col.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(f64_arr.value(1), 150.0f64);
+    }
+
+    #[tokio::test]
+    async fn test_filter_int_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: i32 == 150
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("i32").equal_to(Datum::int(150i32));
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 12);
+
+        let col = batches[0].column_by_name("i32").unwrap();
+        let i32_arr = col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(i32_arr.value(1), 150i32);
+    }
+
+    #[tokio::test]
+    async fn test_filter_long_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: i64 == 150
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("i64").equal_to(Datum::long(150i64));
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 12);
+
+        let col = batches[0].column_by_name("i64").unwrap();
+        let i64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(i64_arr.value(1), 150i64);
+    }
+
+    #[tokio::test]
+    async fn test_filter_bool_eq() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: bool == true
+        let mut builder = fixture.table.scan();
+        let predicate = Reference::new("bool").equal_to(Datum::bool(true));
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
+        let table_scan = builder.build().unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 512);
+
+        let col = batches[0].column_by_name("bool").unwrap();
+        let bool_arr = col.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(bool_arr.value(1), true);
+    }
+
+    #[tokio::test]
     async fn test_filter_on_arrow_is_null() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
@@ -1392,7 +1566,9 @@ mod tests {
         // Filter: y is null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_null();
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1409,7 +1585,9 @@ mod tests {
         // Filter: y is not null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_not_null();
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1428,7 +1606,9 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .and(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1462,7 +1642,9 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .or(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1497,7 +1679,9 @@ mod tests {
         // Filter: a STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").starts_with(Datum::string("Ice"));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1519,7 +1703,9 @@ mod tests {
         // Filter: a NOT STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").not_starts_with(Datum::string("Ice"));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1542,7 +1728,9 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
@@ -1565,7 +1753,9 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_not_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_row_selection_enabled(true);
         let table_scan = builder.build().unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();

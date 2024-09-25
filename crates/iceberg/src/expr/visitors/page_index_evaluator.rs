@@ -246,10 +246,10 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|(item, &row_count)| {
                     predicate(
-                        item.max.map(|val| {
+                        item.min.map(|val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
-                        item.min.map(|val| {
+                        item.max.map(|val| {
                             Datum::new(field_type.clone(), PrimitiveLiteral::Boolean(val))
                         }),
                         PageNullCount::from_row_and_null_counts(row_count, item.null_count),
@@ -262,9 +262,9 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|(item, &row_count)| {
                     predicate(
-                        item.max
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
                         item.min
+                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
+                        item.max
                             .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
                         PageNullCount::from_row_and_null_counts(row_count, item.null_count),
                     )
@@ -276,9 +276,9 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|(item, &row_count)| {
                     predicate(
-                        item.max
-                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
                         item.min
+                            .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
+                        item.max
                             .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
                         PageNullCount::from_row_and_null_counts(row_count, item.null_count),
                     )
@@ -312,13 +312,13 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|(item, &row_count)| {
                     predicate(
-                        item.max.map(|val| {
+                        item.min.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
-                        item.min.map(|val| {
+                        item.max.map(|val| {
                             Datum::new(
                                 field_type.clone(),
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
