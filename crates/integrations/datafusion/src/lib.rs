@@ -24,3 +24,4 @@ pub use error::*;
 mod physical_plan;
 mod schema;
 mod table;
+pub use table::*;

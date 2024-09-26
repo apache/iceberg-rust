@@ -33,7 +33,7 @@ use crate::physical_plan::scan::IcebergTableScan;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
-pub(crate) struct IcebergTableProvider {
+pub struct IcebergTableProvider {
     /// A table in the catalog.
     table: Table,
     /// A reference-counted arrow `Schema`.
@@ -54,6 +54,13 @@ impl IcebergTableProvider {
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
+        Ok(IcebergTableProvider { table, schema })
+    }
+
+    /// Asynchronously tries to construct a new [`IcebergTableProvider`]
+    /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
+    pub async fn try_new_from_table(table: Table) -> Result<Self> {
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergTableProvider { table, schema })
     }
 }
