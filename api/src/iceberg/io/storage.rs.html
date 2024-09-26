@@ -169,8 +169,6 @@
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
-<a href="#172" id="172">172</a>
-<a href="#173" id="173">173</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -203,7 +201,7 @@
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>Storage {
     <span class="attr">#[cfg(feature = <span class="string">"storage-memory"</span>)]
-    </span>Memory,
+    </span>Memory(Operator),
     <span class="attr">#[cfg(feature = <span class="string">"storage-fs"</span>)]
     </span>LocalFs,
     <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
@@ -229,7 +227,7 @@
 
         <span class="kw">match </span>scheme {
             <span class="attr">#[cfg(feature = <span class="string">"storage-memory"</span>)]
-            </span>Scheme::Memory =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Memory),
+            </span>Scheme::Memory =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Memory(<span class="kw">super</span>::memory_config_build()<span class="question-mark">?</span>)),
             <span class="attr">#[cfg(feature = <span class="string">"storage-fs"</span>)]
             </span>Scheme::Fs =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::LocalFs),
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
@@ -269,13 +267,11 @@
         <span class="kw">let </span>path = path.as_ref();
         <span class="kw">match </span><span class="self">self </span>{
             <span class="attr">#[cfg(feature = <span class="string">"storage-memory"</span>)]
-            </span>Storage::Memory =&gt; {
-                <span class="kw">let </span>op = <span class="kw">super</span>::memory_config_build()<span class="question-mark">?</span>;
-
+            </span>Storage::Memory(op) =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(stripped) = path.strip_prefix(<span class="string">"memory:/"</span>) {
-                    <span class="prelude-val">Ok</span>((op, stripped))
+                    <span class="prelude-val">Ok</span>((op.clone(), stripped))
                 } <span class="kw">else </span>{
-                    <span class="prelude-val">Ok</span>((op, <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
+                    <span class="prelude-val">Ok</span>((op.clone(), <span class="kw-2">&amp;</span>path[<span class="number">1</span>..]))
                 }
             }
             <span class="attr">#[cfg(feature = <span class="string">"storage-fs"</span>)]
