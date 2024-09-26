@@ -106,15 +106,17 @@ impl std::fmt::Debug for ManifestListWriter {
 
 impl ManifestListWriter {
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {
-        let metadata = HashMap::from_iter([
+    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
+        let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
-            (
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             ("format-version".to_string(), "1".to_string()),
         ]);
+        if let Some(parent_snapshot_id) = parent_snapshot_id {
+            metadata.insert(
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            );
+        }
         Self::new(FormatVersion::V1, output_file, metadata, 0, snapshot_id)
     }
 
@@ -580,6 +582,18 @@ pub struct ManifestFile {
     ///
     /// Implementation-specific key metadata for encryption
     pub key_metadata: Vec<u8>,
+}
+
+impl ManifestFile {
+    /// Checks if the manifest file has any added files.
+    pub fn has_added_files(&self) -> bool {
+        self.added_files_count.is_none() || self.added_files_count.unwrap() > 0
+    }
+
+    /// Checks if the manifest file has any existed files.
+    pub fn has_existing_files(&self) -> bool {
+        self.existing_files_count.is_none() || self.existing_files_count.unwrap() > 0
+    }
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
@@ -1148,7 +1162,7 @@ mod test {
         let mut writer = ManifestListWriter::v1(
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
-            1646658105718557341,
+            Some(1646658105718557341),
         );
 
         writer
@@ -1337,7 +1351,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, 0);
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

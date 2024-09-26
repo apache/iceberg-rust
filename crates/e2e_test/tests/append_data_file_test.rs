@@ -17,6 +17,9 @@
 
 //! Integration tests for rest catalog.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
@@ -35,8 +38,6 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 use port_scanner::scan_port_addr;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::time::sleep;
 
 const REST_CATALOG_PORT: u16 = 8181;
@@ -80,7 +81,7 @@ async fn set_test_fixture(func: &str) -> TestFixture {
             (S3_REGION.to_string(), "us-east-1".to_string()),
         ]))
         .build();
-    let rest_catalog = RestCatalog::new(config).await.unwrap();
+    let rest_catalog = RestCatalog::new(config);
 
     TestFixture {
         _docker_compose: docker_compose,
@@ -145,7 +146,7 @@ async fn test_append_data_file() {
     );
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
-        schema.clone(),
+        table.metadata().current_schema().clone(),
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
@@ -158,14 +159,11 @@ async fn test_append_data_file() {
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(col1) as ArrayRef,
-            Arc::new(col2) as ArrayRef,
-            Arc::new(col3) as ArrayRef,
-        ],
-    )
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(col1) as ArrayRef,
+        Arc::new(col2) as ArrayRef,
+        Arc::new(col3) as ArrayRef,
+    ])
     .unwrap();
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();

@@ -102,23 +102,6 @@ impl fmt::Display for Type {
 }
 
 impl Type {
-    /// Check whether literal is compatible with the type.
-    pub fn compatible(&self, literal: &Literal) -> bool {
-        match (self, literal) {
-            (Type::Primitive(primitive), Literal::Primitive(primitive_literal)) => {
-                primitive.compatible(primitive_literal)
-            }
-            (Type::Struct(struct_type), Literal::Struct(struct_literal)) => {
-                struct_type.compatible(struct_literal)
-            }
-            (Type::List(list_type), Literal::List(list_literal)) => {
-                list_type.compatible(list_literal)
-            }
-            (Type::Map(map_type), Literal::Map(map_literal)) => map_type.compatible(map_literal),
-            _ => false,
-        }
-    }
-
     /// Whether the type is primitive type.
     #[inline(always)]
     pub fn is_primitive(&self) -> bool {
@@ -311,29 +294,6 @@ impl<'de> Deserialize<'de> for PrimitiveType {
     }
 }
 
-impl PrimitiveType {
-    /// Check whether literal is compatible with the type.
-    pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
-        matches!(
-            (self, literal),
-            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(_))
-                | (PrimitiveType::Int, PrimitiveLiteral::Int(_))
-                | (PrimitiveType::Long, PrimitiveLiteral::Long(_))
-                | (PrimitiveType::Float, PrimitiveLiteral::Float(_))
-                | (PrimitiveType::Double, PrimitiveLiteral::Double(_))
-                | (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Decimal(_))
-                | (PrimitiveType::Date, PrimitiveLiteral::Date(_))
-                | (PrimitiveType::Time, PrimitiveLiteral::Time(_))
-                | (PrimitiveType::Timestamp, PrimitiveLiteral::Timestamp(_))
-                | (PrimitiveType::Timestamptz, PrimitiveLiteral::TimestampTZ(_))
-                | (PrimitiveType::String, PrimitiveLiteral::String(_))
-                | (PrimitiveType::Uuid, PrimitiveLiteral::UUID(_))
-                | (PrimitiveType::Fixed(_), PrimitiveLiteral::Fixed(_))
-                | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
-        )
-    }
-}
-
 impl Serialize for PrimitiveType {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where S: Serializer {
@@ -520,17 +480,6 @@ impl StructType {
     /// Get fields.
     pub fn fields(&self) -> &[NestedFieldRef] {
         &self.fields
-    }
-
-    /// Check whether literal is compatible with the type.
-    pub fn compatible(&self, struct_literal: &Struct) -> bool {
-        if self.fields().len() != struct_literal.fields().len() {
-            return false;
-        }
-        self.fields()
-            .iter()
-            .zip(struct_literal.fields())
-            .all(|(field, literal)| field.field_type.compatible(literal))
     }
 }
 

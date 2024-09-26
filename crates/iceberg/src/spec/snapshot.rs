@@ -59,7 +59,7 @@ pub struct Summary {
     pub operation: Operation,
     /// Other summary data.
     #[serde(flatten)]
-    pub other: HashMap<String, String>,
+    pub additional_properties: HashMap<String, String>,
 }
 
 impl Default for Operation {
@@ -291,7 +291,7 @@ pub(super) mod _serde {
                    },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
-                    other: HashMap::new(),
+                    additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
             })
@@ -378,11 +378,6 @@ impl SnapshotRetention {
             max_ref_age_ms,
         }
     }
-
-    /// Create a new tag retention policy
-    pub fn tag(max_ref_age_ms: i64) -> Self {
-        SnapshotRetention::Tag { max_ref_age_ms }
-    }
 }
 
 #[cfg(test)]
@@ -421,7 +416,7 @@ mod tests {
         assert_eq!(
             Summary {
                 operation: Operation::Append,
-                other: HashMap::new()
+                additional_properties: HashMap::new()
             },
             *result.summary()
         );
