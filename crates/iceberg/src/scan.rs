@@ -1555,7 +1555,7 @@ mod tests {
 
         let col = batches[0].column_by_name("bool").unwrap();
         let bool_arr = col.as_any().downcast_ref::<BooleanArray>().unwrap();
-        assert_eq!(bool_arr.value(1), true);
+        assert!(bool_arr.value(1));
     }
 
     #[tokio::test]
