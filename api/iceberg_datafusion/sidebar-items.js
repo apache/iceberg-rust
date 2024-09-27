@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["from_datafusion_error","to_datafusion_error"],"struct":["IcebergCatalogProvider"]};
+window.SIDEBAR_ITEMS = {"fn":["from_datafusion_error","to_datafusion_error"],"struct":["IcebergCatalogProvider","IcebergTableProvider"]};

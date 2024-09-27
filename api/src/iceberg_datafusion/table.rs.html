@@ -103,6 +103,13 @@
 <a href="#103" id="103">103</a>
 <a href="#104" id="104">104</a>
 <a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -138,7 +145,7 @@
 
 <span class="doccomment">/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>IcebergTableProvider {
+</span><span class="kw">pub struct </span>IcebergTableProvider {
     <span class="doccomment">/// A table in the catalog.
     </span>table: Table,
     <span class="doccomment">/// A reference-counted arrow `Schema`.
@@ -159,6 +166,13 @@
 
         <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
 
+        <span class="prelude-val">Ok</span>(IcebergTableProvider { table, schema })
+    }
+
+    <span class="doccomment">/// Asynchronously tries to construct a new [`IcebergTableProvider`]
+    /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
+    </span><span class="kw">pub async fn </span>try_new_from_table(table: Table) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())<span class="question-mark">?</span>);
         <span class="prelude-val">Ok</span>(IcebergTableProvider { table, schema })
     }
 }
