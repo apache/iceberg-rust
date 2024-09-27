@@ -118,7 +118,7 @@ mod tests {
     use iceberg::TableIdent;
 
     use super::*;
-    
+
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
         let metadata_file_path = format!(
