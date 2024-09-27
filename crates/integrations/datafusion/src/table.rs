@@ -110,3 +110,42 @@ impl TableProvider for IcebergTableProvider {
         Ok(filter_support)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iceberg::io::FileIO;
+    use iceberg::table::{StaticTable, Table};
+    use iceberg::TableIdent;
+
+    async fn get_test_table_from_metadata_file() -> Table {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/tests/test_data/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::from_path(&metadata_file_path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_file_path, static_identifier, file_io)
+                .await
+                .unwrap();
+        static_table.into_table()
+    }
+
+    #[tokio::test]
+    async fn test_try_new_from_table() {
+        let table = get_test_table_from_metadata_file().await;
+        let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+        let index_of_z = table_provider.schema().index_of("z").unwrap();
+        assert_eq!(index_of_z, 2);
+        let fields_num = table_provider.schema().fields().len();
+        assert_eq!(fields_num, 3);
+    }
+}
