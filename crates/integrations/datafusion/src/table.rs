@@ -113,6 +113,8 @@ impl TableProvider for IcebergTableProvider {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::common::Column;
+    use datafusion::prelude::SessionContext;
     use iceberg::io::FileIO;
     use iceberg::table::{StaticTable, Table};
     use iceberg::TableIdent;
@@ -144,9 +146,21 @@ mod tests {
         let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
             .await
             .unwrap();
-        let index_of_z = table_provider.schema().index_of("z").unwrap();
-        assert_eq!(index_of_z, 2);
-        let fields_num = table_provider.schema().fields().len();
-        assert_eq!(fields_num, 3);
+        let ctx = SessionContext::new();
+        ctx.register_table("mytable", Arc::new(table_provider))
+            .unwrap();
+        let df = ctx.sql("SELECT * FROM mytable").await.unwrap();
+        let df_schema = df.schema();
+        let df_columns = df_schema.fields();
+        assert_eq!(df_columns.len(), 3);
+        let x_column = df_columns.first().unwrap();
+        let column_data = format!(
+            "{:?}:{:?}",
+            x_column.name(),
+            x_column.data_type().to_string()
+        );
+        assert_eq!(column_data, "\"x\":\"Int64\"");
+        let has_column = df_schema.has_column(&Column::from_name("z"));
+        assert!(has_column);
     }
 }
