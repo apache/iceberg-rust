@@ -110,6 +110,60 @@
 <a href="#110" id="110">110</a>
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -220,6 +274,60 @@
             .collect::&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt;();
 
         <span class="prelude-val">Ok</span>(filter_support)
+    }
+}
+
+<span class="attr">#[cfg(test)]
+</span><span class="kw">mod </span>tests {
+    <span class="kw">use </span>datafusion::common::Column;
+    <span class="kw">use </span>datafusion::prelude::SessionContext;
+    <span class="kw">use </span>iceberg::io::FileIO;
+    <span class="kw">use </span>iceberg::table::{StaticTable, Table};
+    <span class="kw">use </span>iceberg::TableIdent;
+
+    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+
+    <span class="kw">async fn </span>get_test_table_from_metadata_file() -&gt; Table {
+        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
+        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
+            <span class="string">"{}/tests/test_data/{}"</span>,
+            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+            metadata_file_name
+        );
+        <span class="kw">let </span>file_io = FileIO::from_path(<span class="kw-2">&amp;</span>metadata_file_path)
+            .unwrap()
+            .build()
+            .unwrap();
+        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
+        <span class="kw">let </span>static_table =
+            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
+                .<span class="kw">await
+                </span>.unwrap();
+        static_table.into_table()
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_try_new_from_table() {
+        <span class="kw">let </span>table = get_test_table_from_metadata_file().<span class="kw">await</span>;
+        <span class="kw">let </span>table_provider = IcebergTableProvider::try_new_from_table(table.clone())
+            .<span class="kw">await
+            </span>.unwrap();
+        <span class="kw">let </span>ctx = SessionContext::new();
+        ctx.register_table(<span class="string">"mytable"</span>, Arc::new(table_provider))
+            .unwrap();
+        <span class="kw">let </span>df = ctx.sql(<span class="string">"SELECT * FROM mytable"</span>).<span class="kw">await</span>.unwrap();
+        <span class="kw">let </span>df_schema = df.schema();
+        <span class="kw">let </span>df_columns = df_schema.fields();
+        <span class="macro">assert_eq!</span>(df_columns.len(), <span class="number">3</span>);
+        <span class="kw">let </span>x_column = df_columns.first().unwrap();
+        <span class="kw">let </span>column_data = <span class="macro">format!</span>(
+            <span class="string">"{:?}:{:?}"</span>,
+            x_column.name(),
+            x_column.data_type().to_string()
+        );
+        <span class="macro">assert_eq!</span>(column_data, <span class="string">"\"x\":\"Int64\""</span>);
+        <span class="kw">let </span>has_column = df_schema.has_column(<span class="kw-2">&amp;</span>Column::from_name(<span class="string">"z"</span>));
+        <span class="macro">assert!</span>(has_column);
     }
 }
 </code></pre></div></section></main></body></html>
