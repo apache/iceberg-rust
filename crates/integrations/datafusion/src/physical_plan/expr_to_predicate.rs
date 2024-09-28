@@ -222,8 +222,8 @@ mod tests {
 
     fn create_test_schema() -> DFSchema {
         let arrow_schema = Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-            Field::new("bar", DataType::Utf8, false),
+            Field::new("foo", DataType::Int32, true),
+            Field::new("bar", DataType::Utf8, true),
         ]);
         DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
     }
