@@ -172,14 +172,14 @@ fn to_iceberg_binary_predicate(
         (_, TransformedResult::NotTransformed) => return TransformedResult::NotTransformed,
         (TransformedResult::Column(r), TransformedResult::Literal(d)) => (r, d, op),
         (TransformedResult::Literal(d), TransformedResult::Column(r)) => {
-            (r, d, reserve_predicate_operator(op))
+            (r, d, reverse_predicate_operator(op))
         }
         _ => return TransformedResult::NotTransformed,
     };
     TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(op, r, d)))
 }
 
-fn reserve_predicate_operator(op: PredicateOperator) -> PredicateOperator {
+fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {
     match op {
         PredicateOperator::Eq => PredicateOperator::Eq,
         PredicateOperator::NotEq => PredicateOperator::NotEq,
@@ -187,7 +187,7 @@ fn reserve_predicate_operator(op: PredicateOperator) -> PredicateOperator {
         PredicateOperator::GreaterThanOrEq => PredicateOperator::LessThanOrEq,
         PredicateOperator::LessThan => PredicateOperator::GreaterThan,
         PredicateOperator::LessThanOrEq => PredicateOperator::GreaterThanOrEq,
-        _ => unreachable!("Support reserve {}", op),
+        _ => unreachable!("Reverse {}", op),
     }
 }
 
@@ -286,6 +286,9 @@ mod tests {
             predicate,
             Reference::new("foo").is_not_in([Datum::long(5), Datum::long(6)])
         );
+
+        let predicate = convert_to_iceberg_predicate("not foo = 1").unwrap();
+        assert_eq!(predicate, !Reference::new("foo").equal_to(Datum::long(1)));
     }
 
     #[test]
