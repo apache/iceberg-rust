@@ -40,7 +40,7 @@ use crate::{Error, ErrorKind, Result};
 /// | Local file system  | `storage-fs`      | `file`     |
 /// | Memory             | `storage-memory`  | `memory`   |
 /// | S3                 | `storage-s3`      | `s3`, `s3a`|
-/// | GCS                | `storage-gcs`     | `gs`       |
+/// | GCS                | `storage-gcs`     | `gcs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     inner: Arc<Storage>,
