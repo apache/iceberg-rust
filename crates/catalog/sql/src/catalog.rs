@@ -23,7 +23,8 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
+    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+    TableIdent,
 };
 use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
 use sqlx::{Any, AnyPool, Row, Transaction};
@@ -496,8 +497,12 @@ impl Catalog for SqlCatalog {
             }
 
             self.execute(
-                &format!("DELETE FROM {NAMESPACE_TABLE_NAME} WHERE {NAMESPACE_FIELD_NAME} = ?"),
-                vec![Some(&namespace.join("."))],
+                &format!(
+                    "DELETE FROM {NAMESPACE_TABLE_NAME}
+                     WHERE {NAMESPACE_FIELD_NAME} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?"
+                ),
+                vec![Some(&namespace.join(".")), Some(&self.name)],
                 None,
             )
             .await?;
@@ -763,7 +768,10 @@ impl Catalog for SqlCatalog {
     }
 
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        todo!()
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Updating a table is not supported yet",
+        ))
     }
 }
 
