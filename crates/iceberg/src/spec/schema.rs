@@ -87,7 +87,7 @@ impl SchemaBuilder {
         self
     }
 
-    /// Reassign all field-ids (nested) on build.
+    /// Reassign all field-ids (including nested) on build.
     /// Reassignment starts from the field-id specified in `start_from` (inclusive).
     ///
     /// All specified aliases and identifier fields will be updated to the new field-ids.
