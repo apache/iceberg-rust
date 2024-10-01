@@ -158,19 +158,17 @@ impl SchemaBuilder {
 
         if let Some(start_from) = self.reassign_field_ids_from {
             let mut id_reassigner = ReassignFieldIds::new(start_from);
-            let mew_fields = id_reassigner.reassign_field_ids(schema.r#struct.fields().to_vec())?;
+            let new_fields = id_reassigner.reassign_field_ids(schema.r#struct.fields().to_vec())?;
             let new_identifier_field_ids =
                 id_reassigner.apply_to_identifier_fields(schema.identifier_field_ids)?;
             let new_alias_to_id = id_reassigner.apply_to_aliases(schema.alias_to_id.clone())?;
 
-            schema = SchemaBuilder {
-                schema_id: schema.schema_id,
-                fields: mew_fields,
-                alias_to_id: new_alias_to_id,
-                identifier_field_ids: new_identifier_field_ids,
-                reassign_field_ids_from: None,
-            }
-            .build()?;
+            schema = Schema::builder()
+                .with_schema_id(schema.schema_id)
+                .with_fields(new_fields)
+                .with_identifier_field_ids(new_identifier_field_ids)
+                .with_alias(new_alias_to_id)
+                .build()?;
         }
 
         Ok(schema)
