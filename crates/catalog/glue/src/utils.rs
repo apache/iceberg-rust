@@ -347,7 +347,7 @@ mod tests {
         let metadata = create_metadata(schema)?;
 
         let parameters = HashMap::from([
-            (ICEBERG_FIELD_ID.to_string(), "1".to_string()),
+            (ICEBERG_FIELD_ID.to_string(), "0".to_string()),
             (ICEBERG_FIELD_OPTIONAL.to_string(), "true".to_string()),
             (ICEBERG_FIELD_CURRENT.to_string(), "true".to_string()),
         ]);

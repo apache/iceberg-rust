@@ -322,7 +322,7 @@ mod tests {
     fn simple_table_schema() -> Schema {
         Schema::builder()
             .with_fields(vec![NestedField::required(
-                1,
+                0,
                 "foo",
                 Type::Primitive(PrimitiveType::Int),
             )

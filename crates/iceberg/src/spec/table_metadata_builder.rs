@@ -156,13 +156,10 @@ impl TableMetadataBuilder {
                 "Can't create table without location",
             )
         })?;
-        let partition_spec = partition_spec.unwrap_or(
-            UnboundPartitionSpec {
-                spec_id: None,
-                fields: vec![],
-            }
-            .into(),
-        );
+        let partition_spec = partition_spec.unwrap_or(UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![],
+        });
 
         Self::new(
             schema,
