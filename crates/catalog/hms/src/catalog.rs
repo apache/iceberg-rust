@@ -346,7 +346,9 @@ impl Catalog for HmsCatalog {
             }
         };
 
-        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?
+            .build()?
+            .metadata;
         let metadata_location = create_metadata_location(&location, 0)?;
 
         self.file_io
