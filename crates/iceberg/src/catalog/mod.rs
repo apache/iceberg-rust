@@ -451,7 +451,7 @@ impl TableUpdate {
                 last_column_id,
             } => {
                 if let Some(last_column_id) = last_column_id {
-                    if builder.last_column_id() < last_column_id {
+                    if builder.last_column_id() > last_column_id {
                         return Err(Error::new(
                             ErrorKind::DataInvalid,
                             format!(
