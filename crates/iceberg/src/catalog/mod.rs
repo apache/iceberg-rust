@@ -1167,7 +1167,7 @@ mod tests {
             .metadata;
         let table_metadata_builder = TableMetadataBuilder::new_from_metadata(
             table_metadata,
-            "s3://db/table/metadata/metadata1.gz.json",
+            Some("s3://db/table/metadata/metadata1.gz.json".to_string()),
         );
 
         let uuid = uuid::Uuid::new_v4();

@@ -170,8 +170,10 @@ impl TableMetadata {
     ///
     /// `current_file_location` is the location where the current version
     /// of the metadata file is stored. This is used to update the metadata log.
+    /// If `current_file_location` is `None`, the metadata log will not be updated.
+    /// This should only be used to stage-create tables.
     #[must_use]
-    pub fn into_builder(self, current_file_location: impl Into<String>) -> TableMetadataBuilder {
+    pub fn into_builder(self, current_file_location: Option<String>) -> TableMetadataBuilder {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
     }
 

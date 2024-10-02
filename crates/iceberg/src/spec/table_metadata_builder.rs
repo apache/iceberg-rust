@@ -121,15 +121,19 @@ impl TableMetadataBuilder {
     }
 
     /// Creates a new table metadata builder from the given metadata to modify it.
-    /// Previous file location is used to populate the Metadata Log.
+
+    /// `current_file_location` is the location where the current version
+    /// of the metadata file is stored. This is used to update the metadata log.
+    /// If `current_file_location` is `None`, the metadata log will not be updated.
+    /// This should only be used to stage-create tables.
     #[must_use]
     pub fn new_from_metadata(
         previous: TableMetadata,
-        previous_file_location: impl Into<String>,
+        previous_file_location: Option<String>,
     ) -> Self {
         Self {
-            previous_history_entry: Some(MetadataLog {
-                metadata_file: previous_file_location.into(),
+            previous_history_entry: previous_file_location.map(|l| MetadataLog {
+                metadata_file: l,
                 timestamp_ms: previous.last_updated_ms,
             }),
             metadata: previous,
@@ -1191,7 +1195,9 @@ mod tests {
         .build()
         .unwrap()
         .metadata
-        .into_builder("s3://bucket/test/location/metadata/metadata1.json")
+        .into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ))
     }
 
     #[test]
@@ -1228,7 +1234,9 @@ mod tests {
 
         // Test can serialize v2
         let metadata = metadata
-            .into_builder("s3://bucket/test/location/metadata/metadata1.json")
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
             .upgrade_format_version(FormatVersion::V2)
             .unwrap()
             .build()
@@ -1534,7 +1542,9 @@ mod tests {
         // Set old spec again
         let build_result = build_result
             .metadata
-            .into_builder("s3://bucket/test/location/metadata/metadata1.json")
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
             .set_default_partition_spec(0)
             .unwrap()
             .build()
@@ -1670,6 +1680,28 @@ mod tests {
     }
 
     #[test]
+    fn test_no_metadata_log_entry_for_no_previous_location() {
+        // Used for first commit after stage-creation of tables
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(metadata.metadata_log.len(), 1);
+
+        let build_result = metadata
+            .into_builder(None)
+            .set_properties(HashMap::from_iter(vec![(
+                "foo".to_string(),
+                "bar".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.metadata.metadata_log.len(), 1);
+    }
+
+    #[test]
     fn test_from_metadata_generates_metadata_log() {
         let metadata_path = "s3://bucket/test/location/metadata/metadata1.json";
         let builder = TableMetadataBuilder::new(
@@ -1684,7 +1716,7 @@ mod tests {
         .build()
         .unwrap()
         .metadata
-        .into_builder(metadata_path);
+        .into_builder(Some(metadata_path.to_string()));
 
         let builder = builder
             .add_default_sort_order(SortOrder::unsorted_order())
