@@ -18,6 +18,7 @@
 //! Spec for Iceberg.
 
 mod datatypes;
+mod delete_file;
 mod manifest;
 mod manifest_list;
 mod partition;
@@ -31,6 +32,7 @@ mod view_metadata;
 mod view_version;
 
 pub use datatypes::*;
+pub(crate) use delete_file::*;
 pub use manifest::*;
 pub use manifest_list::*;
 pub use partition::*;

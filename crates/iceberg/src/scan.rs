@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use arrow_array::RecordBatch;
-use futures::channel::mpsc::{channel, Sender};
+use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
+    DataContentType, DataFile, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
     ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::table::Table;
@@ -292,6 +292,7 @@ impl<'a> TableScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            delete_file_manager: Arc::new(DeleteFileManager::new()),
         };
 
         Ok(TableScan {
@@ -331,6 +332,48 @@ pub struct TableScan {
     row_selection_enabled: bool,
 }
 
+/// Manages async retrieval of all of a given snapshot's delete files
+/// from FileIO and then subsequently serving filtered references to them
+/// up for inclusion within FileScanTasks
+#[derive(Debug)]
+struct DeleteFileManager {
+    file_scan_task_delete_files: RwLock<Option<Arc<Vec<FileScanTaskDeleteFile>>>>,
+}
+
+impl DeleteFileManager {
+    pub(crate) fn new() -> Self {
+        DeleteFileManager {
+            file_scan_task_delete_files: RwLock::new(None),
+        }
+    }
+
+    pub(crate) async fn handle_delete_file_stream(
+        &self,
+        delete_file_rx: Receiver<Result<FileScanTaskDeleteFile>>,
+    ) -> Result<()> {
+        let mut delete_file_stream = delete_file_rx.boxed();
+
+        let mut delete_files = vec![];
+
+        while let Some(delete_file) = delete_file_stream.try_next().await? {
+            delete_files.push(delete_file);
+        }
+
+        if !delete_files.is_empty() {
+            *(self.file_scan_task_delete_files.write().unwrap()) = Some(Arc::new(delete_files));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn get_deletes_for_data_file(
+        &self,
+        _data_file: &DataFile,
+    ) -> Option<Arc<Vec<FileScanTaskDeleteFile>>> {
+        self.file_scan_task_delete_files.read().unwrap().clone()
+    }
+}
+
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
 /// objects that are required to perform a scan file plan.
 #[derive(Debug)]
@@ -344,6 +387,7 @@ struct PlanContext {
     snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     object_cache: Arc<ObjectCache>,
     field_ids: Arc<Vec<i32>>,
+    delete_file_manager: Arc<DeleteFileManager>,
 
     partition_filter_cache: Arc<PartitionFilterCache>,
     manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
@@ -357,19 +401,26 @@ impl TableScan {
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
         // used to stream ManifestEntryContexts between stages of the file plan operation
-        let (manifest_entry_ctx_tx, manifest_entry_ctx_rx) =
+        let (manifest_entry_data_ctx_tx, manifest_entry_data_ctx_rx) =
+            channel(concurrency_limit_manifest_files);
+        let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(concurrency_limit_manifest_files);
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
+        // used to stream delete files into the DeleteFileManager
+        let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose content type is not Data or whose partitions cannot match this
+        // whose partitions cannot match this
         // scan's filter
-        let manifest_file_contexts = self
-            .plan_context
-            .build_manifest_file_contexts(manifest_list, manifest_entry_ctx_tx)?;
+        let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
+            manifest_list,
+            manifest_entry_data_ctx_tx,
+            manifest_entry_delete_ctx_tx,
+            self.plan_context.delete_file_manager.clone(),
+        )?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
 
@@ -386,17 +437,18 @@ impl TableScan {
             }
         });
 
-        let mut channel_for_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
-        // Process the [`ManifestEntry`] stream in parallel
+        // Process the delete file [`ManifestEntry`] stream in parallel
         spawn(async move {
-            let result = manifest_entry_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+            let result = manifest_entry_delete_ctx_rx
+                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
                     |(manifest_entry_context, tx)| async move {
                         spawn(async move {
-                            Self::process_manifest_entry(manifest_entry_context, tx).await
+                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
                         })
                         .await
                     },
@@ -404,7 +456,35 @@ impl TableScan {
                 .await;
 
             if let Err(error) = result {
-                let _ = channel_for_manifest_entry_error.send(Err(error)).await;
+                let _ = channel_for_delete_manifest_entry_error
+                    .send(Err(error))
+                    .await;
+            }
+        })
+        .await;
+
+        self.plan_context
+            .delete_file_manager
+            .handle_delete_file_stream(delete_file_rx)
+            .await?;
+
+        // Process the data file [`ManifestEntry`] stream in parallel
+        spawn(async move {
+            let result = manifest_entry_data_ctx_rx
+                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_manifest_entries,
+                    |(manifest_entry_context, tx)| async move {
+                        spawn(async move {
+                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
+                        })
+                        .await
+                    },
+                )
+                .await;
+
+            if let Err(error) = result {
+                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
             }
         });
 
@@ -435,7 +515,7 @@ impl TableScan {
         &self.plan_context.snapshot
     }
 
-    async fn process_manifest_entry(
+    async fn process_data_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
         mut file_scan_task_tx: Sender<Result<FileScanTask>>,
     ) -> Result<()> {
@@ -444,12 +524,11 @@ impl TableScan {
             return Ok(());
         }
 
-        // abort the plan if we encounter a manifest entry whose data file's
-        // content type is currently unsupported
+        // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                "Only Data files currently supported",
+                "Encountered an entry for a delete file in a data file manifest",
             ));
         }
 
@@ -487,7 +566,69 @@ impl TableScan {
         // entire plan without getting filtered out. Create a corresponding
         // FileScanTask and push it to the result stream
         file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task()))
+            .send(Ok(manifest_entry_context.into_file_scan_task().await))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn process_delete_manifest_entry(
+        manifest_entry_context: ManifestEntryContext,
+        mut file_scan_task_delete_file_tx: Sender<Result<FileScanTaskDeleteFile>>,
+    ) -> Result<()> {
+        // skip processing this manifest entry if it has been marked as deleted
+        if !manifest_entry_context.manifest_entry.is_alive() {
+            return Ok(());
+        }
+
+        // abort the plan if we encounter a manifest entry that is not for a delete file
+        if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Encountered an entry for a data file in a delete manifest",
+            ));
+        }
+
+        if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
+            let BoundPredicates {
+                // ref snapshot_bound_predicate,
+                ref partition_bound_predicate,
+                ..
+            } = bound_predicates.as_ref();
+
+            let expression_evaluator_cache =
+                manifest_entry_context.expression_evaluator_cache.as_ref();
+
+            let expression_evaluator = expression_evaluator_cache.get(
+                manifest_entry_context.partition_spec_id,
+                partition_bound_predicate,
+            )?;
+
+            // skip any data file whose partition data indicates that it can't contain
+            // any data that matches this scan's filter
+            if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                return Ok(());
+            }
+
+            // TODO: I don't think that this is required. Need to confirm
+            // skip any data file whose metrics don't match this scan's filter
+            // if !InclusiveMetricsEvaluator::eval(
+            //     snapshot_bound_predicate,
+            //     manifest_entry_context.manifest_entry.data_file(),
+            //     false,
+            // )? {
+            //     return Ok(());
+            // }
+        }
+
+        file_scan_task_delete_file_tx
+            .send(Ok(FileScanTaskDeleteFile {
+                file_path: manifest_entry_context
+                    .manifest_entry
+                    .file_path()
+                    .to_string(),
+                file_type: manifest_entry_context.manifest_entry.content_type(),
+            }))
             .await?;
 
         Ok(())
@@ -511,16 +652,7 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    deletes: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
-}
-
-impl ManifestFileContext {
-    fn with_deletes(self, deletes: Arc<Vec<FileScanTaskDeleteFile>>) -> Self {
-        Self {
-            deletes: Some(deletes),
-            ..self
-        }
-    }
+    delete_file_manager: Arc<DeleteFileManager>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -533,7 +665,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
-    deletes: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
+    delete_file_manager: Arc<DeleteFileManager>,
 }
 
 impl ManifestFileContext {
@@ -548,7 +680,7 @@ impl ManifestFileContext {
             field_ids,
             mut sender,
             expression_evaluator_cache,
-            deletes,
+            delete_file_manager,
             ..
         } = self;
 
@@ -563,7 +695,7 @@ impl ManifestFileContext {
                 partition_spec_id: manifest_file.partition_spec_id,
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
-                deletes: deletes.clone(),
+                delete_file_manager: delete_file_manager.clone(),
             };
 
             sender
@@ -579,7 +711,7 @@ impl ManifestFileContext {
 impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
-    fn into_file_scan_task(self) -> FileScanTask {
+    async fn into_file_scan_task(self) -> FileScanTask {
         FileScanTask {
             start: 0,
             length: self.manifest_entry.file_size_in_bytes(),
@@ -595,8 +727,10 @@ impl ManifestEntryContext {
                 .bound_predicates
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
 
-            // TODO
-            deletes: self.deletes,
+            deletes: self
+                .delete_file_manager
+                .get_deletes_for_data_file(self.manifest_entry.data_file())
+                .await,
         }
     }
 }
@@ -633,15 +767,11 @@ impl PlanContext {
     fn build_manifest_file_contexts(
         &self,
         manifest_list: Arc<ManifestList>,
-        sender: Sender<ManifestEntryContext>,
+        sender_data: Sender<ManifestEntryContext>,
+        sender_delete: Sender<ManifestEntryContext>,
+        delete_file_manager: Arc<DeleteFileManager>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
-        let manifest_files = manifest_list
-            .entries()
-            .iter()
-            // .filter(|manifest_file| manifest_file.content == ManifestContentType::Data)
-        ;
-
-        let mut delete_files = vec![];
+        let manifest_files = manifest_list.entries().iter();
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
@@ -660,38 +790,38 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
-                    if manifest_file.content == ManifestContentType::Data {
-                        let mfc = self.create_manifest_file_context(
-                            manifest_file,
-                            Some(partition_bound_predicate),
-                            sender.clone(),
-                        );
-                        filtered_mfcs.push(Ok(mfc));
-                    } else {
-                        delete_files.push(FileScanTaskDeleteFile {
-                            file_path: manifest_file.manifest_path.clone(),
-                        });
-                    }
+                    let mfc = self.create_manifest_file_context(
+                        manifest_file,
+                        Some(partition_bound_predicate),
+                        if manifest_file.content == ManifestContentType::Data {
+                            sender_data.clone()
+                        } else {
+                            sender_delete.clone()
+                        },
+                        delete_file_manager.clone(),
+                    );
+
+                    filtered_mfcs.push(Ok(mfc));
                 }
             }
         } else {
             for manifest_file in manifest_files {
-                if manifest_file.content == ManifestContentType::Data {
-                    let mfc =
-                        self.create_manifest_file_context(manifest_file, None, sender.clone());
-                    filtered_mfcs.push(Ok(mfc));
-                } else {
-                    delete_files.push(FileScanTaskDeleteFile {
-                        file_path: manifest_file.manifest_path.clone(),
-                    });
-                }
+                let mfc = self.create_manifest_file_context(
+                    manifest_file,
+                    None,
+                    if manifest_file.content == ManifestContentType::Data {
+                        sender_data.clone()
+                    } else {
+                        sender_delete.clone()
+                    },
+                    delete_file_manager.clone(),
+                );
+
+                filtered_mfcs.push(Ok(mfc));
             }
         }
 
-        let deletes = Arc::new(delete_files);
-        Ok(Box::new(filtered_mfcs.into_iter().map(move |mfc| {
-            mfc.map(|mfc| mfc.with_deletes(deletes.clone()))
-        })))
+        Ok(Box::new(filtered_mfcs.into_iter()))
     }
 
     fn create_manifest_file_context(
@@ -699,6 +829,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
+        delete_file_manager: Arc<DeleteFileManager>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -720,7 +851,7 @@ impl PlanContext {
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
-            deletes: None,
+            delete_file_manager,
         }
     }
 }
@@ -971,6 +1102,9 @@ pub struct FileScanTask {
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
+
+    /// delete file type
+    pub file_type: DataContentType,
 }
 
 impl FileScanTask {
