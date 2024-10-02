@@ -55,9 +55,13 @@ pub struct TableMetadataBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Result of modifying or creating a `TableMetadata`.
 pub struct TableMetadataBuildResult {
+    /// The new `TableMetadata`.
     pub metadata: TableMetadata,
+    /// The changes that were applied to the metadata.
     pub changes: Vec<TableUpdate>,
+    /// Expired metadata logs
     pub expired_metadata_logs: Vec<MetadataLog>,
 }
 
