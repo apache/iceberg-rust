@@ -232,80 +232,80 @@ mod tests {
             "schema-id": 1,
             "fields": [
                 {
-                    "id": 0,
-                    "name": "c0",
-                    "required": true,
-                    "type": "boolean"
-                },
-                {
                     "id": 1,
                     "name": "c1",
                     "required": true,
-                    "type": "int"
+                    "type": "boolean"
                 },
                 {
                     "id": 2,
                     "name": "c2",
                     "required": true,
-                    "type": "long"
+                    "type": "int"
                 },
                 {
                     "id": 3,
                     "name": "c3",
                     "required": true,
-                    "type": "float"
+                    "type": "long"
                 },
                 {
                     "id": 4,
                     "name": "c4",
                     "required": true,
-                    "type": "double"
+                    "type": "float"
                 },
                 {
                     "id": 5,
                     "name": "c5",
                     "required": true,
-                    "type": "decimal(2,2)"
+                    "type": "double"
                 },
                 {
                     "id": 6,
                     "name": "c6",
                     "required": true,
-                    "type": "date"
+                    "type": "decimal(2,2)"
                 },
                 {
                     "id": 7,
                     "name": "c7",
                     "required": true,
-                    "type": "time"
+                    "type": "date"
                 },
                 {
                     "id": 8,
                     "name": "c8",
                     "required": true,
-                    "type": "timestamp"
+                    "type": "time"
                 },
                 {
                     "id": 9,
                     "name": "c9",
                     "required": true,
-                    "type": "string"
+                    "type": "timestamp"
                 },
                 {
                     "id": 10,
                     "name": "c10",
                     "required": true,
-                    "type": "uuid"
+                    "type": "string"
                 },
                 {
                     "id": 11,
                     "name": "c11",
                     "required": true,
-                    "type": "fixed[4]"
+                    "type": "uuid"
                 },
                 {
                     "id": 12,
                     "name": "c12",
+                    "required": true,
+                    "type": "fixed[4]"
+                },
+                {
+                    "id": 13,
+                    "name": "c13",
                     "required": true,
                     "type": "binary"
                 }
@@ -318,19 +318,19 @@ mod tests {
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
         let expected = vec![
-            create_column("c0", "boolean", "0")?,
-            create_column("c1", "int", "1")?,
-            create_column("c2", "bigint", "2")?,
-            create_column("c3", "float", "3")?,
-            create_column("c4", "double", "4")?,
-            create_column("c5", "decimal(2,2)", "5")?,
-            create_column("c6", "date", "6")?,
-            create_column("c7", "string", "7")?,
-            create_column("c8", "timestamp", "8")?,
-            create_column("c9", "string", "9")?,
+            create_column("c1", "boolean", "1")?,
+            create_column("c2", "int", "2")?,
+            create_column("c3", "bigint", "3")?,
+            create_column("c4", "float", "4")?,
+            create_column("c5", "double", "5")?,
+            create_column("c6", "decimal(2,2)", "6")?,
+            create_column("c7", "date", "7")?,
+            create_column("c8", "string", "8")?,
+            create_column("c9", "timestamp", "9")?,
             create_column("c10", "string", "10")?,
-            create_column("c11", "binary", "11")?,
+            create_column("c11", "string", "11")?,
             create_column("c12", "binary", "12")?,
+            create_column("c13", "binary", "13")?,
         ];
 
         assert_eq!(result, expected);
@@ -345,20 +345,20 @@ mod tests {
             "schema-id": 1,
             "fields": [
                 {
-                    "id": 0,
+                    "id": 1,
                     "name": "person",
                     "required": true,
                     "type": {
                         "type": "struct",
                         "fields": [
                             {
-                                "id": 1,
+                                "id": 2,
                                 "name": "name",
                                 "required": true,
                                 "type": "string"
                             },
                             {
-                                "id": 2,
+                                "id": 3,
                                 "name": "age",
                                 "required": false,
                                 "type": "int"
@@ -377,7 +377,7 @@ mod tests {
         let expected = vec![create_column(
             "person",
             "struct<name:string, age:int>",
-            "0",
+            "1",
         )?];
 
         assert_eq!(result, expected);
@@ -393,24 +393,24 @@ mod tests {
             "type": "struct",
             "fields": [
                 {
-                    "id": 0,
+                    "id": 1,
                     "name": "location",
                     "required": true,
                     "type": {
                         "type": "list",
-                        "element-id": 1,
+                        "element-id": 2,
                         "element-required": true,
                         "element": {
                             "type": "struct",
                             "fields": [
                                 {
-                                    "id": 2,
+                                    "id": 3,
                                     "name": "latitude",
                                     "required": false,
                                     "type": "float"
                                 },
                                 {
-                                    "id": 3,
+                                    "id": 4,
                                     "name": "longitude",
                                     "required": false,
                                     "type": "float"
@@ -431,7 +431,7 @@ mod tests {
         let expected = vec![create_column(
             "location",
             "array<struct<latitude:float, longitude:float>>",
-            "0",
+            "1",
         )?];
 
         assert_eq!(result, expected);
@@ -447,20 +447,20 @@ mod tests {
                 "type": "struct",
                 "fields": [
                     {
-                        "id": 0,
+                        "id": 1,
                         "name": "quux",
                         "required": true,
                         "type": {
                             "type": "map",
-                            "key-id": 1,
+                            "key-id": 2,
                             "key": "string",
-                            "value-id": 2,
+                            "value-id": 3,
                             "value-required": true,
                             "value": {
                                 "type": "map",
-                                "key-id": 3,
+                                "key-id": 4,
                                 "key": "string",
-                                "value-id": 4,
+                                "value-id": 5,
                                 "value-required": true,
                                 "value": "int"
                             }
@@ -475,7 +475,7 @@ mod tests {
 
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
-        let expected = vec![create_column("quux", "map<string,map<string,int>>", "0")?];
+        let expected = vec![create_column("quux", "map<string,map<string,int>>", "1")?];
 
         assert_eq!(result, expected);
 

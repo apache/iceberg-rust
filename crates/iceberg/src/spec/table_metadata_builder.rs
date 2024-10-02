@@ -31,6 +31,8 @@ use super::{
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
 
+const FIRST_FIELD_ID: u32 = 1;
+
 /// Manipulating table metadata.
 ///
 /// For this builder the order of called functions matters. Functions are applied in-order.
@@ -996,7 +998,7 @@ impl TableMetadataBuilder {
         let fresh_schema = schema
             .into_builder()
             .with_schema_id(DEFAULT_SCHEMA_ID)
-            .with_reassigned_field_ids(u32::try_from(DEFAULT_PARTITION_SPEC_ID).unwrap_or_default())
+            .with_reassigned_field_ids(FIRST_FIELD_ID)
             .build()?;
 
         // Re-build partition spec with new ids
@@ -1151,14 +1153,14 @@ mod tests {
     };
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
-    const LAST_ASSIGNED_COLUMN_ID: i32 = 2;
+    const LAST_ASSIGNED_COLUMN_ID: i32 = 3;
 
     fn schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
-                NestedField::required(0, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
             ])
             .build()
             .unwrap()
@@ -1169,7 +1171,7 @@ mod tests {
         SortOrder::builder()
             .with_order_id(1)
             .with_sort_field(SortField {
-                source_id: 2,
+                source_id: 3,
                 transform: Transform::Bucket(4),
                 direction: SortDirection::Descending,
                 null_order: NullOrder::First,
@@ -1181,7 +1183,7 @@ mod tests {
     fn partition_spec() -> UnboundPartitionSpec {
         UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "y", Transform::Identity)
+            .add_partition_field(2, "y", Transform::Identity)
             .unwrap()
             .build()
     }
@@ -1225,7 +1227,7 @@ mod tests {
         assert_eq!(metadata.default_spec.spec_id(), 0);
         assert_eq!(metadata.default_sort_order_id, 1);
         assert_eq!(metadata.last_partition_id, 1000);
-        assert_eq!(metadata.last_column_id, 2);
+        assert_eq!(metadata.last_column_id, 3);
         assert_eq!(metadata.snapshots.len(), 0);
         assert_eq!(metadata.refs.len(), 0);
         assert_eq!(metadata.properties.len(), 0);
@@ -1297,20 +1299,20 @@ mod tests {
 
         let expected_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(0, "a", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(1, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "b", Type::Primitive(PrimitiveType::Long)).into(),
                 NestedField::required(
-                    2,
+                    3,
                     "struct",
                     Type::Struct(StructType::new(vec![NestedField::required(
-                        4,
+                        5,
                         "nested",
                         Type::Primitive(PrimitiveType::Long),
                     )
                     .into()])),
                 )
                 .into(),
-                NestedField::required(3, "c", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "c", Type::Primitive(PrimitiveType::Long)).into(),
             ])
             .build()
             .unwrap();
@@ -1326,7 +1328,7 @@ mod tests {
 
         let expected_sort_order = SortOrder::builder()
             .with_fields(vec![SortField {
-                source_id: 0,
+                source_id: 1,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
@@ -1393,7 +1395,7 @@ mod tests {
                     .add_unbound_field(UnboundPartitionField {
                         name: "y".to_string(),
                         transform: Transform::Identity,
-                        source_id: 1,
+                        source_id: 2,
                         field_id: Some(1000)
                     })
                     .unwrap()
@@ -1420,14 +1422,14 @@ mod tests {
                     // The previous field - has field_id set
                     name: "y".to_string(),
                     transform: Transform::Identity,
-                    source_id: 1,
+                    source_id: 2,
                     field_id: Some(1000),
                 },
                 UnboundPartitionField {
                     // A new field without field id - should still be without field id in changes
                     name: "z".to_string(),
                     transform: Transform::Identity,
-                    source_id: 2,
+                    source_id: 3,
                     field_id: None,
                 },
             ])
@@ -1447,14 +1449,14 @@ mod tests {
             .add_unbound_field(UnboundPartitionField {
                 name: "y".to_string(),
                 transform: Transform::Identity,
-                source_id: 1,
+                source_id: 2,
                 field_id: Some(1000),
             })
             .unwrap()
             .add_unbound_field(UnboundPartitionField {
                 name: "z".to_string(),
                 transform: Transform::Identity,
-                source_id: 2,
+                source_id: 3,
                 field_id: Some(1001),
             })
             .unwrap()
@@ -1609,10 +1611,10 @@ mod tests {
         let added_schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(0, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "z", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long)).into(),
             ])
             .build()
             .unwrap();
@@ -1630,7 +1632,7 @@ mod tests {
             Some(&Arc::new(added_schema.clone()))
         );
         pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSchema {
-            last_column_id: Some(3),
+            last_column_id: Some(4),
             schema: added_schema
         });
         assert_eq!(build_result.changes[1], TableUpdate::SetCurrentSchema {
@@ -1645,10 +1647,10 @@ mod tests {
         let added_schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
-                NestedField::required(0, "x", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(1, "y", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(2, "z", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "a", Type::Primitive(PrimitiveType::Long)).into(),
             ])
             .build()
             .unwrap();
@@ -1925,13 +1927,13 @@ mod tests {
                 UnboundPartitionField {
                     name: "y".to_string(),
                     transform: Transform::Identity,
-                    source_id: 1,
+                    source_id: 2,
                     field_id: Some(1000),
                 },
                 UnboundPartitionField {
                     name: "z".to_string(),
                     transform: Transform::Identity,
-                    source_id: 2,
+                    source_id: 3,
                     field_id: Some(1002),
                 },
             ])
