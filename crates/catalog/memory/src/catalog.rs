@@ -194,7 +194,9 @@ impl Catalog for MemoryCatalog {
             }
         };
 
-        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
+            .build()?
+            .metadata;
         let metadata_location = format!(
             "{}/metadata/{}-{}.metadata.json",
             &location,

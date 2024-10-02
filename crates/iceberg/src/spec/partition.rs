@@ -171,6 +171,11 @@ impl PartitionSpec {
     pub fn partition_type(&self) -> &StructType {
         &self.partition_type
     }
+
+    /// Set the spec id for the partition spec.
+    pub(crate) fn with_spec_id(self, spec_id: i32) -> Self {
+        Self { spec_id, ..self }
+    }
 }
 
 impl SchemalessPartitionSpec {
