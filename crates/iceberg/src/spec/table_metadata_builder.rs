@@ -872,13 +872,13 @@ impl TableMetadataBuilder {
             .with_fields(sort_order.fields)
             .build(&schema)?;
 
-        let expired_metadata_logs = self.expire_metadata_log();
         self.update_snapshot_log()?;
         self.metadata.try_normalize()?;
 
         if let Some(hist_entry) = self.previous_history_entry.take() {
             self.metadata.metadata_log.push(hist_entry);
         }
+        let expired_metadata_logs = self.expire_metadata_log();
 
         Ok(TableMetadataBuildResult {
             metadata: self.metadata,
@@ -1944,5 +1944,47 @@ mod tests {
         assert!(err.to_string().contains(
             "Cannot add partition spec with non-sequential field ids to format version 1 table"
         ));
+    }
+
+    #[test]
+    fn test_expire_metadata_log() {
+        let builder = builder_without_changes(FormatVersion::V2);
+        let metadata = builder
+            .set_properties(HashMap::from_iter(vec![(
+                PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                "2".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(metadata.metadata.metadata_log.len(), 1);
+        assert_eq!(metadata.expired_metadata_logs.len(), 0);
+
+        let metadata = metadata
+            .metadata
+            .into_builder(Some("path2".to_string()))
+            .set_properties(HashMap::from_iter(vec![(
+                "change_nr".to_string(),
+                "1".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(metadata.metadata.metadata_log.len(), 2);
+        assert_eq!(metadata.expired_metadata_logs.len(), 0);
+
+        let metadata = metadata
+            .metadata
+            .into_builder(Some("path2".to_string()))
+            .set_properties(HashMap::from_iter(vec![(
+                "change_nr".to_string(),
+                "2".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(metadata.metadata.metadata_log.len(), 2);
+        assert_eq!(metadata.expired_metadata_logs.len(), 1);
     }
 }
