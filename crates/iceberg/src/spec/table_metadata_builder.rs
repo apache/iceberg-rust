@@ -880,7 +880,7 @@ impl TableMetadataBuilder {
         let max_size = self
             .metadata
             .properties
-            .get(PROPERTY_FORMAT_VERSION)
+            .get(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX)
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT)
             .max(1);
