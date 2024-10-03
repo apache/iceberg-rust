@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::compute::cast;
 use arrow_array::{
     Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
     Int32Array, Int64Array, NullArray, RecordBatch, StringArray,
 };
+use arrow_cast::cast;
 use arrow_schema::{
     DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
 };
