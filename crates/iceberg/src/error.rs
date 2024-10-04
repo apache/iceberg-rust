@@ -337,6 +337,12 @@ define_from_err!(
     "Failed to send a message to a channel"
 );
 
+define_from_err!(
+    arrow_schema::ArrowError,
+    ErrorKind::Unexpected,
+    "Arrow Schema Error"
+);
+
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
 
 /// Converts a timestamp in milliseconds to `DateTime<Utc>`, handling errors.

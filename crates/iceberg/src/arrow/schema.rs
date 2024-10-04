@@ -207,7 +207,7 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
     visitor.schema(schema, results)
 }
 
-/// Convert Arrow schema to ceberg schema.
+/// Convert Arrow schema to Iceberg schema.
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)

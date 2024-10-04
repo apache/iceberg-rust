@@ -906,6 +906,33 @@ pub struct FileScanTask {
     pub predicate: Option<BoundPredicate>,
 }
 
+impl FileScanTask {
+    /// Returns the data file path of this file scan task.
+    pub fn data_file_path(&self) -> &str {
+        &self.data_file_path
+    }
+
+    /// Returns the project field id of this file scan task.
+    pub fn project_field_ids(&self) -> &[i32] {
+        &self.project_field_ids
+    }
+
+    /// Returns the predicate of this file scan task.
+    pub fn predicate(&self) -> Option<&BoundPredicate> {
+        self.predicate.as_ref()
+    }
+
+    /// Returns the schema of this file scan task as a reference
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// Returns the schema of this file scan task as a SchemaRef
+    pub fn schema_ref(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
