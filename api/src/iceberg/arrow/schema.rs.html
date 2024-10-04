@@ -2315,8 +2315,8 @@
 
     <span class="kw">fn </span>arrow_schema_for_arrow_schema_to_schema_test() -&gt; ArrowSchema {
         <span class="kw">let </span>fields = Fields::from(<span class="macro">vec!</span>[
-            simple_field(<span class="string">"key"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"17"</span>),
-            simple_field(<span class="string">"value"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"18"</span>),
+            simple_field(<span class="string">"key"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"28"</span>),
+            simple_field(<span class="string">"value"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"29"</span>),
         ]);
 
         <span class="kw">let </span>r#struct = DataType::Struct(fields);
@@ -2546,9 +2546,9 @@
                     "required": true,
                     "type": {
                         "type": "map",
-                        "key-id": 17,
+                        "key-id": 28,
                         "key": "int",
-                        "value-id": 18,
+                        "value-id": 29,
                         "value-required": false,
                         "value": "string"
                     }
@@ -2599,8 +2599,8 @@
 
     <span class="kw">fn </span>arrow_schema_for_schema_to_arrow_schema_test() -&gt; ArrowSchema {
         <span class="kw">let </span>fields = Fields::from(<span class="macro">vec!</span>[
-            simple_field(<span class="string">"key"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"17"</span>),
-            simple_field(<span class="string">"value"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"18"</span>),
+            simple_field(<span class="string">"key"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"28"</span>),
+            simple_field(<span class="string">"value"</span>, DataType::Utf8, <span class="bool-val">true</span>, <span class="string">"29"</span>),
         ]);
 
         <span class="kw">let </span>r#struct = DataType::Struct(fields);
@@ -2689,7 +2689,7 @@
             ),
             simple_field(<span class="string">"map"</span>, map, <span class="bool-val">false</span>, <span class="string">"16"</span>),
             simple_field(<span class="string">"struct"</span>, r#struct, <span class="bool-val">false</span>, <span class="string">"17"</span>),
-            simple_field(<span class="string">"uuid"</span>, DataType::FixedSizeBinary(<span class="number">16</span>), <span class="bool-val">false</span>, <span class="string">"26"</span>),
+            simple_field(<span class="string">"uuid"</span>, DataType::FixedSizeBinary(<span class="number">16</span>), <span class="bool-val">false</span>, <span class="string">"30"</span>),
         ])
     }
 
@@ -2833,9 +2833,9 @@
                     "required": true,
                     "type": {
                         "type": "map",
-                        "key-id": 17,
+                        "key-id": 28,
                         "key": "int",
-                        "value-id": 18,
+                        "value-id": 29,
                         "value-required": false,
                         "value": "string"
                     }
@@ -2869,7 +2869,7 @@
                     }
                 },
                 {
-                    "id":26,
+                    "id":30,
                     "name":"uuid",
                     "required":true,
                     "type":"uuid"

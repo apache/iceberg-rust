@@ -1174,6 +1174,12 @@
 <a href="#1174" id="1174">1174</a>
 <a href="#1175" id="1175">1175</a>
 <a href="#1176" id="1176">1176</a>
+<a href="#1177" id="1177">1177</a>
+<a href="#1178" id="1178">1178</a>
+<a href="#1179" id="1179">1179</a>
+<a href="#1180" id="1180">1180</a>
+<a href="#1181" id="1181">1181</a>
+<a href="#1182" id="1182">1182</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1842,6 +1848,12 @@
     <span class="doccomment">/// Set the field's initial default value.
     </span><span class="kw">pub fn </span>with_write_default(<span class="kw-2">mut </span><span class="self">self</span>, value: Literal) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.write_default = <span class="prelude-val">Some</span>(value);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Set the id of the field.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_id(<span class="kw-2">mut </span><span class="self">self</span>, id: i32) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.id = id;
         <span class="self">self
     </span>}
 }
