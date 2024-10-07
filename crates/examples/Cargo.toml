@@ -36,6 +36,10 @@ name = "datafusion-read-data"
 path = "src/datafusion_read_data.rs"
 
 [[example]]
+name = "datafusion-read-static-table"
+path = "src/datafusion_read_static_table.rs"
+
+[[example]]
 name = "rest-catalog-namespace"
 path = "src/rest_catalog_namespace.rs"
 
