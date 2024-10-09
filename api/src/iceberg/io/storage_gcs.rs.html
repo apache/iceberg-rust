@@ -66,6 +66,20 @@
 <a href="#66" id="66">66</a>
 <a href="#67" id="67">67</a>
 <a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a>
+<a href="#76" id="76">76</a>
+<a href="#77" id="77">77</a>
+<a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -102,10 +116,24 @@
 </span><span class="kw">pub const </span>GCS_USER_PROJECT: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.user-project"</span>;
 <span class="doccomment">/// Allow unauthenticated requests
 </span><span class="kw">pub const </span>GCS_NO_AUTH: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.no-auth"</span>;
+<span class="doccomment">/// Google Cloud Storage credentials JSON string, base64 encoded.
+///
+/// E.g. base64::prelude::BASE64_STANDARD.encode(serde_json::to_string(credential).as_bytes())
+</span><span class="kw">pub const </span>GCS_CREDENTIALS_JSON: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.credentials-json"</span>;
+<span class="doccomment">/// Google Cloud Storage token
+</span><span class="kw">pub const </span>GCS_TOKEN: <span class="kw-2">&amp;</span>str = <span class="string">"gcs.oauth2.token"</span>;
 
 <span class="doccomment">/// Parse iceberg properties to [`GcsConfig`].
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>gcs_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;GcsConfig&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>cfg = GcsConfig::default();
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(cred) = m.remove(GCS_CREDENTIALS_JSON) {
+        cfg.credential = <span class="prelude-val">Some</span>(cred);
+    }
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(token) = m.remove(GCS_TOKEN) {
+        cfg.token = <span class="prelude-val">Some</span>(token);
+    }
 
     <span class="kw">if let </span><span class="prelude-val">Some</span>(endpoint) = m.remove(GCS_SERVICE_PATH) {
         cfg.endpoint = <span class="prelude-val">Some</span>(endpoint);
