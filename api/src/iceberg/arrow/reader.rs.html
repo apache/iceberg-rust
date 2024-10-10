@@ -1170,6 +1170,8 @@
 <a href="#1170" id="1170">1170</a>
 <a href="#1171" id="1171">1171</a>
 <a href="#1172" id="1172">1172</a>
+<a href="#1173" id="1173">1173</a>
+<a href="#1174" id="1174">1174</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1203,11 +1205,11 @@
 <span class="kw">use </span>fnv::FnvHashSet;
 <span class="kw">use </span>futures::channel::mpsc::{channel, Sender};
 <span class="kw">use </span>futures::future::BoxFuture;
-<span class="kw">use </span>futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+<span class="kw">use </span>futures::{try_join, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 <span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
-<span class="kw">use </span>parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
+<span class="kw">use </span>parquet::arrow::async_reader::AsyncFileReader;
 <span class="kw">use </span>parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-<span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
+<span class="kw">use </span>parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 <span class="kw">use </span>parquet::schema::types::{SchemaDescriptor, Type <span class="kw">as </span>ParquetType};
 
 <span class="kw">use </span><span class="kw">crate</span>::arrow::{arrow_schema_to_schema, get_arrow_datum};
@@ -2250,12 +2252,14 @@
     }
 
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Arc&lt;ParquetMetaData&gt;&gt;&gt; {
-        Box::pin(<span class="kw">async move </span>{
-            <span class="kw">let </span>file_size = <span class="self">self</span>.meta.size;
-            <span class="kw">let </span><span class="kw-2">mut </span>loader = MetadataLoader::load(<span class="self">self</span>, file_size <span class="kw">as </span>usize, <span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-            loader.load_page_index(<span class="bool-val">false</span>, <span class="bool-val">false</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="prelude-val">Ok</span>(Arc::new(loader.finish()))
-        })
+        <span class="kw">async move </span>{
+            <span class="kw">let </span>reader = ParquetMetaDataReader::new();
+            <span class="kw">let </span>size = <span class="self">self</span>.meta.size <span class="kw">as </span>usize;
+            <span class="kw">let </span>meta = reader.load_and_finish(<span class="self">self</span>, size).<span class="kw">await</span><span class="question-mark">?</span>;
+
+            <span class="prelude-val">Ok</span>(Arc::new(meta))
+        }
+        .boxed()
     }
 }
 
