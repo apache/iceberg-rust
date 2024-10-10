@@ -284,18 +284,27 @@ impl ArrowReader {
     fn get_equality_deletes(_delete_files: &[Deletes]) -> Result<Option<BoundPredicate>> {
         let result = None;
 
-        // TODO:
-        //   reject DeleteFiles that are not equality deletes
-        //    * for each delete file:
-        //      * set `file_predicate` = AlwaysTrue
-        //      * for each row in the file:
-        //          * for each cell in the row:
-        //              * create a predicate of the form `field` = `val`
-        //                  where `field` is the column name and `val` is the value
-        //                  of the cell
-        //              * Bind this predicate to the table schema to get a `BoundPredicate`
-        //              * set file_predicate = file_predicate.and(bound_predicate_for_cell)
-        //      * set result = result.or(file_predicate)
+        for delete_file in _delete_files {
+            let Deletes::Equality(_delete_file_batches) = delete_file else {
+                continue;
+            };
+
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Equality delete files are not yet supported.",
+            ));
+
+            // TODO:
+            //      * set `file_predicate` = AlwaysTrue
+            //      * for each row in the file:
+            //          * for each cell in the row:
+            //              * create a predicate of the form `field` = `val`
+            //                  where `field` is the column name and `val` is the value
+            //                  of the cell
+            //              * Bind this predicate to the table schema to get a `BoundPredicate`
+            //              * set file_predicate = file_predicate.and(bound_predicate_for_cell)
+            //      * set result = result.or(file_predicate)
+        }
 
         Ok(result)
     }

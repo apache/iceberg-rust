@@ -28,11 +28,9 @@ use crate::{Error, ErrorKind, Result};
 
 pub(crate) const FIELD_ID_DELETE_FILE_PATH: i32 = i32::MAX - 101;
 pub(crate) const FIELD_ID_DELETE_POS: i32 = i32::MAX - 102;
-// pub(crate) const FIELD_ID_DELETE_ROW: i32 = i32::MAX - 103;
 
 pub(crate) const FIELD_NAME_DELETE_FILE_PATH: &str = "file_path";
 pub(crate) const FIELD_NAME_DELETE_POS: &str = "pos";
-// pub(crate) const FIELD_NAME_DELETE_ROW: &str = "row";
 
 // Represents a parsed Delete file that can be safely stored
 // in the Object Cache.
@@ -111,8 +109,8 @@ fn validate_schema(schema: SchemaRef) -> Result<PosDelSchema> {
             } else if fields.len() == 2 {
                 Ok(PosDelSchema::WithoutRow)
             } else {
-                // TODO: should check that col 3 is of type Struct
-                //   and that it contains a subset of the table schema
+                // TODO: should we check that col 3 is of type Struct
+                //   and that it contains a subset of the table schema?
                 Ok(PosDelSchema::WithRow)
             }
         }
