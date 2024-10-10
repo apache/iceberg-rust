@@ -572,18 +572,12 @@ impl TableScan {
         }
 
         if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
-            let BoundPredicates {
-                // ref snapshot_bound_predicate,
-                ref partition_bound_predicate,
-                ..
-            } = bound_predicates.as_ref();
-
             let expression_evaluator_cache =
                 manifest_entry_context.expression_evaluator_cache.as_ref();
 
             let expression_evaluator = expression_evaluator_cache.get(
                 manifest_entry_context.partition_spec_id,
-                partition_bound_predicate,
+                &bound_predicates.partition_bound_predicate,
             )?;
 
             // skip any data file whose partition data indicates that it can't contain
@@ -591,16 +585,6 @@ impl TableScan {
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
                 return Ok(());
             }
-
-            // TODO: I don't think that this is required. Need to confirm
-            // skip any data file whose metrics don't match this scan's filter
-            // if !InclusiveMetricsEvaluator::eval(
-            //     snapshot_bound_predicate,
-            //     manifest_entry_context.manifest_entry.data_file(),
-            //     false,
-            // )? {
-            //     return Ok(());
-            // }
         }
 
         file_scan_task_delete_file_tx
