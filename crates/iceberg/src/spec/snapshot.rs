@@ -59,7 +59,7 @@ pub struct Summary {
     pub operation: Operation,
     /// Other summary data.
     #[serde(flatten)]
-    pub other: HashMap<String, String>,
+    pub additional_properties: HashMap<String, String>,
 }
 
 impl Default for Operation {
@@ -291,7 +291,7 @@ pub(super) mod _serde {
                    },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
-                    other: HashMap::new(),
+                    additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
             })
@@ -365,6 +365,21 @@ pub enum SnapshotRetention {
     },
 }
 
+impl SnapshotRetention {
+    /// Create a new branch retention policy
+    pub fn branch(
+        min_snapshots_to_keep: Option<i32>,
+        max_snapshot_age_ms: Option<i64>,
+        max_ref_age_ms: Option<i64>,
+    ) -> Self {
+        SnapshotRetention::Branch {
+            min_snapshots_to_keep,
+            max_snapshot_age_ms,
+            max_ref_age_ms,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -401,7 +416,7 @@ mod tests {
         assert_eq!(
             Summary {
                 operation: Operation::Append,
-                other: HashMap::new()
+                additional_properties: HashMap::new()
             },
             *result.summary()
         );
