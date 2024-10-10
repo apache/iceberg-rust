@@ -132,7 +132,16 @@ impl<T: Bind> Bind for UnaryExpression<T> {
 }
 
 impl<T> UnaryExpression<T> {
-    pub(crate) fn new(op: PredicateOperator, term: T) -> Self {
+    /// Creates a unary expression with the given operator and term.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::{PredicateOperator, Reference, UnaryExpression};
+    ///
+    /// UnaryExpression::new(PredicateOperator::IsNull, Reference::new("c"));
+    /// ```
+    pub fn new(op: PredicateOperator, term: T) -> Self {
         debug_assert!(op.is_unary());
         Self { op, term }
     }
@@ -171,7 +180,21 @@ impl<T: Debug> Debug for BinaryExpression<T> {
 }
 
 impl<T> BinaryExpression<T> {
-    pub(crate) fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
+    /// Creates a binary expression with the given operator, term and literal.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::{BinaryExpression, PredicateOperator, Reference};
+    /// use iceberg::spec::Datum;
+    ///
+    /// BinaryExpression::new(
+    ///     PredicateOperator::LessThanOrEq,
+    ///     Reference::new("a"),
+    ///     Datum::int(10),
+    /// );
+    /// ```
+    pub fn new(op: PredicateOperator, term: T, literal: Datum) -> Self {
         debug_assert!(op.is_binary());
         Self { op, term, literal }
     }

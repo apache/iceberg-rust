@@ -23,7 +23,7 @@ use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
-use datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
@@ -99,15 +99,8 @@ impl TableProvider for IcebergTableProvider {
         filters: &[&Expr],
     ) -> std::result::Result<Vec<TableProviderFilterPushDown>, datafusion::error::DataFusionError>
     {
-        let filter_support = filters
-            .iter()
-            .map(|e| match e {
-                Expr::BinaryExpr(BinaryExpr { .. }) => TableProviderFilterPushDown::Inexact,
-                _ => TableProviderFilterPushDown::Unsupported,
-            })
-            .collect::<Vec<TableProviderFilterPushDown>>();
-
-        Ok(filter_support)
+        // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
     }
 }
 

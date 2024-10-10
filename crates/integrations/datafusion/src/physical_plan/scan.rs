@@ -22,7 +22,6 @@ use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use datafusion::common::tree_node::TreeNode;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -35,7 +34,7 @@ use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
 
-use crate::physical_plan::expr_to_predicate::ExprToPredicateVisitor;
+use super::expr_to_predicate::convert_filters_to_predicate;
 use crate::to_datafusion_error;
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -140,10 +139,13 @@ impl DisplayAs for IcebergTableScan {
     ) -> std::fmt::Result {
         write!(
             f,
-            "IcebergTableScan projection:[{}]",
+            "IcebergTableScan projection:[{}] predicate:[{}]",
             self.projection
                 .clone()
-                .map_or(String::new(), |v| v.join(","))
+                .map_or(String::new(), |v| v.join(",")),
+            self.predicates
+                .clone()
+                .map_or(String::from(""), |p| format!("{}", p))
         )
     }
 }
@@ -175,22 +177,6 @@ async fn get_batch_stream(
     Ok(Box::pin(stream))
 }
 
-/// Converts DataFusion filters ([`Expr`]) to an iceberg [`Predicate`].
-/// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
-/// If the conversion was successful, return the converted predicates combined with an AND operator.
-fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
-    filters
-        .iter()
-        .filter_map(|expr| {
-            let mut visitor = ExprToPredicateVisitor::new();
-            if expr.visit(&mut visitor).is_ok() {
-                visitor.get_predicate()
-            } else {
-                None
-            }
-        })
-        .reduce(Predicate::and)
-}
 fn get_column_names(
     schema: ArrowSchemaRef,
     projection: Option<&Vec<usize>>,

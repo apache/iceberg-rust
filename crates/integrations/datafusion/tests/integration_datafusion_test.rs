@@ -204,10 +204,7 @@ async fn test_table_projection() -> Result<()> {
         .unwrap();
     assert_eq!(2, s.len());
     // the first row is logical_plan, the second row is physical_plan
-    assert_eq!(
-        "IcebergTableScan projection:[foo1,foo2,foo3]",
-        s.value(1).trim()
-    );
+    assert!(s.value(1).contains("projection:[foo1,foo2,foo3]"));
 
     // datafusion doesn't support query foo3.s_foo1, use foo3 instead
     let records = table_df
@@ -226,7 +223,54 @@ async fn test_table_projection() -> Result<()> {
         .downcast_ref::<StringArray>()
         .unwrap();
     assert_eq!(2, s.len());
-    assert_eq!("IcebergTableScan projection:[foo1,foo3]", s.value(1).trim());
+    assert!(s
+        .value(1)
+        .contains("IcebergTableScan projection:[foo1,foo3]"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_predict_pushdown() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("ns".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+    let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+    let records = ctx
+        .sql("select * from catalog.ns.t1 where (foo > 1 and length(bar) = 1 ) or bar is null")
+        .await
+        .unwrap()
+        .explain(false, false)
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(1, records.len());
+    let record = &records[0];
+    // the first column is plan_type, the second column plan string.
+    let s = record
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(2, s.len());
+    // the first row is logical_plan, the second row is physical_plan
+    let expected = "predicate:[(foo > 1) OR (bar IS NULL)]";
+    assert!(s.value(1).trim().contains(expected));
     Ok(())
 }
