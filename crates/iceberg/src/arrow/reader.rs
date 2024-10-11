@@ -38,6 +38,7 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FI
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
@@ -209,6 +210,12 @@ impl ArrowReader {
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
+        // RecordBatchTransformer performs any required transformations on the RecordBatches
+        // that come back from the file, such as type promotion, default column insertion
+        // and column re-ordering
+        let mut record_batch_transformer =
+            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
@@ -261,8 +268,10 @@ impl ArrowReader {
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let mut record_batch_stream = record_batch_stream_builder.build()?;
+
         while let Some(batch) = record_batch_stream.try_next().await? {
-            tx.send(Ok(batch)).await?
+            tx.send(record_batch_transformer.process_record_batch(batch))
+                .await?
         }
 
         Ok(())
