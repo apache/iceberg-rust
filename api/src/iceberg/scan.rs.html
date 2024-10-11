@@ -1819,6 +1819,33 @@
 <a href="#1819" id="1819">1819</a>
 <a href="#1820" id="1820">1820</a>
 <a href="#1821" id="1821">1821</a>
+<a href="#1822" id="1822">1822</a>
+<a href="#1823" id="1823">1823</a>
+<a href="#1824" id="1824">1824</a>
+<a href="#1825" id="1825">1825</a>
+<a href="#1826" id="1826">1826</a>
+<a href="#1827" id="1827">1827</a>
+<a href="#1828" id="1828">1828</a>
+<a href="#1829" id="1829">1829</a>
+<a href="#1830" id="1830">1830</a>
+<a href="#1831" id="1831">1831</a>
+<a href="#1832" id="1832">1832</a>
+<a href="#1833" id="1833">1833</a>
+<a href="#1834" id="1834">1834</a>
+<a href="#1835" id="1835">1835</a>
+<a href="#1836" id="1836">1836</a>
+<a href="#1837" id="1837">1837</a>
+<a href="#1838" id="1838">1838</a>
+<a href="#1839" id="1839">1839</a>
+<a href="#1840" id="1840">1840</a>
+<a href="#1841" id="1841">1841</a>
+<a href="#1842" id="1842">1842</a>
+<a href="#1843" id="1843">1843</a>
+<a href="#1844" id="1844">1844</a>
+<a href="#1845" id="1845">1845</a>
+<a href="#1846" id="1846">1846</a>
+<a href="#1847" id="1847">1847</a>
+<a href="#1848" id="1848">1848</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2725,6 +2752,33 @@
     <span class="doccomment">/// The predicate to filter.
     </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
     </span><span class="kw">pub </span>predicate: <span class="prelude-ty">Option</span>&lt;BoundPredicate&gt;,
+}
+
+<span class="kw">impl </span>FileScanTask {
+    <span class="doccomment">/// Returns the data file path of this file scan task.
+    </span><span class="kw">pub fn </span>data_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.data_file_path
+    }
+
+    <span class="doccomment">/// Returns the project field id of this file scan task.
+    </span><span class="kw">pub fn </span>project_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i32] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.project_field_ids
+    }
+
+    <span class="doccomment">/// Returns the predicate of this file scan task.
+    </span><span class="kw">pub fn </span>predicate(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BoundPredicate&gt; {
+        <span class="self">self</span>.predicate.as_ref()
+    }
+
+    <span class="doccomment">/// Returns the schema of this file scan task as a reference
+    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Schema {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
+    }
+
+    <span class="doccomment">/// Returns the schema of this file scan task as a SchemaRef
+    </span><span class="kw">pub fn </span>schema_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaRef {
+        <span class="self">self</span>.schema.clone()
+    }
 }
 
 <span class="attr">#[cfg(test)]

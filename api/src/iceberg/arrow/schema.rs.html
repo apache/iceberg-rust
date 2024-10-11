@@ -1696,7 +1696,7 @@
     visitor.schema(schema, results)
 }
 
-<span class="doccomment">/// Convert Arrow schema to ceberg schema.
+<span class="doccomment">/// Convert Arrow schema to Iceberg schema.
 </span><span class="kw">pub fn </span>arrow_schema_to_schema(schema: <span class="kw-2">&amp;</span>ArrowSchema) -&gt; <span class="prelude-ty">Result</span>&lt;Schema&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>visitor = ArrowSchemaConverter::new();
     visit_schema(schema, <span class="kw-2">&amp;mut </span>visitor)

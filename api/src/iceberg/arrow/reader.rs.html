@@ -1172,6 +1172,15 @@
 <a href="#1172" id="1172">1172</a>
 <a href="#1173" id="1173">1173</a>
 <a href="#1174" id="1174">1174</a>
+<a href="#1175" id="1175">1175</a>
+<a href="#1176" id="1176">1176</a>
+<a href="#1177" id="1177">1177</a>
+<a href="#1178" id="1178">1178</a>
+<a href="#1179" id="1179">1179</a>
+<a href="#1180" id="1180">1180</a>
+<a href="#1181" id="1181">1181</a>
+<a href="#1182" id="1182">1182</a>
+<a href="#1183" id="1183">1183</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1212,6 +1221,7 @@
 <span class="kw">use </span>parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 <span class="kw">use </span>parquet::schema::types::{SchemaDescriptor, Type <span class="kw">as </span>ParquetType};
 
+<span class="kw">use </span><span class="kw">crate</span>::arrow::record_batch_transformer::RecordBatchTransformer;
 <span class="kw">use </span><span class="kw">crate</span>::arrow::{arrow_schema_to_schema, get_arrow_datum};
 <span class="kw">use </span><span class="kw">crate</span>::error::Result;
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
@@ -1383,6 +1393,12 @@
         )<span class="question-mark">?</span>;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
+        <span class="comment">// RecordBatchTransformer performs any required transformations on the RecordBatches
+        // that come back from the file, such as type promotion, default column insertion
+        // and column re-ordering
+        </span><span class="kw">let </span><span class="kw-2">mut </span>record_batch_transformer =
+            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
@@ -1435,8 +1451,10 @@
         <span class="comment">// Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         </span><span class="kw">let </span><span class="kw-2">mut </span>record_batch_stream = record_batch_stream_builder.build()<span class="question-mark">?</span>;
+
         <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = record_batch_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
-            tx.send(<span class="prelude-val">Ok</span>(batch)).<span class="kw">await</span><span class="question-mark">?
+            tx.send(record_batch_transformer.process_record_batch(batch))
+                .<span class="kw">await</span><span class="question-mark">?
         </span>}
 
         <span class="prelude-val">Ok</span>(())
