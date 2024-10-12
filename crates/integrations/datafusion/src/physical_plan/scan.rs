@@ -205,14 +205,3 @@ fn get_column_names(
             .collect::<Vec<String>>()
     })
 }
-
-fn get_project_schema(
-    schema: ArrowSchemaRef,
-    projection: Option<&Vec<usize>>,
-) -> Option<Vec<String>> {
-    projection.map(|v| {
-        v.iter()
-            .map(|p| schema.field(*p).name().clone())
-            .collect::<Vec<String>>()
-    })
-}
