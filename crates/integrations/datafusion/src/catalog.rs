@@ -30,6 +30,7 @@ use crate::schema::IcebergSchemaProvider;
 ///
 /// Acts as a centralized catalog provider that aggregates
 /// multiple [`SchemaProvider`], each associated with distinct namespaces.
+#[derive(Debug)]
 pub struct IcebergCatalogProvider {
     /// A `HashMap` where keys are namespace names
     /// and values are dynamic references to objects implementing the

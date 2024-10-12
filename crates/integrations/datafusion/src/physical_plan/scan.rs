@@ -63,7 +63,11 @@ impl IcebergTableScan {
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
     ) -> Self {
-        let plan_properties = Self::compute_properties(schema.clone());
+        let output_schema = match projection {
+            None => schema.clone(),
+            Some(projection) => Arc::new(schema.project(projection).unwrap()),
+        };
+        let plan_properties = Self::compute_properties(output_schema);
         let projection = get_column_names(schema.clone(), projection);
         let predicates = convert_filters_to_predicate(filters);
 
@@ -192,6 +196,17 @@ fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
         .reduce(Predicate::and)
 }
 fn get_column_names(
+    schema: ArrowSchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<String>> {
+    projection.map(|v| {
+        v.iter()
+            .map(|p| schema.field(*p).name().clone())
+            .collect::<Vec<String>>()
+    })
+}
+
+fn get_project_schema(
     schema: ArrowSchemaRef,
     projection: Option<&Vec<usize>>,
 ) -> Option<Vec<String>> {
