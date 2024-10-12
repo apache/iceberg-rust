@@ -878,7 +878,7 @@ impl ExpressionEvaluatorCache {
 }
 
 /// A task to scan part of file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileScanTask {
     /// The start offset of the file to scan.
     pub start: u64,
