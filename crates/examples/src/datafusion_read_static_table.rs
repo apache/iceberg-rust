@@ -48,6 +48,12 @@ async fn main() {
     ctx.register_table("mytable", Arc::new(table_provider))
         .unwrap();
     //let data = ctx.sql("SELECT count(*) FROM mytable").await.unwrap().explain(true, true).unwrap().collect().await.unwrap();
-    let data = ctx.sql("SELECT name FROM mytable group by 1").await.unwrap().collect().await.unwrap();
+    let data = ctx
+        .sql("SELECT name FROM mytable group by 1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     println!("{:?}", data);
 }

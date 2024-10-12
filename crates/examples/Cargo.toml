@@ -32,10 +32,6 @@ iceberg-datafusion = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 
 [[example]]
-name = "datafusion-read-data"
-path = "src/datafusion_read_data.rs"
-
-[[example]]
 name = "datafusion-read-static-table"
 path = "src/datafusion_read_static_table.rs"
 
