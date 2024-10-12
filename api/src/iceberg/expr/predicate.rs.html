@@ -1285,6 +1285,29 @@
 <a href="#1285" id="1285">1285</a>
 <a href="#1286" id="1286">1286</a>
 <a href="#1287" id="1287">1287</a>
+<a href="#1288" id="1288">1288</a>
+<a href="#1289" id="1289">1289</a>
+<a href="#1290" id="1290">1290</a>
+<a href="#1291" id="1291">1291</a>
+<a href="#1292" id="1292">1292</a>
+<a href="#1293" id="1293">1293</a>
+<a href="#1294" id="1294">1294</a>
+<a href="#1295" id="1295">1295</a>
+<a href="#1296" id="1296">1296</a>
+<a href="#1297" id="1297">1297</a>
+<a href="#1298" id="1298">1298</a>
+<a href="#1299" id="1299">1299</a>
+<a href="#1300" id="1300">1300</a>
+<a href="#1301" id="1301">1301</a>
+<a href="#1302" id="1302">1302</a>
+<a href="#1303" id="1303">1303</a>
+<a href="#1304" id="1304">1304</a>
+<a href="#1305" id="1305">1305</a>
+<a href="#1306" id="1306">1306</a>
+<a href="#1307" id="1307">1307</a>
+<a href="#1308" id="1308">1308</a>
+<a href="#1309" id="1309">1309</a>
+<a href="#1310" id="1310">1310</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1419,7 +1442,16 @@
 }
 
 <span class="kw">impl</span>&lt;T&gt; UnaryExpression&lt;T&gt; {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(op: PredicateOperator, term: T) -&gt; <span class="self">Self </span>{
+    <span class="doccomment">/// Creates a unary expression with the given operator and term.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::{PredicateOperator, Reference, UnaryExpression};
+    ///
+    /// UnaryExpression::new(PredicateOperator::IsNull, Reference::new("c"));
+    /// ```
+    </span><span class="kw">pub fn </span>new(op: PredicateOperator, term: T) -&gt; <span class="self">Self </span>{
         <span class="macro">debug_assert!</span>(op.is_unary());
         <span class="self">Self </span>{ op, term }
     }
@@ -1458,7 +1490,21 @@
 }
 
 <span class="kw">impl</span>&lt;T&gt; BinaryExpression&lt;T&gt; {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(op: PredicateOperator, term: T, literal: Datum) -&gt; <span class="self">Self </span>{
+    <span class="doccomment">/// Creates a binary expression with the given operator, term and literal.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use iceberg::expr::{BinaryExpression, PredicateOperator, Reference};
+    /// use iceberg::spec::Datum;
+    ///
+    /// BinaryExpression::new(
+    ///     PredicateOperator::LessThanOrEq,
+    ///     Reference::new("a"),
+    ///     Datum::int(10),
+    /// );
+    /// ```
+    </span><span class="kw">pub fn </span>new(op: PredicateOperator, term: T, literal: Datum) -&gt; <span class="self">Self </span>{
         <span class="macro">debug_assert!</span>(op.is_binary());
         <span class="self">Self </span>{ op, term, literal }
     }

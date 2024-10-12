@@ -157,13 +157,6 @@
 <a href="#157" id="157">157</a>
 <a href="#158" id="158">158</a>
 <a href="#159" id="159">159</a>
-<a href="#160" id="160">160</a>
-<a href="#161" id="161">161</a>
-<a href="#162" id="162">162</a>
-<a href="#163" id="163">163</a>
-<a href="#164" id="164">164</a>
-<a href="#165" id="165">165</a>
-<a href="#166" id="166">166</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -189,7 +182,7 @@
 <span class="kw">use </span>datafusion::catalog::Session;
 <span class="kw">use </span>datafusion::datasource::{TableProvider, TableType};
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
-<span class="kw">use </span>datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
+<span class="kw">use </span>datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 <span class="kw">use </span>datafusion::physical_plan::ExecutionPlan;
 <span class="kw">use </span>iceberg::arrow::schema_to_arrow_schema;
 <span class="kw">use </span>iceberg::table::Table;
@@ -265,15 +258,8 @@
         filters: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Expr],
     ) -&gt; std::result::Result&lt;Vec&lt;TableProviderFilterPushDown&gt;, datafusion::error::DataFusionError&gt;
     {
-        <span class="kw">let </span>filter_support = filters
-            .iter()
-            .map(|e| <span class="kw">match </span>e {
-                Expr::BinaryExpr(BinaryExpr { .. }) =&gt; TableProviderFilterPushDown::Inexact,
-                <span class="kw">_ </span>=&gt; TableProviderFilterPushDown::Unsupported,
-            })
-            .collect::&lt;Vec&lt;TableProviderFilterPushDown&gt;&gt;();
-
-        <span class="prelude-val">Ok</span>(filter_support)
+        <span class="comment">// Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
+        </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[TableProviderFilterPushDown::Inexact; filters.len()])
     }
 }
 

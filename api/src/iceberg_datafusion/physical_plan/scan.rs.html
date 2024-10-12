@@ -187,20 +187,6 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
-<a href="#190" id="190">190</a>
-<a href="#191" id="191">191</a>
-<a href="#192" id="192">192</a>
-<a href="#193" id="193">193</a>
-<a href="#194" id="194">194</a>
-<a href="#195" id="195">195</a>
-<a href="#196" id="196">196</a>
-<a href="#197" id="197">197</a>
-<a href="#198" id="198">198</a>
-<a href="#199" id="199">199</a>
-<a href="#200" id="200">200</a>
-<a href="#201" id="201">201</a>
-<a href="#202" id="202">202</a>
-<a href="#203" id="203">203</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -225,7 +211,6 @@
 
 <span class="kw">use </span>datafusion::arrow::array::RecordBatch;
 <span class="kw">use </span>datafusion::arrow::datatypes::SchemaRef <span class="kw">as </span>ArrowSchemaRef;
-<span class="kw">use </span>datafusion::common::tree_node::TreeNode;
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
 <span class="kw">use </span>datafusion::execution::{SendableRecordBatchStream, TaskContext};
 <span class="kw">use </span>datafusion::physical_expr::EquivalenceProperties;
@@ -238,7 +223,7 @@
 <span class="kw">use </span>iceberg::expr::Predicate;
 <span class="kw">use </span>iceberg::table::Table;
 
-<span class="kw">use </span><span class="kw">crate</span>::physical_plan::expr_to_predicate::ExprToPredicateVisitor;
+<span class="kw">use </span><span class="kw">super</span>::expr_to_predicate::convert_filters_to_predicate;
 <span class="kw">use </span><span class="kw">crate</span>::to_datafusion_error;
 
 <span class="doccomment">/// Manages the scanning process of an Iceberg [`Table`], encapsulating the
@@ -343,10 +328,13 @@
     ) -&gt; std::fmt::Result {
         <span class="macro">write!</span>(
             f,
-            <span class="string">"IcebergTableScan projection:[{}]"</span>,
+            <span class="string">"IcebergTableScan projection:[{}] predicate:[{}]"</span>,
             <span class="self">self</span>.projection
                 .clone()
-                .map_or(String::new(), |v| v.join(<span class="string">","</span>))
+                .map_or(String::new(), |v| v.join(<span class="string">","</span>)),
+            <span class="self">self</span>.predicates
+                .clone()
+                .map_or(String::from(<span class="string">""</span>), |p| <span class="macro">format!</span>(<span class="string">"{}"</span>, p))
         )
     }
 }
@@ -378,22 +366,6 @@
     <span class="prelude-val">Ok</span>(Box::pin(stream))
 }
 
-<span class="doccomment">/// Converts DataFusion filters ([`Expr`]) to an iceberg [`Predicate`].
-/// If none of the filters could be converted, return `None` which adds no predicates to the scan operation.
-/// If the conversion was successful, return the converted predicates combined with an AND operator.
-</span><span class="kw">fn </span>convert_filters_to_predicate(filters: <span class="kw-2">&amp;</span>[Expr]) -&gt; <span class="prelude-ty">Option</span>&lt;Predicate&gt; {
-    filters
-        .iter()
-        .filter_map(|expr| {
-            <span class="kw">let </span><span class="kw-2">mut </span>visitor = ExprToPredicateVisitor::new();
-            <span class="kw">if </span>expr.visit(<span class="kw-2">&amp;mut </span>visitor).is_ok() {
-                visitor.get_predicate()
-            } <span class="kw">else </span>{
-                <span class="prelude-val">None
-            </span>}
-        })
-        .reduce(Predicate::and)
-}
 <span class="kw">fn </span>get_column_names(
     schema: ArrowSchemaRef,
     projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
