@@ -2726,7 +2726,7 @@
 }
 
 <span class="doccomment">/// A task to scan part of file.
-</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 </span><span class="kw">pub struct </span>FileScanTask {
     <span class="doccomment">/// The start offset of the file to scan.
     </span><span class="kw">pub </span>start: u64,
