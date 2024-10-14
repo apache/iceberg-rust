@@ -81,13 +81,13 @@ The Apache Iceberg Rust project is composed of the following components:
 Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version). The 
 current MSRV is 1.77.1. 
 
-Also, we use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
+Also, iceberg-rust use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
 and only MSRV is required.  
 
 
 ## Contribute
 
-Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). We are always open to people who want to use or contribute to it. Here are some ways to get involved.
+Apache Iceberg is an active open-source project, governed under the Apache Software Foundation (ASF). Iceberg-rust are always open to people who want to use or contribute to it. Here are some ways to get involved.
 
 - Start with [Contributing Guide](CONTRIBUTING.md).
 - Submit [Issues](https://github.com/apache/iceberg-rust/issues/new) for bug report or feature requests.
