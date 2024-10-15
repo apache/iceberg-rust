@@ -22,8 +22,8 @@ use arrow_schema::{DataType, FieldRef, Fields, Schema, SchemaRef};
 use itertools::Itertools;
 
 use crate::spec::{DataFile, Struct};
-use crate::writer::file_writer::FileWriter;
-use crate::writer::{file_writer::FileWriterBuilder, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
@@ -243,31 +243,27 @@ impl FieldProjector {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::types::Int64Type;
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StructArray};
     use arrow_select::concat::concat_batches;
     use itertools::Itertools;
-    use std::{collections::HashMap, sync::Arc};
-
-    use arrow_array::{types::Int64Type, ArrayRef, Int64Array, RecordBatch, StructArray};
-    use parquet::{
-        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, PARQUET_FIELD_ID_META_KEY},
-        file::properties::WriterProperties,
-    };
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
-    use crate::{
-        io::{FileIO, FileIOBuilder},
-        spec::{DataFile, DataFileFormat},
-        writer::{
-            base_writer::equality_delete_writer::{
-                EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig, FieldProjector,
-            },
-            file_writer::{
-                location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
-                ParquetWriterBuilder,
-            },
-            IcebergWriter, IcebergWriterBuilder,
-        },
+    use crate::io::{FileIO, FileIOBuilder};
+    use crate::spec::{DataFile, DataFileFormat, Schema};
+    use crate::writer::base_writer::equality_delete_writer::{
+        EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig, FieldProjector,
     };
+    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
     async fn check_parquet_data_file_with_equality_delete_write(
         file_io: &FileIO,
@@ -511,14 +507,14 @@ mod test {
         let equality_ids = vec![1, 3];
         let (projector, fields) =
             FieldProjector::new(schema.fields(), &equality_ids, PARQUET_FIELD_ID_META_KEY)?;
-        let delete_schema = arrow_schema::Schema::new(fields);
-        let delete_schema_ref = Arc::new(delete_schema.clone());
+        let arrow_delete_schema = arrow_schema::Schema::new(fields);
+        let delete_schema: Schema = (&arrow_delete_schema).try_into()?;
 
         // prepare writer
         let to_write = RecordBatch::try_new(Arc::new(schema.clone()), columns).unwrap();
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
-            delete_schema_ref.clone(),
+            Arc::new(delete_schema.clone()),
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -528,7 +524,7 @@ mod test {
             .build(EqualityDeleteWriterConfig::new(
                 equality_ids,
                 projector,
-                delete_schema.clone(),
+                arrow_delete_schema.clone(),
                 None,
             ))
             .await?;
