@@ -29,7 +29,9 @@ use std::str::FromStr;
 pub use _serde::RawLiteral;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::de::{
     MapAccess, {self},
@@ -422,10 +424,15 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Decimal {
-                precision: _,
-                scale: _,
-            } => todo!(),
+            PrimitiveType::Decimal { .. } => {
+                let unscaled_value = BigInt::from_signed_bytes_be(bytes);
+                PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Can't convert bytes to i128: {:?}", bytes),
+                    )
+                })?)
+            }
         };
         Ok(Datum::new(data_type, literal))
     }
@@ -449,7 +456,30 @@ impl Datum {
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
             PrimitiveLiteral::UInt128(val) => ByteBuf::from(val.to_be_bytes()),
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
-            PrimitiveLiteral::Int128(_) => todo!(),
+            PrimitiveLiteral::Int128(val) => {
+                let PrimitiveType::Decimal { precision, .. } = self.r#type else {
+                    unreachable!(
+                        "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
+                        &self.r#type
+                    )
+                };
+
+                // It's required by iceberg spec that we must keep the minimum
+                // number of bytes for the value
+                let required_bytes = Type::decimal_required_bytes(precision)
+                    .expect("PrimitiveType must has valid precision")
+                    as usize;
+
+                // The primitive literal is unscaled value.
+                let unscaled_value = BigInt::from(*val);
+                // Convert into two's-complement byte representation of the BigInt
+                // in big-endian byte order.
+                let mut bytes = unscaled_value.to_signed_bytes_be();
+                // Truncate with required bytes to make sure.
+                bytes.truncate(required_bytes);
+
+                ByteBuf::from(bytes)
+            }
         }
     }
 
@@ -3029,6 +3059,31 @@ mod tests {
         let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
 
         check_avro_bytes_serde(bytes, Datum::string("iceberg"), &PrimitiveType::String);
+    }
+
+    #[test]
+    fn avro_bytes_decimal() {
+        let bytes = vec![4u8, 210u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Datum::decimal(Decimal::new(1234, 2)).unwrap(),
+            &PrimitiveType::Decimal {
+                precision: 38,
+                scale: 2,
+            },
+        );
+
+        let bytes = vec![251u8, 46u8];
+
+        check_avro_bytes_serde(
+            bytes,
+            Datum::decimal(Decimal::new(-1234, 2)).unwrap(),
+            &PrimitiveType::Decimal {
+                precision: 38,
+                scale: 2,
+            },
+        );
     }
 
     #[test]

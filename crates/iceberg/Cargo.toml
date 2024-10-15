@@ -63,6 +63,7 @@ futures = { workspace = true }
 itertools = { workspace = true }
 moka = { version = "0.12.8", features = ["future"] }
 murmur3 = { workspace = true }
+num-bigint = { workspace = true }
 once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
