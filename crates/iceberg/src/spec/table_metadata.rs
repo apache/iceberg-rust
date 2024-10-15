@@ -189,6 +189,18 @@ impl TableMetadata {
         self.last_sequence_number
     }
 
+    /// Returns the next sequence number for the table.
+    ///
+    /// For format version 1, it always returns the initial sequence number.
+    /// For other versions, it returns the last sequence number incremented by 1.
+    #[inline]
+    pub fn next_sequence_number(&self) -> i64 {
+        match self.format_version {
+            FormatVersion::V1 => INITIAL_SEQUENCE_NUMBER,
+            _ => self.last_sequence_number + 1,
+        }
+    }
+
     /// Returns last updated time.
     #[inline]
     pub fn last_updated_timestamp(&self) -> Result<DateTime<Utc>> {
@@ -1463,7 +1475,7 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro")
-            .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
+            .with_summary(Summary { operation: Operation::Append, additional_properties: HashMap::from_iter(vec![("spark.app.id".to_string(), "local-1662532784305".to_string()), ("added-data-files".to_string(), "4".to_string()), ("added-records".to_string(), "4".to_string()), ("added-files-size".to_string(), "6001".to_string())]) })
             .build();
 
         let expected = TableMetadata {
@@ -1864,7 +1876,7 @@ mod tests {
             .with_manifest_list("s3://a/b/1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
@@ -1877,7 +1889,7 @@ mod tests {
             .with_manifest_list("s3://a/b/2.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
