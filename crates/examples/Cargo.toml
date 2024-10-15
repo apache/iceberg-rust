@@ -25,9 +25,15 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+datafusion = { git = "https://github.com/apache/datafusion"}
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+iceberg-datafusion = { workspace = true }
 tokio = { version = "1", features = ["full"] }
+
+[[example]]
+name = "datafusion-read-static-table"
+path = "src/datafusion_read_static_table.rs"
 
 [[example]]
 name = "rest-catalog-namespace"
