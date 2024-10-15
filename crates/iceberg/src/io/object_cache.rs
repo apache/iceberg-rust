@@ -262,7 +262,7 @@ mod tests {
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Data)
                     .format_version(FormatVersion::V2)
                     .partition_spec((**current_partition_spec).clone())
