@@ -40,11 +40,7 @@ module-name = "pyiceberg_core.pyiceberg_core_rust"
 ignore = ["F403", "F405"]
 
 [tool.hatch.envs.dev]
-dependencies = [
-    "maturin>=1.0,<2.0",
-    "pytest>=8.3.2",
-    "pyarrow>=17.0.0",
-]
+dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0"]
 
 [tool.hatch.envs.dev.scripts]
 develop = "maturin develop"

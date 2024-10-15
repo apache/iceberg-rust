@@ -41,7 +41,7 @@ async-std = ["dep:async-std"]
 tokio = ["dep:tokio"]
 
 [dependencies]
-anyhow = { workspace = true  }
+anyhow = { workspace = true }
 apache-avro = { workspace = true }
 array-init = { workspace = true }
 arrow-arith = { workspace = true }
