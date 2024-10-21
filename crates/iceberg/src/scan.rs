@@ -427,7 +427,7 @@ impl TableScan {
 
     /// Returns a reference to the column names of the table scan.
     pub fn column_names(&self) -> Option<&[String]> {
-        self.column_names.as_ref().map(|v| v.as_slice())
+        self.column_names.as_deref()
     }
 
     /// Returns a reference to the snapshot of the table scan.
