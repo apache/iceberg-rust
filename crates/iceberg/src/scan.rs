@@ -411,6 +411,11 @@ impl TableScan {
         return Ok(file_scan_task_rx.boxed());
     }
 
+    /// Returns an [`ManifestList`]
+    pub async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
+        self.plan_context.get_manifest_list().await
+    }
+
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
