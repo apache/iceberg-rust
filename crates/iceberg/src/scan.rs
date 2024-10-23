@@ -51,7 +51,7 @@ pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
-    // defaults to none which means select all columns
+    // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
     batch_size: Option<usize>,
