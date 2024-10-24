@@ -257,7 +257,7 @@ mod tests {
                 .unwrap()
         }
 
-        async fn setup_manifest_files(&mut self) {
+        async fn setup_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let parent_snapshot = current_snapshot
                 .parent_snapshot(self.table.metadata())
@@ -396,6 +396,26 @@ mod tests {
                                 .unwrap(),
                         )
                         .build(),
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Existing)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFileBuilder::default()
+                                .content(DataContentType::EqualityDeletes)
+                                .file_path(format!(
+                                    "{}/equality-deletes-1.parquet",
+                                    &self.table_location
+                                ))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(8)
+                                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
                 ],
             ))
             .await
@@ -481,7 +501,7 @@ mod tests {
                 writer.close().unwrap();
             }
 
-            // prepare data for positional delete files
+            // prepare data for equality delete file
             let mut file_path_cols = vec![];
             let mut pos_cols = vec![];
 
@@ -546,13 +566,67 @@ mod tests {
                 // writer must be closed to write footer
                 writer.close().unwrap();
             }
+
+            // prepare data for positional delete file
+            let col_y_vals = vec![1, 2];
+            let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
+
+            let col_z_vals = vec![Some(100), None];
+            let col_z = Arc::new(Int64Array::from(col_z_vals)) as ArrayRef;
+
+            let col_a_vals = vec![Some("HELP"), None];
+            let col_a = Arc::new(StringArray::from(col_a_vals)) as ArrayRef;
+
+            let equality_delete_schema = {
+                let fields = vec![
+                    arrow_schema::Field::new("y", arrow_schema::DataType::Int64, true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "2".to_string(),
+                        )])),
+                    arrow_schema::Field::new("z", arrow_schema::DataType::Int64, true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "3".to_string(),
+                        )])),
+                    arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "4".to_string(),
+                        )])),
+                ];
+                Arc::new(arrow_schema::Schema::new(fields))
+            };
+
+            let equality_deletes_to_write =
+                RecordBatch::try_new(equality_delete_schema.clone(), vec![col_y, col_z, col_a])
+                    .unwrap();
+
+            let file = std::fs::File::create(format!(
+                "{}/equality-deletes-1.parquet",
+                &self.table_location
+            ))
+            .unwrap();
+            let mut writer = ArrowWriter::try_new(
+                file,
+                equality_deletes_to_write.schema(),
+                Some(props.clone()),
+            )
+            .unwrap();
+
+            writer
+                .write(&equality_deletes_to_write)
+                .expect("Writing batch");
+
+            // writer must be closed to write footer
+            writer.close().unwrap();
         }
     }
 
     #[tokio::test]
     async fn test_plan_files_with_deletions() {
         let mut fixture = TableDeleteTestFixture::new();
-        fixture.setup_manifest_files().await;
+        fixture.setup_files().await;
 
         // Create table scan for current snapshot and plan files
         let table_scan = fixture.table.scan().build().unwrap();
@@ -587,7 +661,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_positional_deletes() {
         let mut fixture = TableDeleteTestFixture::new();
-        fixture.setup_manifest_files().await;
+        fixture.setup_files().await;
 
         // Create table scan for current snapshot and plan files
         let table_scan = fixture.table.scan().select(["x", "z"]).build().unwrap();
@@ -661,7 +735,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_positional_deletes_and_filter() {
         let mut fixture = TableDeleteTestFixture::new();
-        fixture.setup_manifest_files().await;
+        fixture.setup_files().await;
 
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y")
