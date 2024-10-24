@@ -1082,7 +1082,7 @@ pub struct FileScanTask {
 }
 
 /// A task to scan part of file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileScanTaskDeleteFile {
     /// The delete file path
     pub file_path: String,
