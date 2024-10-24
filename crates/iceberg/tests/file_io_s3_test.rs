@@ -68,21 +68,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_io_s3_is_exist() {
+    async fn test_file_io_s3_exists() {
         let file_io = get_file_io().await;
-        assert!(!file_io.is_exist("s3://bucket2/any").await.unwrap());
-        assert!(file_io.is_exist("s3://bucket1/").await.unwrap());
+        assert!(!file_io.exists("s3://bucket2/any").await.unwrap());
+        assert!(file_io.exists("s3://bucket1/").await.unwrap());
     }
 
     #[tokio::test]
     async fn test_file_io_s3_output() {
         let file_io = get_file_io().await;
-        assert!(!file_io.is_exist("s3://bucket1/test_output").await.unwrap());
+        assert!(!file_io.exists("s3://bucket1/test_output").await.unwrap());
         let output_file = file_io.new_output("s3://bucket1/test_output").unwrap();
         {
             output_file.write("123".into()).await.unwrap();
         }
-        assert!(file_io.is_exist("s3://bucket1/test_output").await.unwrap());
+        assert!(file_io.exists("s3://bucket1/test_output").await.unwrap());
     }
 
     #[tokio::test]
