@@ -23,7 +23,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    RecordBatch, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    TimestampNanosecondArray,
+};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
 use arrow_string::like::starts_with;
@@ -46,7 +50,8 @@ use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
+use crate::expr::{Bind, BoundPredicate, BoundReference, Reference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::runtime::spawn;
 use crate::scan::{
@@ -54,7 +59,7 @@ use crate::scan::{
 };
 use crate::spec::{
     parse_equality_delete_file, parse_positional_delete_file, DataContentType, Datum, Deletes,
-    Schema,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef,
 };
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
@@ -281,32 +286,248 @@ impl ArrowReader {
         }
     }
 
-    fn get_equality_deletes(_delete_files: &[Deletes]) -> Result<Option<BoundPredicate>> {
-        let result = None;
+    fn get_equality_deletes(
+        delete_files: &[Deletes],
+        snapshot_schema: SchemaRef,
+    ) -> Result<Option<BoundPredicate>> {
+        let mut result_predicate = AlwaysFalse;
 
-        for delete_file in _delete_files {
-            let Deletes::Equality(_delete_file_batches) = delete_file else {
-                continue;
-            };
+        for delete_file in delete_files {
+            if let Deletes::Equality(record_batches) = delete_file {
+                for record_batch in record_batches {
+                    let batch_schema_arrow = record_batch.schema();
+                    let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
 
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Equality delete files are not yet supported.",
-            ));
+                    let datum_columns_with_names: Result<Vec<_>> = record_batch
+                        .columns()
+                        .iter()
+                        .zip(batch_schema_iceberg.as_struct().fields())
+                        .map(|(column, field)| {
+                            let col_as_datums =
+                                Self::equality_delete_column_to_datum_vec(column, field);
+                            col_as_datums.map(|c| (c, field.name.to_string()))
+                        })
+                        .collect();
+                    let datum_columns_with_names = datum_columns_with_names?;
 
-            // TODO:
-            //      * set `file_predicate` = AlwaysTrue
-            //      * for each row in the file:
-            //          * for each cell in the row:
-            //              * create a predicate of the form `field` = `val`
-            //                  where `field` is the column name and `val` is the value
-            //                  of the cell
-            //              * Bind this predicate to the table schema to get a `BoundPredicate`
-            //              * set file_predicate = file_predicate.and(bound_predicate_for_cell)
-            //      * set result = result.or(file_predicate)
+                    for row_idx in 0..record_batch.num_rows() {
+                        let mut row_predicate = AlwaysTrue;
+                        for (column, field_name) in &datum_columns_with_names {
+                            if let Some(Some(datum)) = column.get(row_idx) {
+                                row_predicate = row_predicate
+                                    .and(Reference::new(field_name).equal_to(datum.clone()));
+                            }
+                        }
+                        result_predicate = result_predicate.or(row_predicate);
+                    }
+                }
+            }
         }
 
-        Ok(result)
+        Ok(if result_predicate == AlwaysFalse {
+            None
+        } else {
+            // This is a deletion filter, not a selection filter, so we need to invert it
+            result_predicate = result_predicate.negate();
+            Some(result_predicate.bind(snapshot_schema, true)?)
+        })
+    }
+
+    fn equality_delete_column_to_datum_vec(
+        column: &ArrayRef,
+        field: &NestedFieldRef,
+    ) -> Result<Vec<Option<Datum>>> {
+        Ok(match field.field_type.as_primitive_type() {
+            Some(primitive_type) => match primitive_type {
+                PrimitiveType::Int => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Int32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::int))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Boolean => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to BooleanArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::bool))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Long => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Int64Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::long))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Float => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Float32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::float))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Double => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Float64Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::double))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::String => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to StringArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::string))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Date => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Date32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::date))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Time => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Time64MicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Time64MicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| match val {
+                            None => Ok(None),
+                            Some(val) => Datum::time_micros(val).map(Some),
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                }
+                PrimitiveType::Timestamp => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampMicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamp_micros))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Timestamptz => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampMicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamptz_micros))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::TimestampNs => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampNanosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamp_nanos))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::TimestamptzNs => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampNanosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamptz_nanos))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Decimal { .. } => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Decimal column are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Uuid => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Uuid column are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Fixed(_) => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a column of type Fixed are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Binary => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Binary column are not yet supported",
+                        )
+                    );
+                }
+            },
+            None => {
+                return Err(
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        "Equality deletes where a predicate acts upon a non-primitive (i.e. Struct, List, or Map) typed column are not yet supported",
+                    )
+                );
+            }
+        })
     }
 
     async fn process_file_scan_task(
@@ -355,7 +576,7 @@ impl ArrowReader {
 
         let delete_files = delete_files_fut.await?;
         let delete_predicate = if let Some(ref delete_files) = delete_files {
-            Self::get_equality_deletes(delete_files)?
+            Self::get_equality_deletes(delete_files, task.schema.clone())?
         } else {
             None
         };
