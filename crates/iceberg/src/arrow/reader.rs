@@ -1532,10 +1532,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let literals: Result<Vec<_>> = literals.iter().map(get_arrow_datum).collect();
+            let literals = literals?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
@@ -1560,10 +1558,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let literals: Result<Vec<_>> = literals.iter().map(get_arrow_datum).collect();
+            let literals = literals?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
