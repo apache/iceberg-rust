@@ -504,12 +504,6 @@
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
 <a href="#506" id="506">506</a>
-<a href="#507" id="507">507</a>
-<a href="#508" id="508">508</a>
-<a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a>
-<a href="#512" id="512">512</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -607,9 +601,9 @@
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
-    </span><span class="kw">pub async fn </span>is_exist(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+    </span><span class="kw">pub async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
         <span class="kw">let </span>(op, relative_path) = <span class="self">self</span>.inner.create_operator(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(op.is_exist(relative_path).<span class="kw">await</span><span class="question-mark">?</span>)
+        <span class="prelude-val">Ok</span>(op.exists(relative_path).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="doccomment">/// Creates input file.
@@ -753,10 +747,7 @@
 
     <span class="doccomment">/// Check if file exists.
     </span><span class="kw">pub async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;bool&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self
-            </span>.op
-            .is_exist(<span class="kw-2">&amp;</span><span class="self">self</span>.path[<span class="self">self</span>.relative_path_pos..])
-            .<span class="kw">await</span><span class="question-mark">?</span>)
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.op.exists(<span class="kw-2">&amp;</span><span class="self">self</span>.path[<span class="self">self</span>.relative_path_pos..]).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="doccomment">/// Fetch and returns metadata of file.
@@ -835,10 +826,7 @@
 
     <span class="doccomment">/// Checks if file exists.
     </span><span class="kw">pub async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;bool&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self
-            </span>.op
-            .is_exist(<span class="kw-2">&amp;</span><span class="self">self</span>.path[<span class="self">self</span>.relative_path_pos..])
-            .<span class="kw">await</span><span class="question-mark">?</span>)
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.op.exists(<span class="kw-2">&amp;</span><span class="self">self</span>.path[<span class="self">self</span>.relative_path_pos..]).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="doccomment">/// Converts into [`InputFile`].
@@ -938,15 +926,15 @@
         write_to_file(<span class="string">"Iceberg loves rust."</span>, <span class="kw-2">&amp;</span>c_path);
 
         <span class="kw">let </span>file_io = create_local_file_io();
-        <span class="macro">assert!</span>(file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(file_io.exists(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
 
         file_io.remove_all(<span class="kw-2">&amp;</span>sub_dir_path).<span class="kw">await</span>.unwrap();
-        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>b_path).<span class="kw">await</span>.unwrap());
-        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>c_path).<span class="kw">await</span>.unwrap());
-        <span class="macro">assert!</span>(file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!file_io.exists(<span class="kw-2">&amp;</span>b_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!file_io.exists(<span class="kw-2">&amp;</span>c_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(file_io.exists(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
 
         file_io.delete(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap();
-        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!file_io.exists(<span class="kw-2">&amp;</span>a_path).<span class="kw">await</span>.unwrap());
     }
 
     <span class="attr">#[tokio::test]
@@ -957,7 +945,7 @@
         <span class="kw">let </span>full_path = <span class="macro">format!</span>(<span class="string">"{}/{}"</span>, tmp_dir.path().to_str().unwrap(), file_name);
 
         <span class="kw">let </span>file_io = create_local_file_io();
-        <span class="macro">assert!</span>(!file_io.is_exist(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!file_io.exists(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.unwrap());
         <span class="macro">assert!</span>(file_io.delete(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.is_ok());
         <span class="macro">assert!</span>(file_io.remove_all(<span class="kw-2">&amp;</span>full_path).<span class="kw">await</span>.is_ok());
     }
@@ -1013,13 +1001,13 @@
         <span class="kw">let </span>output_file = io.new_output(<span class="kw-2">&amp;</span>path).unwrap();
         output_file.write(<span class="string">"test"</span>.into()).<span class="kw">await</span>.unwrap();
 
-        <span class="macro">assert!</span>(io.is_exist(<span class="kw-2">&amp;</span>path.clone()).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(io.exists(<span class="kw-2">&amp;</span>path.clone()).<span class="kw">await</span>.unwrap());
         <span class="kw">let </span>input_file = io.new_input(<span class="kw-2">&amp;</span>path).unwrap();
         <span class="kw">let </span>content = input_file.read().<span class="kw">await</span>.unwrap();
         <span class="macro">assert_eq!</span>(content, Bytes::from(<span class="string">"test"</span>));
 
         io.delete(<span class="kw-2">&amp;</span>path).<span class="kw">await</span>.unwrap();
-        <span class="macro">assert!</span>(!io.is_exist(<span class="kw-2">&amp;</span>path).<span class="kw">await</span>.unwrap());
+        <span class="macro">assert!</span>(!io.exists(<span class="kw-2">&amp;</span>path).<span class="kw">await</span>.unwrap());
     }
 }
 </code></pre></div></section></main></body></html>
