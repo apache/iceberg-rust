@@ -2114,6 +2114,11 @@
 <a href="#2114" id="2114">2114</a>
 <a href="#2115" id="2115">2115</a>
 <a href="#2116" id="2116">2116</a>
+<a href="#2117" id="2117">2117</a>
+<a href="#2118" id="2118">2118</a>
+<a href="#2119" id="2119">2119</a>
+<a href="#2120" id="2120">2120</a>
+<a href="#2121" id="2121">2121</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2964,6 +2969,11 @@
             <span class="self">self</span>.status,
             ManifestStatus::Added | ManifestStatus::Existing
         )
+    }
+
+    <span class="doccomment">/// Status of this manifest entry
+    </span><span class="kw">pub fn </span>status(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ManifestStatus {
+        <span class="self">self</span>.status
     }
 
     <span class="doccomment">/// Content type of this manifest entry.
