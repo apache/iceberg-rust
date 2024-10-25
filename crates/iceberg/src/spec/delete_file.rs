@@ -601,7 +601,7 @@ mod tests {
                 RecordBatch::try_new(equality_delete_schema.clone(), vec![col_y, col_z, col_a])
                     .unwrap();
 
-            let file = std::fs::File::create(format!(
+            let file = File::create(format!(
                 "{}/equality-deletes-1.parquet",
                 &self.table_location
             ))
