@@ -1846,6 +1846,35 @@
 <a href="#1846" id="1846">1846</a>
 <a href="#1847" id="1847">1847</a>
 <a href="#1848" id="1848">1848</a>
+<a href="#1849" id="1849">1849</a>
+<a href="#1850" id="1850">1850</a>
+<a href="#1851" id="1851">1851</a>
+<a href="#1852" id="1852">1852</a>
+<a href="#1853" id="1853">1853</a>
+<a href="#1854" id="1854">1854</a>
+<a href="#1855" id="1855">1855</a>
+<a href="#1856" id="1856">1856</a>
+<a href="#1857" id="1857">1857</a>
+<a href="#1858" id="1858">1858</a>
+<a href="#1859" id="1859">1859</a>
+<a href="#1860" id="1860">1860</a>
+<a href="#1861" id="1861">1861</a>
+<a href="#1862" id="1862">1862</a>
+<a href="#1863" id="1863">1863</a>
+<a href="#1864" id="1864">1864</a>
+<a href="#1865" id="1865">1865</a>
+<a href="#1866" id="1866">1866</a>
+<a href="#1867" id="1867">1867</a>
+<a href="#1868" id="1868">1868</a>
+<a href="#1869" id="1869">1869</a>
+<a href="#1870" id="1870">1870</a>
+<a href="#1871" id="1871">1871</a>
+<a href="#1872" id="1872">1872</a>
+<a href="#1873" id="1873">1873</a>
+<a href="#1874" id="1874">1874</a>
+<a href="#1875" id="1875">1875</a>
+<a href="#1876" id="1876">1876</a>
+<a href="#1877" id="1877">1877</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1899,8 +1928,8 @@
 <span class="doccomment">/// Builder to create table scan.
 </span><span class="kw">pub struct </span>TableScanBuilder&lt;<span class="lifetime">'a</span>&gt; {
     table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table,
-    <span class="comment">// Empty column names means to select all columns
-    </span>column_names: Vec&lt;String&gt;,
+    <span class="comment">// Defaults to none which means select all columns
+    </span>column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     case_sensitive: bool,
@@ -1918,7 +1947,7 @@
 
         <span class="self">Self </span>{
             table,
-            column_names: <span class="macro">vec!</span>[],
+            column_names: <span class="prelude-val">None</span>,
             snapshot_id: <span class="prelude-val">None</span>,
             batch_size: <span class="prelude-val">None</span>,
             case_sensitive: <span class="bool-val">true</span>,
@@ -1954,16 +1983,24 @@
 
     <span class="doccomment">/// Select all columns.
     </span><span class="kw">pub fn </span>select_all(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.column_names.clear();
+        <span class="self">self</span>.column_names = <span class="prelude-val">None</span>;
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Select empty columns.
+    </span><span class="kw">pub fn </span>select_empty(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.column_names = <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[]);
         <span class="self">self
     </span>}
 
     <span class="doccomment">/// Select some columns of the table.
     </span><span class="kw">pub fn </span>select(<span class="kw-2">mut </span><span class="self">self</span>, column_names: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>ToString&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.column_names = column_names
-            .into_iter()
-            .map(|item| item.to_string())
-            .collect();
+        <span class="self">self</span>.column_names = <span class="prelude-val">Some</span>(
+            column_names
+                .into_iter()
+                .map(|item| item.to_string())
+                .collect(),
+        );
         <span class="self">self
     </span>}
 
@@ -2053,8 +2090,8 @@
         <span class="kw">let </span>schema = snapshot.schema(<span class="self">self</span>.table.metadata())<span class="question-mark">?</span>;
 
         <span class="comment">// Check that all column names exist in the schema.
-        </span><span class="kw">if </span>!<span class="self">self</span>.column_names.is_empty() {
-            <span class="kw">for </span>column_name <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.column_names {
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(column_names) = <span class="self">self</span>.column_names.as_ref() {
+            <span class="kw">for </span>column_name <span class="kw">in </span>column_names {
                 <span class="kw">if </span>schema.field_by_name(column_name).is_none() {
                     <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                         ErrorKind::DataInvalid,
@@ -2068,7 +2105,16 @@
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>field_ids = <span class="macro">vec!</span>[];
-        <span class="kw">for </span>column_name <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.column_names {
+        <span class="kw">let </span>column_names = <span class="self">self</span>.column_names.clone().unwrap_or_else(|| {
+            schema
+                .as_struct()
+                .fields()
+                .iter()
+                .map(|f| f.name.clone())
+                .collect()
+        });
+
+        <span class="kw">for </span>column_name <span class="kw">in </span>column_names.iter() {
             <span class="kw">let </span>field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -2145,7 +2191,7 @@
     plan_context: PlanContext,
     batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     file_io: FileIO,
-    column_names: Vec&lt;String&gt;,
+    column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="doccomment">/// The maximum number of manifest files that will be
     /// retrieved from [`FileIO`] concurrently
     </span>concurrency_limit_manifest_files: usize,
@@ -2257,9 +2303,10 @@
     }
 
     <span class="doccomment">/// Returns a reference to the column names of the table scan.
-    </span><span class="kw">pub fn </span>column_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[String] {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.column_names
+    </span><span class="kw">pub fn </span>column_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[String]&gt; {
+        <span class="self">self</span>.column_names.as_deref()
     }
+
     <span class="doccomment">/// Returns a reference to the snapshot of the table scan.
     </span><span class="kw">pub fn </span>snapshot(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SnapshotRef {
         <span class="kw-2">&amp;</span><span class="self">self</span>.plan_context.snapshot
@@ -3084,7 +3131,10 @@
         <span class="kw">let </span>table = TableTestFixture::new().table;
 
         <span class="kw">let </span>table_scan = table.scan().select([<span class="string">"x"</span>, <span class="string">"y"</span>]).build().unwrap();
-        <span class="macro">assert_eq!</span>(<span class="macro">vec!</span>[<span class="string">"x"</span>, <span class="string">"y"</span>], table_scan.column_names);
+        <span class="macro">assert_eq!</span>(
+            <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"x"</span>.to_string(), <span class="string">"y"</span>.to_string()]),
+            table_scan.column_names
+        );
 
         <span class="kw">let </span>table_scan = table
             .scan()
@@ -3092,7 +3142,7 @@
             .select([<span class="string">"z"</span>])
             .build()
             .unwrap();
-        <span class="macro">assert_eq!</span>(<span class="macro">vec!</span>[<span class="string">"z"</span>], table_scan.column_names);
+        <span class="macro">assert_eq!</span>(<span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="string">"z"</span>.to_string()]), table_scan.column_names);
     }
 
     <span class="attr">#[test]
@@ -3100,7 +3150,7 @@
         <span class="kw">let </span>table = TableTestFixture::new().table;
 
         <span class="kw">let </span>table_scan = table.scan().select_all().build().unwrap();
-        <span class="macro">assert!</span>(table_scan.column_names.is_empty());
+        <span class="macro">assert!</span>(table_scan.column_names.is_none());
     }
 
     <span class="attr">#[test]
@@ -3272,6 +3322,14 @@
         <span class="kw">let </span>col2 = batches[<span class="number">0</span>].column_by_name(<span class="string">"z"</span>).unwrap();
         <span class="kw">let </span>int64_arr = col2.as_any().downcast_ref::&lt;Int64Array&gt;().unwrap();
         <span class="macro">assert_eq!</span>(int64_arr.value(<span class="number">0</span>), <span class="number">3</span>);
+
+        <span class="comment">// test empty scan
+        </span><span class="kw">let </span>table_scan = fixture.table.scan().select_empty().build().unwrap();
+        <span class="kw">let </span>batch_stream = table_scan.to_arrow().<span class="kw">await</span>.unwrap();
+        <span class="kw">let </span>batches: Vec&lt;<span class="kw">_</span>&gt; = batch_stream.try_collect().<span class="kw">await</span>.unwrap();
+
+        <span class="macro">assert_eq!</span>(batches[<span class="number">0</span>].num_columns(), <span class="number">0</span>);
+        <span class="macro">assert_eq!</span>(batches[<span class="number">0</span>].num_rows(), <span class="number">1024</span>);
     }
 
     <span class="attr">#[tokio::test]
