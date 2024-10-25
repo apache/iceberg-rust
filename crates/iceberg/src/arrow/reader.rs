@@ -215,38 +215,41 @@ impl ArrowReader {
                                 file_type,
                             } = entry;
 
-                        let record_batch_stream = Self::create_parquet_record_batch_stream_builder(
-                            file_path,
-                            file_io.clone(),
-                            false,
-                        )
-                        .await?
-                        .build()?
-                        .map(|item| match item {
-                            Ok(val) => Ok(val),
-                            Err(err) => Err(Error::new(ErrorKind::DataInvalid, err.to_string())
-                                .with_source(err)),
-                        })
-                        .boxed();
+                            let record_batch_stream =
+                                Self::create_parquet_record_batch_stream_builder(
+                                    file_path,
+                                    file_io.clone(),
+                                    false,
+                                )
+                                .await?
+                                .build()?
+                                .map(|item| match item {
+                                    Ok(val) => Ok(val),
+                                    Err(err) => {
+                                        Err(Error::new(ErrorKind::DataInvalid, err.to_string())
+                                            .with_source(err))
+                                    }
+                                })
+                                .boxed();
 
-                        let result = match file_type {
-                            DataContentType::PositionDeletes => {
-                                parse_positional_delete_file(record_batch_stream).await
-                            }
-                            DataContentType::EqualityDeletes => {
-                                parse_equality_delete_file(record_batch_stream).await
-                            }
-                            _ => Err(Error::new(
-                                ErrorKind::Unexpected,
-                                "Expected equality or positional delete",
-                            )),
-                        }?;
+                            let result = match file_type {
+                                DataContentType::PositionDeletes => {
+                                    parse_positional_delete_file(record_batch_stream).await
+                                }
+                                DataContentType::EqualityDeletes => {
+                                    parse_equality_delete_file(record_batch_stream).await
+                                }
+                                _ => Err(Error::new(
+                                    ErrorKind::Unexpected,
+                                    "Expected equality or positional delete",
+                                )),
+                            }?;
 
-                        tx.send(Ok(result)).await?;
-                        Ok(())
-                    }
-                })
-                .await;
+                            tx.send(Ok(result)).await?;
+                            Ok(())
+                        }
+                    })
+                    .await;
 
             if let Err(error) = result {
                 let _ = channel_for_error.send(Err(error)).await;
@@ -919,25 +922,15 @@ impl ArrowReader {
         selected_row_groups: &Option<Vec<usize>>,
         positional_deletes: &[usize],
     ) -> Result<RowSelection> {
-        let Some(offset_index) = parquet_metadata.offset_index() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Parquet file metadata does not contain an offset index",
-            ));
-        };
-
         let mut selected_row_groups_idx = 0;
         let mut curr_pos_del_idx = 0;
         let pos_del_len = positional_deletes.len();
 
-        let page_index = offset_index
-            .iter()
-            .enumerate()
-            .zip(parquet_metadata.row_groups());
+        let page_index = parquet_metadata.row_groups().iter().enumerate();
 
         let mut results: Vec<RowSelector> = Vec::new();
         let mut current_page_base_idx: usize = 0;
-        for ((idx, _offset_index), row_group_metadata) in page_index {
+        for (idx, row_group_metadata) in page_index {
             let page_num_rows = row_group_metadata.num_rows() as usize;
             let next_page_base_idx = current_page_base_idx + page_num_rows;
 
