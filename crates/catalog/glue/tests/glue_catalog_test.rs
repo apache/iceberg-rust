@@ -237,7 +237,7 @@ async fn test_create_table() -> Result<()> {
     assert!(
         catalog
             .file_io()
-            .is_exist("s3a://warehouse/hive/metadata/")
+            .exists("s3a://warehouse/hive/metadata/")
             .await?
     );
 
