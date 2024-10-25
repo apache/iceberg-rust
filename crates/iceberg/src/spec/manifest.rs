@@ -850,6 +850,11 @@ impl ManifestEntry {
         )
     }
 
+    /// Status of this manifest entry
+    pub fn status(&self) -> ManifestStatus {
+        self.status
+    }
+
     /// Content type of this manifest entry.
     #[inline]
     pub fn content_type(&self) -> DataContentType {
