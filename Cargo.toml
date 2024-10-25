@@ -41,6 +41,7 @@ apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "53" }
 arrow-array = { version = "53" }
+arrow-cast = { version = "53" }
 arrow-ord = { version = "53" }
 arrow-schema = { version = "53" }
 arrow-select = { version = "53" }
@@ -70,7 +71,7 @@ log = "0.4"
 mockito = "1"
 murmur3 = "0.5.2"
 once_cell = "1"
-opendal = "0.50"
+opendal = "0.50.1"
 ordered-float = "4"
 parquet = "53"
 paste = "1"

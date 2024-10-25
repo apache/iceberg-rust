@@ -55,6 +55,7 @@
 
 #[macro_use]
 extern crate derive_builder;
+extern crate core;
 
 mod error;
 pub use error::{Error, ErrorKind, Result};

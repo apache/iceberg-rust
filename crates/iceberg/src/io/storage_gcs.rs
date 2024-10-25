@@ -34,10 +34,24 @@ pub const GCS_SERVICE_PATH: &str = "gcs.service.path";
 pub const GCS_USER_PROJECT: &str = "gcs.user-project";
 /// Allow unauthenticated requests
 pub const GCS_NO_AUTH: &str = "gcs.no-auth";
+/// Google Cloud Storage credentials JSON string, base64 encoded.
+///
+/// E.g. base64::prelude::BASE64_STANDARD.encode(serde_json::to_string(credential).as_bytes())
+pub const GCS_CREDENTIALS_JSON: &str = "gcs.credentials-json";
+/// Google Cloud Storage token
+pub const GCS_TOKEN: &str = "gcs.oauth2.token";
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
     let mut cfg = GcsConfig::default();
+
+    if let Some(cred) = m.remove(GCS_CREDENTIALS_JSON) {
+        cfg.credential = Some(cred);
+    }
+
+    if let Some(token) = m.remove(GCS_TOKEN) {
+        cfg.token = Some(token);
+    }
 
     if let Some(endpoint) = m.remove(GCS_SERVICE_PATH) {
         cfg.endpoint = Some(endpoint);

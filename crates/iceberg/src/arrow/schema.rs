@@ -207,7 +207,7 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
     visitor.schema(schema, results)
 }
 
-/// Convert Arrow schema to ceberg schema.
+/// Convert Arrow schema to Iceberg schema.
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
@@ -826,8 +826,8 @@ mod tests {
 
     fn arrow_schema_for_arrow_schema_to_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
-            simple_field("key", DataType::Int32, false, "17"),
-            simple_field("value", DataType::Utf8, true, "18"),
+            simple_field("key", DataType::Int32, false, "28"),
+            simple_field("value", DataType::Utf8, true, "29"),
         ]);
 
         let r#struct = DataType::Struct(fields);
@@ -1057,9 +1057,9 @@ mod tests {
                     "required": true,
                     "type": {
                         "type": "map",
-                        "key-id": 17,
+                        "key-id": 28,
                         "key": "int",
-                        "value-id": 18,
+                        "value-id": 29,
                         "value-required": false,
                         "value": "string"
                     }
@@ -1110,8 +1110,8 @@ mod tests {
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
-            simple_field("key", DataType::Int32, false, "17"),
-            simple_field("value", DataType::Utf8, true, "18"),
+            simple_field("key", DataType::Int32, false, "28"),
+            simple_field("value", DataType::Utf8, true, "29"),
         ]);
 
         let r#struct = DataType::Struct(fields);
@@ -1200,7 +1200,7 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
-            simple_field("uuid", DataType::FixedSizeBinary(16), false, "26"),
+            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
         ])
     }
 
@@ -1344,9 +1344,9 @@ mod tests {
                     "required": true,
                     "type": {
                         "type": "map",
-                        "key-id": 17,
+                        "key-id": 28,
                         "key": "int",
-                        "value-id": 18,
+                        "value-id": 29,
                         "value-required": false,
                         "value": "string"
                     }
@@ -1380,7 +1380,7 @@ mod tests {
                     }
                 },
                 {
-                    "id":26,
+                    "id":30,
                     "name":"uuid",
                     "required":true,
                     "type":"uuid"

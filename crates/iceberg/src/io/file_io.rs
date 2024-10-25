@@ -40,7 +40,7 @@ use crate::{Error, ErrorKind, Result};
 /// | Local file system  | `storage-fs`      | `file`     |
 /// | Memory             | `storage-memory`  | `memory`   |
 /// | S3                 | `storage-s3`      | `s3`, `s3a`|
-/// | GCS                | `storage-gcs`     | `gs`       |
+/// | GCS                | `storage-gcs`     | `gcs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     inner: Arc<Storage>,
@@ -95,9 +95,9 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
-    pub async fn is_exist(&self, path: impl AsRef<str>) -> Result<bool> {
+    pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.is_exist(relative_path).await?)
+        Ok(op.exists(relative_path).await?)
     }
 
     /// Creates input file.
@@ -241,10 +241,7 @@ impl InputFile {
 
     /// Check if file exists.
     pub async fn exists(&self) -> crate::Result<bool> {
-        Ok(self
-            .op
-            .is_exist(&self.path[self.relative_path_pos..])
-            .await?)
+        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
     }
 
     /// Fetch and returns metadata of file.
@@ -323,10 +320,7 @@ impl OutputFile {
 
     /// Checks if file exists.
     pub async fn exists(&self) -> crate::Result<bool> {
-        Ok(self
-            .op
-            .is_exist(&self.path[self.relative_path_pos..])
-            .await?)
+        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
     }
 
     /// Converts into [`InputFile`].
@@ -426,15 +420,15 @@ mod tests {
         write_to_file("Iceberg loves rust.", &c_path);
 
         let file_io = create_local_file_io();
-        assert!(file_io.is_exist(&a_path).await.unwrap());
+        assert!(file_io.exists(&a_path).await.unwrap());
 
         file_io.remove_all(&sub_dir_path).await.unwrap();
-        assert!(!file_io.is_exist(&b_path).await.unwrap());
-        assert!(!file_io.is_exist(&c_path).await.unwrap());
-        assert!(file_io.is_exist(&a_path).await.unwrap());
+        assert!(!file_io.exists(&b_path).await.unwrap());
+        assert!(!file_io.exists(&c_path).await.unwrap());
+        assert!(file_io.exists(&a_path).await.unwrap());
 
         file_io.delete(&a_path).await.unwrap();
-        assert!(!file_io.is_exist(&a_path).await.unwrap());
+        assert!(!file_io.exists(&a_path).await.unwrap());
     }
 
     #[tokio::test]
@@ -445,7 +439,7 @@ mod tests {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let file_io = create_local_file_io();
-        assert!(!file_io.is_exist(&full_path).await.unwrap());
+        assert!(!file_io.exists(&full_path).await.unwrap());
         assert!(file_io.delete(&full_path).await.is_ok());
         assert!(file_io.remove_all(&full_path).await.is_ok());
     }
@@ -501,12 +495,12 @@ mod tests {
         let output_file = io.new_output(&path).unwrap();
         output_file.write("test".into()).await.unwrap();
 
-        assert!(io.is_exist(&path.clone()).await.unwrap());
+        assert!(io.exists(&path.clone()).await.unwrap());
         let input_file = io.new_input(&path).unwrap();
         let content = input_file.read().await.unwrap();
         assert_eq!(content, Bytes::from("test"));
 
         io.delete(&path).await.unwrap();
-        assert!(!io.is_exist(&path).await.unwrap());
+        assert!(!io.exists(&path).await.unwrap());
     }
 }

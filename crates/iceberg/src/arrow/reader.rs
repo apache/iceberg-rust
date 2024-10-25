@@ -31,13 +31,14 @@ use bytes::Bytes;
 use fnv::FnvHashSet;
 use futures::channel::mpsc::{channel, Sender};
 use futures::future::BoxFuture;
-use futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{try_join, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
-use parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
@@ -209,6 +210,12 @@ impl ArrowReader {
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
+        // RecordBatchTransformer performs any required transformations on the RecordBatches
+        // that come back from the file, such as type promotion, default column insertion
+        // and column re-ordering
+        let mut record_batch_transformer =
+            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
@@ -261,8 +268,10 @@ impl ArrowReader {
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
         let mut record_batch_stream = record_batch_stream_builder.build()?;
+
         while let Some(batch) = record_batch_stream.try_next().await? {
-            tx.send(Ok(batch)).await?
+            tx.send(record_batch_transformer.process_record_batch(batch))
+                .await?
         }
 
         Ok(())
@@ -1077,12 +1086,14 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        Box::pin(async move {
-            let file_size = self.meta.size;
-            let mut loader = MetadataLoader::load(self, file_size as usize, None).await?;
-            loader.load_page_index(false, false).await?;
-            Ok(Arc::new(loader.finish()))
-        })
+        async move {
+            let reader = ParquetMetaDataReader::new();
+            let size = self.meta.size as usize;
+            let meta = reader.load_and_finish(self, size).await?;
+
+            Ok(Arc::new(meta))
+        }
+        .boxed()
     }
 }
 
