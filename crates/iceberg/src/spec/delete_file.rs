@@ -23,18 +23,13 @@ use futures::StreamExt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{NestedField, PrimitiveType, Schema, Type};
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) const FIELD_ID_DELETE_FILE_PATH: i32 = i32::MAX - 101;
 pub(crate) const FIELD_ID_DELETE_POS: i32 = i32::MAX - 102;
 
-pub(crate) const FIELD_NAME_DELETE_FILE_PATH: &str = "file_path";
-pub(crate) const FIELD_NAME_DELETE_POS: &str = "pos";
-
 // Represents a parsed Delete file that can be safely stored
 // in the Object Cache.
-#[allow(dead_code)]
 pub(crate) enum Deletes {
     // Positional delete files are parsed into a map of
     // filename to a sorted list of row indices.
@@ -60,51 +55,45 @@ enum PosDelSchema {
     WithoutRow,
 }
 
-#[allow(dead_code)]
-fn positional_delete_file_without_row_schema() -> Schema {
-    Schema::builder()
-        .with_fields([
-            NestedField::required(
-                FIELD_ID_DELETE_FILE_PATH,
-                FIELD_NAME_DELETE_FILE_PATH,
-                Type::Primitive(PrimitiveType::String),
-            )
-            .into(),
-            NestedField::required(
-                FIELD_ID_DELETE_POS,
-                FIELD_NAME_DELETE_POS,
-                Type::Primitive(PrimitiveType::Long),
-            )
-            .into(),
-        ])
-        .build()
-        .unwrap()
-}
-
 fn validate_schema(schema: SchemaRef) -> Result<PosDelSchema> {
     let fields = schema.flattened_fields();
     match fields.len() {
         2 | 3 => {
-            let path_field = fields[0];
-            let pos_field = fields[1];
-            if path_field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .unwrap()
-                .parse::<i32>()
-                .unwrap()
-                != FIELD_ID_DELETE_FILE_PATH
-                || pos_field
-                    .metadata()
-                    .get(PARQUET_FIELD_ID_META_KEY)
-                    .unwrap()
-                    .parse::<i32>()
-                    .unwrap()
-                    != FIELD_ID_DELETE_POS
+            let Some(path_field_id_raw) = fields[0].metadata().get(PARQUET_FIELD_ID_META_KEY)
+            else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Positional Delete file did not have the expected schema (missing field ID for field 0)",
+                ));
+            };
+
+            let Some(pos_field_id_raw) = fields[1].metadata().get(PARQUET_FIELD_ID_META_KEY) else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Positional Delete file did not have the expected schema (missing field ID for field 1)",
+                ));
+            };
+
+            let Ok(path_field_id_val) = path_field_id_raw.parse::<i32>() else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Positional Delete file did not have the expected schema (field ID 0 not parseable as an int)",
+                ));
+            };
+
+            let Ok(pos_field_id_val) = pos_field_id_raw.parse::<i32>() else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Positional Delete file did not have the expected schema (field ID 1 not parseable as an int)",
+                ));
+            };
+
+            if path_field_id_val != FIELD_ID_DELETE_FILE_PATH
+                || pos_field_id_val != FIELD_ID_DELETE_POS
             {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Positional Delete file did not have the expected schema",
+                    "Positional Delete file did not have the expected schema (unexpected field ID)",
                 ))
             } else if fields.len() == 2 {
                 Ok(PosDelSchema::WithoutRow)
@@ -137,8 +126,18 @@ pub(crate) async fn parse_positional_delete_file(
 
         let columns = batch.columns();
 
-        let file_paths = columns[0].as_any().downcast_ref::<StringArray>().unwrap();
-        let positions = columns[1].as_any().downcast_ref::<Int64Array>().unwrap();
+        let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Could not downcast file paths array to StringArray",
+            ));
+        };
+        let Some(positions) = columns[1].as_any().downcast_ref::<Int64Array>() else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Could not downcast positions array to Int64Array",
+            ));
+        };
 
         for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
             let (Some(file_path), Some(pos)) = (file_path, pos) else {

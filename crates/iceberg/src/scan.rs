@@ -360,7 +360,18 @@ impl DeleteFileManager {
         }
 
         if !delete_files.is_empty() {
-            *(self.file_scan_task_delete_files.write().unwrap()) = Some(Arc::new(delete_files));
+            let mut guard = self
+                .file_scan_task_delete_files
+                .write()
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "DeleteFileManager RwLock was poisoned",
+                    )
+                })
+                .unwrap();
+
+            *guard = Some(Arc::new(delete_files));
         }
 
         Ok(())
@@ -370,7 +381,16 @@ impl DeleteFileManager {
         &self,
         _data_file: &DataFile,
     ) -> Option<Arc<Vec<FileScanTaskDeleteFile>>> {
-        self.file_scan_task_delete_files.read().unwrap().clone()
+        self.file_scan_task_delete_files
+            .read()
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "DeleteFileManager RwLock was poisoned",
+                )
+            })
+            .unwrap()
+            .clone()
     }
 }
 
