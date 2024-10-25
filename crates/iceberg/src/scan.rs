@@ -1594,15 +1594,15 @@ mod tests {
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
-        let batche1: Vec<_> = batch_stream.try_collect().await.unwrap();
+        let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
-        let batche2: Vec<_> = batch_stream.try_collect().await.unwrap();
+        let batch_2: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        assert_eq!(batche1, batche2);
+        assert_eq!(batch_1, batch_2);
     }
 
     #[tokio::test]

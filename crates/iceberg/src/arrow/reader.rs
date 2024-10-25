@@ -203,7 +203,7 @@ impl ArrowReader {
         let mut channel_for_error = tx.clone();
 
         spawn(async move {
-            #[allow(clippy::redundant_closure)] // clippy's recommendation fails to compile
+            #[allow(clippy::redundant_closure)] // recommendation from Clippy fails to compile
             let result =
                 futures::stream::iter(delete_file_entries.iter().map(|df| crate::Result::Ok(df)))
                     .try_for_each_concurrent(concurrency_limit_data_files, |entry| {
@@ -215,41 +215,38 @@ impl ArrowReader {
                                 file_type,
                             } = entry;
 
-                            let record_batch_stream =
-                                Self::create_parquet_record_batch_stream_builder(
-                                    file_path,
-                                    file_io.clone(),
-                                    false,
-                                )
-                                .await?
-                                .build()?
-                                .map(|item| match item {
-                                    Ok(val) => Ok(val),
-                                    Err(err) => {
-                                        Err(Error::new(ErrorKind::DataInvalid, err.to_string())
-                                            .with_source(err))
-                                    }
-                                })
-                                .boxed();
+                        let record_batch_stream = Self::create_parquet_record_batch_stream_builder(
+                            file_path,
+                            file_io.clone(),
+                            false,
+                        )
+                        .await?
+                        .build()?
+                        .map(|item| match item {
+                            Ok(val) => Ok(val),
+                            Err(err) => Err(Error::new(ErrorKind::DataInvalid, err.to_string())
+                                .with_source(err)),
+                        })
+                        .boxed();
 
-                            let result = match file_type {
-                                DataContentType::PositionDeletes => {
-                                    parse_positional_delete_file(record_batch_stream).await
-                                }
-                                DataContentType::EqualityDeletes => {
-                                    parse_equality_delete_file(record_batch_stream).await
-                                }
-                                _ => Err(Error::new(
-                                    ErrorKind::Unexpected,
-                                    "Expected equality or positional delete",
-                                )),
-                            }?;
+                        let result = match file_type {
+                            DataContentType::PositionDeletes => {
+                                parse_positional_delete_file(record_batch_stream).await
+                            }
+                            DataContentType::EqualityDeletes => {
+                                parse_equality_delete_file(record_batch_stream).await
+                            }
+                            _ => Err(Error::new(
+                                ErrorKind::Unexpected,
+                                "Expected equality or positional delete",
+                            )),
+                        }?;
 
-                            tx.send(Ok(result)).await?;
-                            Ok(())
-                        }
-                    })
-                    .await;
+                        tx.send(Ok(result)).await?;
+                        Ok(())
+                    }
+                })
+                .await;
 
             if let Err(error) = result {
                 let _ = channel_for_error.send(Err(error)).await;
@@ -268,21 +265,23 @@ impl ArrowReader {
         data_file_path: &str,
         deletes: &[Deletes],
     ) -> Option<Vec<usize>> {
-        // TODO: refactor to avoid allocating vec if no results
-
-        let mut results = vec![];
-        deletes.iter().for_each(|d| {
-            if let Deletes::Positional(map) = d {
-                if let Some(indices) = map.get(data_file_path) {
-                    results.extend(indices.iter().map(|&i| i as usize));
+        let mut results = deletes
+            .iter()
+            .filter_map(|d| {
+                if let Deletes::Positional(map) = d {
+                    if let Some(indices) = map.get(data_file_path) {
+                        return Some(indices.iter().map(|&i| i as usize));
+                    }
                 }
-            }
-        });
 
-        if results.is_empty() {
+                None
+            })
+            .peekable();
+
+        if results.peek().is_none() {
             None
         } else {
-            Some(results)
+            Some(results.flatten().collect())
         }
     }
 
@@ -303,9 +302,9 @@ impl ArrowReader {
                         .iter()
                         .zip(batch_schema_iceberg.as_struct().fields())
                         .map(|(column, field)| {
-                            let col_as_datums =
+                            let col_as_datum_vec =
                                 Self::equality_delete_column_to_datum_vec(column, field);
-                            col_as_datums.map(|c| (c, field.name.to_string()))
+                            col_as_datum_vec.map(|c| (c, field.name.to_string()))
                         })
                         .collect();
                     let datum_columns_with_names = datum_columns_with_names?;
