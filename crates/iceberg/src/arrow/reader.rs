@@ -362,11 +362,10 @@ impl ArrowReader {
     ) -> Result<RowFilter> {
         // Collect Parquet column indices from field ids.
         // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
-        let mut column_indices = iceberg_field_ids
+        let column_indices = iceberg_field_ids
             .iter()
             .filter_map(|field_id| field_id_map.get(field_id).cloned())
             .collect::<Vec<_>>();
-        column_indices.sort();
 
         // The converter that converts `BoundPredicates` to `ArrowPredicates`
         let mut converter = PredicateConverter {
