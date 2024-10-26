@@ -98,7 +98,6 @@ use crate::to_datafusion_error;
 /// An error will be returned if any unsupported feature, such as partition columns,
 /// order expressions, constraints, or column defaults, is detected in the table creation command.
 #[derive(Default)]
-#[non_exhaustive]
 pub struct IcebergTableProviderFactory {}
 
 impl IcebergTableProviderFactory {
@@ -163,7 +162,7 @@ fn check_cmd(cmd: &CreateExternalTable) -> Result<()> {
 /// # Note
 /// If the table name is a bare name, it will be complemented with the 'default' namespace.
 /// Otherwise, it will be returned as is. Because Iceberg tables are always namespaced, but DataFusion
-/// external table commands not include the namespace, this function ensures that the namespace is always present.
+/// external table commands maybe not include the namespace, this function ensures that the namespace is always present.
 ///
 /// # See also
 /// - [`iceberg::NamespaceIdent`]
