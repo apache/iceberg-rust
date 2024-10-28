@@ -258,12 +258,13 @@ mod tests {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
-        PartitionSpecRef, PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
+        BoundPartitionSpec, BoundPartitionSpecRef, DataContentType, DataFile, DataFileFormat,
+        Datum, Literal, NestedField, PrimitiveType, Schema, Struct, Transform, Type,
+        UnboundPartitionField,
     };
     use crate::Result;
 
-    fn create_partition_spec(r#type: PrimitiveType) -> Result<PartitionSpecRef> {
+    fn create_partition_spec(r#type: PrimitiveType) -> Result<BoundPartitionSpecRef> {
         let schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
@@ -272,7 +273,7 @@ mod tests {
             ))])
             .build()?;
 
-        let spec = PartitionSpec::builder(schema.clone())
+        let spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
@@ -288,7 +289,7 @@ mod tests {
     }
 
     fn create_partition_filter(
-        partition_spec: PartitionSpecRef,
+        partition_spec: BoundPartitionSpecRef,
         predicate: &BoundPredicate,
         case_sensitive: bool,
     ) -> Result<BoundPredicate> {
@@ -312,7 +313,7 @@ mod tests {
     }
 
     fn create_expression_evaluator(
-        partition_spec: PartitionSpecRef,
+        partition_spec: BoundPartitionSpecRef,
         predicate: &BoundPredicate,
         case_sensitive: bool,
     ) -> Result<ExpressionEvaluator> {

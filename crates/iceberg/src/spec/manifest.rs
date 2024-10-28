@@ -30,8 +30,8 @@ use typed_builder::TypedBuilder;
 
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 use super::{
-    Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
-    SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
+    BoundPartitionSpec, Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile,
+    Schema, SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
 use crate::io::OutputFile;
@@ -706,7 +706,7 @@ pub struct ManifestMetadata {
     /// ID of the schema used to write the manifest as a string
     schema_id: SchemaId,
     /// The partition spec used  to write the manifest
-    partition_spec: PartitionSpec,
+    partition_spec: BoundPartitionSpec,
     /// Table format version number of the manifest as a string
     format_version: FormatVersion,
     /// Type of content files tracked by the manifest: “data” or “deletes”
@@ -773,7 +773,7 @@ impl ManifestMetadata {
                 })
                 .transpose()?
                 .unwrap_or(0);
-            PartitionSpec::builder(schema.clone())
+            BoundPartitionSpec::builder(schema.clone())
                 .with_spec_id(spec_id)
                 .add_unbound_fields(fields.into_iter().map(|f| f.into_unbound()))?
                 .build()?
@@ -1594,7 +1594,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 0,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -1707,7 +1707,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 0,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema)
+                partition_spec: BoundPartitionSpec::builder(schema)
                 .with_spec_id(0).add_partition_field("v_int", "v_int", Transform::Identity).unwrap()
                 .add_partition_field("v_long", "v_long", Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
@@ -1818,7 +1818,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 1,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -1882,7 +1882,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 0,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema).add_partition_field("category", "category", Transform::Identity).unwrap().build().unwrap(),
+                partition_spec: BoundPartitionSpec::builder(schema).add_partition_field("category", "category", Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -1961,7 +1961,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 0,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -2033,7 +2033,7 @@ mod tests {
             metadata: ManifestMetadata {
                 schema_id: 0,
                 schema: schema.clone(),
-                partition_spec: PartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },

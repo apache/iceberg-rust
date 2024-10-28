@@ -495,7 +495,7 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        BoundPartitionSpec, DataContentType, DataFile, DataFileFormat, Datum, NestedField,
         PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
@@ -1645,7 +1645,7 @@ mod test {
         assert!(result, "Should read: NotIn on no nulls column");
     }
 
-    fn create_test_partition_spec() -> Arc<PartitionSpec> {
+    fn create_test_partition_spec() -> Arc<BoundPartitionSpec> {
         let table_schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
@@ -1656,7 +1656,7 @@ mod test {
             .unwrap();
         let table_schema_ref = Arc::new(table_schema);
 
-        let partition_spec = PartitionSpec::builder(table_schema_ref.clone())
+        let partition_spec = BoundPartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
