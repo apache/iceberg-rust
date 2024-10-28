@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow_array::{
     Array as ArrowArray, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-    Int32Array, Int64Array, NullArray, RecordBatch, StringArray,
+    Int32Array, Int64Array, NullArray, RecordBatch, RecordBatchOptions, StringArray,
 };
 use arrow_cast::cast;
 use arrow_schema::{
@@ -124,19 +124,7 @@ impl RecordBatchTransformer {
         snapshot_schema: Arc<IcebergSchema>,
         projected_iceberg_field_ids: &[i32],
     ) -> Self {
-        let projected_iceberg_field_ids = if projected_iceberg_field_ids.is_empty() {
-            // If the list of field ids is empty, this indicates that we
-            // need to select all fields.
-            // Project all fields in table schema order
-            snapshot_schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|field| field.id)
-                .collect()
-        } else {
-            projected_iceberg_field_ids.to_vec()
-        };
+        let projected_iceberg_field_ids = projected_iceberg_field_ids.to_vec();
 
         Self {
             snapshot_schema,
@@ -154,10 +142,15 @@ impl RecordBatchTransformer {
             Some(BatchTransform::Modify {
                 ref target_schema,
                 ref operations,
-            }) => RecordBatch::try_new(
-                target_schema.clone(),
-                self.transform_columns(record_batch.columns(), operations)?,
-            )?,
+            }) => {
+                let options =
+                    RecordBatchOptions::default().with_row_count(Some(record_batch.num_rows()));
+                RecordBatch::try_new_with_options(
+                    target_schema.clone(),
+                    self.transform_columns(record_batch.columns(), operations)?,
+                    &options,
+                )?
+            }
             Some(BatchTransform::ModifySchema { target_schema }) => {
                 record_batch.with_schema(target_schema.clone())?
             }
