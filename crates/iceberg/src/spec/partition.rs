@@ -55,19 +55,6 @@ impl PartitionField {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-/// Common interface for partition specs.
-/// This enum exposes common functions between [`BoundPartitionSpec`], [`UnboundPartitionSpec`] and [`SchemalessPartitionSpec`].
-/// In most cases, it is better to use the specific struct instead of this enum.
-pub enum PartitionSpec<'a> {
-    /// Bound partition spec
-    Bound(&'a BoundPartitionSpec),
-    /// Unbound partition spec
-    Unbound(&'a UnboundPartitionSpec),
-    /// Schemaless partition spec
-    Schemaless(&'a SchemalessPartitionSpec),
-}
-
 /// Partition spec that defines how to produce a tuple of partition values from a record.
 /// `PartitionSpec` is bound to a specific schema.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -137,16 +124,14 @@ impl BoundPartitionSpec {
     ///
     /// A [`PartitionSpec`] is unpartitioned if it has no fields or all fields are [`Transform::Void`] transform.
     pub fn is_unpartitioned(&self) -> bool {
-        // <Self as UnboundPartitionSpecInterface<PartitionField>>::is_unpartitioned(self)
-        todo!()
+        self.fields.is_empty() || self.fields.iter().all(|f| f.transform == Transform::Void)
     }
 
     /// Turn this partition spec into an unbound partition spec.
     ///
     /// The `field_id` is retained as `partition_id` in the unbound partition spec.
     pub fn into_unbound(self) -> UnboundPartitionSpec {
-        // <Self as UnboundPartitionSpecInterface<PartitionField>>::into_unbound(self)
-        todo!()
+        self.into()
     }
 
     /// Turn this partition spec into a preserved partition spec.
@@ -154,33 +139,21 @@ impl BoundPartitionSpec {
         self.into()
     }
 
-    /// Check if this partition spec is compatible with another partition spec.
-    ///
-    /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and
-    /// spec_id ignored. The following must be identical:
-    /// * The number of fields
-    /// * Field order
-    /// * Field names
-    /// * Source column ids
-    /// * Transforms
-    pub fn is_compatible_with<'a, T: Into<PartitionSpec<'a>>>(&self, other: T) -> bool {
-        let self_spec = PartitionSpec::Bound(self);
-        self_spec.is_compatible_with(other.into())
-    }
-
     /// Check if this partition spec has sequential partition ids.
     /// Sequential ids start from 1000 and increment by 1 for each field.
     /// This is required for spec version 1
     pub fn has_sequential_ids(&self) -> bool {
-        // <Self as PartitionSpecInterface>::has_sequential_ids(self)
-        todo!()
+        has_sequential_ids(&self.fields.iter().map(|f| f.field_id).collect::<Vec<_>>())
     }
 
     /// Get the highest field id in the partition spec.
     /// If the partition spec is unpartitioned, it returns the last unpartitioned last assigned id (999).
     pub fn highest_field_id(&self) -> i32 {
-        // <Self as PartitionSpecInterface>::highest_field_id(self)
-        todo!()
+        self.fields
+            .iter()
+            .map(|f| f.field_id)
+            .max()
+            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
     }
 
     /// Returns the partition type of this partition spec.
@@ -221,6 +194,32 @@ impl SchemalessPartitionSpec {
     /// Convert to unbound partition spec
     pub fn into_unbound(self) -> UnboundPartitionSpec {
         self.into()
+    }
+
+    /// Check if this partition spec is compatible with another partition spec.
+    ///
+    /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and
+    /// spec_id ignored. The following must be identical:
+    /// * The number of fields
+    /// * Field order
+    /// * Field names
+    /// * Source column ids
+    /// * Transforms
+    pub fn is_compatible_with_unbound(&self, other: &UnboundPartitionSpec) -> bool {
+        if self.fields.len() != other.fields.len() {
+            return false;
+        }
+
+        for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
+            if this_field.source_id != other_field.source_id
+                || this_field.name != other_field.name
+                || this_field.transform != other_field.transform
+            {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -282,84 +281,19 @@ impl UnboundPartitionSpec {
     }
 }
 
-impl<'a> PartitionSpec<'a> {
-    /// Returns if the partition spec is unpartitioned.
-    ///
-    /// A spec is unpartitioned if it has no fields or all fields are [`Transform::Void`] transform.
-    pub fn is_unpartitioned(&self) -> bool {
-        let transforms: Vec<_> = match self {
-            PartitionSpec::Bound(spec) => spec.fields.iter().map(|f| f.transform).collect(),
-            PartitionSpec::Unbound(spec) => spec.fields.iter().map(|f| f.transform).collect(),
-            PartitionSpec::Schemaless(spec) => spec.fields.iter().map(|f| f.transform).collect(),
-        };
+fn has_sequential_ids(field_ids: &[i32]) -> bool {
+    for (index, field_id) in field_ids.iter().enumerate() {
+        let expected_id = (UNPARTITIONED_LAST_ASSIGNED_ID as i64)
+            .checked_add(1)
+            .and_then(|id| id.checked_add(index as i64))
+            .unwrap_or(i64::MAX);
 
-        transforms.is_empty() || transforms.iter().all(|t| *t == Transform::Void)
-    }
-
-    /// Number of fields in the partition spec
-    pub fn len(&self) -> usize {
-        match self {
-            PartitionSpec::Bound(spec) => spec.fields.len(),
-            PartitionSpec::Unbound(spec) => spec.fields.len(),
-            PartitionSpec::Schemaless(spec) => spec.fields.len(),
-        }
-    }
-
-    /// Check if the partition spec is empty
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Internal function to get common properties of fields.
-    /// Returns (source_id, name, transform)
-    fn fields(&self) -> Vec<(i32, &str, &Transform)> {
-        match self {
-            PartitionSpec::Bound(spec) => spec
-                .fields
-                .iter()
-                .map(|f| (f.source_id, f.name.as_str(), &f.transform))
-                .collect(),
-            PartitionSpec::Unbound(spec) => spec
-                .fields
-                .iter()
-                .map(|f| (f.source_id, f.name.as_str(), &f.transform))
-                .collect(),
-            PartitionSpec::Schemaless(spec) => spec
-                .fields
-                .iter()
-                .map(|f| (f.source_id, f.name.as_str(), &f.transform))
-                .collect(),
-        }
-    }
-
-    /// Check if this partition spec is compatible with another partition spec.
-    ///
-    /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and
-    /// spec_id ignored. The following must be identical:
-    /// * The number of fields
-    /// * Field order
-    /// * Field names
-    /// * Source column ids
-    /// * Transforms
-    pub fn is_compatible_with(&self, other: PartitionSpec<'_>) -> bool {
-        if self.len() != other.len() {
+        if *field_id as i64 != expected_id {
             return false;
         }
-
-        let self_fields = self.fields();
-        let other_fields = other.fields();
-
-        for (this_field, other_field) in self_fields.iter().zip(other_fields) {
-            if this_field.0 != other_field.0
-                || this_field.1 != other_field.1
-                || this_field.2 != other_field.2
-            {
-                return false;
-            }
-        }
-
-        true
     }
+
+    true
 }
 
 impl From<PartitionField> for UnboundPartitionField {
@@ -397,24 +331,6 @@ impl From<BoundPartitionSpec> for SchemalessPartitionSpec {
             spec_id: spec.spec_id,
             fields: spec.fields,
         }
-    }
-}
-
-impl<'a> From<&'a BoundPartitionSpec> for PartitionSpec<'a> {
-    fn from(spec: &'a BoundPartitionSpec) -> Self {
-        PartitionSpec::Bound(spec)
-    }
-}
-
-impl<'a> From<&'a SchemalessPartitionSpec> for PartitionSpec<'a> {
-    fn from(spec: &'a SchemalessPartitionSpec) -> Self {
-        PartitionSpec::Schemaless(spec)
-    }
-}
-
-impl<'a> From<&'a UnboundPartitionSpec> for PartitionSpec<'a> {
-    fn from(spec: &'a UnboundPartitionSpec) -> Self {
-        PartitionSpec::Unbound(spec)
     }
 }
 
@@ -1638,7 +1554,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
+        assert!(partition_spec_1
+            .into_schemaless()
+            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1677,7 +1595,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1
+            .into_schemaless()
+            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1720,7 +1640,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1
+            .into_schemaless()
+            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
     }
 
     #[test]
@@ -1777,7 +1699,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1.is_compatible_with(&partition_spec_2.into_unbound()));
+        assert!(!partition_spec_1
+            .into_schemaless()
+            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
     }
 
     #[test]
