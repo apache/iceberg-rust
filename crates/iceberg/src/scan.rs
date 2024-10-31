@@ -370,7 +370,7 @@ impl TableScan {
 
         // used to stream delete files into the DeleteFileManager
         let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
-        let delete_file_manager = Arc::new(DeleteFileManager::from_receiver(delete_file_rx));
+        let delete_file_manager = DeleteFileManager::from_receiver(delete_file_rx);
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
@@ -593,7 +593,7 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_manager: Arc<DeleteFileManager>,
+    delete_file_manager: DeleteFileManager,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -606,7 +606,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
-    delete_file_manager: Arc<DeleteFileManager>,
+    delete_file_manager: DeleteFileManager,
 }
 
 impl ManifestFileContext {
@@ -712,7 +712,7 @@ impl PlanContext {
         manifest_list: Arc<ManifestList>,
         sender_data: Sender<ManifestEntryContext>,
         sender_delete: Sender<ManifestEntryContext>,
-        delete_file_manager: Arc<DeleteFileManager>,
+        delete_file_manager: DeleteFileManager,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
         let manifest_files = manifest_list.entries().iter();
 
@@ -772,7 +772,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
-        delete_file_manager: Arc<DeleteFileManager>,
+        delete_file_manager: DeleteFileManager,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
