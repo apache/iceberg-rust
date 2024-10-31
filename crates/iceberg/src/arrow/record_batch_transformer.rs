@@ -143,8 +143,9 @@ impl RecordBatchTransformer {
                 ref target_schema,
                 ref operations,
             }) => {
-                let options =
-                    RecordBatchOptions::default().with_row_count(Some(record_batch.num_rows()));
+                let options = RecordBatchOptions::default()
+                    .with_match_field_names(false)
+                    .with_row_count(Some(record_batch.num_rows()));
                 RecordBatch::try_new_with_options(
                     target_schema.clone(),
                     self.transform_columns(record_batch.columns(), operations)?,
