@@ -613,6 +613,7 @@
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -758,8 +759,9 @@
                 <span class="kw-2">ref </span>target_schema,
                 <span class="kw-2">ref </span>operations,
             }) =&gt; {
-                <span class="kw">let </span>options =
-                    RecordBatchOptions::default().with_row_count(<span class="prelude-val">Some</span>(record_batch.num_rows()));
+                <span class="kw">let </span>options = RecordBatchOptions::default()
+                    .with_match_field_names(<span class="bool-val">false</span>)
+                    .with_row_count(<span class="prelude-val">Some</span>(record_batch.num_rows()));
                 RecordBatch::try_new_with_options(
                     target_schema.clone(),
                     <span class="self">self</span>.transform_columns(record_batch.columns(), operations)<span class="question-mark">?</span>,
