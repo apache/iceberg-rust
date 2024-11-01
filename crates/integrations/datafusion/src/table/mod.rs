@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod table_provider_factory;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -41,6 +43,9 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
+    pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
+        IcebergTableProvider { table, schema }
+    }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
