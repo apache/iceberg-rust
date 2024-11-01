@@ -143,22 +143,44 @@ impl BoundPartitionSpec {
     /// Sequential ids start from 1000 and increment by 1 for each field.
     /// This is required for spec version 1
     pub fn has_sequential_ids(&self) -> bool {
-        has_sequential_ids(&self.fields.iter().map(|f| f.field_id).collect::<Vec<_>>())
+        has_sequential_ids(self.fields.iter().map(|f| f.field_id))
     }
 
     /// Get the highest field id in the partition spec.
     /// If the partition spec is unpartitioned, it returns the last unpartitioned last assigned id (999).
-    pub fn highest_field_id(&self) -> i32 {
-        self.fields
-            .iter()
-            .map(|f| f.field_id)
-            .max()
-            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
+    pub fn highest_field_id(&self) -> Option<i32> {
+        self.fields.iter().map(|f| f.field_id).max()
     }
 
     /// Returns the partition type of this partition spec.
     pub fn partition_type(&self) -> &StructType {
         &self.partition_type
+    }
+
+    /// Check if this partition spec is compatible with another partition spec.
+    ///
+    /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and
+    /// spec_id ignored. The following must be identical:
+    /// * The number of fields
+    /// * Field order
+    /// * Field names
+    /// * Source column ids
+    /// * Transforms
+    pub fn is_compatible_with_schemaless(&self, other: &SchemalessPartitionSpec) -> bool {
+        if self.fields.len() != other.fields.len() {
+            return false;
+        }
+
+        for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
+            if this_field.source_id != other_field.source_id
+                || this_field.name != other_field.name
+                || this_field.transform != other_field.transform
+            {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -194,32 +216,6 @@ impl SchemalessPartitionSpec {
     /// Convert to unbound partition spec
     pub fn into_unbound(self) -> UnboundPartitionSpec {
         self.into()
-    }
-
-    /// Check if this partition spec is compatible with another partition spec.
-    ///
-    /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and
-    /// spec_id ignored. The following must be identical:
-    /// * The number of fields
-    /// * Field order
-    /// * Field names
-    /// * Source column ids
-    /// * Transforms
-    pub fn is_compatible_with_unbound(&self, other: &UnboundPartitionSpec) -> bool {
-        if self.fields.len() != other.fields.len() {
-            return false;
-        }
-
-        for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
-            if this_field.source_id != other_field.source_id
-                || this_field.name != other_field.name
-                || this_field.transform != other_field.transform
-            {
-                return false;
-            }
-        }
-
-        true
     }
 }
 
@@ -281,14 +277,14 @@ impl UnboundPartitionSpec {
     }
 }
 
-fn has_sequential_ids(field_ids: &[i32]) -> bool {
-    for (index, field_id) in field_ids.iter().enumerate() {
+fn has_sequential_ids(field_ids: impl Iterator<Item = i32>) -> bool {
+    for (index, field_id) in field_ids.enumerate() {
         let expected_id = (UNPARTITIONED_LAST_ASSIGNED_ID as i64)
             .checked_add(1)
             .and_then(|id| id.checked_add(index as i64))
             .unwrap_or(i64::MAX);
 
-        if *field_id as i64 != expected_id {
+        if field_id as i64 != expected_id {
             return false;
         }
     }
@@ -1554,9 +1550,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(partition_spec_1
-            .into_schemaless()
-            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
+        assert!(partition_spec_1.is_compatible_with_schemaless(&partition_spec_2.into_schemaless()));
     }
 
     #[test]
@@ -1595,9 +1589,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1
-            .into_schemaless()
-            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
+        assert!(
+            !partition_spec_1.is_compatible_with_schemaless(&partition_spec_2.into_schemaless())
+        );
     }
 
     #[test]
@@ -1640,9 +1634,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1
-            .into_schemaless()
-            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
+        assert!(
+            !partition_spec_1.is_compatible_with_schemaless(&partition_spec_2.into_schemaless())
+        );
     }
 
     #[test]
@@ -1699,9 +1693,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(!partition_spec_1
-            .into_schemaless()
-            .is_compatible_with_unbound(&partition_spec_2.into_unbound()));
+        assert!(
+            !partition_spec_1.is_compatible_with_schemaless(&partition_spec_2.into_schemaless())
+        );
     }
 
     #[test]
@@ -1712,7 +1706,7 @@ mod tests {
                 .build()
                 .unwrap();
 
-        assert_eq!(UNPARTITIONED_LAST_ASSIGNED_ID, spec.highest_field_id());
+        assert!(spec.highest_field_id().is_none());
     }
 
     #[test]
@@ -1750,7 +1744,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(1001, spec.highest_field_id());
+        assert_eq!(Some(1001), spec.highest_field_id());
     }
 
     #[test]
