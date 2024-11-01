@@ -5,7 +5,7 @@ var srcIndex = new Map(JSON.parse('[\
 ["iceberg_catalog_memory",["",[],["catalog.rs","lib.rs","namespace_state.rs"]]],\
 ["iceberg_catalog_rest",["",[],["catalog.rs","client.rs","lib.rs","types.rs"]]],\
 ["iceberg_catalog_sql",["",[],["catalog.rs","error.rs","lib.rs"]]],\
-["iceberg_datafusion",["",[["physical_plan",[],["expr_to_predicate.rs","mod.rs","scan.rs"]]],["catalog.rs","error.rs","lib.rs","schema.rs","table.rs"]]],\
+["iceberg_datafusion",["",[["physical_plan",[],["expr_to_predicate.rs","mod.rs","scan.rs"]],["table",[],["mod.rs","table_provider_factory.rs"]]],["catalog.rs","error.rs","lib.rs","schema.rs"]]],\
 ["iceberg_test_utils",["",[],["cmd.rs","docker.rs","lib.rs"]]]\
 ]'));
 createSrcSidebar();
