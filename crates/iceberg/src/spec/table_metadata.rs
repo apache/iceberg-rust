@@ -31,8 +31,8 @@ use uuid::Uuid;
 
 use super::snapshot::SnapshotReference;
 use super::{
-    PartitionSpec, PartitionSpecRef, SchemaId, SchemaRef, Snapshot, SnapshotRef, SnapshotRetention,
-    SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
+    BoundPartitionSpec, BoundPartitionSpecRef, SchemaId, SchemaRef, SchemalessPartitionSpecRef,
+    Snapshot, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
 };
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind, TableCreation};
@@ -118,9 +118,9 @@ pub struct TableMetadata {
     /// ID of the table’s current schema.
     pub(crate) current_schema_id: i32,
     /// A list of partition specs, stored as full partition spec objects.
-    pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
+    pub(crate) partition_specs: HashMap<i32, SchemalessPartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
-    pub(crate) default_spec_id: i32,
+    pub(crate) default_spec: BoundPartitionSpecRef,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
     pub(crate) last_partition_id: i32,
     ///A string to string map of table properties. This is used to control settings that
@@ -222,21 +222,26 @@ impl TableMetadata {
 
     /// Returns all partition specs.
     #[inline]
-    pub fn partition_specs_iter(&self) -> impl Iterator<Item = &PartitionSpecRef> {
+    pub fn partition_specs_iter(&self) -> impl Iterator<Item = &SchemalessPartitionSpecRef> {
         self.partition_specs.values()
     }
 
     /// Lookup partition spec by id.
     #[inline]
-    pub fn partition_spec_by_id(&self, spec_id: i32) -> Option<&PartitionSpecRef> {
+    pub fn partition_spec_by_id(&self, spec_id: i32) -> Option<&SchemalessPartitionSpecRef> {
         self.partition_specs.get(&spec_id)
     }
 
     /// Get default partition spec
     #[inline]
-    pub fn default_partition_spec(&self) -> &PartitionSpecRef {
-        self.partition_spec_by_id(self.default_spec_id)
-            .expect("Default partition spec id set, but not found in table metadata")
+    pub fn default_partition_spec(&self) -> &BoundPartitionSpecRef {
+        &self.default_spec
+    }
+
+    #[inline]
+    /// Returns spec id of the "current" partition spec.
+    pub fn default_partition_spec_id(&self) -> i32 {
+        self.default_spec.spec_id()
     }
 
     /// Returns all snapshots
@@ -352,28 +357,17 @@ impl TableMetadata {
         Ok(self)
     }
 
-    /// If the default partition spec is specified but the spec is not present in specs, add it
+    /// If the default partition spec is not present in specs, add it
     fn try_normalize_partition_spec(&mut self) -> Result<()> {
-        if self.partition_spec_by_id(self.default_spec_id).is_some() {
-            return Ok(());
+        if self
+            .partition_spec_by_id(self.default_spec.spec_id())
+            .is_none()
+        {
+            self.partition_specs.insert(
+                self.default_spec.spec_id(),
+                Arc::new(Arc::unwrap_or_clone(self.default_spec.clone()).into_schemaless()),
+            );
         }
-
-        if self.default_spec_id != DEFAULT_PARTITION_SPEC_ID {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "No partition spec exists with the default spec id {}.",
-                    self.default_spec_id
-                ),
-            ));
-        }
-
-        let partition_spec = PartitionSpec {
-            spec_id: DEFAULT_PARTITION_SPEC_ID,
-            fields: vec![],
-        };
-        self.partition_specs
-            .insert(DEFAULT_PARTITION_SPEC_ID, Arc::new(partition_spec));
 
         Ok(())
     }
@@ -565,6 +559,8 @@ impl TableMetadataBuilder {
             properties,
         } = table_creation;
 
+        let schema: Arc<super::Schema> = Arc::new(schema);
+        let unpartition_spec = BoundPartitionSpec::unpartition_spec(schema.clone());
         let partition_specs = match partition_spec {
             Some(_) => {
                 return Err(Error::new(
@@ -573,11 +569,8 @@ impl TableMetadataBuilder {
                 ))
             }
             None => HashMap::from([(
-                DEFAULT_PARTITION_SPEC_ID,
-                Arc::new(PartitionSpec {
-                    spec_id: DEFAULT_PARTITION_SPEC_ID,
-                    fields: vec![],
-                }),
+                unpartition_spec.spec_id(),
+                Arc::new(unpartition_spec.clone().into_schemaless()),
             )]),
         };
 
@@ -607,9 +600,9 @@ impl TableMetadataBuilder {
             last_updated_ms: Utc::now().timestamp_millis(),
             last_column_id: schema.highest_field_id(),
             current_schema_id: schema.schema_id(),
-            schemas: HashMap::from([(schema.schema_id(), Arc::new(schema))]),
+            schemas: HashMap::from([(schema.schema_id(), schema)]),
             partition_specs,
-            default_spec_id: DEFAULT_PARTITION_SPEC_ID,
+            default_spec: BoundPartitionSpecRef::new(unpartition_spec),
             last_partition_id: 0,
             properties,
             current_snapshot_id: None,
@@ -661,8 +654,8 @@ pub(super) mod _serde {
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
     use crate::spec::{
-        PartitionField, PartitionSpec, Schema, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder,
+        BoundPartitionSpec, PartitionField, Schema, SchemaRef, SchemalessPartitionSpec, Snapshot,
+        SnapshotReference, SnapshotRetention, SortOrder,
     };
     use crate::{Error, ErrorKind};
 
@@ -685,7 +678,7 @@ pub(super) mod _serde {
         pub last_column_id: i32,
         pub schemas: Vec<SchemaV2>,
         pub current_schema_id: i32,
-        pub partition_specs: Vec<PartitionSpec>,
+        pub partition_specs: Vec<SchemalessPartitionSpec>,
         pub default_spec_id: i32,
         pub last_partition_id: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -721,7 +714,7 @@ pub(super) mod _serde {
         pub current_schema_id: Option<i32>,
         pub partition_spec: Vec<PartitionField>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub partition_specs: Option<Vec<PartitionSpec>>,
+        pub partition_specs: Option<Vec<SchemalessPartitionSpec>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub default_spec_id: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -809,6 +802,44 @@ pub(super) mod _serde {
                     .map(|schema| Ok((schema.schema_id, Arc::new(schema.try_into()?))))
                     .collect::<Result<Vec<_>, Error>>()?,
             );
+
+            let current_schema: &SchemaRef =
+                schemas.get(&value.current_schema_id).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "No schema exists with the current schema id {}.",
+                            value.current_schema_id
+                        ),
+                    )
+                })?;
+            let partition_specs = HashMap::from_iter(
+                value
+                    .partition_specs
+                    .into_iter()
+                    .map(|x| (x.spec_id(), Arc::new(x))),
+            );
+            let default_spec_id = value.default_spec_id;
+            let default_spec = partition_specs
+                .get(&value.default_spec_id)
+                .map(|schemaless_spec| {
+                    (*schemaless_spec.clone())
+                        .clone()
+                        .bind(current_schema.clone())
+                })
+                .transpose()?
+                .or_else(|| {
+                    (DEFAULT_PARTITION_SPEC_ID == default_spec_id)
+                        .then(|| BoundPartitionSpec::unpartition_spec(current_schema.clone()))
+                })
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Default partition spec {default_spec_id} not found"),
+                    )
+                })?
+                .into();
+
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V2,
                 table_uuid: value.table_uuid,
@@ -818,13 +849,8 @@ pub(super) mod _serde {
                 last_column_id: value.last_column_id,
                 current_schema_id: value.current_schema_id,
                 schemas,
-                partition_specs: HashMap::from_iter(
-                    value
-                        .partition_specs
-                        .into_iter()
-                        .map(|x| (x.spec_id(), Arc::new(x))),
-                ),
-                default_spec_id: value.default_spec_id,
+                partition_specs,
+                default_spec,
                 last_partition_id: value.last_partition_id,
                 properties: value.properties.unwrap_or_default(),
                 current_snapshot_id,
@@ -876,6 +902,7 @@ pub(super) mod _serde {
             } else {
                 value.current_snapshot_id
             };
+
             let schemas = value
                 .schemas
                 .map(|schemas| {
@@ -900,18 +927,49 @@ pub(super) mod _serde {
                 })
                 .transpose()?
                 .unwrap_or_default();
-            let partition_specs = HashMap::from_iter(
-                value
-                    .partition_specs
-                    .unwrap_or_else(|| {
-                        vec![PartitionSpec {
-                            spec_id: DEFAULT_PARTITION_SPEC_ID,
-                            fields: value.partition_spec,
-                        }]
-                    })
-                    .into_iter()
-                    .map(|x| (x.spec_id(), Arc::new(x))),
-            );
+            let current_schema_id = value
+                .current_schema_id
+                .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default());
+            let current_schema = schemas
+                .get(&current_schema_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "No schema exists with the current schema id {}.",
+                            current_schema_id
+                        ),
+                    )
+                })?
+                .clone();
+
+            let partition_specs = match value.partition_specs {
+                Some(partition_specs) => partition_specs,
+                None => vec![BoundPartitionSpec::builder(current_schema.clone())
+                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
+                    .add_unbound_fields(value.partition_spec.into_iter().map(|f| f.into_unbound()))?
+                    .build()?
+                    .into_schemaless()],
+            }
+            .into_iter()
+            .map(|x| (x.spec_id(), Arc::new(x)))
+            .collect::<HashMap<_, _>>();
+
+            let default_spec_id = value
+                .default_spec_id
+                .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default());
+            let default_spec = partition_specs
+                .get(&default_spec_id)
+                .map(|x| Arc::unwrap_or_clone(x.clone()).bind(current_schema.clone()))
+                .transpose()?
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Default partition spec {default_spec_id} not found"),
+                    )
+                })?
+                .into();
+
             let mut metadata = TableMetadata {
                 format_version: FormatVersion::V1,
                 table_uuid: value.table_uuid.unwrap_or_default(),
@@ -919,12 +977,8 @@ pub(super) mod _serde {
                 last_sequence_number: 0,
                 last_updated_ms: value.last_updated_ms,
                 last_column_id: value.last_column_id,
-                current_schema_id: value
-                    .current_schema_id
-                    .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default()),
-                default_spec_id: value
-                    .default_spec_id
-                    .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
+                current_schema_id,
+                default_spec,
                 last_partition_id: value
                     .last_partition_id
                     .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
@@ -998,7 +1052,7 @@ pub(super) mod _serde {
                     .into_values()
                     .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                     .collect(),
-                default_spec_id: v.default_spec_id,
+                default_spec_id: v.default_spec.spec_id(),
                 last_partition_id: v.last_partition_id,
                 properties: Some(v.properties),
                 current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
@@ -1067,18 +1121,14 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 current_schema_id: Some(v.current_schema_id),
-                partition_spec: v
-                    .partition_specs
-                    .get(&v.default_spec_id)
-                    .map(|x| x.fields().to_vec())
-                    .unwrap_or_default(),
+                partition_spec: v.default_spec.fields().to_vec(),
                 partition_specs: Some(
                     v.partition_specs
                         .into_values()
                         .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                         .collect(),
                 ),
-                default_spec_id: Some(v.default_spec_id),
+                default_spec_id: Some(v.default_spec.spec_id()),
                 last_partition_id: Some(v.last_partition_id),
                 properties: if v.properties.is_empty() {
                     None
@@ -1195,9 +1245,9 @@ mod tests {
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
-        NestedField, NullOrder, Operation, PartitionField, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-        Summary, Transform, Type, UnboundPartitionField,
+        BoundPartitionSpec, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
+        Transform, Type, UnboundPartitionField,
     };
     use crate::TableCreation;
 
@@ -1238,6 +1288,12 @@ mod tests {
                                 "name": "struct_name",
                                 "required": true,
                                 "type": "fixed[1]"
+                            },
+                            {
+                                "id": 4,
+                                "name": "ts",
+                                "required": true,
+                                "type": "timestamp"
                             }
                         ]
                     }
@@ -1279,23 +1335,32 @@ mod tests {
 
         let schema = Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![Arc::new(NestedField::required(
-                1,
-                "struct_name",
-                Type::Primitive(PrimitiveType::Fixed(1)),
-            ))])
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "struct_name",
+                    Type::Primitive(PrimitiveType::Fixed(1)),
+                )),
+                Arc::new(NestedField::required(
+                    4,
+                    "ts",
+                    Type::Primitive(PrimitiveType::Timestamp),
+                )),
+            ])
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec {
-            spec_id: 0,
-            fields: vec![PartitionField {
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_unbound_field(UnboundPartitionField {
                 name: "ts_day".to_string(),
                 transform: Transform::Day,
                 source_id: 4,
-                field_id: 1000,
-            }],
-        };
+                field_id: Some(1000),
+            })
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = TableMetadata {
             format_version: FormatVersion::V2,
@@ -1305,8 +1370,11 @@ mod tests {
             last_column_id: 1,
             schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
             current_schema_id: 1,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
-            default_spec_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: partition_spec.into(),
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![(0, SortOrder::unsorted_order().into())]),
@@ -1445,7 +1513,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let schema = Arc::new(schema);
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(0)
             .add_partition_field("vendor_id", "vendor_id", Transform::Identity)
             .unwrap()
@@ -1472,10 +1541,10 @@ mod tests {
             location: "/home/iceberg/warehouse/nyc/taxis".to_string(),
             last_updated_ms: 1662532818843,
             last_column_id: 5,
-            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            schemas: HashMap::from_iter(vec![(0, schema)]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
-            default_spec_id: 0,
+            partition_specs: HashMap::from_iter(vec![(0, partition_spec.clone().into_schemaless().into())]),
+            default_spec: Arc::new(partition_spec),
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![(0, sort_order.into())]),
@@ -1514,6 +1583,12 @@ mod tests {
                             "name": "struct_name",
                             "required": true,
                             "type": "fixed[1]"
+                        },
+                        {
+                            "id": 4,
+                            "name": "ts",
+                            "required": true,
+                            "type": "timestamp"
                         }
                     ]
                 }
@@ -1614,6 +1689,12 @@ mod tests {
                             "name": "struct_name",
                             "required": true,
                             "type": "fixed[1]"
+                        },
+                        {
+                            "id": 4,
+                            "name": "ts",
+                            "required": true,
+                            "type": "timestamp"
                         }
                     ]
                 }
@@ -1699,6 +1780,12 @@ mod tests {
                             "name": "struct_name",
                             "required": true,
                             "type": "fixed[1]"
+                        },
+                        {
+                            "id": 4,
+                            "name": "ts",
+                            "required": true,
+                            "type": "timestamp"
                         }
                     ]
                 }
@@ -1828,7 +1915,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder(&schema1)
+        let partition_spec = BoundPartitionSpec::builder(schema2.clone())
             .with_spec_id(0)
             .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
@@ -1889,8 +1976,11 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema1)), (1, Arc::new(schema2))]),
             current_schema_id: 1,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
-            default_spec_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: Arc::new(partition_spec),
             last_partition_id: 1000,
             default_sort_order_id: 3,
             sort_orders: HashMap::from_iter(vec![(3, sort_order.into())]),
@@ -1951,7 +2041,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(0)
             .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
@@ -1988,8 +2078,11 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
-            default_spec_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: Arc::new(partition_spec),
             last_partition_id: 1000,
             default_sort_order_id: 3,
             sort_orders: HashMap::from_iter(vec![(3, sort_order.into())]),
@@ -2031,7 +2124,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(0)
             .add_unbound_field(UnboundPartitionField {
                 name: "x".to_string(),
@@ -2051,8 +2144,11 @@ mod tests {
             last_column_id: 3,
             schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
             current_schema_id: 0,
-            partition_specs: HashMap::from_iter(vec![(0, partition_spec.into())]),
-            default_spec_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: Arc::new(partition_spec),
             last_partition_id: 0,
             default_sort_order_id: 0,
             // Sort order is added during deserialization for V2 compatibility
@@ -2165,16 +2261,22 @@ mod tests {
     fn test_default_partition_spec() {
         let default_spec_id = 1234;
         let mut table_meta_data = get_test_table_metadata("TableMetadataV2Valid.json");
-        table_meta_data.default_spec_id = default_spec_id;
+        let partition_spec =
+            BoundPartitionSpec::unpartition_spec(table_meta_data.current_schema().clone());
+        table_meta_data.default_spec = partition_spec.clone().into();
         table_meta_data
             .partition_specs
-            .insert(default_spec_id, Arc::new(PartitionSpec::default()));
+            .insert(default_spec_id, Arc::new(partition_spec.into_schemaless()));
 
         assert_eq!(
-            table_meta_data.default_partition_spec(),
-            table_meta_data
+            (*table_meta_data.default_partition_spec().clone())
+                .clone()
+                .into_schemaless(),
+            (*table_meta_data
                 .partition_spec_by_id(default_spec_id)
                 .unwrap()
+                .clone())
+            .clone()
         );
     }
     #[test]
@@ -2225,10 +2327,11 @@ mod tests {
             HashMap::from([(
                 0,
                 Arc::new(
-                    PartitionSpec::builder(table_metadata.schemas.get(&0).unwrap())
+                    BoundPartitionSpec::builder(table_metadata.schemas.get(&0).unwrap().clone())
                         .with_spec_id(0)
                         .build()
                         .unwrap()
+                        .into_schemaless()
                 )
             )])
         );

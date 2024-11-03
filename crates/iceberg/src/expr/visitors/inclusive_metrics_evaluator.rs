@@ -495,7 +495,7 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        BoundPartitionSpec, DataContentType, DataFile, DataFileFormat, Datum, NestedField,
         PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
@@ -504,10 +504,10 @@ mod test {
 
     #[test]
     fn test_data_file_no_partitions() {
-        let (table_schema_ref, _partition_spec_ref) = create_test_schema_and_partition_spec();
+        let partition_spec_ref = create_test_partition_spec();
 
         let partition_filter = Predicate::AlwaysTrue
-            .bind(table_schema_ref.clone(), false)
+            .bind(partition_spec_ref.schema_ref().clone(), false)
             .unwrap();
 
         let case_sensitive = false;
@@ -1645,7 +1645,7 @@ mod test {
         assert!(result, "Should read: NotIn on no nulls column");
     }
 
-    fn create_test_schema_and_partition_spec() -> (Arc<Schema>, Arc<PartitionSpec>) {
+    fn create_test_partition_spec() -> Arc<BoundPartitionSpec> {
         let table_schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
@@ -1656,7 +1656,7 @@ mod test {
             .unwrap();
         let table_schema_ref = Arc::new(table_schema);
 
-        let partition_spec = PartitionSpec::builder(&table_schema_ref)
+        let partition_spec = BoundPartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
@@ -1667,8 +1667,7 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        let partition_spec_ref = Arc::new(partition_spec);
-        (table_schema_ref, partition_spec_ref)
+        Arc::new(partition_spec)
     }
 
     fn not_null(reference: &str) -> BoundPredicate {
