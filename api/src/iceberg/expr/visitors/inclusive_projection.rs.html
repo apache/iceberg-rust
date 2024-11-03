@@ -453,6 +453,71 @@
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -476,16 +541,16 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference, Predicate};
-<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PartitionField, PartitionSpecRef};
+<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PartitionField, SchemalessPartitionSpecRef};
 <span class="kw">use </span><span class="kw">crate</span>::Error;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>InclusiveProjection {
-    partition_spec: PartitionSpecRef,
+    partition_spec: SchemalessPartitionSpecRef,
     cached_parts: HashMap&lt;i32, Vec&lt;PartitionField&gt;&gt;,
 }
 
 <span class="kw">impl </span>InclusiveProjection {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(partition_spec: PartitionSpecRef) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(partition_spec: SchemalessPartitionSpecRef) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             partition_spec,
             cached_parts: HashMap::new(),
@@ -690,7 +755,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::inclusive_projection::InclusiveProjection;
     <span class="kw">use </span><span class="kw">crate</span>::expr::{Bind, Predicate, Reference};
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        Datum, NestedField, PartitionField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
+        BoundPartitionSpec, Datum, NestedField, PrimitiveType, Schema, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -720,13 +785,14 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_inclusive_projection_logic_ops() {
         <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .build()
-            .unwrap();
+            .unwrap()
+            .into_schemaless();
 
-        <span class="kw">let </span>arc_schema = Arc::new(schema);
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
         <span class="comment">// this predicate contains only logic operators,
@@ -750,8 +816,9 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_inclusive_projection_identity_transform() {
         <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -763,9 +830,9 @@
             )
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .into_schemaless();
 
-        <span class="kw">let </span>arc_schema = Arc::new(schema);
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
         <span class="kw">let </span>unbound_predicate = Reference::new(<span class="string">"a"</span>).less_than(Datum::int(<span class="number">10</span>));
@@ -776,7 +843,7 @@
         // should result in the same Predicate as the original
         // `unbound_predicate`, since we have just a single partition field,
         // and it has an Identity transform
-        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
 
         <span class="kw">let </span>expected = <span class="string">"a &lt; 10"</span>.to_string();
@@ -785,34 +852,23 @@
     }
 
     <span class="attr">#[test]
-    </span><span class="kw">fn </span>test_inclusive_projection_date_transforms() {
+    </span><span class="kw">fn </span>test_inclusive_projection_date_year_transform() {
         <span class="kw">let </span>schema = build_test_schema();
-
-        <span class="kw">let </span>partition_spec = PartitionSpec {
-            spec_id: <span class="number">1</span>,
-            fields: <span class="macro">vec!</span>[
-                PartitionField {
-                    source_id: <span class="number">2</span>,
-                    name: <span class="string">"year"</span>.to_string(),
-                    field_id: <span class="number">1000</span>,
-                    transform: Transform::Year,
-                },
-                PartitionField {
-                    source_id: <span class="number">2</span>,
-                    name: <span class="string">"month"</span>.to_string(),
-                    field_id: <span class="number">1001</span>,
-                    transform: Transform::Month,
-                },
-                PartitionField {
-                    source_id: <span class="number">2</span>,
-                    name: <span class="string">"day"</span>.to_string(),
-                    field_id: <span class="number">1002</span>,
-                    transform: Transform::Day,
-                },
-            ],
-        };
-
         <span class="kw">let </span>arc_schema = Arc::new(schema);
+
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(<span class="number">1</span>)
+            .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
+                source_id: <span class="number">2</span>,
+                name: <span class="string">"year"</span>.to_string(),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
+                transform: Transform::Year,
+            }])
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_schemaless();
+
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
         <span class="kw">let </span>unbound_predicate =
@@ -823,10 +879,82 @@
         <span class="comment">// applying InclusiveProjection to bound_predicate
         // should result in a predicate that correctly handles
         // year, month and date
-        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
 
-        <span class="kw">let </span>expected = <span class="string">"((year &lt;= 53) AND (month &lt;= 647)) AND (day &lt;= 19722)"</span>.to_string();
+        <span class="kw">let </span>expected = <span class="string">"year &lt;= 53"</span>.to_string();
+
+        <span class="macro">assert_eq!</span>(result.to_string(), expected);
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_inclusive_projection_date_month_transform() {
+        <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
+
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(<span class="number">1</span>)
+            .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
+                source_id: <span class="number">2</span>,
+                name: <span class="string">"month"</span>.to_string(),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
+                transform: Transform::Month,
+            }])
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_schemaless();
+
+        <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
+
+        <span class="kw">let </span>unbound_predicate =
+            Reference::new(<span class="string">"date"</span>).less_than(Datum::date_from_str(<span class="string">"2024-01-01"</span>).unwrap());
+
+        <span class="kw">let </span>bound_predicate = unbound_predicate.bind(arc_schema.clone(), <span class="bool-val">false</span>).unwrap();
+
+        <span class="comment">// applying InclusiveProjection to bound_predicate
+        // should result in a predicate that correctly handles
+        // year, month and date
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
+        <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
+
+        <span class="kw">let </span>expected = <span class="string">"month &lt;= 647"</span>.to_string();
+
+        <span class="macro">assert_eq!</span>(result.to_string(), expected);
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_inclusive_projection_date_day_transform() {
+        <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
+
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(<span class="number">1</span>)
+            .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
+                source_id: <span class="number">2</span>,
+                name: <span class="string">"day"</span>.to_string(),
+                field_id: <span class="prelude-val">Some</span>(<span class="number">1000</span>),
+                transform: Transform::Day,
+            }])
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_schemaless();
+
+        <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
+
+        <span class="kw">let </span>unbound_predicate =
+            Reference::new(<span class="string">"date"</span>).less_than(Datum::date_from_str(<span class="string">"2024-01-01"</span>).unwrap());
+
+        <span class="kw">let </span>bound_predicate = unbound_predicate.bind(arc_schema.clone(), <span class="bool-val">false</span>).unwrap();
+
+        <span class="comment">// applying InclusiveProjection to bound_predicate
+        // should result in a predicate that correctly handles
+        // year, month and date
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
+        <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
+
+        <span class="kw">let </span>expected = <span class="string">"day &lt;= 19722"</span>.to_string();
 
         <span class="macro">assert_eq!</span>(result.to_string(), expected);
     }
@@ -834,8 +962,9 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_inclusive_projection_truncate_transform() {
         <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -847,9 +976,9 @@
             )
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .into_schemaless();
 
-        <span class="kw">let </span>arc_schema = Arc::new(schema);
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
         <span class="kw">let </span>unbound_predicate = Reference::new(<span class="string">"name"</span>).starts_with(Datum::string(<span class="string">"Testy McTest"</span>));
@@ -863,7 +992,7 @@
         // name that start with "Testy McTest" into a partition
         // for values of name that start with the first four letters
         // of that, ie "Test".
-        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
 
         <span class="kw">let </span>expected = <span class="string">"name_truncate STARTS WITH \"Test\""</span>.to_string();
@@ -874,8 +1003,9 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_inclusive_projection_bucket_transform() {
         <span class="kw">let </span>schema = build_test_schema();
+        <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = PartitionSpec::builder(<span class="kw-2">&amp;</span>schema)
+        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -887,9 +1017,9 @@
             )
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .into_schemaless();
 
-        <span class="kw">let </span>arc_schema = Arc::new(schema);
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
         <span class="kw">let </span>unbound_predicate = Reference::new(<span class="string">"a"</span>).equal_to(Datum::int(<span class="number">10</span>));
@@ -900,7 +1030,7 @@
         // should result in the "a = 10" predicate being
         // transformed into "a = 2", since 10 gets bucketed
         // to 2 with a Bucket(7) partition
-        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
 
         <span class="kw">let </span>expected = <span class="string">"a_bucket[7] = 2"</span>.to_string();

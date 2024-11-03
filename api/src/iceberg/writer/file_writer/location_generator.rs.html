@@ -228,6 +228,7 @@
 <a href="#228" id="228">228</a>
 <a href="#229" id="229">229</a>
 <a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -362,7 +363,7 @@
     <span class="kw">use </span>uuid::Uuid;
 
     <span class="kw">use </span><span class="kw">super</span>::LocationGenerator;
-    <span class="kw">use </span><span class="kw">crate</span>::spec::{FormatVersion, TableMetadata};
+    <span class="kw">use </span><span class="kw">crate</span>::spec::{BoundPartitionSpec, FormatVersion, TableMetadata};
     <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -386,6 +387,7 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_default_location_generate() {
+        <span class="kw">let </span>schema = <span class="kw">crate</span>::spec::Schema::builder().build().unwrap();
         <span class="kw">let </span><span class="kw-2">mut </span>table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str(<span class="string">"fb072c92-a02b-11e9-ae9c-1bb7bc9eca94"</span>).unwrap(),
@@ -395,7 +397,7 @@
             schemas: HashMap::new(),
             current_schema_id: <span class="number">1</span>,
             partition_specs: HashMap::new(),
-            default_spec_id: <span class="number">1</span>,
+            default_spec: BoundPartitionSpec::unpartition_spec(schema).into(),
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">0</span>,
             sort_orders: HashMap::from_iter(<span class="macro">vec!</span>[]),

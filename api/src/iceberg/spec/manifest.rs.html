@@ -2103,22 +2103,6 @@
 <a href="#2103" id="2103">2103</a>
 <a href="#2104" id="2104">2104</a>
 <a href="#2105" id="2105">2105</a>
-<a href="#2106" id="2106">2106</a>
-<a href="#2107" id="2107">2107</a>
-<a href="#2108" id="2108">2108</a>
-<a href="#2109" id="2109">2109</a>
-<a href="#2110" id="2110">2110</a>
-<a href="#2111" id="2111">2111</a>
-<a href="#2112" id="2112">2112</a>
-<a href="#2113" id="2113">2113</a>
-<a href="#2114" id="2114">2114</a>
-<a href="#2115" id="2115">2115</a>
-<a href="#2116" id="2116">2116</a>
-<a href="#2117" id="2117">2117</a>
-<a href="#2118" id="2118">2118</a>
-<a href="#2119" id="2119">2119</a>
-<a href="#2120" id="2120">2120</a>
-<a href="#2121" id="2121">2121</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2151,8 +2135,8 @@
 
 <span class="kw">use </span><span class="self">self</span>::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 <span class="kw">use super</span>::{
-    Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec, Schema,
-    SchemaId, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
+    BoundPartitionSpec, Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile,
+    Schema, SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
 };
 <span class="kw">use </span><span class="kw">crate</span>::error::Result;
 <span class="kw">use </span><span class="kw">crate</span>::io::OutputFile;
@@ -2176,7 +2160,7 @@
         <span class="kw">let </span>metadata = ManifestMetadata::parse(meta)<span class="question-mark">?</span>;
 
         <span class="comment">// Parse manifest entries
-        </span><span class="kw">let </span>partition_type = metadata.partition_spec.partition_type(<span class="kw-2">&amp;</span>metadata.schema)<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>partition_type = metadata.partition_spec.partition_type();
 
         <span class="kw">let </span>entries = <span class="kw">match </span>metadata.format_version {
             FormatVersion::V1 =&gt; {
@@ -2186,7 +2170,7 @@
                     .into_iter()
                     .map(|value| {
                         from_value::&lt;_serde::ManifestEntryV1&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                            </span>.try_into(partition_type, <span class="kw-2">&amp;</span>metadata.schema)
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -2197,7 +2181,7 @@
                     .into_iter()
                     .map(|value| {
                         from_value::&lt;_serde::ManifestEntryV2&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                            </span>.try_into(partition_type, <span class="kw-2">&amp;</span>metadata.schema)
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -2327,10 +2311,7 @@
     <span class="doccomment">/// Write a manifest.
     </span><span class="kw">pub async fn </span>write(<span class="kw-2">mut </span><span class="self">self</span>, manifest: Manifest) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestFile&gt; {
         <span class="comment">// Create the avro writer
-        </span><span class="kw">let </span>partition_type = manifest
-            .metadata
-            .partition_spec
-            .partition_type(<span class="kw-2">&amp;</span>manifest.metadata.schema)<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>partition_type = manifest.metadata.partition_spec.partition_type();
         <span class="kw">let </span>table_schema = <span class="kw-2">&amp;</span>manifest.metadata.schema;
         <span class="kw">let </span>avro_schema = <span class="kw">match </span>manifest.metadata.format_version {
             FormatVersion::V1 =&gt; manifest_schema_v1(partition_type.clone())<span class="question-mark">?</span>,
@@ -2405,12 +2386,12 @@
             <span class="kw">let </span>value = <span class="kw">match </span>manifest.metadata.format_version {
                 FormatVersion::V1 =&gt; to_value(_serde::ManifestEntryV1::try_from(
                     (<span class="kw-2">*</span>entry).clone(),
-                    <span class="kw-2">&amp;</span>partition_type,
+                    partition_type,
                 )<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>,
                 FormatVersion::V2 =&gt; to_value(_serde::ManifestEntryV2::try_from(
                     (<span class="kw-2">*</span>entry).clone(),
-                    <span class="kw-2">&amp;</span>partition_type,
+                    partition_type,
                 )<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>,
             };
@@ -2826,11 +2807,11 @@
 </span><span class="kw">pub struct </span>ManifestMetadata {
     <span class="doccomment">/// The table schema at the time the manifest
     /// was written
-    </span>schema: Schema,
+    </span>schema: SchemaRef,
     <span class="doccomment">/// ID of the schema used to write the manifest as a string
     </span>schema_id: SchemaId,
     <span class="doccomment">/// The partition spec used  to write the manifest
-    </span>partition_spec: PartitionSpec,
+    </span>partition_spec: BoundPartitionSpec,
     <span class="doccomment">/// Table format version number of the manifest as a string
     </span>format_version: FormatVersion,
     <span class="doccomment">/// Type of content files tracked by the manifest: “data” or “deletes”
@@ -2840,7 +2821,7 @@
 <span class="kw">impl </span>ManifestMetadata {
     <span class="doccomment">/// Parse from metadata in avro file.
     </span><span class="kw">pub fn </span>parse(meta: <span class="kw-2">&amp;</span>HashMap&lt;String, Vec&lt;u8&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>schema = {
+        <span class="kw">let </span>schema = Arc::new({
             <span class="kw">let </span>bs = meta.get(<span class="string">"schema"</span>).ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
@@ -2854,7 +2835,7 @@
                 )
                 .with_source(err)
             })<span class="question-mark">?
-        </span>};
+        </span>});
         <span class="kw">let </span>schema_id: i32 = meta
             .get(<span class="string">"schema-id"</span>)
             .map(|bs| {
@@ -2897,8 +2878,11 @@
                 })
                 .transpose()<span class="question-mark">?
                 </span>.unwrap_or(<span class="number">0</span>);
-            PartitionSpec { spec_id, fields }
-        };
+            BoundPartitionSpec::builder(schema.clone())
+                .with_spec_id(spec_id)
+                .add_unbound_fields(fields.into_iter().map(|f| f.into_unbound()))<span class="question-mark">?
+                </span>.build()<span class="question-mark">?
+        </span>};
         <span class="kw">let </span>format_version = <span class="kw">if let </span><span class="prelude-val">Some</span>(bs) = meta.get(<span class="string">"format-version"</span>) {
             serde_json::from_slice::&lt;FormatVersion&gt;(bs).map_err(|err| {
                 Error::new(
@@ -3640,82 +3624,82 @@
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_parse_manifest_v2_unpartition() {
+        <span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_fields(<span class="macro">vec!</span>[
+                    <span class="comment">// id v_int v_long v_float v_double v_varchar v_bool v_date v_timestamp v_decimal v_ts_ntz
+                    </span>Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"v_int"</span>,
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">3</span>,
+                        <span class="string">"v_long"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">4</span>,
+                        <span class="string">"v_float"</span>,
+                        Type::Primitive(PrimitiveType::Float),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">5</span>,
+                        <span class="string">"v_double"</span>,
+                        Type::Primitive(PrimitiveType::Double),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">6</span>,
+                        <span class="string">"v_varchar"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">7</span>,
+                        <span class="string">"v_bool"</span>,
+                        Type::Primitive(PrimitiveType::Boolean),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">8</span>,
+                        <span class="string">"v_date"</span>,
+                        Type::Primitive(PrimitiveType::Date),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">9</span>,
+                        <span class="string">"v_timestamp"</span>,
+                        Type::Primitive(PrimitiveType::Timestamptz),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">10</span>,
+                        <span class="string">"v_decimal"</span>,
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: <span class="number">36</span>,
+                            scale: <span class="number">10</span>,
+                        }),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">11</span>,
+                        <span class="string">"v_ts_ntz"</span>,
+                        Type::Primitive(PrimitiveType::Timestamp),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">12</span>,
+                        <span class="string">"v_ts_ns_ntz"</span>,
+                        Type::Primitive(PrimitiveType::TimestampNs),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
         <span class="kw">let </span>manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
-                schema: Schema::builder()
-                    .with_fields(<span class="macro">vec!</span>[
-                        <span class="comment">// id v_int v_long v_float v_double v_varchar v_bool v_date v_timestamp v_decimal v_ts_ntz
-                        </span>Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"v_int"</span>,
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">3</span>,
-                            <span class="string">"v_long"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">4</span>,
-                            <span class="string">"v_float"</span>,
-                            Type::Primitive(PrimitiveType::Float),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">5</span>,
-                            <span class="string">"v_double"</span>,
-                            Type::Primitive(PrimitiveType::Double),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">6</span>,
-                            <span class="string">"v_varchar"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">7</span>,
-                            <span class="string">"v_bool"</span>,
-                            Type::Primitive(PrimitiveType::Boolean),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">8</span>,
-                            <span class="string">"v_date"</span>,
-                            Type::Primitive(PrimitiveType::Date),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">9</span>,
-                            <span class="string">"v_timestamp"</span>,
-                            Type::Primitive(PrimitiveType::Timestamptz),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">10</span>,
-                            <span class="string">"v_decimal"</span>,
-                            Type::Primitive(PrimitiveType::Decimal {
-                                precision: <span class="number">36</span>,
-                                scale: <span class="number">10</span>,
-                            }),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">11</span>,
-                            <span class="string">"v_ts_ntz"</span>,
-                            Type::Primitive(PrimitiveType::Timestamp),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">12</span>,
-                            <span class="string">"v_ts_ns_ntz"</span>,
-                            Type::Primitive(PrimitiveType::TimestampNs
-                        ))),
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -3754,94 +3738,83 @@
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_parse_manifest_v2_partition() {
+        <span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_fields(<span class="macro">vec!</span>[
+                    Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"v_int"</span>,
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">3</span>,
+                        <span class="string">"v_long"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">4</span>,
+                        <span class="string">"v_float"</span>,
+                        Type::Primitive(PrimitiveType::Float),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">5</span>,
+                        <span class="string">"v_double"</span>,
+                        Type::Primitive(PrimitiveType::Double),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">6</span>,
+                        <span class="string">"v_varchar"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">7</span>,
+                        <span class="string">"v_bool"</span>,
+                        Type::Primitive(PrimitiveType::Boolean),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">8</span>,
+                        <span class="string">"v_date"</span>,
+                        Type::Primitive(PrimitiveType::Date),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">9</span>,
+                        <span class="string">"v_timestamp"</span>,
+                        Type::Primitive(PrimitiveType::Timestamptz),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">10</span>,
+                        <span class="string">"v_decimal"</span>,
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: <span class="number">36</span>,
+                            scale: <span class="number">10</span>,
+                        }),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">11</span>,
+                        <span class="string">"v_ts_ntz"</span>,
+                        Type::Primitive(PrimitiveType::Timestamp),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">12</span>,
+                        <span class="string">"v_ts_ns_ntz"</span>,
+                        Type::Primitive(PrimitiveType::TimestampNs),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
         <span class="kw">let </span>manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
-                schema: Schema::builder()
-                    .with_fields(<span class="macro">vec!</span>[
-                        Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"v_int"</span>,
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">3</span>,
-                            <span class="string">"v_long"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">4</span>,
-                            <span class="string">"v_float"</span>,
-                            Type::Primitive(PrimitiveType::Float),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">5</span>,
-                            <span class="string">"v_double"</span>,
-                            Type::Primitive(PrimitiveType::Double),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">6</span>,
-                            <span class="string">"v_varchar"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">7</span>,
-                            <span class="string">"v_bool"</span>,
-                            Type::Primitive(PrimitiveType::Boolean),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">8</span>,
-                            <span class="string">"v_date"</span>,
-                            Type::Primitive(PrimitiveType::Date),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">9</span>,
-                            <span class="string">"v_timestamp"</span>,
-                            Type::Primitive(PrimitiveType::Timestamptz),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">10</span>,
-                            <span class="string">"v_decimal"</span>,
-                            Type::Primitive(PrimitiveType::Decimal {
-                                precision: <span class="number">36</span>,
-                                scale: <span class="number">10</span>,
-                            }),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">11</span>,
-                            <span class="string">"v_ts_ntz"</span>,
-                            Type::Primitive(PrimitiveType::Timestamp),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">12</span>,
-                            <span class="string">"v_ts_ns_ntz"</span>,
-                            Type::Primitive(PrimitiveType::TimestampNs
-                        )))
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[
-                        PartitionField {
-                            name: <span class="string">"v_int"</span>.to_string(),
-                            transform: Transform::Identity,
-                            source_id: <span class="number">2</span>,
-                            field_id: <span class="number">1000</span>,
-                        },
-                        PartitionField {
-                            name: <span class="string">"v_long"</span>.to_string(),
-                            transform: Transform::Identity,
-                            source_id: <span class="number">3</span>,
-                            field_id: <span class="number">1001</span>,
-                        },
-                    ],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(<span class="number">0</span>).add_partition_field(<span class="string">"v_int"</span>, <span class="string">"v_int"</span>, Transform::Identity).unwrap()
+                .add_partition_field(<span class="string">"v_long"</span>, <span class="string">"v_long"</span>, Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -3923,34 +3896,34 @@
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_parse_manifest_v1_unpartition() {
+        <span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(<span class="number">1</span>)
+                .with_fields(<span class="macro">vec!</span>[
+                    Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"data"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">3</span>,
+                        <span class="string">"comment"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
         <span class="kw">let </span>manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">1</span>,
-                schema: Schema::builder()
-                    .with_schema_id(<span class="number">1</span>)
-                    .with_fields(<span class="macro">vec!</span>[
-                        Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"data"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">3</span>,
-                            <span class="string">"comment"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -3988,38 +3961,33 @@
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_parse_manifest_v1_partition() {
+        <span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_fields(<span class="macro">vec!</span>[
+                    Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"data"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">3</span>,
+                        <span class="string">"category"</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
         <span class="kw">let </span>manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
-                schema: Schema::builder()
-                    .with_fields(<span class="macro">vec!</span>[
-                        Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"data"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">3</span>,
-                            <span class="string">"category"</span>,
-                            Type::Primitive(PrimitiveType::String),
-                        )),
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[PartitionField {
-                        name: <span class="string">"category"</span>.to_string(),
-                        transform: Transform::Identity,
-                        source_id: <span class="number">3</span>,
-                        field_id: <span class="number">1000</span>,
-                    }],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema).add_partition_field(<span class="string">"category"</span>, <span class="string">"category"</span>, Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -4077,28 +4045,28 @@
 
     <span class="attr">#[tokio::test]
     </span><span class="kw">async fn </span>test_parse_manifest_with_schema_evolution() {
+        <span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_fields(<span class="macro">vec!</span>[
+                    Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"v_int"</span>,
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
         <span class="kw">let </span>manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
-                schema: Schema::builder()
-                    .with_fields(<span class="macro">vec!</span>[
-                        Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"v_int"</span>,
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -4149,28 +4117,28 @@
 
         <span class="comment">// Compared with original manifest, the lower_bounds and upper_bounds no longer has data for field 3, and
         // other parts should be same.
-        </span><span class="kw">let </span>expected_manifest = Manifest {
+        </span><span class="kw">let </span>schema = Arc::new(
+            Schema::builder()
+                .with_fields(<span class="macro">vec!</span>[
+                    Arc::new(NestedField::optional(
+                        <span class="number">1</span>,
+                        <span class="string">"id"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        <span class="number">2</span>,
+                        <span class="string">"v_int"</span>,
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+        <span class="kw">let </span>expected_manifest = Manifest {
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
-                schema: Schema::builder()
-                    .with_fields(<span class="macro">vec!</span>[
-                        Arc::new(NestedField::optional(
-                            <span class="number">1</span>,
-                            <span class="string">"id"</span>,
-                            Type::Primitive(PrimitiveType::Long),
-                        )),
-                        Arc::new(NestedField::optional(
-                            <span class="number">2</span>,
-                            <span class="string">"v_int"</span>,
-                            Type::Primitive(PrimitiveType::Int),
-                        )),
-                    ])
-                    .build()
-                    .unwrap(),
-                partition_spec: PartitionSpec {
-                    spec_id: <span class="number">0</span>,
-                    fields: <span class="macro">vec!</span>[],
-                },
+                schema: schema.clone(),
+                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },

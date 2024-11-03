@@ -664,7 +664,7 @@
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((<span class="kw-2">*</span>current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Data)
                     .format_version(FormatVersion::V2)
                     .partition_spec((<span class="kw-2">**</span>current_partition_spec).clone())

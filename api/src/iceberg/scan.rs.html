@@ -2583,7 +2583,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         spec_id: i32,
         table_metadata: <span class="kw-2">&amp;</span>TableMetadataRef,
-        schema: <span class="kw-2">&amp;</span>SchemaRef,
+        schema: <span class="kw-2">&amp;</span>Schema,
         case_sensitive: bool,
         filter: BoundPredicate,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;BoundPredicate&gt;&gt; {
@@ -2609,11 +2609,11 @@
                 <span class="macro">format!</span>(<span class="string">"Could not find partition spec for id {}"</span>, spec_id),
             ))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>partition_type = partition_spec.partition_type(schema.as_ref())<span class="question-mark">?</span>;
+        <span class="kw">let </span>partition_type = partition_spec.partition_type(schema)<span class="question-mark">?</span>;
         <span class="kw">let </span>partition_fields = partition_type.fields().to_owned();
         <span class="kw">let </span>partition_schema = Arc::new(
             Schema::builder()
-                .with_schema_id(partition_spec.spec_id)
+                .with_schema_id(partition_spec.spec_id())
                 .with_fields(partition_fields)
                 .build()<span class="question-mark">?</span>,
         );
@@ -2934,7 +2934,7 @@
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((<span class="kw-2">*</span>current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Data)
                     .format_version(FormatVersion::V2)
                     .partition_spec((<span class="kw-2">**</span>current_partition_spec).clone())
