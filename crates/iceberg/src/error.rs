@@ -44,6 +44,8 @@ pub enum ErrorKind {
     ///
     /// This error is returned when given iceberg feature is not supported.
     FeatureUnsupported,
+    /// A requirement check failed.
+    RequirementFailed,
 }
 
 impl ErrorKind {
@@ -59,6 +61,7 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
+            ErrorKind::RequirementFailed => "RequirementFailed",
         }
     }
 }
