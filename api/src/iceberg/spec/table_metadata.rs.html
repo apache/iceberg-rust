@@ -2347,6 +2347,24 @@
 <a href="#2347" id="2347">2347</a>
 <a href="#2348" id="2348">2348</a>
 <a href="#2349" id="2349">2349</a>
+<a href="#2350" id="2350">2350</a>
+<a href="#2351" id="2351">2351</a>
+<a href="#2352" id="2352">2352</a>
+<a href="#2353" id="2353">2353</a>
+<a href="#2354" id="2354">2354</a>
+<a href="#2355" id="2355">2355</a>
+<a href="#2356" id="2356">2356</a>
+<a href="#2357" id="2357">2357</a>
+<a href="#2358" id="2358">2358</a>
+<a href="#2359" id="2359">2359</a>
+<a href="#2360" id="2360">2360</a>
+<a href="#2361" id="2361">2361</a>
+<a href="#2362" id="2362">2362</a>
+<a href="#2363" id="2363">2363</a>
+<a href="#2364" id="2364">2364</a>
+<a href="#2365" id="2365">2365</a>
+<a href="#2366" id="2366">2366</a>
+<a href="#2367" id="2367">2367</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2569,6 +2587,12 @@
             .expect(<span class="string">"Current schema id set, but not found in table metadata"</span>)
     }
 
+    <span class="doccomment">/// Get the id of the current schema
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>current_schema_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaId {
+        <span class="self">self</span>.current_schema_id
+    }
+
     <span class="doccomment">/// Returns all partition specs.
     </span><span class="attr">#[inline]
     </span><span class="kw">pub fn </span>partition_specs_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SchemalessPartitionSpecRef&gt; {
@@ -2626,6 +2650,12 @@
         })
     }
 
+    <span class="doccomment">/// Get the current snapshot id
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>current_snapshot_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
+        <span class="self">self</span>.current_snapshot_id
+    }
+
     <span class="doccomment">/// Get the snapshot for a reference
     /// Returns an option if the `ref_name` is not found
     </span><span class="attr">#[inline]
@@ -2654,6 +2684,12 @@
         <span class="self">self</span>.sort_orders
             .get(<span class="kw-2">&amp;</span><span class="self">self</span>.default_sort_order_id)
             .expect(<span class="string">"Default order id has been set, but not found in table metadata!"</span>)
+    }
+
+    <span class="doccomment">/// Returns default sort order id.
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>default_sort_order_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i64 {
+        <span class="self">self</span>.default_sort_order_id
     }
 
     <span class="doccomment">/// Returns properties of table.
