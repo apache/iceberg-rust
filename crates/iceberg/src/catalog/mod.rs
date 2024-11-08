@@ -29,7 +29,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadata,
+    FormatVersion, Schema, SchemaId, Snapshot, SnapshotReference, SortOrder, TableMetadata,
     TableMetadataBuilder, UnboundPartitionSpec, ViewRepresentations,
 };
 use crate::table::Table;
@@ -319,7 +319,7 @@ pub enum TableRequirement {
     CurrentSchemaIdMatch {
         /// Current schema id of the table to assert.
         #[serde(rename = "current-schema-id")]
-        current_schema_id: i32,
+        current_schema_id: SchemaId,
     },
     /// The table's last assigned partition id must match the
     /// requirement.
@@ -456,108 +456,133 @@ impl TableUpdate {
 impl TableRequirement {
     /// Check that the requirement is met by the table metadata.
     /// If the requirement is not met, an appropriate error is returned.
-    pub fn check(&self, metadata: &TableMetadata, exists: bool) -> Result<()> {
-        match self {
-            TableRequirement::NotExist => {
-                if exists {
+    ///
+    /// Provide metadata as `None` if the table does not exist.
+    pub fn check(&self, metadata: Option<&TableMetadata>) -> Result<()> {
+        if let Some(metadata) = metadata {
+            match self {
+                TableRequirement::NotExist => {
                     return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        format!("Table with id {} already exists", metadata.uuid()),
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Requirement failed: Table with id {} already exists",
+                            metadata.uuid()
+                        ),
                     ));
                 }
-            }
-            TableRequirement::UuidMatch { uuid } => {
-                if &metadata.uuid() != uuid {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Table UUID does not match",
-                    )
-                    .with_context("expected", *uuid)
-                    .with_context("found", metadata.uuid()));
-                }
-            }
-            TableRequirement::CurrentSchemaIdMatch { current_schema_id } => {
-                // ToDo: Harmonize the types of current_schema_id
-                if metadata.current_schema_id != *current_schema_id {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Current schema id does not match",
-                    )
-                    .with_context("expected", current_schema_id.to_string())
-                    .with_context("found", metadata.current_schema_id.to_string()));
-                }
-            }
-            TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id,
-            } => {
-                if metadata.default_sort_order().order_id != *default_sort_order_id {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Default sort order id does not match",
-                    )
-                    .with_context("expected", default_sort_order_id.to_string())
-                    .with_context("found", metadata.default_sort_order().order_id.to_string()));
-                }
-            }
-            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } => {
-                let snapshot_ref = metadata.snapshot_for_ref(r#ref);
-                if let Some(snapshot_id) = snapshot_id {
-                    let snapshot_ref = snapshot_ref.ok_or(Error::new(
-                        ErrorKind::RequirementFailed,
-                        format!("Branch or tag `{}` not found", r#ref),
-                    ))?;
-                    if snapshot_ref.snapshot_id() != *snapshot_id {
+                TableRequirement::UuidMatch { uuid } => {
+                    if &metadata.uuid() != uuid {
                         return Err(Error::new(
-                            ErrorKind::RequirementFailed,
-                            format!("Branch or tag `{}` has changed", r#ref),
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Table UUID does not match",
                         )
-                        .with_context("expected", snapshot_id.to_string())
-                        .with_context("found", snapshot_ref.snapshot_id().to_string()));
+                        .with_context("expected", *uuid)
+                        .with_context("found", metadata.uuid()));
                     }
-                } else if snapshot_ref.is_some() {
-                    // a null snapshot ID means the ref should not exist already
+                }
+                TableRequirement::CurrentSchemaIdMatch { current_schema_id } => {
+                    // ToDo: Harmonize the types of current_schema_id
+                    if metadata.current_schema_id != *current_schema_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Current schema id does not match",
+                        )
+                        .with_context("expected", current_schema_id.to_string())
+                        .with_context("found", metadata.current_schema_id.to_string()));
+                    }
+                }
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id,
+                } => {
+                    if metadata.default_sort_order().order_id != *default_sort_order_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Default sort order id does not match",
+                        )
+                        .with_context("expected", default_sort_order_id.to_string())
+                        .with_context(
+                            "found",
+                            metadata.default_sort_order().order_id.to_string(),
+                        ));
+                    }
+                }
+                TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } => {
+                    let snapshot_ref = metadata.snapshot_for_ref(r#ref);
+                    if let Some(snapshot_id) = snapshot_id {
+                        let snapshot_ref = snapshot_ref.ok_or(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Requirement failed: Branch or tag `{}` not found", r#ref),
+                        ))?;
+                        if snapshot_ref.snapshot_id() != *snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Requirement failed: Branch or tag `{}`'s snapshot has changed",
+                                    r#ref
+                                ),
+                            )
+                            .with_context("expected", snapshot_id.to_string())
+                            .with_context("found", snapshot_ref.snapshot_id().to_string()));
+                        }
+                    } else if snapshot_ref.is_some() {
+                        // a null snapshot ID means the ref should not exist already
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Requirement failed: Branch or tag `{}` already exists",
+                                r#ref
+                            ),
+                        ));
+                    }
+                }
+                TableRequirement::DefaultSpecIdMatch { default_spec_id } => {
+                    // ToDo: Harmonize the types of default_spec_id
+                    if metadata.default_partition_spec_id() != *default_spec_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Default partition spec id does not match",
+                        )
+                        .with_context("expected", default_spec_id.to_string())
+                        .with_context("found", metadata.default_partition_spec_id().to_string()));
+                    }
+                }
+                TableRequirement::LastAssignedPartitionIdMatch {
+                    last_assigned_partition_id,
+                } => {
+                    if metadata.last_partition_id != *last_assigned_partition_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Last assigned partition id does not match",
+                        )
+                        .with_context("expected", last_assigned_partition_id.to_string())
+                        .with_context("found", metadata.last_partition_id.to_string()));
+                    }
+                }
+                TableRequirement::LastAssignedFieldIdMatch {
+                    last_assigned_field_id,
+                } => {
+                    if &metadata.last_column_id != last_assigned_field_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Last assigned field id does not match",
+                        )
+                        .with_context("expected", last_assigned_field_id.to_string())
+                        .with_context("found", metadata.last_column_id.to_string()));
+                    }
+                }
+            };
+        } else {
+            match self {
+                TableRequirement::NotExist => {}
+                _ => {
                     return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        format!("Branch or tag `{}` already exists", r#ref),
+                        ErrorKind::DataInvalid,
+                        "Requirement failed: Table does not exist",
                     ));
                 }
             }
-            TableRequirement::DefaultSpecIdMatch { default_spec_id } => {
-                // ToDo: Harmonize the types of default_spec_id
-                if metadata.default_partition_spec_id() != *default_spec_id {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Default partition spec id does not match",
-                    )
-                    .with_context("expected", default_spec_id.to_string())
-                    .with_context("found", metadata.default_partition_spec_id().to_string()));
-                }
-            }
-            TableRequirement::LastAssignedPartitionIdMatch {
-                last_assigned_partition_id,
-            } => {
-                if metadata.last_partition_id != *last_assigned_partition_id {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Last assigned partition id does not match",
-                    )
-                    .with_context("expected", last_assigned_partition_id.to_string())
-                    .with_context("found", metadata.last_partition_id.to_string()));
-                }
-            }
-            TableRequirement::LastAssignedFieldIdMatch {
-                last_assigned_field_id,
-            } => {
-                if &metadata.last_column_id != last_assigned_field_id {
-                    return Err(Error::new(
-                        ErrorKind::RequirementFailed,
-                        "Last assigned field id does not match",
-                    )
-                    .with_context("expected", last_assigned_field_id.to_string())
-                    .with_context("found", metadata.last_column_id.to_string()));
-                }
-            }
-        };
+        }
+
         Ok(())
     }
 }
@@ -722,8 +747,8 @@ mod tests {
         let metadata = metadata();
         let requirement = TableRequirement::NotExist;
 
-        assert!(requirement.check(&metadata, true).is_err());
-        assert!(requirement.check(&metadata, false).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_err());
+        assert!(requirement.check(None).is_ok());
     }
 
     #[test]
@@ -733,12 +758,12 @@ mod tests {
         let requirement = TableRequirement::UuidMatch {
             uuid: uuid::Uuid::now_v7(),
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::UuidMatch {
             uuid: uuid::Uuid::nil(),
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -750,14 +775,14 @@ mod tests {
             r#ref: "my_branch".to_string(),
             snapshot_id: Some(1),
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         // Ref does not exist and should not
         let requirement = TableRequirement::RefSnapshotIdMatch {
             r#ref: "my_branch".to_string(),
             snapshot_id: None,
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
 
         // Add snapshot
         let record = r#"
@@ -782,14 +807,14 @@ mod tests {
             r#ref: "main".to_string(),
             snapshot_id: Some(3051729675574597004),
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
 
         // Ref exists but does not match
         let requirement = TableRequirement::RefSnapshotIdMatch {
             r#ref: "main".to_string(),
             snapshot_id: Some(1),
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
     }
 
     #[test]
@@ -799,12 +824,12 @@ mod tests {
         let requirement = TableRequirement::LastAssignedFieldIdMatch {
             last_assigned_field_id: 1,
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::LastAssignedFieldIdMatch {
             last_assigned_field_id: 0,
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -814,12 +839,12 @@ mod tests {
         let requirement = TableRequirement::CurrentSchemaIdMatch {
             current_schema_id: 1,
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::CurrentSchemaIdMatch {
             current_schema_id: 0,
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -829,12 +854,12 @@ mod tests {
         let requirement = TableRequirement::LastAssignedPartitionIdMatch {
             last_assigned_partition_id: 1,
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::LastAssignedPartitionIdMatch {
             last_assigned_partition_id: 0,
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -842,10 +867,10 @@ mod tests {
         let metadata = metadata();
 
         let requirement = TableRequirement::DefaultSpecIdMatch { default_spec_id: 1 };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::DefaultSpecIdMatch { default_spec_id: 0 };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -855,12 +880,12 @@ mod tests {
         let requirement = TableRequirement::DefaultSortOrderIdMatch {
             default_sort_order_id: 1,
         };
-        assert!(requirement.check(&metadata, true).is_err());
+        assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::DefaultSortOrderIdMatch {
             default_sort_order_id: 0,
         };
-        assert!(requirement.check(&metadata, true).is_ok());
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
