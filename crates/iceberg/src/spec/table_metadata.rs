@@ -220,6 +220,12 @@ impl TableMetadata {
             .expect("Current schema id set, but not found in table metadata")
     }
 
+    /// Get the id of the current schema
+    #[inline]
+    pub fn current_schema_id(&self) -> SchemaId {
+        self.current_schema_id
+    }
+
     /// Returns all partition specs.
     #[inline]
     pub fn partition_specs_iter(&self) -> impl Iterator<Item = &SchemalessPartitionSpecRef> {
@@ -277,6 +283,12 @@ impl TableMetadata {
         })
     }
 
+    /// Get the current snapshot id
+    #[inline]
+    pub fn current_snapshot_id(&self) -> Option<i64> {
+        self.current_snapshot_id
+    }
+
     /// Get the snapshot for a reference
     /// Returns an option if the `ref_name` is not found
     #[inline]
@@ -305,6 +317,12 @@ impl TableMetadata {
         self.sort_orders
             .get(&self.default_sort_order_id)
             .expect("Default order id has been set, but not found in table metadata!")
+    }
+
+    /// Returns default sort order id.
+    #[inline]
+    pub fn default_sort_order_id(&self) -> i64 {
+        self.default_sort_order_id
     }
 
     /// Returns properties of table.
