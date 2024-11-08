@@ -97,7 +97,7 @@ use crate::to_datafusion_error;
 /// # Errors
 /// An error will be returned if any unsupported feature, such as partition columns,
 /// order expressions, constraints, or column defaults, is detected in the table creation command.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IcebergTableProviderFactory {}
 
 impl IcebergTableProviderFactory {
@@ -241,6 +241,7 @@ mod tests {
             constraints: Constraints::empty(),
             column_defaults: Default::default(),
             if_not_exists: Default::default(),
+            temporary: false,
             definition: Default::default(),
             unbounded: Default::default(),
         }
