@@ -23,7 +23,7 @@ homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg Datafusion Integration"
+description = "Apache Iceberg DataFusion Integration"
 repository = { workspace = true }
 license = { workspace = true }
 keywords = ["iceberg", "integrations", "datafusion"]
@@ -31,7 +31,7 @@ keywords = ["iceberg", "integrations", "datafusion"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-datafusion = { version = "42" }
+datafusion = { version = "43" }
 futures = { workspace = true }
 iceberg = { workspace = true }
 tokio = { workspace = true }
