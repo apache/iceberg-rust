@@ -21,6 +21,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
@@ -580,12 +581,7 @@ impl TableMetadataBuilder {
         let schema: Arc<super::Schema> = Arc::new(schema);
         let unpartition_spec = BoundPartitionSpec::unpartition_spec(schema.clone());
         let partition_specs = match partition_spec {
-            Some(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "Can't create table with partition spec now",
-                ))
-            }
+            Some(p) => HashMap::from([(p.spec_id(), Arc::new(p))]),
             None => HashMap::from([(
                 unpartition_spec.spec_id(),
                 Arc::new(unpartition_spec.clone().into_schemaless()),

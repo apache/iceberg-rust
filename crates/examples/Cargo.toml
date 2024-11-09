@@ -25,6 +25,7 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 tokio = { version = "1", features = ["full"] }
@@ -36,3 +37,7 @@ path = "src/rest_catalog_namespace.rs"
 [[example]]
 name = "rest-catalog-table"
 path = "src/rest_catalog_table.rs"
+
+[[example]]
+name = "rest-catalog-read-data"
+path = "src/rest_catalog_read_data.rs"
