@@ -203,7 +203,7 @@ impl TableMetadata {
 
     /// Returns schemas
     #[inline]
-    pub fn schemas_iter(&self) -> impl Iterator<Item = &SchemaRef> {
+    pub fn schemas_iter(&self) -> impl ExactSizeIterator<Item = &SchemaRef> {
         self.schemas.values()
     }
 
@@ -228,7 +228,9 @@ impl TableMetadata {
 
     /// Returns all partition specs.
     #[inline]
-    pub fn partition_specs_iter(&self) -> impl Iterator<Item = &SchemalessPartitionSpecRef> {
+    pub fn partition_specs_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &SchemalessPartitionSpecRef> {
         self.partition_specs.values()
     }
 
@@ -252,7 +254,7 @@ impl TableMetadata {
 
     /// Returns all snapshots
     #[inline]
-    pub fn snapshots(&self) -> impl Iterator<Item = &SnapshotRef> {
+    pub fn snapshots(&self) -> impl ExactSizeIterator<Item = &SnapshotRef> {
         self.snapshots.values()
     }
 
@@ -301,7 +303,7 @@ impl TableMetadata {
 
     /// Return all sort orders.
     #[inline]
-    pub fn sort_orders_iter(&self) -> impl Iterator<Item = &SortOrderRef> {
+    pub fn sort_orders_iter(&self) -> impl ExactSizeIterator<Item = &SortOrderRef> {
         self.sort_orders.values()
     }
 
