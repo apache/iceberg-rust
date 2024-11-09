@@ -95,6 +95,7 @@
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -127,6 +128,7 @@
 ///
 /// Acts as a centralized catalog provider that aggregates
 /// multiple [`SchemaProvider`], each associated with distinct namespaces.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>IcebergCatalogProvider {
     <span class="doccomment">/// A `HashMap` where keys are namespace names
     /// and values are dynamic references to objects implementing the

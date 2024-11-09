@@ -162,6 +162,7 @@
 <a href="#162" id="162">162</a>
 <a href="#163" id="163">163</a>
 <a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -199,6 +200,7 @@
 
 <span class="doccomment">/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>IcebergTableProvider {
     <span class="doccomment">/// A table in the catalog.
     </span>table: Table,

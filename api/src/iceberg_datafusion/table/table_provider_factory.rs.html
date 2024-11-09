@@ -298,6 +298,7 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -397,7 +398,7 @@
 /// # Errors
 /// An error will be returned if any unsupported feature, such as partition columns,
 /// order expressions, constraints, or column defaults, is detected in the table creation command.
-</span><span class="attr">#[derive(Default)]
+</span><span class="attr">#[derive(Debug, Default)]
 </span><span class="kw">pub struct </span>IcebergTableProviderFactory {}
 
 <span class="kw">impl </span>IcebergTableProviderFactory {
@@ -541,6 +542,7 @@
             constraints: Constraints::empty(),
             column_defaults: Default::default(),
             if_not_exists: Default::default(),
+            temporary: <span class="bool-val">false</span>,
             definition: Default::default(),
             unbounded: Default::default(),
         }
