@@ -358,7 +358,7 @@ impl Schema {
 
     /// Returns [`identifier_field_ids`].
     #[inline]
-    pub fn identifier_field_ids(&self) -> impl Iterator<Item = i32> + '_ {
+    pub fn identifier_field_ids(&self) -> impl ExactSizeIterator<Item = i32> + '_ {
         self.identifier_field_ids.iter().copied()
     }
 
