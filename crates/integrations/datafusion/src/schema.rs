@@ -30,6 +30,7 @@ use crate::table::IcebergTableProvider;
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
+#[derive(Debug)]
 pub(crate) struct IcebergSchemaProvider {
     /// A `HashMap` where keys are table names
     /// and values are dynamic references to objects implementing the

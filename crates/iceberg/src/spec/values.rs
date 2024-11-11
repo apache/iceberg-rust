@@ -1560,7 +1560,7 @@ impl Struct {
     }
 
     /// Create a iterator to read the field in order of field_value.
-    pub fn iter(&self) -> impl Iterator<Item = Option<&Literal>> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Option<&Literal>> {
         self.null_bitmap.iter().zip(self.fields.iter()).map(
             |(null, value)| {
                 if *null {

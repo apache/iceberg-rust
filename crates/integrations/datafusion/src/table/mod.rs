@@ -35,6 +35,7 @@ use crate::physical_plan::scan::IcebergTableScan;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
+#[derive(Debug)]
 pub struct IcebergTableProvider {
     /// A table in the catalog.
     table: Table,

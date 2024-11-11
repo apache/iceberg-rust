@@ -94,7 +94,7 @@ impl ViewMetadata {
 
     /// Returns all view versions.
     #[inline]
-    pub fn versions(&self) -> impl Iterator<Item = &ViewVersionRef> {
+    pub fn versions(&self) -> impl ExactSizeIterator<Item = &ViewVersionRef> {
         self.versions.values()
     }
 
@@ -114,7 +114,7 @@ impl ViewMetadata {
 
     /// Returns schemas
     #[inline]
-    pub fn schemas_iter(&self) -> impl Iterator<Item = &SchemaRef> {
+    pub fn schemas_iter(&self) -> impl ExactSizeIterator<Item = &SchemaRef> {
         self.schemas.values()
     }
 
