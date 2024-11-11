@@ -519,7 +519,7 @@
 
         <span class="kw">let </span>requirements = <span class="macro">vec!</span>[
             TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: <span class="self">self</span>.tx.table.metadata().current_schema().schema_id() <span class="kw">as </span>i64,
+                current_schema_id: <span class="self">self</span>.tx.table.metadata().current_schema().schema_id(),
             },
             TableRequirement::DefaultSortOrderIdMatch {
                 default_sort_order_id: <span class="self">self</span>.tx.table.metadata().default_sort_order().order_id,
