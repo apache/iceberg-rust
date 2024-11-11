@@ -5025,7 +5025,7 @@
     }
 
     <span class="doccomment">/// Create a iterator to read the field in order of field_value.
-    </span><span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Literal&gt;&gt; {
+    </span><span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Literal&gt;&gt; {
         <span class="self">self</span>.null_bitmap.iter().zip(<span class="self">self</span>.fields.iter()).map(
             |(null, value)| {
                 <span class="kw">if </span><span class="kw-2">*</span>null {

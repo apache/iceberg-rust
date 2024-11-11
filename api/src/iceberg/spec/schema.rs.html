@@ -2971,7 +2971,7 @@
 
     <span class="doccomment">/// Returns [`identifier_field_ids`].
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>identifier_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = i32&gt; + <span class="lifetime">'_ </span>{
+    </span><span class="kw">pub fn </span>identifier_field_ids(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = i32&gt; + <span class="lifetime">'_ </span>{
         <span class="self">self</span>.identifier_field_ids.iter().copied()
     }
 

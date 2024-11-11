@@ -2365,6 +2365,8 @@
 <a href="#2365" id="2365">2365</a>
 <a href="#2366" id="2366">2366</a>
 <a href="#2367" id="2367">2367</a>
+<a href="#2368" id="2368">2368</a>
+<a href="#2369" id="2369">2369</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2570,7 +2572,7 @@
 
     <span class="doccomment">/// Returns schemas
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>schemas_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SchemaRef&gt; {
+    </span><span class="kw">pub fn </span>schemas_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SchemaRef&gt; {
         <span class="self">self</span>.schemas.values()
     }
 
@@ -2595,7 +2597,9 @@
 
     <span class="doccomment">/// Returns all partition specs.
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>partition_specs_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SchemalessPartitionSpecRef&gt; {
+    </span><span class="kw">pub fn </span>partition_specs_iter(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+    ) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SchemalessPartitionSpecRef&gt; {
         <span class="self">self</span>.partition_specs.values()
     }
 
@@ -2619,7 +2623,7 @@
 
     <span class="doccomment">/// Returns all snapshots
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>snapshots(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SnapshotRef&gt; {
+    </span><span class="kw">pub fn </span>snapshots(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SnapshotRef&gt; {
         <span class="self">self</span>.snapshots.values()
     }
 
@@ -2668,7 +2672,7 @@
 
     <span class="doccomment">/// Return all sort orders.
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>sort_orders_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SortOrderRef&gt; {
+    </span><span class="kw">pub fn </span>sort_orders_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SortOrderRef&gt; {
         <span class="self">self</span>.sort_orders.values()
     }
 

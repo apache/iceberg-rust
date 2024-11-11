@@ -822,7 +822,7 @@
 
     <span class="doccomment">/// Returns all view versions.
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>versions(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>ViewVersionRef&gt; {
+    </span><span class="kw">pub fn </span>versions(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>ViewVersionRef&gt; {
         <span class="self">self</span>.versions.values()
     }
 
@@ -842,7 +842,7 @@
 
     <span class="doccomment">/// Returns schemas
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>schemas_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>SchemaRef&gt; {
+    </span><span class="kw">pub fn </span>schemas_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SchemaRef&gt; {
         <span class="self">self</span>.schemas.values()
     }
 
