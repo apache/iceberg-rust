@@ -230,9 +230,16 @@ impl TableMetadataBuilder {
         }
 
         if format_version != self.metadata.format_version {
-            self.metadata.format_version = format_version;
-            self.changes
-                .push(TableUpdate::UpgradeFormatVersion { format_version });
+            match format_version {
+                FormatVersion::V1 => {
+                    // No changes needed for V1
+                }
+                FormatVersion::V2 => {
+                    self.metadata.format_version = format_version;
+                    self.changes
+                        .push(TableUpdate::UpgradeFormatVersion { format_version });
+                }
+            }
         }
 
         Ok(self)
