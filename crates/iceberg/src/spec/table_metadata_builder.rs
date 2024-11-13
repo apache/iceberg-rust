@@ -312,22 +312,8 @@ impl TableMetadataBuilder {
     /// - No partition spec has been added to the table metadata.
     /// - No sort order has been added to the table metadata.
     /// - Snapshot id already exists.
-    /// - For format version > 1: the sequence number of the snapshot is loser than the highest sequence number specified so far.
+    /// - For format version > 1: the sequence number of the snapshot is lower than the highest sequence number specified so far.
     pub fn add_snapshot(mut self, snapshot: Snapshot) -> Result<Self> {
-        if self.metadata.partition_specs.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Attempting to add a snapshot before a partition spec is added",
-            ));
-        }
-
-        if self.metadata.sort_orders.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Attempting to add a snapshot before a sort order is added",
-            ));
-        }
-
         if self
             .metadata
             .snapshots
