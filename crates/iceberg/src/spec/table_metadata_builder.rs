@@ -98,6 +98,11 @@ impl TableMetadataBuilder {
                 schemas: HashMap::new(),
                 partition_specs: HashMap::new(),
                 default_spec: Arc::new(
+                    // The spec id (-1) is just a proxy value and can be any negative number.
+                    // 0 would lead to wrong changes in the builder if the provided spec by the user is
+                    // also unpartitioned.
+                    // The `default_spec` value is always replaced at the end of this method by he `add_default_partition_spec`
+                    // method.
                     BoundPartitionSpec::unpartition_spec(fresh_schema.clone()).with_spec_id(-1),
                 ), // Overwritten immediately by add_default_partition_spec
                 last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
@@ -240,7 +245,7 @@ impl TableMetadataBuilder {
     /// * format-version: Set the format version of the table.
     ///
     /// # Errors
-    /// - If format-version property is set to a lower version than the current format version.
+    /// - If properties contains a reserved property
     pub fn set_properties(mut self, properties: HashMap<String, String>) -> Result<Self> {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
@@ -537,8 +542,6 @@ impl TableMetadataBuilder {
     // If the schema is built out of sync with the TableMetadata, for example in a REST Catalog setting, the assertion of
     // the provided `last_column_id` as part of the `TableUpdate::AddSchema` is still done in its `.apply` method.
     pub fn add_schema(mut self, schema: Schema) -> Self {
-        // fn returns a result because I think we should check field-id <-> type compatibility if the field-id
-        // is still present in the metadata. This is not done in the Java code.
         let new_schema_id = self.reuse_or_create_new_schema_id(&schema);
         let schema_found = self.metadata.schemas.contains_key(&new_schema_id);
 
