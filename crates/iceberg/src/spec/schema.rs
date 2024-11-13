@@ -376,6 +376,24 @@ impl Schema {
     pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
         self.field_id_to_accessor.get(&field_id).cloned()
     }
+
+    /// Check if this schema is identical to another schema semantically - excluding schema id.
+    pub(crate) fn is_same_schema(&self, other: &SchemaRef) -> bool {
+        self.as_struct().eq(other.as_struct())
+            && self.identifier_field_ids().eq(other.identifier_field_ids())
+    }
+
+    /// Change the schema id of this schema.
+    // This is redundant with the `with_schema_id` method on the builder, but useful
+    // as it is infallible in contrast to the builder `build()` method.
+    pub(crate) fn with_schema_id(self, schema_id: SchemaId) -> Self {
+        Self { schema_id, ..self }
+    }
+
+    /// Return A HashMap matching field ids to field names.
+    pub(crate) fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
+        &self.id_to_name
+    }
 }
 
 impl Display for Schema {

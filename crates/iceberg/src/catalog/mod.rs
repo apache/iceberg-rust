@@ -447,8 +447,46 @@ impl TableUpdate {
     /// Applies the update to the table metadata builder.
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
-            TableUpdate::AssignUuid { uuid } => builder.assign_uuid(uuid),
-            _ => unimplemented!(),
+            TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
+            TableUpdate::AddSchema {
+                schema,
+                last_column_id,
+            } => {
+                if let Some(last_column_id) = last_column_id {
+                    if builder.last_column_id() > last_column_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Invalid last column ID: {last_column_id} < {} (previous last column ID)",
+                                builder.last_column_id()
+                            ),
+                        ));
+                    }
+                };
+                Ok(builder.add_schema(schema))
+            }
+            TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
+            TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
+            TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
+            TableUpdate::AddSortOrder { sort_order } => builder.add_sort_order(sort_order),
+            TableUpdate::SetDefaultSortOrder { sort_order_id } => {
+                builder.set_default_sort_order(sort_order_id)
+            }
+            TableUpdate::AddSnapshot { snapshot } => builder.add_snapshot(snapshot),
+            TableUpdate::SetSnapshotRef {
+                ref_name,
+                reference,
+            } => builder.set_ref(&ref_name, reference),
+            TableUpdate::RemoveSnapshots { snapshot_ids } => {
+                Ok(builder.remove_snapshots(&snapshot_ids))
+            }
+            TableUpdate::RemoveSnapshotRef { ref_name } => Ok(builder.remove_ref(&ref_name)),
+            TableUpdate::SetLocation { location } => Ok(builder.set_location(location)),
+            TableUpdate::SetProperties { updates } => builder.set_properties(updates),
+            TableUpdate::RemoveProperties { removals } => Ok(builder.remove_properties(&removals)),
+            TableUpdate::UpgradeFormatVersion { format_version } => {
+                builder.upgrade_format_version(format_version)
+            }
         }
     }
 }
@@ -1516,8 +1554,12 @@ mod tests {
         let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
             .build()
-            .unwrap();
-        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+            .unwrap()
+            .metadata;
+        let table_metadata_builder = TableMetadataBuilder::new_from_metadata(
+            table_metadata,
+            Some("s3://db/table/metadata/metadata1.gz.json".to_string()),
+        );
 
         let uuid = uuid::Uuid::new_v4();
         let update = TableUpdate::AssignUuid { uuid };
@@ -1525,7 +1567,8 @@ mod tests {
             .apply(table_metadata_builder)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
         assert_eq!(updated_metadata.uuid(), uuid);
     }
 }
