@@ -30,7 +30,8 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, Schema, SchemaId, Snapshot, SnapshotReference, SortOrder, TableMetadata,
-    TableMetadataBuilder, UnboundPartitionSpec, ViewRepresentations,
+    TableMetadataBuilder, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations,
+    ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -671,6 +672,64 @@ pub struct ViewCreation {
     pub summary: HashMap<String, String>,
 }
 
+/// ViewUpdate represents an update to a view in the catalog.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum ViewUpdate {
+    /// Assign a new UUID to the view
+    #[serde(rename_all = "kebab-case")]
+    AssignUuid {
+        /// The new UUID to assign.
+        uuid: uuid::Uuid,
+    },
+    /// Upgrade view's format version
+    #[serde(rename_all = "kebab-case")]
+    UpgradeFormatVersion {
+        /// Target format upgrade to.
+        format_version: ViewFormatVersion,
+    },
+    /// Add a new schema to the view
+    #[serde(rename_all = "kebab-case")]
+    AddSchema {
+        /// The schema to add.
+        schema: Schema,
+        /// The last column id of the view.
+        last_column_id: Option<i32>,
+    },
+    /// Set view's current schema
+    #[serde(rename_all = "kebab-case")]
+    SetLocation {
+        /// New location for view.
+        location: String,
+    },
+    /// Set view's properties
+    ///
+    /// Matching keys are updated, and non-matching keys are left unchanged.
+    #[serde(rename_all = "kebab-case")]
+    SetProperties {
+        /// Properties to update for view.
+        updates: HashMap<String, String>,
+    },
+    /// Remove view's properties
+    #[serde(rename_all = "kebab-case")]
+    RemoveProperties {
+        /// Properties to remove
+        removals: Vec<String>,
+    },
+    /// Add a new version to the view
+    #[serde(rename_all = "kebab-case")]
+    AddViewVersion {
+        /// The view version to add.
+        view_version: ViewVersion,
+    },
+    /// Set view's current version
+    #[serde(rename_all = "kebab-case")]
+    SetCurrentViewVersion {
+        /// View version id to set as current, or -1 to set last added version
+        view_version_id: i32,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -680,10 +739,13 @@ mod tests {
     use serde::Serialize;
     use uuid::uuid;
 
+    use super::ViewUpdate;
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        TableMetadata, TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+        SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -1527,5 +1589,201 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(updated_metadata.uuid(), uuid);
+    }
+
+    #[test]
+    fn test_view_assign_uuid() {
+        test_serde_json(
+            r#"
+{
+    "action": "assign-uuid",
+    "uuid": "2cc52516-5e73-41f2-b139-545d41a4e151"
+}        
+        "#,
+            ViewUpdate::AssignUuid {
+                uuid: uuid!("2cc52516-5e73-41f2-b139-545d41a4e151"),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_upgrade_format_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "upgrade-format-version",
+    "format-version": 1
+}        
+        "#,
+            ViewUpdate::UpgradeFormatVersion {
+                format_version: ViewFormatVersion::V1,
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_add_schema() {
+        let test_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()
+            .unwrap();
+        test_serde_json(
+            r#"
+{
+    "action": "add-schema",
+    "schema": {
+        "type": "struct",
+        "schema-id": 1,
+        "fields": [
+            {
+                "id": 1,
+                "name": "foo",
+                "required": false,
+                "type": "string"
+            },
+            {
+                "id": 2,
+                "name": "bar",
+                "required": true,
+                "type": "int"
+            },
+            {
+                "id": 3,
+                "name": "baz",
+                "required": false,
+                "type": "boolean"
+            }
+        ],
+        "identifier-field-ids": [
+            2
+        ]
+    },
+    "last-column-id": 3
+}
+        "#,
+            ViewUpdate::AddSchema {
+                schema: test_schema.clone(),
+                last_column_id: Some(3),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_location() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-location",
+    "location": "s3://db/view"
+}        
+        "#,
+            ViewUpdate::SetLocation {
+                location: "s3://db/view".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_properties() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-properties",
+    "updates": {
+        "prop1": "v1",
+        "prop2": "v2"
+    }
+}        
+        "#,
+            ViewUpdate::SetProperties {
+                updates: vec![
+                    ("prop1".to_string(), "v1".to_string()),
+                    ("prop2".to_string(), "v2".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_remove_properties() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-properties",
+    "removals": [
+        "prop1",
+        "prop2"
+    ]
+}        
+        "#,
+            ViewUpdate::RemoveProperties {
+                removals: vec!["prop1".to_string(), "prop2".to_string()],
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_add_view_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "add-view-version",
+    "view-version": {
+            "version-id" : 1,
+            "timestamp-ms" : 1573518431292,
+            "schema-id" : 1,
+            "default-catalog" : "prod",
+            "default-namespace" : [ "default" ],
+            "summary" : {
+              "engine-name" : "Spark"
+            },
+            "representations" : [ {
+              "type" : "sql",
+              "sql" : "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2",
+              "dialect" : "spark"
+            } ]
+    }
+}        
+        "#,
+            ViewUpdate::AddViewVersion {
+                view_version: ViewVersion::builder()
+                    .with_version_id(1)
+                    .with_timestamp_ms(1573518431292)
+                    .with_schema_id(1)
+                    .with_default_catalog(Some("prod".to_string()))
+                    .with_default_namespace(NamespaceIdent::from_strs(vec!["default"]).unwrap())
+                    .with_summary(
+                        vec![("engine-name".to_string(), "Spark".to_string())]
+                            .into_iter()
+                            .collect(),
+                    )
+                    .with_representations(ViewRepresentations(vec![ViewRepresentation::Sql(SqlViewRepresentation {
+                        sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2".to_string(),
+                        dialect: "spark".to_string(),
+                    })]))
+                    .build(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_current_view_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-current-view-version",
+    "view-version-id": 1
+}        
+        "#,
+            ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
+        );
     }
 }
