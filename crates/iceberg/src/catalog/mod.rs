@@ -1412,7 +1412,7 @@ mod tests {
                 .with_manifest_list("s3://a/b/2.avro")
                 .with_summary(Summary {
                     operation: Operation::Append,
-                    other: HashMap::default(),
+                    additional_properties: HashMap::default(),
                 })
                 .build(),
         };

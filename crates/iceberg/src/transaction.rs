@@ -29,8 +29,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry, ManifestFile,
-    ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation, PartitionSpec,
+    BoundPartitionSpec, DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation,
     Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
     Struct, StructType, Summary, Transform, MAIN_BRANCH,
 };
@@ -203,7 +203,7 @@ impl<'a> FastAppendAction<'a> {
         schema: Schema,
         schema_id: i32,
         format_version: FormatVersion,
-        partition_spec: Arc<PartitionSpec>,
+        partition_spec: Arc<BoundPartitionSpec>,
         key_metadata: Vec<u8>,
         commit_uuid: String,
         snapshot_properties: HashMap<String, String>,
@@ -318,7 +318,7 @@ struct SnapshotProduceAction<'a> {
     snapshot_id: i64,
     schema_id: i32,
     format_version: FormatVersion,
-    partition_spec: Arc<PartitionSpec>,
+    partition_spec: Arc<BoundPartitionSpec>,
     schema: Schema,
     key_metadata: Vec<u8>,
 
@@ -341,7 +341,7 @@ impl<'a> SnapshotProduceAction<'a> {
         parent_snapshot_id: Option<i64>,
         schema_id: i32,
         format_version: FormatVersion,
-        partition_spec: Arc<PartitionSpec>,
+        partition_spec: Arc<BoundPartitionSpec>,
         schema: Schema,
         key_metadata: Vec<u8>,
         commit_uuid: String,
@@ -409,7 +409,7 @@ impl<'a> SnapshotProduceAction<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                &self.partition_spec.partition_type(&self.schema)?,
+                self.partition_spec.partition_type(),
             )?;
         }
         self.added_data_files.extend(data_files);
@@ -447,7 +447,7 @@ impl<'a> SnapshotProduceAction<'a> {
             })
             .collect();
         let manifest_meta = ManifestMetadata::builder()
-            .schema(self.schema.clone())
+            .schema(self.schema.clone().into())
             .schema_id(self.schema_id)
             .format_version(self.format_version)
             .partition_spec(self.partition_spec.as_ref().clone())
@@ -533,14 +533,6 @@ impl<'a> SnapshotProduceAction<'a> {
         };
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         manifest_list_writer.close().await?;
-
-        let input = self
-            .tx
-            .table
-            .file_io()
-            .new_input(manifest_list_path.clone())
-            .unwrap();
-        println!("{}", input.exists().await?);
 
         let commit_ts = chrono::Utc::now().timestamp_millis();
         let new_snapshot = Snapshot::builder()
