@@ -67,7 +67,8 @@ pub struct TableMetadataBuildResult {
 }
 
 impl TableMetadataBuilder {
-    const LAST_ADDED: i32 = -1;
+    /// Proxy value for "last added" items
+    pub const LAST_ADDED: i32 = -1;
 
     /// Create a `TableMetadata` object from scratch.
     ///
@@ -285,18 +286,41 @@ impl TableMetadataBuilder {
 
     /// Remove properties from the table metadata.
     /// Does nothing if the key is not present.
-    pub fn remove_properties(mut self, properties: &[String]) -> Self {
-        for property in properties {
+    ///
+    /// # Errors
+    /// - If properties to remove contains a reserved property
+    pub fn remove_properties(mut self, properties: &[String]) -> Result<Self> {
+        // remove duplicates
+        let properties = properties.iter().cloned().collect::<HashSet<_>>();
+
+        // disallow removal of reserved properties
+        let reserved_properties = properties
+            .iter()
+            .filter(|key| RESERVED_PROPERTIES.contains(&key.as_str()))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        if !reserved_properties.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Table properties to remove contain reserved properties: [{}]",
+                    reserved_properties.join(", ")
+                ),
+            ));
+        }
+
+        for property in &properties {
             self.metadata.properties.remove(property);
         }
 
         if !properties.is_empty() {
             self.changes.push(TableUpdate::RemoveProperties {
-                removals: properties.to_vec(),
+                removals: properties.into_iter().collect(),
             });
         }
 
-        self
+        Ok(self)
     }
 
     /// Set the location of the table metadata, stripping any trailing slashes.
@@ -315,9 +339,6 @@ impl TableMetadataBuilder {
     /// Add a snapshot to the table metadata.
     ///
     /// # Errors
-    /// - No schema has been added to the table metadata.
-    /// - No partition spec has been added to the table metadata.
-    /// - No sort order has been added to the table metadata.
     /// - Snapshot id already exists.
     /// - For format version > 1: the sequence number of the snapshot is lower than the highest sequence number specified so far.
     pub fn add_snapshot(mut self, snapshot: Snapshot) -> Result<Self> {
@@ -500,7 +521,7 @@ impl TableMetadataBuilder {
     /// If `ref_name='main'` the current snapshot id is set to -1.
     pub fn remove_ref(mut self, ref_name: &str) -> Self {
         if ref_name == MAIN_BRANCH {
-            self.metadata.current_snapshot_id = Some(i64::from(Self::LAST_ADDED));
+            self.metadata.current_snapshot_id = None;
             self.metadata.snapshot_log.clear();
         }
 
@@ -583,6 +604,8 @@ impl TableMetadataBuilder {
     }
 
     /// Set the current schema id.
+    ///
+    /// If `schema_id` is -1, the last added schema is set as the current schema.
     ///
     /// Errors:
     /// - provided `schema_id` is -1 but no schema has been added via `add_schema`.
@@ -973,7 +996,11 @@ impl TableMetadataBuilder {
                 } => {
                     if added_snapshot_ids.contains(&reference.snapshot_id)
                         && ref_name == MAIN_BRANCH
-                        && reference.snapshot_id != self.metadata.current_snapshot_id.unwrap_or(-1)
+                        && reference.snapshot_id
+                            != self
+                                .metadata
+                                .current_snapshot_id
+                                .unwrap_or(i64::from(Self::LAST_ADDED))
                     {
                         Some(reference.snapshot_id)
                     } else {

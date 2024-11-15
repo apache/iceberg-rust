@@ -484,7 +484,7 @@ impl TableUpdate {
             TableUpdate::RemoveSnapshotRef { ref_name } => Ok(builder.remove_ref(&ref_name)),
             TableUpdate::SetLocation { location } => Ok(builder.set_location(location)),
             TableUpdate::SetProperties { updates } => builder.set_properties(updates),
-            TableUpdate::RemoveProperties { removals } => Ok(builder.remove_properties(&removals)),
+            TableUpdate::RemoveProperties { removals } => builder.remove_properties(&removals),
             TableUpdate::UpgradeFormatVersion { format_version } => {
                 builder.upgrade_format_version(format_version)
             }
