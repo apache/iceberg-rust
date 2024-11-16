@@ -67,7 +67,7 @@ pub struct TableMetadataBuildResult {
 }
 
 impl TableMetadataBuilder {
-    /// Proxy value for "last added" items
+    /// Proxy id for "last added" items, including schema, partition spec, sort order.
     pub const LAST_ADDED: i32 = -1;
 
     /// Create a `TableMetadata` object from scratch.
