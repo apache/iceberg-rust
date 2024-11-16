@@ -21,8 +21,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SortOrder, SortOrderRef, TableMetadata,
+    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, ReferenceType, Schema,
+    SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SortOrder, SortOrderRef, TableMetadata,
     UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
     PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
     RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
@@ -409,11 +409,12 @@ impl TableMetadataBuilder {
 
     /// Append a snapshot to the specified branch.
     /// If branch is not specified, the snapshot is appended to the main branch.
-    /// The `ref` must already exist. Retention settings from the `ref` are re-used.
+    /// The `branch` or `tag` must already exist. Retention settings from the `ref` are re-used.
     ///
     /// # Errors
     /// - The ref is unknown.
     /// - Any of the preconditions of `self.add_snapshot` are not met.
+    #[deprecated(since = "0.4.0", note = "please use `set_branch_snapshot` instead")]
     pub fn append_snapshot(self, snapshot: Snapshot, ref_name: Option<&str>) -> Result<Self> {
         let ref_name = ref_name.unwrap_or(MAIN_BRANCH);
         let mut reference = self
@@ -431,6 +432,41 @@ impl TableMetadataBuilder {
         reference.snapshot_id = snapshot.snapshot_id();
 
         self.add_snapshot(snapshot)?.set_ref(ref_name, reference)
+    }
+
+    /// Append a snapshot to the specified branch.
+    /// The `branch` must already exist. Retention settings from the `branch` are re-used.
+    ///
+    /// # Errors
+    /// - The branch is unknown.
+    /// - Any of the preconditions of `self.add_snapshot` are not met.
+    pub fn set_branch_snapshot(self, snapshot: Snapshot, branch: &str) -> Result<Self> {
+        let mut reference = self
+            .metadata
+            .refs
+            .get(branch)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Cannot append snapshot to unknown branch: '{}'", branch),
+                )
+            })?
+            .clone();
+
+        if reference.reference_type() != ReferenceType::Branch {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot append snapshot to non-branch reference '{}' of type '{}'",
+                    branch,
+                    reference.reference_type()
+                ),
+            ));
+        }
+
+        reference.snapshot_id = snapshot.snapshot_id();
+
+        self.add_snapshot(snapshot)?.set_ref(branch, reference)
     }
 
     /// Remove snapshots by its ids from the table metadata.
@@ -537,36 +573,14 @@ impl TableMetadataBuilder {
     /// Add a schema to the table metadata.
     ///
     /// The provided `schema.schema_id` may not be used.
-
-    // ToDo Discuss: Should we add `new_last_column_id` argument?
-    // TLDR; I believe not as it acts as an assertion and its purpose (and source) is not clear. We shouldn't add it.
-    //
-    // Schemas can contain only old columns or a mix of old and new columns.
-    // In Java, if `new_last_column_id` set but too low, the function would fail, basically hinting at
-    // at the schema having been built for an older metadata version. `new_last_column_id` is typically obtained
-    // in the schema building process.
-    //
-    // This assertion is not required if the user controls the flow - he knows for which
-    // metadata he created a schema. If asserting the `new_last_column_id` was semantically important, it should be part of the schema and
-    // not be passed around alongside it.
-    //
-    // Specifying `new_last_column_id` in java also allows to set `metadata.last_column_id` to any arbitrary value
-    // even if its not present as a column. I believe this to be undesired behavior. This is not possible with the current Rust interface.
-    //
-    // If the schema is built out of sync with the TableMetadata, for example in a REST Catalog setting, the assertion of
-    // the provided `last_column_id` as part of the `TableUpdate::AddSchema` is still done in its `.apply` method.
+    ///
+    /// Important: Use this method with caution. The builder does not check
+    /// if the added schema is compatible with the current schema.
     pub fn add_schema(mut self, schema: Schema) -> Self {
         let new_schema_id = self.reuse_or_create_new_schema_id(&schema);
         let schema_found = self.metadata.schemas.contains_key(&new_schema_id);
 
         if schema_found {
-            // ToDo Discuss: The Java code is a bit convoluted and I think it might be wrong for an edge case.
-            // Why is it wrong: The baseline is, that if something changes the state of the builder, it has an effect on it and
-            // must be recorded in the changes.
-            // The Java code might or might not change `lastAddedSchemaId`, and does not record this change in `changes`.
-            // Thus, replaying the changes, would lead to a different result if a schema is added twice in unfavorable
-            // conditions.
-            // Here we do it differently, but a check from a Java maintainer would be nice.
             if self.last_added_schema_id != Some(new_schema_id) {
                 self.changes.push(TableUpdate::AddSchema {
                     last_column_id: Some(self.metadata.last_column_id),
@@ -795,11 +809,6 @@ impl TableMetadataBuilder {
 
             return Ok(self);
         }
-
-        // ToDo Discuss: Java builds a fresh spec here:
-        // https://github.com/apache/iceberg/blob/64b36999d7ff716ae2534fb0972fcc10d22a64c2/core/src/main/java/org/apache/iceberg/TableMetadata.java#L1613
-        // For rust we make the assumption
-        // that the order that is added refers to the current schema and check compatibility with it.
 
         let schema = self.get_current_schema()?.clone().as_ref().clone();
         let sort_order = SortOrder::builder()
@@ -1963,7 +1972,7 @@ mod tests {
                 },
             })
             .unwrap()
-            .append_snapshot(snapshot_2.clone(), Some(MAIN_BRANCH))
+            .set_branch_snapshot(snapshot_2.clone(), MAIN_BRANCH)
             .unwrap()
             .build()
             .unwrap();
@@ -2093,5 +2102,55 @@ mod tests {
             .unwrap();
         assert_eq!(metadata.metadata.metadata_log.len(), 2);
         assert_eq!(metadata.expired_metadata_logs.len(), 1);
+    }
+
+    #[test]
+    fn test_v2_sequence_number_cannot_decrease() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                other: HashMap::new(),
+            })
+            .build();
+
+        let builder = builder
+            .add_snapshot(snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: Some(10),
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-0")
+            .with_parent_snapshot_id(Some(1))
+            .with_summary(Summary {
+                operation: Operation::Append,
+                other: HashMap::new(),
+            })
+            .build();
+
+        let err = builder
+            .set_branch_snapshot(snapshot, MAIN_BRANCH)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Cannot add snapshot with sequence number"));
     }
 }
