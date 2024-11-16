@@ -424,7 +424,7 @@ impl TableMetadataBuilder {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to unknown ref: '{}'", ref_name),
+                    format!("Cannot append snapshot to unknown ref: '{ref_name}'"),
                 )
             })?
             .clone();
@@ -448,19 +448,15 @@ impl TableMetadataBuilder {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to unknown branch: '{}'", branch),
+                    format!("Cannot append snapshot to unknown branch: '{branch}'"),
                 )
             })?
             .clone();
 
-        if reference.reference_type() != ReferenceType::Branch {
+        if !reference.is_branch() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!(
-                    "Cannot append snapshot to non-branch reference '{}' of type '{}'",
-                    branch,
-                    reference.reference_type()
-                ),
+                format!("Cannot append snapshot to non-branch reference '{branch}'",),
             ));
         }
 

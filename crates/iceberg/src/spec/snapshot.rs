@@ -62,24 +62,6 @@ pub struct Summary {
     pub other: HashMap<String, String>,
 }
 
-/// Type of a reference - either a branch or a tag.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ReferenceType {
-    /// A branch
-    Branch,
-    /// A tag
-    Tag,
-}
-
-impl std::fmt::Display for ReferenceType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReferenceType::Branch => write!(f, "branch"),
-            ReferenceType::Tag => write!(f, "tag"),
-        }
-    }
-}
-
 impl Default for Operation {
     fn default() -> Operation {
         Self::Append
@@ -343,12 +325,9 @@ pub struct SnapshotReference {
 }
 
 impl SnapshotReference {
-    /// Returns the type of the reference.
-    pub fn reference_type(&self) -> ReferenceType {
-        match self.retention {
-            SnapshotRetention::Branch { .. } => ReferenceType::Branch,
-            SnapshotRetention::Tag { .. } => ReferenceType::Tag,
-        }
+    /// Returns true if the snapshot reference is a branch.
+    pub fn is_branch(&self) -> bool {
+        matches!(self.retention, SnapshotRetention::Branch { .. })
     }
 }
 
