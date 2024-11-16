@@ -21,8 +21,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, ReferenceType, Schema,
-    SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SortOrder, SortOrderRef, TableMetadata,
+    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, Schema, SchemaRef,
+    Snapshot, SnapshotLog, SnapshotReference, SortOrder, SortOrderRef, TableMetadata,
     UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
     PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
     RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
