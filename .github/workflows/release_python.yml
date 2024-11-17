@@ -55,7 +55,7 @@ jobs:
             manylinux: auto
             working-directory: "bindings/python"
             command: build
-            args: --release -o dist -i python${{ matix.python-version }}
+            args: --release -o dist -i python${{ matrix.python-version }}
         - name: Upload wheels
           uses: actions/upload-artifact@v3
           with:
