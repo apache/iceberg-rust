@@ -48,7 +48,9 @@ jobs:
     steps:
         - uses: actions/checkout@v4
         - name: Setup Rust toolchain
-          uses: ./.github/actions/setup
+          uses: ./.github/actions/setup-builder
+          with:
+            rust-version: ${{ env.rust_msrv }}
         - uses: PyO3/maturin-action@v1
           with:
             target: ${{ matrix.target }}
