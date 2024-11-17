@@ -19,6 +19,9 @@ name: Publish Python 🐍 distribution 📦 to TestPyPI
 
 on: push
 
+env:
+  rust_msrv: "1.77.1"
+
 permissions:
   contents: read
 
