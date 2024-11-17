@@ -17,8 +17,7 @@
 
 name: Publish Python 🐍 distribution 📦 to TestPyPI
 
-on:
-  workflow_dispatch:
+on: push
 
 permissions:
   contents: read
