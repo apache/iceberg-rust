@@ -26,21 +26,20 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build distribution 📦
+  sdist:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: |
-          3.9
-          3.10
-          3.11
-          3.12
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: "bindings/python"
+          command: sdist
+          args: -o dist
+      - name: Upload sdist
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: bindings/python/dist
 
   linux:
     runs-on: ubuntu-latest
@@ -72,8 +71,7 @@ jobs:
 
   publish-to-testpypi:
     name: Publish Python 🐍 distribution 📦 to TestPyPI
-    needs:
-    - build
+    needs: [ sdist, linux ]
     runs-on: ubuntu-latest
 
     environment:
@@ -82,7 +80,7 @@ jobs:
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
-    needs: [ linux ]
+
     steps:
     - name: Download all the dists
       uses: actions/download-artifact@v4
