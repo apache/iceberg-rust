@@ -25,7 +25,7 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-datafusion = { git = "https://github.com/apache/datafusion"}
+datafusion = { version = "43" }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 iceberg-datafusion = { workspace = true }

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Result;
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
@@ -26,7 +25,7 @@ use iceberg_datafusion::IcebergTableProvider;
 
 async fn get_test_table_from_metadata_file() -> Table {
     let metadata_file_path = "file:///tmp/warehouse/a/a/metadata/00001-e6e7a74a-ae5c-4201-a2a4-46d979c810a3.metadata.json";
-    let file_io = FileIO::from_path(&metadata_file_path)
+    let file_io = FileIO::from_path(metadata_file_path)
         .unwrap()
         .build()
         .unwrap();
