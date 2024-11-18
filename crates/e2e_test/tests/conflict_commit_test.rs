@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::{DataFileWriterBuilder, DataFileWriterConfig};
@@ -32,61 +31,8 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use iceberg_test_utils::docker::DockerCompose;
-use iceberg_test_utils::{normalize_test_name, set_up};
+use iceberg_e2e_test::set_test_fixture;
 use parquet::file::properties::WriterProperties;
-use port_scanner::scan_port_addr;
-use tokio::time::sleep;
-
-const REST_CATALOG_PORT: u16 = 8181;
-
-struct TestFixture {
-    _docker_compose: DockerCompose,
-    rest_catalog: RestCatalog,
-}
-
-async fn set_test_fixture(func: &str) -> TestFixture {
-    set_up();
-    let docker_compose = DockerCompose::new(
-        normalize_test_name(format!("{}_{func}", module_path!())),
-        format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
-    );
-
-    // Start docker compose
-    docker_compose.run();
-
-    let rest_catalog_ip = docker_compose.get_container_ip("rest");
-
-    let read_port = format!("{}:{}", rest_catalog_ip, REST_CATALOG_PORT);
-    loop {
-        if !scan_port_addr(&read_port) {
-            log::info!("Waiting for 1s rest catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
-        } else {
-            break;
-        }
-    }
-
-    let container_ip = docker_compose.get_container_ip("minio");
-    let read_port = format!("{}:{}", container_ip, 9000);
-
-    let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
-        .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), format!("http://{}", read_port)),
-            (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
-            (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
-            (S3_REGION.to_string(), "us-east-1".to_string()),
-        ]))
-        .build();
-    let rest_catalog = RestCatalog::new(config);
-
-    TestFixture {
-        _docker_compose: docker_compose,
-        rest_catalog,
-    }
-}
 
 #[tokio::test]
 async fn test_append_data_file_conflict() {
@@ -176,7 +122,10 @@ async fn test_append_data_file_conflict() {
     let mut append_action = tx2.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
     let tx2 = append_action.apply().await.unwrap();
-    let table = tx2.commit(&fixture.rest_catalog).await.unwrap();
+    let table = tx2
+        .commit(&fixture.rest_catalog)
+        .await
+        .expect("The first commit should not fail.");
 
     // check result
     let batch_stream = table
