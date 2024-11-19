@@ -17,13 +17,15 @@
 
 //! This module provide `EqualityDeleteWriter`.
 
+use std::sync::Arc;
+
 use arrow_array::{ArrayRef, RecordBatch, StructArray};
 use arrow_schema::{DataType, FieldRef, Fields, Schema, SchemaRef};
 use itertools::Itertools;
 
 use crate::spec::{DataFile, Struct};
-use crate::writer::file_writer::FileWriter;
-use crate::writer::{file_writer::FileWriterBuilder, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
@@ -42,8 +44,7 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
 /// Config for `EqualityDeleteWriter`.
 pub struct EqualityDeleteWriterConfig {
     equality_ids: Vec<usize>,
-    projector: FieldProjector,
-    schema: SchemaRef,
+    projector: ArrowFieldProjector,
     partition_value: Struct,
 }
 
@@ -51,14 +52,12 @@ impl EqualityDeleteWriterConfig {
     /// Create a new `DataFileWriterConfig` with equality ids.
     pub fn new(
         equality_ids: Vec<usize>,
-        projector: FieldProjector,
-        schema: Schema,
+        projector: ArrowFieldProjector,
         partition_value: Option<Struct>,
     ) -> Self {
         Self {
             equality_ids,
             projector,
-            schema: schema.into(),
             partition_value: partition_value.unwrap_or(Struct::empty()),
         }
     }
@@ -73,7 +72,6 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
         Ok(EqualityDeleteFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
             projector: config.projector,
-            delete_schema_ref: config.schema,
             equality_ids: config.equality_ids,
             partition_value: config.partition_value,
         })
@@ -83,26 +81,15 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
 /// A writer write data
 pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
-    projector: FieldProjector,
-    delete_schema_ref: SchemaRef,
+    projector: ArrowFieldProjector,
     equality_ids: Vec<usize>,
     partition_value: Struct,
-}
-
-impl<B: FileWriterBuilder> EqualityDeleteFileWriter<B> {
-    fn project_record_batch_columns(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        RecordBatch::try_new(
-            self.delete_schema_ref.clone(),
-            self.projector.project(batch.columns())?,
-        )
-        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
-    }
 }
 
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        let batch = self.project_record_batch_columns(batch)?;
+        let batch = self.projector.project_bacth(batch)?;
         if let Some(writer) = self.inner_writer.as_mut() {
             writer.write(&batch).await
         } else {
@@ -136,23 +123,25 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
 }
 
 /// Help to project specific field from `RecordBatch`` according to the column id.
-pub struct FieldProjector {
+#[derive(Clone)]
+pub struct ArrowFieldProjector {
     index_vec_vec: Vec<Vec<usize>>,
+    projected_schema: SchemaRef,
 }
 
-impl FieldProjector {
+impl ArrowFieldProjector {
     /// Init FieldProjector
     pub fn new(
-        batch_fields: &Fields,
+        original_schema: SchemaRef,
         column_ids: &[usize],
         column_id_meta_key: &str,
-    ) -> Result<(Self, Fields)> {
+    ) -> Result<Self> {
         let mut index_vec_vec = Vec::with_capacity(column_ids.len());
         let mut fields = Vec::with_capacity(column_ids.len());
         for &id in column_ids {
             let mut index_vec = vec![];
             if let Ok(field) = Self::fetch_column_index(
-                batch_fields,
+                original_schema.fields(),
                 &mut index_vec,
                 id as i64,
                 column_id_meta_key,
@@ -169,7 +158,33 @@ impl FieldProjector {
                 ));
             }
         }
-        Ok((Self { index_vec_vec }, Fields::from_iter(fields)))
+        let delete_arrow_schema = Arc::new(Schema::new(fields));
+        Ok(Self {
+            index_vec_vec,
+            projected_schema: delete_arrow_schema,
+        })
+    }
+
+    /// Return the reference of projected schema
+    pub fn projected_schema_ref(&self) -> &SchemaRef {
+        &self.projected_schema
+    }
+
+    /// Do projection with record batch
+    pub fn project_bacth(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            self.projected_schema.clone(),
+            self.project_column(batch.columns())?,
+        )
+        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
+    }
+
+    /// Do projection with columns
+    pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
+        self.index_vec_vec
+            .iter()
+            .map(|index_vec| Self::get_column_by_index_vec(batch, index_vec))
+            .collect::<Result<Vec<_>>>()
     }
 
     fn fetch_column_index(
@@ -215,13 +230,6 @@ impl FieldProjector {
             "Column id not found in fields",
         ))
     }
-    /// Do projection with batch
-    pub fn project(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
-        self.index_vec_vec
-            .iter()
-            .map(|index_vec| Self::get_column_by_index_vec(batch, index_vec))
-            .collect::<Result<Vec<_>>>()
-    }
 
     fn get_column_by_index_vec(batch: &[ArrayRef], index_vec: &[usize]) -> Result<ArrayRef> {
         let mut rev_iterator = index_vec.iter().rev();
@@ -243,31 +251,31 @@ impl FieldProjector {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::types::Int32Type;
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StructArray};
+    use arrow_schema::DataType;
     use arrow_select::concat::concat_batches;
     use itertools::Itertools;
-    use std::{collections::HashMap, sync::Arc};
-
-    use arrow_array::{types::Int64Type, ArrayRef, Int64Array, RecordBatch, StructArray};
-    use parquet::{
-        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, PARQUET_FIELD_ID_META_KEY},
-        file::properties::WriterProperties,
-    };
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
-    use crate::{
-        io::{FileIO, FileIOBuilder},
-        spec::{DataFile, DataFileFormat},
-        writer::{
-            base_writer::equality_delete_writer::{
-                EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig, FieldProjector,
-            },
-            file_writer::{
-                location_generator::{test::MockLocationGenerator, DefaultFileNameGenerator},
-                ParquetWriterBuilder,
-            },
-            IcebergWriter, IcebergWriterBuilder,
-        },
+    use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
+    use crate::io::{FileIO, FileIOBuilder};
+    use crate::spec::{
+        DataFile, DataFileFormat, ListType, NestedField, PrimitiveType, Schema, StructType, Type,
     };
+    use crate::writer::base_writer::equality_delete_writer::{
+        ArrowFieldProjector, EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+    };
+    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
     async fn check_parquet_data_file_with_equality_delete_write(
         file_io: &FileIO,
@@ -356,96 +364,59 @@ mod test {
 
         // prepare data
         // Int, Struct(Int), String, List(Int), Struct(Struct(Int))
-        let schema = {
-            let fields = vec![
-                arrow_schema::Field::new("col0", arrow_schema::DataType::Int64, true)
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "0".to_string(),
-                    )])),
-                arrow_schema::Field::new(
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(0, "col0", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(
+                    1,
                     "col1",
-                    arrow_schema::DataType::Struct(
-                        vec![arrow_schema::Field::new(
-                            "sub_col",
-                            arrow_schema::DataType::Int64,
-                            true,
-                        )
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "5".to_string(),
-                        )]))]
-                        .into(),
-                    ),
-                    true,
+                    Type::Struct(StructType::new(vec![NestedField::required(
+                        5,
+                        "sub_col",
+                        Type::Primitive(PrimitiveType::Int),
+                    )
+                    .into()])),
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )])),
-                arrow_schema::Field::new("col2", arrow_schema::DataType::Utf8, true).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
-                ),
-                arrow_schema::Field::new(
+                .into(),
+                NestedField::required(2, "col2", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(
+                    3,
                     "col3",
-                    arrow_schema::DataType::List(Arc::new(
-                        arrow_schema::Field::new("item", arrow_schema::DataType::Int64, true)
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                "6".to_string(),
-                            )])),
+                    Type::List(ListType::new(
+                        NestedField::required(6, "element", Type::Primitive(PrimitiveType::Int))
+                            .into(),
                     )),
-                    true,
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "3".to_string(),
-                )])),
-                arrow_schema::Field::new(
+                .into(),
+                NestedField::required(
+                    4,
                     "col4",
-                    arrow_schema::DataType::Struct(
-                        vec![arrow_schema::Field::new(
-                            "sub_col",
-                            arrow_schema::DataType::Struct(
-                                vec![arrow_schema::Field::new(
-                                    "sub_sub_col",
-                                    arrow_schema::DataType::Int64,
-                                    true,
-                                )
-                                .with_metadata(HashMap::from([(
-                                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    "7".to_string(),
-                                )]))]
-                                .into(),
-                            ),
-                            true,
+                    Type::Struct(StructType::new(vec![NestedField::required(
+                        7,
+                        "sub_col",
+                        Type::Struct(StructType::new(vec![NestedField::required(
+                            8,
+                            "sub_sub_col",
+                            Type::Primitive(PrimitiveType::Int),
                         )
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "8".to_string(),
-                        )]))]
-                        .into(),
-                    ),
-                    true,
+                        .into()])),
+                    )
+                    .into()])),
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "4".to_string(),
-                )])),
-            ];
-            arrow_schema::Schema::new(fields)
-        };
-        let col0 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let col0 = Arc::new(Int32Array::from_iter_values(vec![1; 1024])) as ArrayRef;
         let col1 = Arc::new(StructArray::new(
-            vec![
-                arrow_schema::Field::new("sub_col", arrow_schema::DataType::Int64, true)
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "5".to_string(),
-                    )])),
-            ]
-            .into(),
-            vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
+            if let DataType::Struct(fields) = arrow_schema.fields.get(1).unwrap().data_type() {
+                fields.clone()
+            } else {
+                unreachable!()
+            },
+            vec![Arc::new(Int32Array::from_iter_values(vec![1; 1024]))],
             None,
         ));
         let col2 = Arc::new(arrow_array::StringArray::from_iter_values(vec![
@@ -453,7 +424,7 @@ mod test {
             1024
         ])) as ArrayRef;
         let col3 = Arc::new({
-            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            let list_parts = arrow_array::ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
               Some(
                   vec![Some(1),]
               );
@@ -461,64 +432,49 @@ mod test {
           ])
             .into_parts();
             arrow_array::ListArray::new(
-                Arc::new(list_parts.0.as_ref().clone().with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "6".to_string(),
-                )]))),
+                if let DataType::List(field) = arrow_schema.fields.get(3).unwrap().data_type() {
+                    field.clone()
+                } else {
+                    unreachable!()
+                },
                 list_parts.1,
                 list_parts.2,
                 list_parts.3,
             )
         }) as ArrayRef;
         let col4 = Arc::new(StructArray::new(
-            vec![arrow_schema::Field::new(
-                "sub_col",
-                arrow_schema::DataType::Struct(
-                    vec![arrow_schema::Field::new(
-                        "sub_sub_col",
-                        arrow_schema::DataType::Int64,
-                        true,
-                    )
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "7".to_string(),
-                    )]))]
-                    .into(),
-                ),
-                true,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "8".to_string(),
-            )]))]
-            .into(),
+            if let DataType::Struct(fields) = arrow_schema.fields.get(4).unwrap().data_type() {
+                fields.clone()
+            } else {
+                unreachable!()
+            },
             vec![Arc::new(StructArray::new(
-                vec![
-                    arrow_schema::Field::new("sub_sub_col", arrow_schema::DataType::Int64, true)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "7".to_string(),
-                        )])),
-                ]
-                .into(),
-                vec![Arc::new(Int64Array::from_iter_values(vec![1; 1024]))],
+                if let DataType::Struct(fields) = arrow_schema.fields.get(4).unwrap().data_type() {
+                    if let DataType::Struct(fields) = fields.first().unwrap().data_type() {
+                        fields.clone()
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    unreachable!()
+                },
+                vec![Arc::new(Int32Array::from_iter_values(vec![1; 1024]))],
                 None,
             ))],
             None,
         ));
         let columns = vec![col0, col1, col2, col3, col4];
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
 
         let equality_ids = vec![1, 3];
-        let (projector, fields) =
-            FieldProjector::new(schema.fields(), &equality_ids, PARQUET_FIELD_ID_META_KEY)?;
-        let delete_schema = arrow_schema::Schema::new(fields);
-        let delete_schema_ref = Arc::new(delete_schema.clone());
+        let projector =
+            ArrowFieldProjector::new(arrow_schema, &equality_ids, PARQUET_FIELD_ID_META_KEY)?;
+        let delete_schema = arrow_schema_to_schema(projector.projected_schema_ref()).unwrap();
 
         // prepare writer
-        let to_write = RecordBatch::try_new(Arc::new(schema.clone()), columns).unwrap();
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
-            delete_schema_ref.clone(),
+            Arc::new(delete_schema),
             file_io.clone(),
             location_gen,
             file_name_gen,
@@ -527,8 +483,7 @@ mod test {
         let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
             .build(EqualityDeleteWriterConfig::new(
                 equality_ids,
-                projector,
-                delete_schema.clone(),
+                projector.clone(),
                 None,
             ))
             .await?;
@@ -539,7 +494,7 @@ mod test {
         let data_file = res.into_iter().next().unwrap();
 
         // check
-        let to_write_projected = equality_delete_writer.project_record_batch_columns(to_write)?;
+        let to_write_projected = projector.project_bacth(to_write)?;
         check_parquet_data_file_with_equality_delete_write(
             &file_io,
             &data_file,
@@ -565,20 +520,20 @@ mod test {
                         "1".to_string(),
                     )])),
             ];
-            arrow_schema::Schema::new(fields)
+            Arc::new(arrow_schema::Schema::new(fields))
         };
 
         let equality_id_float = vec![0];
-        let result_float = FieldProjector::new(
-            schema.fields(),
+        let result_float = ArrowFieldProjector::new(
+            schema.clone(),
             &equality_id_float,
             PARQUET_FIELD_ID_META_KEY,
         );
         assert!(result_float.is_err());
 
         let equality_ids_double = vec![1];
-        let result_double = FieldProjector::new(
-            schema.fields(),
+        let result_double = ArrowFieldProjector::new(
+            schema.clone(),
             &equality_ids_double,
             PARQUET_FIELD_ID_META_KEY,
         );
