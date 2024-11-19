@@ -134,7 +134,7 @@ impl<'a> Transaction<'a> {
     /// Creates a fast append action.
     pub fn fast_append(
         self,
-        commit_uuid: Option<String>,
+        commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
         let parent_snapshot_id = self
@@ -147,7 +147,7 @@ impl<'a> Transaction<'a> {
         let schema_id = schema.schema_id();
         let format_version = self.table.metadata().format_version();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
-        let commit_uuid = commit_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let commit_uuid = commit_uuid.unwrap_or_else(Uuid::new_v4);
 
         FastAppendAction::new(
             self,
@@ -205,7 +205,7 @@ impl<'a> FastAppendAction<'a> {
         format_version: FormatVersion,
         partition_spec: Arc<BoundPartitionSpec>,
         key_metadata: Vec<u8>,
-        commit_uuid: String,
+        commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
@@ -318,7 +318,7 @@ struct SnapshotProduceAction<'a> {
     schema: Schema,
     key_metadata: Vec<u8>,
 
-    commit_uuid: String,
+    commit_uuid: Uuid,
 
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
@@ -340,7 +340,7 @@ impl<'a> SnapshotProduceAction<'a> {
         partition_spec: Arc<BoundPartitionSpec>,
         schema: Schema,
         key_metadata: Vec<u8>,
-        commit_uuid: String,
+        commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
@@ -417,7 +417,7 @@ impl<'a> SnapshotProduceAction<'a> {
             "{}/{}/{}-m{}.{}",
             self.tx.table.metadata().location(),
             META_ROOT_PATH,
-            &self.commit_uuid,
+            self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
