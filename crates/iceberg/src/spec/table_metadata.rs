@@ -346,6 +346,10 @@ impl TableMetadata {
     }
 
     /// Append snapshot to table
+    #[deprecated(
+        since = "0.4.0",
+        note = "please use `TableMetadataBuilder.set_branch_snapshot` instead"
+    )]
     pub fn append_snapshot(&mut self, snapshot: Snapshot) {
         self.last_updated_ms = snapshot.timestamp_ms();
         self.last_sequence_number = snapshot.sequence_number();

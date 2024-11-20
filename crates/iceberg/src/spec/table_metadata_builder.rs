@@ -182,7 +182,7 @@ impl TableMetadataBuilder {
             partition_spec,
             sort_order.unwrap_or(SortOrder::unsorted_order()),
             location,
-            FormatVersion::V1,
+            FormatVersion::V2,
             properties,
         )
     }
@@ -393,33 +393,6 @@ impl TableMetadataBuilder {
             .insert(snapshot.snapshot_id(), snapshot.into());
 
         Ok(self)
-    }
-
-    /// Append a snapshot to the specified branch.
-    /// If branch is not specified, the snapshot is appended to the main branch.
-    /// The `branch` or `tag` must already exist. Retention settings from the `ref` are re-used.
-    ///
-    /// # Errors
-    /// - The ref is unknown.
-    /// - Any of the preconditions of `self.add_snapshot` are not met.
-    #[deprecated(since = "0.4.0", note = "please use `set_branch_snapshot` instead")]
-    pub fn append_snapshot(self, snapshot: Snapshot, ref_name: Option<&str>) -> Result<Self> {
-        let ref_name = ref_name.unwrap_or(MAIN_BRANCH);
-        let mut reference = self
-            .metadata
-            .refs
-            .get(ref_name)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to unknown ref: '{ref_name}'"),
-                )
-            })?
-            .clone();
-
-        reference.snapshot_id = snapshot.snapshot_id();
-
-        self.add_snapshot(snapshot)?.set_ref(ref_name, reference)
     }
 
     /// Append a snapshot to the specified branch.

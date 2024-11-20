@@ -950,7 +950,6 @@ mod tests {
     #[test]
     fn test_check_last_assigned_partition_id() {
         let metadata = metadata();
-        println!("{:?}", metadata.last_partition_id);
         let requirement = TableRequirement::LastAssignedPartitionIdMatch {
             last_assigned_partition_id: 0,
         };
