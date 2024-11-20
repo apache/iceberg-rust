@@ -187,6 +187,17 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -232,6 +243,8 @@
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>IcebergTableScan {
     <span class="doccomment">/// A table in the catalog.
     </span>table: Table,
+    <span class="doccomment">/// Snapshot of the table to scan.
+    </span>snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     <span class="doccomment">/// A reference-counted arrow `Schema`.
     </span>schema: ArrowSchemaRef,
     <span class="doccomment">/// Stores certain, often expensive to compute,
@@ -247,6 +260,7 @@
     <span class="doccomment">/// Creates a new [`IcebergTableScan`] object.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(
         table: Table,
+        snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
         schema: ArrowSchemaRef,
         projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
         filters: <span class="kw-2">&amp;</span>[Expr],
@@ -257,6 +271,7 @@
 
         <span class="self">Self </span>{
             table,
+            snapshot_id,
             schema,
             plan_properties,
             projection,
@@ -308,6 +323,7 @@
     ) -&gt; DFResult&lt;SendableRecordBatchStream&gt; {
         <span class="kw">let </span>fut = get_batch_stream(
             <span class="self">self</span>.table.clone(),
+            <span class="self">self</span>.snapshot_id,
             <span class="self">self</span>.projection.clone(),
             <span class="self">self</span>.predicates.clone(),
         );
@@ -346,12 +362,18 @@
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
 </span><span class="kw">async fn </span>get_batch_stream(
     table: Table,
+    snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     predicates: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
 ) -&gt; DFResult&lt;Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = DFResult&lt;RecordBatch&gt;&gt; + Send&gt;&gt;&gt; {
+    <span class="kw">let </span>scan_builder = <span class="kw">match </span>snapshot_id {
+        <span class="prelude-val">Some</span>(snapshot_id) =&gt; table.scan().snapshot_id(snapshot_id),
+        <span class="prelude-val">None </span>=&gt; table.scan(),
+    };
+
     <span class="kw">let </span><span class="kw-2">mut </span>scan_builder = <span class="kw">match </span>column_names {
-        <span class="prelude-val">Some</span>(column_names) =&gt; table.scan().select(column_names),
-        <span class="prelude-val">None </span>=&gt; table.scan().select_all(),
+        <span class="prelude-val">Some</span>(column_names) =&gt; scan_builder.select(column_names),
+        <span class="prelude-val">None </span>=&gt; scan_builder.select_all(),
     };
     <span class="kw">if let </span><span class="prelude-val">Some</span>(pred) = predicates {
         scan_builder = scan_builder.with_filter(pred);
