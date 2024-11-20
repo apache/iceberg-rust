@@ -87,7 +87,7 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table_snapshot(table: Table, snapshot_id: i64) -> Result<Self> {
-        let schema_id = table
+        let snapshot = table
             .metadata()
             .snapshot_by_id(snapshot_id)
             .ok_or_else(|| {
@@ -98,15 +98,9 @@ impl IcebergTableProvider {
                         table.identifier().name()
                     ),
                 )
-            })?
-            .schema_id()
-            .ok_or_else(|| Error::new(ErrorKind::Unexpected, format!("cannot create a table provider: table snapshot {snapshot_id} does not have a schema id set")))?;
-        let schema = Arc::new(schema_to_arrow_schema(
-            table
-                .metadata()
-                .schema_by_id(schema_id)
-                .ok_or_else(|| Error::new(ErrorKind::DataInvalid, format!("snapshot {snapshot_id} has current schema id {schema_id}; however this schema id does not exist in table metadata")))?,
-        )?);
+            })?;
+        let schema = snapshot.schema(table.metadata())?;
+        let schema = Arc::new(schema_to_arrow_schema(&schema)?);
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
