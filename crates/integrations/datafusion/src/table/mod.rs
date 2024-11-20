@@ -29,7 +29,7 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
-use iceberg::{Catalog, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 use crate::physical_plan::scan::IcebergTableScan;
 
@@ -39,13 +39,19 @@ use crate::physical_plan::scan::IcebergTableScan;
 pub struct IcebergTableProvider {
     /// A table in the catalog.
     table: Table,
+    /// Table snapshot id that will be queried via this provider.
+    snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
 }
 
 impl IcebergTableProvider {
     pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
-        IcebergTableProvider { table, schema }
+        IcebergTableProvider {
+            table,
+            snapshot_id: None,
+            schema,
+        }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
@@ -60,14 +66,46 @@ impl IcebergTableProvider {
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
-        Ok(IcebergTableProvider { table, schema })
+        Ok(IcebergTableProvider {
+            table,
+            snapshot_id: None,
+            schema,
+        })
     }
 
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
-        Ok(IcebergTableProvider { table, schema })
+        Ok(IcebergTableProvider {
+            table,
+            snapshot_id: None,
+            schema,
+        })
+    }
+
+    /// Asynchronously tries to construct a new [`IcebergTableProvider`]
+    /// using a specific snapshot of the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
+    pub async fn try_new_from_table_snapshot(table: Table, snapshot_id: i64) -> Result<Self> {
+        let snapshot = table
+            .metadata()
+            .snapshot_by_id(snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "snapshot id {snapshot_id} not found in table {}",
+                        table.identifier().name()
+                    ),
+                )
+            })?;
+        let schema = snapshot.schema(table.metadata())?;
+        let schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        Ok(IcebergTableProvider {
+            table,
+            snapshot_id: Some(snapshot_id),
+            schema,
+        })
     }
 }
 
@@ -94,6 +132,7 @@ impl TableProvider for IcebergTableProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
+            self.snapshot_id,
             self.schema.clone(),
             projection,
             filters,
@@ -145,6 +184,32 @@ mod tests {
         let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
             .await
             .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("mytable", Arc::new(table_provider))
+            .unwrap();
+        let df = ctx.sql("SELECT * FROM mytable").await.unwrap();
+        let df_schema = df.schema();
+        let df_columns = df_schema.fields();
+        assert_eq!(df_columns.len(), 3);
+        let x_column = df_columns.first().unwrap();
+        let column_data = format!(
+            "{:?}:{:?}",
+            x_column.name(),
+            x_column.data_type().to_string()
+        );
+        assert_eq!(column_data, "\"x\":\"Int64\"");
+        let has_column = df_schema.has_column(&Column::from_name("z"));
+        assert!(has_column);
+    }
+
+    #[tokio::test]
+    async fn test_try_new_from_table_snapshot() {
+        let table = get_test_table_from_metadata_file().await;
+        let snapshot_id = table.metadata().snapshots().next().unwrap().snapshot_id();
+        let table_provider =
+            IcebergTableProvider::try_new_from_table_snapshot(table.clone(), snapshot_id)
+                .await
+                .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("mytable", Arc::new(table_provider))
             .unwrap();
