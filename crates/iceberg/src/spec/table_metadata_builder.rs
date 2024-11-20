@@ -187,22 +187,10 @@ impl TableMetadataBuilder {
         )
     }
 
-    /// Get the current schema with all changes applied up to this point.
-    #[inline]
-    pub fn current_schema(&self) -> &SchemaRef {
-        self.metadata.current_schema()
-    }
-
     /// Get the current last column id
     #[inline]
-    pub fn last_column_id(&self) -> i32 {
+    pub(crate) fn last_column_id(&self) -> i32 {
         self.metadata.last_column_id
-    }
-
-    /// Get the current last updated timestamp
-    #[inline]
-    pub fn last_updated_ms(&self) -> i64 {
-        self.metadata.last_updated_ms
     }
 
     /// Changes uuid of table metadata.
@@ -1855,7 +1843,7 @@ mod tests {
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(1)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
@@ -1918,7 +1906,7 @@ mod tests {
 
         let snapshot_1 = Snapshot::builder()
             .with_snapshot_id(1)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
@@ -1938,7 +1926,7 @@ mod tests {
 
         let snapshot_2 = Snapshot::builder()
             .with_snapshot_id(2)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
@@ -1986,7 +1974,7 @@ mod tests {
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(2)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
@@ -2106,7 +2094,7 @@ mod tests {
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(1)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(1)
             .with_schema_id(0)
             .with_manifest_list("/snap-1")
@@ -2131,7 +2119,7 @@ mod tests {
 
         let snapshot = Snapshot::builder()
             .with_snapshot_id(2)
-            .with_timestamp_ms(builder.last_updated_ms() + 1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-0")
