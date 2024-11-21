@@ -858,7 +858,6 @@ impl TableMetadataBuilder {
             .with_fields(sort_order.fields)
             .build(&schema)?;
 
-        self.ensure_main_branch_not_removed()?;
         self.update_snapshot_log()?;
         self.metadata.try_normalize()?;
 
@@ -872,23 +871,6 @@ impl TableMetadataBuilder {
             changes: self.changes,
             expired_metadata_logs,
         })
-    }
-
-    fn ensure_main_branch_not_removed(&self) -> Result<()> {
-        if self.metadata.current_snapshot_id.is_none() {
-            let has_removed_main_branch = self
-                .changes
-                .iter()
-                .any(|update| matches!(update, TableUpdate::RemoveSnapshotRef { ref_name } if ref_name == MAIN_BRANCH));
-            if has_removed_main_branch {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot remove main branch",
-                ));
-            }
-        }
-
-        Ok(())
     }
 
     fn expire_metadata_log(&mut self) -> Vec<MetadataLog> {
