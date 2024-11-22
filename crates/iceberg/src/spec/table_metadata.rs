@@ -645,6 +645,12 @@ impl TableMetadataBuilder {
         Ok(self)
     }
 
+    /// Changes current snapshot ID.
+    pub fn assign_current_snapshot_id(mut self, current_snapshot_id: Option<i64>) -> Result<Self> {
+        self.0.current_snapshot_id = current_snapshot_id;
+        Ok(self)
+    }
+
     /// Returns the new table metadata after changes.
     pub fn build(self) -> Result<TableMetadata> {
         Ok(self.0)
