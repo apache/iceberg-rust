@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use opendal::services::FsConfig;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
 #[cfg(feature = "storage-s3")]
@@ -105,12 +106,26 @@ impl Storage {
             }
             #[cfg(feature = "storage-fs")]
             Storage::LocalFs => {
-                let op = super::fs_config_build()?;
-
-                if let Some(stripped) = path.strip_prefix("file:/") {
+                if let Some(stripped) = path.strip_prefix("file:/").or(path.strip_prefix("/")) {
+                    let op = super::fs_config_build()?;
                     Ok((op, stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    // Compute the full path and extract the root portion of it.
+                    // For now support only ./path/to/loc and path/to/loc.
+                    let relative = path.strip_prefix("./").unwrap_or(path);
+                    let root = std::fs::canonicalize(path)?
+                        .to_str()
+                        .ok_or(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("invalid relative path format {path}"),
+                        ))?
+                        .trim_end_matches(relative)
+                        .to_string();
+
+                    let mut cfg = FsConfig::default();
+                    cfg.root = Some(root);
+                    let op = Operator::from_config(cfg)?.finish();
+                    Ok((op, relative))
                 }
             }
             #[cfg(feature = "storage-s3")]
@@ -166,6 +181,26 @@ impl Storage {
             "s3" | "s3a" => Ok(Scheme::S3),
             "gcs" => Ok(Scheme::Gcs),
             s => Ok(s.parse::<Scheme>()?),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::io::storage::Storage;
+
+    #[tokio::test]
+    async fn test_local_fs_storage_relative_paths() {
+        let rel_manifest_path = "testdata/manifests_lists/manifest-list-v2-1.avro".to_string();
+
+        // Check both dot-based and folder-based relative paths
+        for rel_prefix in ["", "./"] {
+            let path = format!("{rel_prefix}{rel_manifest_path}");
+            let (op, relative) = Storage::LocalFs.create_operator(&path).expect("");
+
+            assert_eq!(relative, rel_manifest_path);
+
+            op.check().await.expect("Relative path operator functional");
         }
     }
 }

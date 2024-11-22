@@ -51,13 +51,23 @@ impl FileIO {
     ///
     /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
     /// - If it's not a valid url, will try to detect if it's a file path.
+    /// - If it's a relative file path the full path must exist.
     ///
     /// Otherwise will return parsing error.
     pub fn from_path(path: impl AsRef<str>) -> crate::Result<FileIOBuilder> {
         let url = Url::parse(path.as_ref())
             .map_err(Error::from)
             .or_else(|e| {
-                Url::from_file_path(path.as_ref()).map_err(|_| {
+                let absolute =
+                    if path.as_ref().starts_with("file://") || path.as_ref().starts_with("/") {
+                        path.as_ref().to_string()
+                    } else {
+                        // If it's not an absolute path try to canonicalize it (this requires the
+                        // full path to actually exist)
+                        std::fs::canonicalize(path.as_ref())?.display().to_string()
+                    };
+
+                Url::from_file_path(absolute).map_err(|_| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         "Input is neither a valid url nor path",
