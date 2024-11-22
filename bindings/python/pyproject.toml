@@ -22,6 +22,7 @@ build-backend = "maturin"
 [project]
 name = "pyiceberg_core"
 version = "0.0.1"
+readme = "project-description.md"
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
