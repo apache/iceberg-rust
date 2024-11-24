@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_physical_input_schema_consistent_with_logic_input_schema() {
+    async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let table = get_test_table_from_metadata_file().await;
         let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
             .await
