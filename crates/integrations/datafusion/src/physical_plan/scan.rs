@@ -69,7 +69,7 @@ impl IcebergTableScan {
             None => schema.clone(),
             Some(projection) => Arc::new(schema.project(projection).unwrap()),
         };
-        let plan_properties = Self::compute_properties(output_schema);
+        let plan_properties = Self::compute_properties(output_schema.clone());
         let projection = get_column_names(schema.clone(), projection);
         let predicates = convert_filters_to_predicate(filters);
 
