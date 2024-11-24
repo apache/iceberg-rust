@@ -54,14 +54,21 @@ jobs:
           name: wheels
           path: bindings/python/dist
 
-  linux:
-    runs-on: ubuntu-latest
+  wheels:
+    runs-on: "${{ matrix.os }}"
     strategy:
       matrix:
-        target: [ x86_64, aarch64, armv7l ]
-        python-version: [ "3.9", "3.10", "3.11", "3.12" ]
+        include:
+          - { os: windows-latest }
+          - { os: macos-latest, target: "universal2-apple-darwin" }
+          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-latest, target: "aarch64" }
+          - { os: ubuntu-latest, target: "armv7l" }
     steps:
         - uses: actions/checkout@v4
+        - uses: actions/setup-python@v4
+          with:
+            python-version: 3.9
         - name: Setup Rust toolchain
           uses: ./.github/actions/setup-builder
           with:
@@ -72,7 +79,7 @@ jobs:
             manylinux: auto
             working-directory: "bindings/python"
             command: build
-            args: --release -o dist -i python${{ matrix.python-version }}
+            args: --release -o dist
           env:
             # Workaround ring 0.17 build issue
             CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
@@ -84,7 +91,7 @@ jobs:
 
   pypi-publish:
     name: Publish Python 🐍 distribution 📦 to Pypi
-    needs: [ sdist, linux ]
+    needs: [ sdist, wheels ]
     runs-on: ubuntu-latest
     # Only publish to PyPi if the tag is not a pre-release
     if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
