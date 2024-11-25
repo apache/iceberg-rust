@@ -22,10 +22,11 @@ use uuid::Uuid;
 
 use super::{
     BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SortOrder, SortOrderRef, TableMetadata,
-    UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
-    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
+    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
+    TableMetadata, UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
+    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
+    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, RESERVED_PROPERTIES,
+    UNPARTITIONED_LAST_ASSIGNED_ID,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -396,32 +397,33 @@ impl TableMetadataBuilder {
     }
 
     /// Append a snapshot to the specified branch.
-    /// The `branch` must already exist. Retention settings from the `branch` are re-used.
+    /// Retention settings from the `branch` are re-used.
     ///
     /// # Errors
-    /// - The branch is unknown.
     /// - Any of the preconditions of `self.add_snapshot` are not met.
     pub fn set_branch_snapshot(self, snapshot: Snapshot, branch: &str) -> Result<Self> {
-        let mut reference = self
-            .metadata
-            .refs
-            .get(branch)
-            .ok_or_else(|| {
-                Error::new(
+        let reference = self.metadata.refs.get(branch).cloned();
+
+        let reference = if let Some(mut reference) = reference {
+            if !reference.is_branch() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to unknown branch: '{branch}'"),
-                )
-            })?
-            .clone();
+                    format!("Cannot append snapshot to non-branch reference '{branch}'",),
+                ));
+            }
 
-        if !reference.is_branch() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot append snapshot to non-branch reference '{branch}'",),
-            ));
-        }
-
-        reference.snapshot_id = snapshot.snapshot_id();
+            reference.snapshot_id = snapshot.snapshot_id();
+            reference
+        } else {
+            SnapshotReference {
+                snapshot_id: snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            }
+        };
 
         self.add_snapshot(snapshot)?.set_ref(branch, reference)
     }
@@ -1939,6 +1941,51 @@ mod tests {
             timestamp_ms: snapshot_2.timestamp_ms()
         }]);
         assert_eq!(result.metadata.current_snapshot().unwrap().snapshot_id(), 2);
+    }
+
+    #[test]
+    fn test_set_branch_snapshot_creates_branch_if_not_exists() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                other: HashMap::new(),
+            })
+            .build();
+
+        let build_result = builder
+            .set_branch_snapshot(snapshot.clone(), "new_branch")
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let reference = SnapshotReference {
+            snapshot_id: 2,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            },
+        };
+
+        assert_eq!(build_result.metadata.refs.len(), 1);
+        assert_eq!(
+            build_result.metadata.refs.get("new_branch"),
+            Some(&reference)
+        );
+        assert_eq!(build_result.changes, vec![
+            TableUpdate::AddSnapshot { snapshot },
+            TableUpdate::SetSnapshotRef {
+                ref_name: "new_branch".to_string(),
+                reference
+            }
+        ]);
     }
 
     #[test]
