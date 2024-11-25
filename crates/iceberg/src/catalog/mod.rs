@@ -368,6 +368,10 @@ pub enum TableUpdate {
         /// The schema to add.
         schema: Schema,
         /// The last column id of the table.
+        #[deprecated(
+            since = "0.3.0",
+            note = "This field is handled internally, and should not be part of the update."
+        )]
         last_column_id: Option<i32>,
     },
     /// Set table's current schema
