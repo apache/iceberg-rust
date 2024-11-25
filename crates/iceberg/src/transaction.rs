@@ -22,17 +22,16 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
-use std::sync::Arc;
 
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    BoundPartitionSpec, DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation,
-    Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-    Struct, StructType, Summary, Transform, MAIN_BRANCH,
+    DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry, ManifestFile,
+    ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType,
+    Summary, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
@@ -137,28 +136,12 @@ impl<'a> Transaction<'a> {
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
-        let parent_snapshot_id = self
-            .table
-            .metadata()
-            .current_snapshot()
-            .map(|s| s.snapshot_id());
         let snapshot_id = self.generate_unique_snapshot_id();
-        let schema = self.table.metadata().current_schema().as_ref().clone();
-        let schema_id = schema.schema_id();
-        let format_version = self.table.metadata().format_version();
-        let partition_spec = self.table.metadata().default_partition_spec().clone();
-        let commit_uuid = commit_uuid.unwrap_or_else(Uuid::new_v4);
-
         FastAppendAction::new(
             self,
-            parent_snapshot_id,
             snapshot_id,
-            schema,
-            schema_id,
-            format_version,
-            partition_spec,
+            commit_uuid.unwrap_or_else(Uuid::new_v4),
             key_metadata,
-            commit_uuid,
             HashMap::new(),
         )
     }
@@ -198,25 +181,15 @@ impl<'a> FastAppendAction<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         tx: Transaction<'a>,
-        parent_snapshot_id: Option<i64>,
         snapshot_id: i64,
-        schema: Schema,
-        schema_id: i32,
-        format_version: FormatVersion,
-        partition_spec: Arc<BoundPartitionSpec>,
-        key_metadata: Vec<u8>,
         commit_uuid: Uuid,
+        key_metadata: Vec<u8>,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
             snapshot_produce_action: SnapshotProduceAction::new(
                 tx,
                 snapshot_id,
-                parent_snapshot_id,
-                schema_id,
-                format_version,
-                partition_spec,
-                schema,
                 key_metadata,
                 commit_uuid,
                 snapshot_properties,
@@ -259,10 +232,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
         &self,
         snapshot_produce: &SnapshotProduceAction<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce
-            .parent_snapshot_id
-            .and_then(|id| snapshot_produce.tx.table.metadata().snapshot_by_id(id))
-        else {
+        let Some(snapshot) = snapshot_produce.tx.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
 
@@ -309,20 +279,11 @@ trait ManifestProcess: Send + Sync {
 
 struct SnapshotProduceAction<'a> {
     tx: Transaction<'a>,
-
-    parent_snapshot_id: Option<i64>,
     snapshot_id: i64,
-    schema_id: i32,
-    format_version: FormatVersion,
-    partition_spec: Arc<BoundPartitionSpec>,
-    schema: Schema,
     key_metadata: Vec<u8>,
-
     commit_uuid: Uuid,
-
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
-
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -330,31 +291,20 @@ struct SnapshotProduceAction<'a> {
 }
 
 impl<'a> SnapshotProduceAction<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         tx: Transaction<'a>,
         snapshot_id: i64,
-        parent_snapshot_id: Option<i64>,
-        schema_id: i32,
-        format_version: FormatVersion,
-        partition_spec: Arc<BoundPartitionSpec>,
-        schema: Schema,
         key_metadata: Vec<u8>,
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
             tx,
-            parent_snapshot_id,
             snapshot_id,
-            schema_id,
-            format_version,
             commit_uuid,
             snapshot_properties,
             added_data_files: vec![],
             manifest_counter: (0..),
-            partition_spec,
-            schema,
             key_metadata,
         })
     }
@@ -374,12 +324,12 @@ impl<'a> SnapshotProduceAction<'a> {
             .fields()
             .iter()
             .zip(partition_type.fields())
-            .any(|(field_from_value, field_from_type)| {
-                !field_from_type
+            .any(|(value, field)| {
+                !field
                     .field_type
                     .as_primitive_type()
                     .unwrap()
-                    .compatible(&field_from_value.as_primitive_literal().unwrap())
+                    .compatible(&value.as_primitive_literal().unwrap())
             })
         {
             return Err(Error::new(
@@ -405,7 +355,11 @@ impl<'a> SnapshotProduceAction<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                self.partition_spec.partition_type(),
+                self.tx
+                    .table
+                    .metadata()
+                    .default_partition_spec()
+                    .partition_type(),
             )?;
         }
         self.added_data_files.extend(data_files);
@@ -433,7 +387,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 let builder = ManifestEntry::builder()
                     .status(crate::spec::ManifestStatus::Added)
                     .data_file(data_file);
-                if self.format_version as u8 == 1u8 {
+                if self.tx.table.metadata().format_version() as u8 == 1u8 {
                     builder.snapshot_id(self.snapshot_id).build()
                 } else {
                     // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
@@ -442,11 +396,19 @@ impl<'a> SnapshotProduceAction<'a> {
                 }
             })
             .collect();
+        let schema = self.tx.table.metadata().current_schema();
         let manifest_meta = ManifestMetadata::builder()
-            .schema(self.schema.clone().into())
-            .schema_id(self.schema_id)
-            .format_version(self.format_version)
-            .partition_spec(self.partition_spec.as_ref().clone())
+            .schema(schema.clone())
+            .schema_id(schema.schema_id())
+            .format_version(self.tx.table.metadata().format_version())
+            .partition_spec(
+                self.tx
+                    .table
+                    .metadata()
+                    .default_partition_spec()
+                    .as_ref()
+                    .clone(),
+            )
             .content(crate::spec::ManifestContentType::Data)
             .build();
         let manifest = Manifest::new(manifest_meta, manifest_entries);
@@ -465,6 +427,8 @@ impl<'a> SnapshotProduceAction<'a> {
     ) -> Result<Vec<ManifestFile>> {
         let added_manifest = self.write_added_manifest().await?;
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
+        // # TODO
+        // Support process delete entries.
 
         let mut manifest_files = vec![added_manifest];
         manifest_files.extend(existing_manifests);
@@ -515,7 +479,7 @@ impl<'a> SnapshotProduceAction<'a> {
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.parent_snapshot_id,
+                self.tx.table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.tx
@@ -523,7 +487,7 @@ impl<'a> SnapshotProduceAction<'a> {
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.parent_snapshot_id,
+                self.tx.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
         };
@@ -534,10 +498,10 @@ impl<'a> SnapshotProduceAction<'a> {
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(self.snapshot_id)
-            .with_parent_snapshot_id(self.parent_snapshot_id)
+            .with_parent_snapshot_id(self.tx.table.metadata().current_snapshot_id())
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
-            .with_schema_id(self.schema_id)
+            .with_schema_id(self.tx.table.metadata().current_schema_id())
             .with_timestamp_ms(commit_ts)
             .build();
 
@@ -559,7 +523,7 @@ impl<'a> SnapshotProduceAction<'a> {
             },
             TableRequirement::RefSnapshotIdMatch {
                 r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: self.parent_snapshot_id,
+                snapshot_id: self.tx.table.metadata().current_snapshot_id(),
             },
         ])?;
         Ok(self.tx)

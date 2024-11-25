@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "iceberg-e2e_test"
+name = "iceberg-e2e-test"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
