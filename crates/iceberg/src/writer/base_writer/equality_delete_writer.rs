@@ -17,13 +17,12 @@
 
 //! This module provide `EqualityDeleteWriter`.
 
-use std::sync::Arc;
-
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
-use arrow_schema::{DataType, FieldRef, Fields, Schema, SchemaRef};
+use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
 use itertools::Itertools;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::spec::{DataFile, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
@@ -45,24 +44,35 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
 /// Config for `EqualityDeleteWriter`.
 pub struct EqualityDeleteWriterConfig {
     // Field ids used to determine row equality in equality delete files.
-    equality_ids: Vec<usize>,
+    equality_ids: Vec<i32>,
     // Projector used to project the data chunk into specific fields.
-    projector: ArrowFieldProjector,
+    projector: RecordBatchProjector,
     partition_value: Struct,
 }
 
 impl EqualityDeleteWriterConfig {
     /// Create a new `DataFileWriterConfig` with equality ids.
     pub fn new(
-        equality_ids: Vec<usize>,
-        projector: ArrowFieldProjector,
+        equality_ids: Vec<i32>,
+        original_schema: SchemaRef,
         partition_value: Option<Struct>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let projector = RecordBatchProjector::new(original_schema, &equality_ids, |field| {
+            field
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .and_then(|value| value.parse::<i64>().ok())
+        })?;
+        Ok(Self {
             equality_ids,
             projector,
             partition_value: partition_value.unwrap_or(Struct::empty()),
-        }
+        })
+    }
+
+    /// Return projected Schema
+    pub fn projected_schema_ref(&self) -> &SchemaRef {
+        self.projector.projected_schema_ref()
     }
 }
 
@@ -84,8 +94,8 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
 /// Writer used to write equality delete files.
 pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
-    projector: ArrowFieldProjector,
-    equality_ids: Vec<usize>,
+    projector: RecordBatchProjector,
+    equality_ids: Vec<i32>,
     partition_value: Struct,
 }
 
@@ -98,7 +108,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
-                "Equality delete inner writer does not exist",
+                "Equality delete inner writer has been closed.",
             ))
         }
     }
@@ -111,7 +121,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
                 .into_iter()
                 .map(|mut res| {
                     res.content(crate::spec::DataContentType::EqualityDeletes);
-                    res.equality_ids(self.equality_ids.iter().map(|id| *id as i32).collect_vec());
+                    res.equality_ids(self.equality_ids.iter().copied().collect_vec());
                     res.partition(self.partition_value.clone());
                     res.build().expect("msg")
                 })
@@ -119,136 +129,9 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
-                "Equality delete inner writer does not exist",
+                "Equality delete inner writer has been closed.",
             ))
         }
-    }
-}
-
-/// Help to project specific field from `RecordBatch`` according to the fields id.
-#[derive(Clone)]
-pub struct ArrowFieldProjector {
-    // A vector of vectors, where each inner vector represents the index path to access a specific field in a nested structure.
-    // E.g. [[0], [1, 2]] means the first field is accessed directly from the first column,
-    // while the second field is accessed from the second column and then from its third subcolumn (second column must be a struct column).
-    field_indices: Vec<Vec<usize>>,
-    // The schema reference after projection. This schema is derived from the original schema based on the given field IDs.
-    projected_schema: SchemaRef,
-}
-
-impl ArrowFieldProjector {
-    /// Init ArrowFieldProjector
-    pub fn new(original_schema: SchemaRef, field_ids: &[usize]) -> Result<Self> {
-        let mut field_indexs = Vec::with_capacity(field_ids.len());
-        let mut fields = Vec::with_capacity(field_ids.len());
-        for &id in field_ids {
-            let mut field_index = vec![];
-            if let Ok(field) = Self::fetch_field_index(
-                original_schema.fields(),
-                &mut field_index,
-                id as i64,
-                PARQUET_FIELD_ID_META_KEY,
-            ) {
-                fields.push(field.clone());
-                field_indexs.push(field_index);
-            } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Can't find source column id or column data type invalid: {}",
-                        id
-                    ),
-                ));
-            }
-        }
-        let delete_arrow_schema = Arc::new(Schema::new(fields));
-        Ok(Self {
-            field_indices: field_indexs,
-            projected_schema: delete_arrow_schema,
-        })
-    }
-
-    fn fetch_field_index(
-        fields: &Fields,
-        index_vec: &mut Vec<usize>,
-        col_id: i64,
-        column_id_meta_key: &str,
-    ) -> Result<FieldRef> {
-        for (pos, field) in fields.iter().enumerate() {
-            match field.data_type() {
-                DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Delete column data type cannot be float or double",
-                    ));
-                }
-                _ => {
-                    let id: i64 = field
-                        .metadata()
-                        .get(column_id_meta_key)
-                        .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "column_id must be set"))?
-                        .parse::<i64>()
-                        .map_err(|_| {
-                            Error::new(ErrorKind::DataInvalid, "column_id must be parsable as i64")
-                        })?;
-                    if col_id == id {
-                        index_vec.push(pos);
-                        return Ok(field.clone());
-                    }
-                    if let DataType::Struct(inner) = field.data_type() {
-                        let res =
-                            Self::fetch_field_index(inner, index_vec, col_id, column_id_meta_key);
-                        if !index_vec.is_empty() {
-                            index_vec.push(pos);
-                            return res;
-                        }
-                    }
-                }
-            }
-        }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Column id not found in fields",
-        ))
-    }
-
-    /// Return the reference of projected schema
-    pub fn projected_schema_ref(&self) -> &SchemaRef {
-        &self.projected_schema
-    }
-
-    /// Do projection with record batch
-    pub fn project_bacth(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        RecordBatch::try_new(
-            self.projected_schema.clone(),
-            self.project_column(batch.columns())?,
-        )
-        .map_err(|err| Error::new(ErrorKind::DataInvalid, format!("{err}")))
-    }
-
-    /// Do projection with columns
-    pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
-        self.field_indices
-            .iter()
-            .map(|index_vec| Self::get_column_by_field_index(batch, index_vec))
-            .collect::<Result<Vec<_>>>()
-    }
-
-    fn get_column_by_field_index(batch: &[ArrayRef], field_index: &[usize]) -> Result<ArrayRef> {
-        let mut rev_iterator = field_index.iter().rev();
-        let mut array = batch[*rev_iterator.next().unwrap()].clone();
-        for idx in rev_iterator {
-            array = array
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "Cannot convert Array to StructArray",
-                ))?
-                .column(*idx)
-                .clone();
-        }
-        Ok(array)
     }
 }
 
@@ -273,7 +156,7 @@ mod test {
         DataFile, DataFileFormat, ListType, NestedField, PrimitiveType, Schema, StructType, Type,
     };
     use crate::writer::base_writer::equality_delete_writer::{
-        ArrowFieldProjector, EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+        EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
     };
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
@@ -469,9 +352,11 @@ mod test {
         let columns = vec![col0, col1, col2, col3, col4];
         let to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
 
-        let equality_ids = vec![1, 3];
-        let projector = ArrowFieldProjector::new(arrow_schema, &equality_ids)?;
-        let delete_schema = arrow_schema_to_schema(projector.projected_schema_ref()).unwrap();
+        let equality_ids = vec![1_i32, 3];
+        let equality_config =
+            EqualityDeleteWriterConfig::new(equality_ids, arrow_schema, None).unwrap();
+        let delete_schema = arrow_schema_to_schema(equality_config.projected_schema_ref()).unwrap();
+        let projector = equality_config.projector.clone();
 
         // prepare writer
         let pb = ParquetWriterBuilder::new(
@@ -483,12 +368,9 @@ mod test {
         );
 
         let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
-            .build(EqualityDeleteWriterConfig::new(
-                equality_ids,
-                projector.clone(),
-                None,
-            ))
+            .build(equality_config)
             .await?;
+
         // write
         equality_delete_writer.write(to_write.clone()).await?;
         let res = equality_delete_writer.close().await?;
@@ -526,11 +408,12 @@ mod test {
         };
 
         let equality_id_float = vec![0];
-        let result_float = ArrowFieldProjector::new(schema.clone(), &equality_id_float);
+        let result_float = EqualityDeleteWriterConfig::new(equality_id_float, schema.clone(), None);
         assert!(result_float.is_err());
 
         let equality_ids_double = vec![1];
-        let result_double = ArrowFieldProjector::new(schema.clone(), &equality_ids_double);
+        let result_double =
+            EqualityDeleteWriterConfig::new(equality_ids_double, schema.clone(), None);
         assert!(result_double.is_err());
 
         Ok(())
