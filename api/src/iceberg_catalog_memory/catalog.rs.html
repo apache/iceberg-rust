@@ -1676,6 +1676,8 @@
 <a href="#1676" id="1676">1676</a>
 <a href="#1677" id="1677">1677</a>
 <a href="#1678" id="1678">1678</a>
+<a href="#1679" id="1679">1679</a>
+<a href="#1680" id="1680">1680</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1872,7 +1874,9 @@
             }
         };
 
-        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)<span class="question-mark">?</span>.build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)<span class="question-mark">?
+            </span>.build()<span class="question-mark">?
+            </span>.metadata;
         <span class="kw">let </span>metadata_location = <span class="macro">format!</span>(
             <span class="string">"{}/metadata/{}-{}.metadata.json"</span>,
             <span class="kw-2">&amp;</span>location,

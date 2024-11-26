@@ -1791,6 +1791,68 @@
 <a href="#1791" id="1791">1791</a>
 <a href="#1792" id="1792">1792</a>
 <a href="#1793" id="1793">1793</a>
+<a href="#1794" id="1794">1794</a>
+<a href="#1795" id="1795">1795</a>
+<a href="#1796" id="1796">1796</a>
+<a href="#1797" id="1797">1797</a>
+<a href="#1798" id="1798">1798</a>
+<a href="#1799" id="1799">1799</a>
+<a href="#1800" id="1800">1800</a>
+<a href="#1801" id="1801">1801</a>
+<a href="#1802" id="1802">1802</a>
+<a href="#1803" id="1803">1803</a>
+<a href="#1804" id="1804">1804</a>
+<a href="#1805" id="1805">1805</a>
+<a href="#1806" id="1806">1806</a>
+<a href="#1807" id="1807">1807</a>
+<a href="#1808" id="1808">1808</a>
+<a href="#1809" id="1809">1809</a>
+<a href="#1810" id="1810">1810</a>
+<a href="#1811" id="1811">1811</a>
+<a href="#1812" id="1812">1812</a>
+<a href="#1813" id="1813">1813</a>
+<a href="#1814" id="1814">1814</a>
+<a href="#1815" id="1815">1815</a>
+<a href="#1816" id="1816">1816</a>
+<a href="#1817" id="1817">1817</a>
+<a href="#1818" id="1818">1818</a>
+<a href="#1819" id="1819">1819</a>
+<a href="#1820" id="1820">1820</a>
+<a href="#1821" id="1821">1821</a>
+<a href="#1822" id="1822">1822</a>
+<a href="#1823" id="1823">1823</a>
+<a href="#1824" id="1824">1824</a>
+<a href="#1825" id="1825">1825</a>
+<a href="#1826" id="1826">1826</a>
+<a href="#1827" id="1827">1827</a>
+<a href="#1828" id="1828">1828</a>
+<a href="#1829" id="1829">1829</a>
+<a href="#1830" id="1830">1830</a>
+<a href="#1831" id="1831">1831</a>
+<a href="#1832" id="1832">1832</a>
+<a href="#1833" id="1833">1833</a>
+<a href="#1834" id="1834">1834</a>
+<a href="#1835" id="1835">1835</a>
+<a href="#1836" id="1836">1836</a>
+<a href="#1837" id="1837">1837</a>
+<a href="#1838" id="1838">1838</a>
+<a href="#1839" id="1839">1839</a>
+<a href="#1840" id="1840">1840</a>
+<a href="#1841" id="1841">1841</a>
+<a href="#1842" id="1842">1842</a>
+<a href="#1843" id="1843">1843</a>
+<a href="#1844" id="1844">1844</a>
+<a href="#1845" id="1845">1845</a>
+<a href="#1846" id="1846">1846</a>
+<a href="#1847" id="1847">1847</a>
+<a href="#1848" id="1848">1848</a>
+<a href="#1849" id="1849">1849</a>
+<a href="#1850" id="1850">1850</a>
+<a href="#1851" id="1851">1851</a>
+<a href="#1852" id="1852">1852</a>
+<a href="#1853" id="1853">1853</a>
+<a href="#1854" id="1854">1854</a>
+<a href="#1855" id="1855">1855</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2031,15 +2093,15 @@
     <span class="doccomment">/// The name of the table.
     </span><span class="kw">pub </span>name: String,
     <span class="doccomment">/// The location of the table.
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = location_opt)))]
     </span><span class="kw">pub </span>location: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="doccomment">/// The schema of the table.
     </span><span class="kw">pub </span>schema: Schema,
     <span class="doccomment">/// The partition spec of the table, could be None.
-    </span><span class="attr">#[builder(default, setter(strip_option, into))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = partition_spec_opt), into))]
     </span><span class="kw">pub </span>partition_spec: <span class="prelude-ty">Option</span>&lt;UnboundPartitionSpec&gt;,
     <span class="doccomment">/// The sort order of the table.
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     </span><span class="kw">pub </span>sort_order: <span class="prelude-ty">Option</span>&lt;SortOrder&gt;,
     <span class="doccomment">/// The properties of the table.
     </span><span class="attr">#[builder(default)]
@@ -2245,8 +2307,46 @@
     <span class="doccomment">/// Applies the update to the table metadata builder.
     </span><span class="kw">pub fn </span>apply(<span class="self">self</span>, builder: TableMetadataBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;TableMetadataBuilder&gt; {
         <span class="kw">match </span><span class="self">self </span>{
-            TableUpdate::AssignUuid { uuid } =&gt; builder.assign_uuid(uuid),
-            <span class="kw">_ </span>=&gt; <span class="macro">unimplemented!</span>(),
+            TableUpdate::AssignUuid { uuid } =&gt; <span class="prelude-val">Ok</span>(builder.assign_uuid(uuid)),
+            TableUpdate::AddSchema {
+                schema,
+                last_column_id,
+            } =&gt; {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(last_column_id) = last_column_id {
+                    <span class="kw">if </span>builder.last_column_id() &gt; last_column_id {
+                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                            ErrorKind::DataInvalid,
+                            <span class="macro">format!</span>(
+                                <span class="string">"Invalid last column ID: {last_column_id} &lt; {} (previous last column ID)"</span>,
+                                builder.last_column_id()
+                            ),
+                        ));
+                    }
+                };
+                <span class="prelude-val">Ok</span>(builder.add_schema(schema))
+            }
+            TableUpdate::SetCurrentSchema { schema_id } =&gt; builder.set_current_schema(schema_id),
+            TableUpdate::AddSpec { spec } =&gt; builder.add_partition_spec(spec),
+            TableUpdate::SetDefaultSpec { spec_id } =&gt; builder.set_default_partition_spec(spec_id),
+            TableUpdate::AddSortOrder { sort_order } =&gt; builder.add_sort_order(sort_order),
+            TableUpdate::SetDefaultSortOrder { sort_order_id } =&gt; {
+                builder.set_default_sort_order(sort_order_id)
+            }
+            TableUpdate::AddSnapshot { snapshot } =&gt; builder.add_snapshot(snapshot),
+            TableUpdate::SetSnapshotRef {
+                ref_name,
+                reference,
+            } =&gt; builder.set_ref(<span class="kw-2">&amp;</span>ref_name, reference),
+            TableUpdate::RemoveSnapshots { snapshot_ids } =&gt; {
+                <span class="prelude-val">Ok</span>(builder.remove_snapshots(<span class="kw-2">&amp;</span>snapshot_ids))
+            }
+            TableUpdate::RemoveSnapshotRef { ref_name } =&gt; <span class="prelude-val">Ok</span>(builder.remove_ref(<span class="kw-2">&amp;</span>ref_name)),
+            TableUpdate::SetLocation { location } =&gt; <span class="prelude-val">Ok</span>(builder.set_location(location)),
+            TableUpdate::SetProperties { updates } =&gt; builder.set_properties(updates),
+            TableUpdate::RemoveProperties { removals } =&gt; builder.remove_properties(<span class="kw-2">&amp;</span>removals),
+            TableUpdate::UpgradeFormatVersion { format_version } =&gt; {
+                builder.upgrade_format_version(format_version)
+            }
         }
     }
 }
@@ -2542,7 +2642,7 @@
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
         SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
         UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion,
+        ViewVersion, MAIN_BRANCH,
     };
     <span class="kw">use crate</span>::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -2596,9 +2696,9 @@
         TableMetadataBuilder::from_table_creation(tbl_creation)
             .unwrap()
             .assign_uuid(uuid::Uuid::nil())
-            .unwrap()
             .build()
             .unwrap()
+            .metadata
     }
 
     <span class="attr">#[test]
@@ -2648,7 +2748,7 @@
         {
             "snapshot-id": 3051729675574597004,
             "sequence-number": 10,
-            "timestamp-ms": 1515100955770,
+            "timestamp-ms": 9992191116217,
             "summary": {
                 "operation": "append"
             },
@@ -2658,8 +2758,28 @@
         "#</span>;
 
         <span class="kw">let </span>snapshot = serde_json::from_str::&lt;Snapshot&gt;(record).unwrap();
-        <span class="kw">let </span><span class="kw-2">mut </span>metadata = metadata;
-        metadata.append_snapshot(snapshot);
+        <span class="kw">let </span>builder = metadata.into_builder(<span class="prelude-val">None</span>);
+        <span class="kw">let </span>builder = TableUpdate::AddSnapshot {
+            snapshot: snapshot.clone(),
+        }
+        .apply(builder)
+        .unwrap();
+        <span class="kw">let </span>metadata = TableUpdate::SetSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string(),
+            reference: SnapshotReference {
+                snapshot_id: snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: <span class="prelude-val">Some</span>(<span class="number">10</span>),
+                    max_snapshot_age_ms: <span class="prelude-val">None</span>,
+                    max_ref_age_ms: <span class="prelude-val">None</span>,
+                },
+            },
+        }
+        .apply(builder)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
 
         <span class="comment">// Ref exists and should matches
         </span><span class="kw">let </span>requirement = TableRequirement::RefSnapshotIdMatch {
@@ -2709,14 +2829,13 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_check_last_assigned_partition_id() {
         <span class="kw">let </span>metadata = metadata();
-
         <span class="kw">let </span>requirement = TableRequirement::LastAssignedPartitionIdMatch {
-            last_assigned_partition_id: <span class="number">1</span>,
+            last_assigned_partition_id: <span class="number">0</span>,
         };
         <span class="macro">assert!</span>(requirement.check(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>metadata)).is_err());
 
         <span class="kw">let </span>requirement = TableRequirement::LastAssignedPartitionIdMatch {
-            last_assigned_partition_id: <span class="number">0</span>,
+            last_assigned_partition_id: <span class="number">999</span>,
         };
         <span class="macro">assert!</span>(requirement.check(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>metadata)).is_ok());
     }
@@ -3375,8 +3494,12 @@
         <span class="kw">let </span>table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
             .build()
-            .unwrap();
-        <span class="kw">let </span>table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+            .unwrap()
+            .metadata;
+        <span class="kw">let </span>table_metadata_builder = TableMetadataBuilder::new_from_metadata(
+            table_metadata,
+            <span class="prelude-val">Some</span>(<span class="string">"s3://db/table/metadata/metadata1.gz.json"</span>.to_string()),
+        );
 
         <span class="kw">let </span>uuid = uuid::Uuid::new_v4();
         <span class="kw">let </span>update = TableUpdate::AssignUuid { uuid };
@@ -3384,7 +3507,8 @@
             .apply(table_metadata_builder)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
         <span class="macro">assert_eq!</span>(updated_metadata.uuid(), uuid);
     }
 

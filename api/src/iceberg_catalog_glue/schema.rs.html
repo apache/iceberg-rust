@@ -480,6 +480,8 @@
 <a href="#480" id="480">480</a>
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -680,7 +682,9 @@
             .location(<span class="string">"my_location"</span>.to_string())
             .schema(schema)
             .build();
-        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)<span class="question-mark">?</span>.build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)<span class="question-mark">?
+            </span>.build()<span class="question-mark">?
+            </span>.metadata;
 
         <span class="prelude-val">Ok</span>(metadata)
     }

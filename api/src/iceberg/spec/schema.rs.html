@@ -2611,6 +2611,23 @@
 <a href="#2611" id="2611">2611</a>
 <a href="#2612" id="2612">2612</a>
 <a href="#2613" id="2613">2613</a>
+<a href="#2614" id="2614">2614</a>
+<a href="#2615" id="2615">2615</a>
+<a href="#2616" id="2616">2616</a>
+<a href="#2617" id="2617">2617</a>
+<a href="#2618" id="2618">2618</a>
+<a href="#2619" id="2619">2619</a>
+<a href="#2620" id="2620">2620</a>
+<a href="#2621" id="2621">2621</a>
+<a href="#2622" id="2622">2622</a>
+<a href="#2623" id="2623">2623</a>
+<a href="#2624" id="2624">2624</a>
+<a href="#2625" id="2625">2625</a>
+<a href="#2626" id="2626">2626</a>
+<a href="#2627" id="2627">2627</a>
+<a href="#2628" id="2628">2628</a>
+<a href="#2629" id="2629">2629</a>
+<a href="#2630" id="2630">2630</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2704,7 +2721,6 @@
     /// Reassignment starts from the field-id specified in `start_from` (inclusive).
     ///
     /// All specified aliases and identifier fields will be updated to the new field-ids.
-    </span><span class="attr">#[allow(dead_code)] </span><span class="comment">// Will be needed in TableMetadataBuilder
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_reassigned_field_ids(<span class="kw-2">mut </span><span class="self">self</span>, start_from: u32) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.reassign_field_ids_from = <span class="prelude-val">Some</span>(start_from.try_into().unwrap_or(i32::MAX));
         <span class="self">self
@@ -2988,6 +3004,24 @@
     <span class="doccomment">/// Get an accessor for retrieving data in a struct
     </span><span class="kw">pub fn </span>accessor_by_field_id(<span class="kw-2">&amp;</span><span class="self">self</span>, field_id: i32) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;StructAccessor&gt;&gt; {
         <span class="self">self</span>.field_id_to_accessor.get(<span class="kw-2">&amp;</span>field_id).cloned()
+    }
+
+    <span class="doccomment">/// Check if this schema is identical to another schema semantically - excluding schema id.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_same_schema(<span class="kw-2">&amp;</span><span class="self">self</span>, other: <span class="kw-2">&amp;</span>SchemaRef) -&gt; bool {
+        <span class="self">self</span>.as_struct().eq(other.as_struct())
+            &amp;&amp; <span class="self">self</span>.identifier_field_ids().eq(other.identifier_field_ids())
+    }
+
+    <span class="doccomment">/// Change the schema id of this schema.
+    </span><span class="comment">// This is redundant with the `with_schema_id` method on the builder, but useful
+    // as it is infallible in contrast to the builder `build()` method.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>with_schema_id(<span class="self">self</span>, schema_id: SchemaId) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ schema_id, ..<span class="self">self </span>}
+    }
+
+    <span class="doccomment">/// Return A HashMap matching field ids to field names.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>field_id_to_name_map(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;i32, String&gt; {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.id_to_name
     }
 }
 

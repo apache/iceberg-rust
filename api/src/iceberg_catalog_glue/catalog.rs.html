@@ -598,6 +598,8 @@
 <a href="#598" id="598">598</a>
 <a href="#599" id="599">599</a>
 <a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -639,9 +641,9 @@
 <span class="attr">#[derive(Debug, TypedBuilder)]
 </span><span class="doccomment">/// Glue Catalog configuration
 </span><span class="kw">pub struct </span>GlueCatalogConfig {
-    <span class="attr">#[builder(default, setter(strip_option))]
+    <span class="attr">#[builder(default, setter(strip_option(fallback = uri_opt)))]
     </span>uri: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="attr">#[builder(default, setter(strip_option))]
+    <span class="attr">#[builder(default, setter(strip_option(fallback = catalog_id_opt)))]
     </span>catalog_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     warehouse: String,
     <span class="attr">#[builder(default)]
@@ -955,7 +957,9 @@
             }
         };
 
-        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(creation)<span class="question-mark">?</span>.build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(creation)<span class="question-mark">?
+            </span>.build()<span class="question-mark">?
+            </span>.metadata;
         <span class="kw">let </span>metadata_location = create_metadata_location(<span class="kw-2">&amp;</span>location, <span class="number">0</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.file_io

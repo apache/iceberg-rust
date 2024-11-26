@@ -2292,81 +2292,6 @@
 <a href="#2292" id="2292">2292</a>
 <a href="#2293" id="2293">2293</a>
 <a href="#2294" id="2294">2294</a>
-<a href="#2295" id="2295">2295</a>
-<a href="#2296" id="2296">2296</a>
-<a href="#2297" id="2297">2297</a>
-<a href="#2298" id="2298">2298</a>
-<a href="#2299" id="2299">2299</a>
-<a href="#2300" id="2300">2300</a>
-<a href="#2301" id="2301">2301</a>
-<a href="#2302" id="2302">2302</a>
-<a href="#2303" id="2303">2303</a>
-<a href="#2304" id="2304">2304</a>
-<a href="#2305" id="2305">2305</a>
-<a href="#2306" id="2306">2306</a>
-<a href="#2307" id="2307">2307</a>
-<a href="#2308" id="2308">2308</a>
-<a href="#2309" id="2309">2309</a>
-<a href="#2310" id="2310">2310</a>
-<a href="#2311" id="2311">2311</a>
-<a href="#2312" id="2312">2312</a>
-<a href="#2313" id="2313">2313</a>
-<a href="#2314" id="2314">2314</a>
-<a href="#2315" id="2315">2315</a>
-<a href="#2316" id="2316">2316</a>
-<a href="#2317" id="2317">2317</a>
-<a href="#2318" id="2318">2318</a>
-<a href="#2319" id="2319">2319</a>
-<a href="#2320" id="2320">2320</a>
-<a href="#2321" id="2321">2321</a>
-<a href="#2322" id="2322">2322</a>
-<a href="#2323" id="2323">2323</a>
-<a href="#2324" id="2324">2324</a>
-<a href="#2325" id="2325">2325</a>
-<a href="#2326" id="2326">2326</a>
-<a href="#2327" id="2327">2327</a>
-<a href="#2328" id="2328">2328</a>
-<a href="#2329" id="2329">2329</a>
-<a href="#2330" id="2330">2330</a>
-<a href="#2331" id="2331">2331</a>
-<a href="#2332" id="2332">2332</a>
-<a href="#2333" id="2333">2333</a>
-<a href="#2334" id="2334">2334</a>
-<a href="#2335" id="2335">2335</a>
-<a href="#2336" id="2336">2336</a>
-<a href="#2337" id="2337">2337</a>
-<a href="#2338" id="2338">2338</a>
-<a href="#2339" id="2339">2339</a>
-<a href="#2340" id="2340">2340</a>
-<a href="#2341" id="2341">2341</a>
-<a href="#2342" id="2342">2342</a>
-<a href="#2343" id="2343">2343</a>
-<a href="#2344" id="2344">2344</a>
-<a href="#2345" id="2345">2345</a>
-<a href="#2346" id="2346">2346</a>
-<a href="#2347" id="2347">2347</a>
-<a href="#2348" id="2348">2348</a>
-<a href="#2349" id="2349">2349</a>
-<a href="#2350" id="2350">2350</a>
-<a href="#2351" id="2351">2351</a>
-<a href="#2352" id="2352">2352</a>
-<a href="#2353" id="2353">2353</a>
-<a href="#2354" id="2354">2354</a>
-<a href="#2355" id="2355">2355</a>
-<a href="#2356" id="2356">2356</a>
-<a href="#2357" id="2357">2357</a>
-<a href="#2358" id="2358">2358</a>
-<a href="#2359" id="2359">2359</a>
-<a href="#2360" id="2360">2360</a>
-<a href="#2361" id="2361">2361</a>
-<a href="#2362" id="2362">2362</a>
-<a href="#2363" id="2363">2363</a>
-<a href="#2364" id="2364">2364</a>
-<a href="#2365" id="2365">2365</a>
-<a href="#2366" id="2366">2366</a>
-<a href="#2367" id="2367">2367</a>
-<a href="#2368" id="2368">2368</a>
-<a href="#2369" id="2369">2369</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2399,12 +2324,13 @@
 <span class="kw">use </span>uuid::Uuid;
 
 <span class="kw">use </span><span class="kw">super</span>::snapshot::SnapshotReference;
+<span class="kw">pub use </span><span class="kw">super</span>::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 <span class="kw">use super</span>::{
-    BoundPartitionSpec, BoundPartitionSpecRef, SchemaId, SchemaRef, SchemalessPartitionSpecRef,
-    Snapshot, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
+    BoundPartitionSpecRef, SchemaId, SchemaRef, SchemalessPartitionSpecRef, Snapshot, SnapshotRef,
+    SnapshotRetention, SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
 };
 <span class="kw">use </span><span class="kw">crate</span>::error::{timestamp_ms_to_utc, <span class="prelude-ty">Result</span>};
-<span class="kw">use crate</span>::{Error, ErrorKind, TableCreation};
+<span class="kw">use crate</span>::{Error, ErrorKind};
 
 <span class="kw">static </span>MAIN_BRANCH: <span class="kw-2">&amp;</span>str = <span class="string">"main"</span>;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>ONE_MINUTE_MS: i64 = <span class="number">60_000</span>;
@@ -2534,6 +2460,17 @@
 }
 
 <span class="kw">impl </span>TableMetadata {
+    <span class="doccomment">/// Convert this Table Metadata into a builder for modification.
+    ///
+    /// `current_file_location` is the location where the current version
+    /// of the metadata file is stored. This is used to update the metadata log.
+    /// If `current_file_location` is `None`, the metadata log will not be updated.
+    /// This should only be used to stage-create tables.
+    </span><span class="attr">#[must_use]
+    </span><span class="kw">pub fn </span>into_builder(<span class="self">self</span>, current_file_location: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; TableMetadataBuilder {
+        TableMetadataBuilder::new_from_metadata(<span class="self">self</span>, current_file_location)
+    }
+
     <span class="doccomment">/// Returns format version of this metadata.
     </span><span class="attr">#[inline]
     </span><span class="kw">pub fn </span>format_version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; FormatVersion {
@@ -2703,6 +2640,10 @@
     }
 
     <span class="doccomment">/// Append snapshot to table
+    </span><span class="attr">#[deprecated(
+        since = <span class="string">"0.4.0"</span>,
+        note = <span class="string">"please use `TableMetadataBuilder.set_branch_snapshot` instead"
+    </span>)]
     </span><span class="kw">pub fn </span>append_snapshot(<span class="kw-2">&amp;mut </span><span class="self">self</span>, snapshot: Snapshot) {
         <span class="self">self</span>.last_updated_ms = snapshot.timestamp_ms();
         <span class="self">self</span>.last_sequence_number = snapshot.sequence_number();
@@ -2925,98 +2866,6 @@
         }
 
         <span class="prelude-val">Ok</span>(())
-    }
-}
-
-<span class="doccomment">/// Manipulating table metadata.
-</span><span class="kw">pub struct </span>TableMetadataBuilder(TableMetadata);
-
-<span class="kw">impl </span>TableMetadataBuilder {
-    <span class="doccomment">/// Creates a new table metadata builder from the given table metadata.
-    </span><span class="kw">pub fn </span>new(origin: TableMetadata) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(origin)
-    }
-
-    <span class="doccomment">/// Creates a new table metadata builder from the given table creation.
-    </span><span class="kw">pub fn </span>from_table_creation(table_creation: TableCreation) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>TableCreation {
-            name: <span class="kw">_</span>,
-            location,
-            schema,
-            partition_spec,
-            sort_order,
-            properties,
-        } = table_creation;
-
-        <span class="kw">let </span>schema: Arc&lt;<span class="kw">super</span>::Schema&gt; = Arc::new(schema);
-        <span class="kw">let </span>unpartition_spec = BoundPartitionSpec::unpartition_spec(schema.clone());
-        <span class="kw">let </span>partition_specs = <span class="kw">match </span>partition_spec {
-            <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; {
-                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    <span class="string">"Can't create table with partition spec now"</span>,
-                ))
-            }
-            <span class="prelude-val">None </span>=&gt; HashMap::from([(
-                unpartition_spec.spec_id(),
-                Arc::new(unpartition_spec.clone().into_schemaless()),
-            )]),
-        };
-
-        <span class="kw">let </span>sort_orders = <span class="kw">match </span>sort_order {
-            <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; {
-                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    <span class="string">"Can't create table with sort order now"</span>,
-                ))
-            }
-            <span class="prelude-val">None </span>=&gt; HashMap::from([(
-                SortOrder::UNSORTED_ORDER_ID,
-                Arc::new(SortOrder::unsorted_order()),
-            )]),
-        };
-
-        <span class="kw">let </span><span class="kw-2">mut </span>table_metadata = TableMetadata {
-            format_version: FormatVersion::V2,
-            table_uuid: Uuid::now_v7(),
-            location: location.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    <span class="string">"Can't create table without location"</span>,
-                )
-            })<span class="question-mark">?</span>,
-            last_sequence_number: <span class="number">0</span>,
-            last_updated_ms: Utc::now().timestamp_millis(),
-            last_column_id: schema.highest_field_id(),
-            current_schema_id: schema.schema_id(),
-            schemas: HashMap::from([(schema.schema_id(), schema)]),
-            partition_specs,
-            default_spec: BoundPartitionSpecRef::new(unpartition_spec),
-            last_partition_id: <span class="number">0</span>,
-            properties,
-            current_snapshot_id: <span class="prelude-val">None</span>,
-            snapshots: Default::default(),
-            snapshot_log: <span class="macro">vec!</span>[],
-            sort_orders,
-            metadata_log: <span class="macro">vec!</span>[],
-            default_sort_order_id: SortOrder::UNSORTED_ORDER_ID,
-            refs: Default::default(),
-        };
-
-        table_metadata.try_normalize()<span class="question-mark">?</span>;
-
-        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(table_metadata))
-    }
-
-    <span class="doccomment">/// Changes uuid of table metadata.
-    </span><span class="kw">pub fn </span>assign_uuid(<span class="kw-2">mut </span><span class="self">self</span>, uuid: Uuid) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="self">self</span>.<span class="number">0</span>.table_uuid = uuid;
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>)
-    }
-
-    <span class="doccomment">/// Returns the new table metadata after changes.
-    </span><span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;TableMetadata&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>)
     }
 }
 
@@ -4697,7 +4546,8 @@
         <span class="kw">let </span>table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
         <span class="macro">assert_eq!</span>(table_metadata.location, <span class="string">"s3://db/table"</span>);
         <span class="macro">assert_eq!</span>(table_metadata.schemas.len(), <span class="number">1</span>);
         <span class="macro">assert_eq!</span>(

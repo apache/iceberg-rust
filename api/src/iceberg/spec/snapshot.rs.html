@@ -408,6 +408,13 @@
 <a href="#408" id="408">408</a>
 <a href="#409" id="409">409</a>
 <a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -503,7 +510,7 @@
     <span class="doccomment">/// A string map that summarizes the snapshot changes, including operation.
     </span>summary: Summary,
     <span class="doccomment">/// ID of the table’s current schema when the snapshot was created.
-    </span><span class="attr">#[builder(setter(strip_option), default = <span class="prelude-val">None</span>)]
+    </span><span class="attr">#[builder(setter(strip_option(fallback = schema_id_opt)), default = <span class="prelude-val">None</span>)]
     </span>schema_id: <span class="prelude-ty">Option</span>&lt;SchemaId&gt;,
 }
 
@@ -732,6 +739,13 @@
     <span class="attr">#[serde(flatten)]
     </span><span class="doccomment">/// Snapshot retention policy
     </span><span class="kw">pub </span>retention: SnapshotRetention,
+}
+
+<span class="kw">impl </span>SnapshotReference {
+    <span class="doccomment">/// Returns true if the snapshot reference is a branch.
+    </span><span class="kw">pub fn </span>is_branch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="macro">matches!</span>(<span class="self">self</span>.retention, SnapshotRetention::Branch { .. })
+    }
 }
 
 <span class="kw">impl </span>SnapshotReference {

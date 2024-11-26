@@ -1867,6 +1867,10 @@
 <a href="#1867" id="1867">1867</a>
 <a href="#1868" id="1868">1868</a>
 <a href="#1869" id="1869">1869</a>
+<a href="#1870" id="1870">1870</a>
+<a href="#1871" id="1871">1871</a>
+<a href="#1872" id="1872">1872</a>
+<a href="#1873" id="1873">1873</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2016,7 +2020,6 @@
     }
 
     <span class="doccomment">/// Get the highest field id in the partition spec.
-    /// If the partition spec is unpartitioned, it returns the last unpartitioned last assigned id (999).
     </span><span class="kw">pub fn </span>highest_field_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i32&gt; {
         <span class="self">self</span>.fields.iter().map(|f| f.field_id).max()
     }
@@ -2051,6 +2054,11 @@
 
         <span class="bool-val">true
     </span>}
+
+    <span class="doccomment">/// Change the spec id of the partition spec
+    </span><span class="kw">pub fn </span>with_spec_id(<span class="self">self</span>, spec_id: i32) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ spec_id, ..<span class="self">self </span>}
+    }
 }
 
 <span class="kw">impl </span>SchemalessPartitionSpec {
@@ -2098,7 +2106,7 @@
     </span><span class="kw">pub </span>source_id: i32,
     <span class="doccomment">/// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = field_id_opt)))]
     </span><span class="kw">pub </span>field_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
     <span class="doccomment">/// A partition name.
     </span><span class="kw">pub </span>name: String,

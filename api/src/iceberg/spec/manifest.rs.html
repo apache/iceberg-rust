@@ -2926,19 +2926,19 @@
     ///
     /// Snapshot id where the file was added, or deleted if status is 2.
     /// Inherited when null.
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = snapshot_id_opt)))]
     </span>snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     <span class="doccomment">/// field id: 3
     ///
     /// Data sequence number of the file.
     /// Inherited when null and status is 1 (added).
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = sequence_number_opt)))]
     </span>sequence_number: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     <span class="doccomment">/// field id: 4
     ///
     /// File sequence number indicating when the file was added.
     /// Inherited when null and status is 1 (added).
-    </span><span class="attr">#[builder(default, setter(strip_option))]
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = file_sequence_number_opt)))]
     </span>file_sequence_number: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     <span class="doccomment">/// field id: 2
     ///
