@@ -50,7 +50,7 @@ const PATH_V1: &str = "v1";
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RestCatalogConfig {
     uri: String,
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
     warehouse: Option<String>,
 
     #[builder(default)]

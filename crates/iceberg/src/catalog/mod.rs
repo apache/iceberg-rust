@@ -238,15 +238,15 @@ pub struct TableCreation {
     /// The name of the table.
     pub name: String,
     /// The location of the table.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = location_opt)))]
     pub location: Option<String>,
     /// The schema of the table.
     pub schema: Schema,
     /// The partition spec of the table, could be None.
-    #[builder(default, setter(strip_option, into))]
+    #[builder(default, setter(strip_option(fallback = partition_spec_opt), into))]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
     /// The properties of the table.
     #[builder(default)]

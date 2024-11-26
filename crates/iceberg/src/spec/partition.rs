@@ -233,7 +233,7 @@ pub struct UnboundPartitionField {
     pub source_id: i32,
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = field_id_opt)))]
     pub field_id: Option<i32>,
     /// A partition name.
     pub name: String,

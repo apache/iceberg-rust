@@ -821,19 +821,19 @@ pub struct ManifestEntry {
     ///
     /// Snapshot id where the file was added, or deleted if status is 2.
     /// Inherited when null.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = snapshot_id_opt)))]
     snapshot_id: Option<i64>,
     /// field id: 3
     ///
     /// Data sequence number of the file.
     /// Inherited when null and status is 1 (added).
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = sequence_number_opt)))]
     sequence_number: Option<i64>,
     /// field id: 4
     ///
     /// File sequence number indicating when the file was added.
     /// Inherited when null and status is 1 (added).
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = file_sequence_number_opt)))]
     file_sequence_number: Option<i64>,
     /// field id: 2
     ///
