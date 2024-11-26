@@ -23,9 +23,9 @@ use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use crate::error::Result;
 use crate::{Error, ErrorKind};
 
-/// Help to project specific field from `RecordBatch`` according to the fields id of meta of field.
+/// Help to project specific field from `RecordBatch`` according to the fields id.
 #[derive(Clone)]
-pub struct RecordBatchProjector {
+pub(crate) struct RecordBatchProjector {
     // A vector of vectors, where each inner vector represents the index path to access a specific field in a nested structure.
     // E.g. [[0], [1, 2]] means the first field is accessed directly from the first column,
     // while the second field is accessed from the second column and then from its third subcolumn (second column must be a struct column).
@@ -36,35 +36,35 @@ pub struct RecordBatchProjector {
 
 impl RecordBatchProjector {
     /// Init ArrowFieldProjector
-    pub fn new<F>(
+    ///
+    /// This function will iterate through the field and fetch the field from the original schema according to the field ids.
+    /// The function to fetch the field id from the field is provided by `field_id_fetch_func`, return None if the field need to be skipped.
+    /// This function will iterate through the nested fields if the field is a struct, `searchable_field_func` can be used to control whether
+    /// iterate into the nested fields.
+    pub(crate) fn new<F1, F2>(
         original_schema: SchemaRef,
         field_ids: &[i32],
-        field_id_fetch_func: F,
+        field_id_fetch_func: F1,
+        searchable_field_func: F2,
     ) -> Result<Self>
     where
-        F: Fn(&Field) -> Option<i64>,
+        F1: Fn(&Field) -> Result<Option<i64>>,
+        F2: Fn(&Field) -> bool,
     {
         let mut field_indices = Vec::with_capacity(field_ids.len());
         let mut fields = Vec::with_capacity(field_ids.len());
         for &id in field_ids {
             let mut field_index = vec![];
-            if let Ok(field) = Self::fetch_field_index(
+            let field = Self::fetch_field_index(
                 original_schema.fields(),
                 &mut field_index,
                 id as i64,
                 &field_id_fetch_func,
-            ) {
-                fields.push(field.clone());
-                field_indices.push(field_index);
-            } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Can't find source column id or column data type invalid: {}",
-                        id
-                    ),
-                ));
-            }
+                &searchable_field_func,
+            )?
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field not found"))?;
+            fields.push(field.clone());
+            field_indices.push(field_index);
         }
         let delete_arrow_schema = Arc::new(Schema::new(fields));
         Ok(Self {
@@ -73,59 +73,50 @@ impl RecordBatchProjector {
         })
     }
 
-    fn fetch_field_index<F>(
+    fn fetch_field_index<F1, F2>(
         fields: &Fields,
         index_vec: &mut Vec<usize>,
         target_field_id: i64,
-        field_id_fetch_func: &F,
-    ) -> Result<FieldRef>
+        field_id_fetch_func: &F1,
+        searchable_field_func: &F2,
+    ) -> Result<Option<FieldRef>>
     where
-        F: Fn(&Field) -> Option<i64>,
+        F1: Fn(&Field) -> Result<Option<i64>>,
+        F2: Fn(&Field) -> bool,
     {
         for (pos, field) in fields.iter().enumerate() {
-            match field.data_type() {
-                DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Delete column data type cannot be float or double",
-                    ));
+            let id = field_id_fetch_func(field)?;
+            if let Some(id) = id {
+                if target_field_id == id {
+                    index_vec.push(pos);
+                    return Ok(Some(field.clone()));
                 }
-                _ => {
-                    let id = field_id_fetch_func(field).ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "column_id must be parsable as i64")
-                    })?;
-                    if target_field_id == id {
+            }
+            if let DataType::Struct(inner) = field.data_type() {
+                if searchable_field_func(field) {
+                    if let Some(res) = Self::fetch_field_index(
+                        inner,
+                        index_vec,
+                        target_field_id,
+                        field_id_fetch_func,
+                        searchable_field_func,
+                    )? {
                         index_vec.push(pos);
-                        return Ok(field.clone());
-                    }
-                    if let DataType::Struct(inner) = field.data_type() {
-                        let res = Self::fetch_field_index(
-                            inner,
-                            index_vec,
-                            target_field_id,
-                            field_id_fetch_func,
-                        );
-                        if !index_vec.is_empty() {
-                            index_vec.push(pos);
-                            return res;
-                        }
+                        return Ok(Some(res));
                     }
                 }
             }
         }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Column id not found in fields",
-        ))
+        Ok(None)
     }
 
     /// Return the reference of projected schema
-    pub fn projected_schema_ref(&self) -> &SchemaRef {
+    pub(crate) fn projected_schema_ref(&self) -> &SchemaRef {
         &self.projected_schema
     }
 
     /// Do projection with record batch
-    pub fn project_bacth(&self, batch: RecordBatch) -> Result<RecordBatch> {
+    pub(crate) fn project_bacth(&self, batch: RecordBatch) -> Result<RecordBatch> {
         RecordBatch::try_new(
             self.projected_schema.clone(),
             self.project_column(batch.columns())?,
@@ -134,7 +125,7 @@ impl RecordBatchProjector {
     }
 
     /// Do projection with columns
-    pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
+    pub(crate) fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
         self.field_indices
             .iter()
             .map(|index_vec| Self::get_column_by_field_index(batch, index_vec))
@@ -167,6 +158,7 @@ mod test {
     use arrow_schema::{DataType, Field, Fields, Schema};
 
     use crate::arrow::record_batch_projector::RecordBatchProjector;
+    use crate::{Error, ErrorKind};
 
     #[test]
     fn test_record_batch_projector_nested_level() {
@@ -185,14 +177,15 @@ mod test {
         let schema = Arc::new(Schema::new(fields));
 
         let field_id_fetch_func = |field: &Field| match field.name().as_str() {
-            "field1" => Some(1),
-            "field2" => Some(2),
-            "inner_field1" => Some(3),
-            "inner_field2" => Some(4),
-            _ => None,
+            "field1" => Ok(Some(1)),
+            "field2" => Ok(Some(2)),
+            "inner_field1" => Ok(Some(3)),
+            "inner_field2" => Ok(Some(4)),
+            _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
         let projector =
-            RecordBatchProjector::new(schema.clone(), &[1, 3], field_id_fetch_func).unwrap();
+            RecordBatchProjector::new(schema.clone(), &[1, 3], field_id_fetch_func, |_| true)
+                .unwrap();
 
         assert!(projector.field_indices.len() == 2);
         assert_eq!(projector.field_indices[0], vec![0]);
@@ -248,14 +241,48 @@ mod test {
         let schema = Arc::new(Schema::new(fields));
 
         let field_id_fetch_func = |field: &Field| match field.name().as_str() {
-            "field1" => Some(1),
-            "field2" => Some(2),
-            "inner_field1" => Some(3),
-            "inner_field2" => Some(4),
-            _ => None,
+            "field1" => Ok(Some(1)),
+            "field2" => Ok(Some(2)),
+            "inner_field1" => Ok(Some(3)),
+            "inner_field2" => Ok(Some(4)),
+            _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
-        let projector = RecordBatchProjector::new(schema.clone(), &[1, 5], field_id_fetch_func);
+        let projector =
+            RecordBatchProjector::new(schema.clone(), &[1, 5], field_id_fetch_func, |_| true);
 
         assert!(projector.is_err());
+    }
+
+    #[test]
+    fn test_field_not_reachable() {
+        let inner_fields = vec![
+            Field::new("inner_field1", DataType::Int32, false),
+            Field::new("inner_field2", DataType::Utf8, false),
+        ];
+
+        let fields = vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new(
+                "field2",
+                DataType::Struct(Fields::from(inner_fields.clone())),
+                false,
+            ),
+        ];
+        let schema = Arc::new(Schema::new(fields));
+
+        let field_id_fetch_func = |field: &Field| match field.name().as_str() {
+            "field1" => Ok(Some(1)),
+            "field2" => Ok(Some(2)),
+            "inner_field1" => Ok(Some(3)),
+            "inner_field2" => Ok(Some(4)),
+            _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
+        };
+        let projector =
+            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| false);
+        assert!(projector.is_err());
+
+        let projector =
+            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| true);
+        assert!(projector.is_ok());
     }
 }

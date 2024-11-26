@@ -17,13 +17,16 @@
 
 //! This module provide `EqualityDeleteWriter`.
 
+use std::sync::Arc;
+
 use arrow_array::RecordBatch;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, Field, SchemaRef as ArrowSchemaRef};
 use itertools::Itertools;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
-use crate::spec::{DataFile, Struct};
+use crate::arrow::schema_to_arrow_schema;
+use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
@@ -57,12 +60,38 @@ impl EqualityDeleteWriterConfig {
         original_schema: SchemaRef,
         partition_value: Option<Struct>,
     ) -> Result<Self> {
-        let projector = RecordBatchProjector::new(original_schema, &equality_ids, |field| {
-            field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .and_then(|value| value.parse::<i64>().ok())
-        })?;
+        let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
+        let projector = RecordBatchProjector::new(
+            original_arrow_schema,
+            &equality_ids,
+            // The following rule comes from https://iceberg.apache.org/spec/#identifier-field-ids
+            // - The identifier field ids must be used for primitive types.
+            // - The identifier field ids must not be used for floating point types or nullable fields.
+            // - The identifier field ids can be nested field of struct but not nested field of nullable struct.
+            |field| {
+                // Only primitive type is allowed to be used for identifier field ids
+                if field.is_nullable()
+                    || !field.data_type().is_primitive()
+                    || matches!(
+                        field.data_type(),
+                        DataType::Float16 | DataType::Float32 | DataType::Float64
+                    )
+                {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    field
+                        .metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .ok_or_else(|| {
+                            Error::new(ErrorKind::Unexpected, "Field metadata is missing.")
+                        })?
+                        .parse::<i64>()
+                        .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?,
+                ))
+            },
+            |field: &Field| !field.is_nullable(),
+        )?;
         Ok(Self {
             equality_ids,
             projector,
@@ -71,7 +100,7 @@ impl EqualityDeleteWriterConfig {
     }
 
     /// Return projected Schema
-    pub fn projected_schema_ref(&self) -> &SchemaRef {
+    pub fn projected_schema_ref(&self) -> &ArrowSchemaRef {
         self.projector.projected_schema_ref()
     }
 }
@@ -137,7 +166,6 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::types::Int32Type;
@@ -146,14 +174,14 @@ mod test {
     use arrow_select::concat::concat_batches;
     use itertools::Itertools;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
     use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
     use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{
-        DataFile, DataFileFormat, ListType, NestedField, PrimitiveType, Schema, StructType, Type,
+        DataFile, DataFileFormat, ListType, MapType, NestedField, PrimitiveType, Schema,
+        StructType, Type,
     };
     use crate::writer::base_writer::equality_delete_writer::{
         EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -352,9 +380,9 @@ mod test {
         let columns = vec![col0, col1, col2, col3, col4];
         let to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
 
-        let equality_ids = vec![1_i32, 3];
+        let equality_ids = vec![0_i32, 8];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, arrow_schema, None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
         let delete_schema = arrow_schema_to_schema(equality_config.projected_schema_ref()).unwrap();
         let projector = equality_config.projector.clone();
 
@@ -389,32 +417,85 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_equality_delete_float_or_double_column() -> Result<(), anyhow::Error> {
-        // Float32, Float64
-        let schema = {
-            let fields = vec![
-                arrow_schema::Field::new("col0", arrow_schema::DataType::Float32, true)
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "0".to_string(),
-                    )])),
-                arrow_schema::Field::new("col1", arrow_schema::DataType::Float64, true)
-                    .with_metadata(HashMap::from([(
-                        PARQUET_FIELD_ID_META_KEY.to_string(),
-                        "1".to_string(),
-                    )])),
-            ];
-            Arc::new(arrow_schema::Schema::new(fields))
-        };
-
-        let equality_id_float = vec![0];
-        let result_float = EqualityDeleteWriterConfig::new(equality_id_float, schema.clone(), None);
-        assert!(result_float.is_err());
-
-        let equality_ids_double = vec![1];
-        let result_double =
-            EqualityDeleteWriterConfig::new(equality_ids_double, schema.clone(), None);
-        assert!(result_double.is_err());
+    async fn test_equality_delete_unreachable_column() -> Result<(), anyhow::Error> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "col0", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::required(1, "col1", Type::Primitive(PrimitiveType::Double)).into(),
+                    NestedField::optional(2, "col2", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        3,
+                        "col3",
+                        Type::Struct(StructType::new(vec![NestedField::required(
+                            4,
+                            "sub_col",
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into()])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        5,
+                        "col4",
+                        Type::Struct(StructType::new(vec![NestedField::required(
+                            6,
+                            "sub_col2",
+                            Type::Primitive(PrimitiveType::Int),
+                        )
+                        .into()])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        7,
+                        "col5",
+                        Type::Map(MapType::new(
+                            Arc::new(NestedField::required(
+                                8,
+                                "key",
+                                Type::Primitive(PrimitiveType::String),
+                            )),
+                            Arc::new(NestedField::required(
+                                9,
+                                "value",
+                                Type::Primitive(PrimitiveType::Int),
+                            )),
+                        )),
+                    )
+                    .into(),
+                    NestedField::required(
+                        10,
+                        "col6",
+                        Type::List(ListType::new(Arc::new(NestedField::required(
+                            11,
+                            "element",
+                            Type::Primitive(PrimitiveType::Int),
+                        )))),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        // Float and Double are not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![0], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![1], schema.clone(), None).is_err());
+        // Int is nullable, not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![2], schema.clone(), None).is_err());
+        // Struct is not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![3], schema.clone(), None).is_err());
+        // Nested field of struct is allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![4], schema.clone(), None).is_ok());
+        // Nested field of optional struct is not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![6], schema.clone(), None).is_err());
+        // Nested field of map is not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![7], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![8], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![9], schema.clone(), None).is_err());
+        // Nested field of list is not allowed to be used for equality delete
+        assert!(EqualityDeleteWriterConfig::new(vec![10], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![11], schema.clone(), None).is_err());
 
         Ok(())
     }
