@@ -25,6 +25,7 @@ mod schema;
 mod snapshot;
 mod sort;
 mod table_metadata;
+mod table_metadata_builder;
 mod transform;
 mod values;
 mod view_metadata;

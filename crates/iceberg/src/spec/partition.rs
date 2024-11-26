@@ -147,7 +147,6 @@ impl BoundPartitionSpec {
     }
 
     /// Get the highest field id in the partition spec.
-    /// If the partition spec is unpartitioned, it returns the last unpartitioned last assigned id (999).
     pub fn highest_field_id(&self) -> Option<i32> {
         self.fields.iter().map(|f| f.field_id).max()
     }
@@ -181,6 +180,11 @@ impl BoundPartitionSpec {
         }
 
         true
+    }
+
+    /// Change the spec id of the partition spec
+    pub fn with_spec_id(self, spec_id: i32) -> Self {
+        Self { spec_id, ..self }
     }
 }
 

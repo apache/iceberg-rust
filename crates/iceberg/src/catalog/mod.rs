@@ -452,8 +452,46 @@ impl TableUpdate {
     /// Applies the update to the table metadata builder.
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
-            TableUpdate::AssignUuid { uuid } => builder.assign_uuid(uuid),
-            _ => unimplemented!(),
+            TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
+            TableUpdate::AddSchema {
+                schema,
+                last_column_id,
+            } => {
+                if let Some(last_column_id) = last_column_id {
+                    if builder.last_column_id() > last_column_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Invalid last column ID: {last_column_id} < {} (previous last column ID)",
+                                builder.last_column_id()
+                            ),
+                        ));
+                    }
+                };
+                Ok(builder.add_schema(schema))
+            }
+            TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
+            TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
+            TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
+            TableUpdate::AddSortOrder { sort_order } => builder.add_sort_order(sort_order),
+            TableUpdate::SetDefaultSortOrder { sort_order_id } => {
+                builder.set_default_sort_order(sort_order_id)
+            }
+            TableUpdate::AddSnapshot { snapshot } => builder.add_snapshot(snapshot),
+            TableUpdate::SetSnapshotRef {
+                ref_name,
+                reference,
+            } => builder.set_ref(&ref_name, reference),
+            TableUpdate::RemoveSnapshots { snapshot_ids } => {
+                Ok(builder.remove_snapshots(&snapshot_ids))
+            }
+            TableUpdate::RemoveSnapshotRef { ref_name } => Ok(builder.remove_ref(&ref_name)),
+            TableUpdate::SetLocation { location } => Ok(builder.set_location(location)),
+            TableUpdate::SetProperties { updates } => builder.set_properties(updates),
+            TableUpdate::RemoveProperties { removals } => builder.remove_properties(&removals),
+            TableUpdate::UpgradeFormatVersion { format_version } => {
+                builder.upgrade_format_version(format_version)
+            }
         }
     }
 }
@@ -749,7 +787,7 @@ mod tests {
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
         SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
         UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion,
+        ViewVersion, MAIN_BRANCH,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -803,9 +841,9 @@ mod tests {
         TableMetadataBuilder::from_table_creation(tbl_creation)
             .unwrap()
             .assign_uuid(uuid::Uuid::nil())
-            .unwrap()
             .build()
             .unwrap()
+            .metadata
     }
 
     #[test]
@@ -855,7 +893,7 @@ mod tests {
         {
             "snapshot-id": 3051729675574597004,
             "sequence-number": 10,
-            "timestamp-ms": 1515100955770,
+            "timestamp-ms": 9992191116217,
             "summary": {
                 "operation": "append"
             },
@@ -865,8 +903,28 @@ mod tests {
         "#;
 
         let snapshot = serde_json::from_str::<Snapshot>(record).unwrap();
-        let mut metadata = metadata;
-        metadata.append_snapshot(snapshot);
+        let builder = metadata.into_builder(None);
+        let builder = TableUpdate::AddSnapshot {
+            snapshot: snapshot.clone(),
+        }
+        .apply(builder)
+        .unwrap();
+        let metadata = TableUpdate::SetSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string(),
+            reference: SnapshotReference {
+                snapshot_id: snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: Some(10),
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            },
+        }
+        .apply(builder)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
 
         // Ref exists and should matches
         let requirement = TableRequirement::RefSnapshotIdMatch {
@@ -916,14 +974,13 @@ mod tests {
     #[test]
     fn test_check_last_assigned_partition_id() {
         let metadata = metadata();
-
         let requirement = TableRequirement::LastAssignedPartitionIdMatch {
-            last_assigned_partition_id: 1,
+            last_assigned_partition_id: 0,
         };
         assert!(requirement.check(Some(&metadata)).is_err());
 
         let requirement = TableRequirement::LastAssignedPartitionIdMatch {
-            last_assigned_partition_id: 0,
+            last_assigned_partition_id: 999,
         };
         assert!(requirement.check(Some(&metadata)).is_ok());
     }
@@ -1582,8 +1639,12 @@ mod tests {
         let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
             .build()
-            .unwrap();
-        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+            .unwrap()
+            .metadata;
+        let table_metadata_builder = TableMetadataBuilder::new_from_metadata(
+            table_metadata,
+            Some("s3://db/table/metadata/metadata1.gz.json".to_string()),
+        );
 
         let uuid = uuid::Uuid::new_v4();
         let update = TableUpdate::AssignUuid { uuid };
@@ -1591,7 +1652,8 @@ mod tests {
             .apply(table_metadata_builder)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
         assert_eq!(updated_metadata.uuid(), uuid);
     }
 

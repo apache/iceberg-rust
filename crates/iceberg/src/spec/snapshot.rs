@@ -325,6 +325,13 @@ pub struct SnapshotReference {
 }
 
 impl SnapshotReference {
+    /// Returns true if the snapshot reference is a branch.
+    pub fn is_branch(&self) -> bool {
+        matches!(self.retention, SnapshotRetention::Branch { .. })
+    }
+}
+
+impl SnapshotReference {
     /// Create new snapshot reference
     pub fn new(snapshot_id: i64, retention: SnapshotRetention) -> Self {
         SnapshotReference {

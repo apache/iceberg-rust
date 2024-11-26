@@ -699,7 +699,9 @@ impl Catalog for SqlCatalog {
             }
         };
 
-        let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?.build()?;
+        let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
+            .build()?
+            .metadata;
         let tbl_metadata_location = format!(
             "{}/metadata/0-{}.metadata.json",
             location.clone(),
