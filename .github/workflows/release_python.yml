@@ -136,6 +136,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: wheels
+        merge-multiple: true
         path: bindings/python/dist
     - name: Publish to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
