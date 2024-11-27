@@ -107,7 +107,7 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: wheels-*
+        pattern: wheels-*
         merge-multiple: true
         path: bindings/python/dist
     - name: Publish to PyPI
@@ -135,7 +135,7 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: wheels-*
+        pattern: wheels-*
         merge-multiple: true
         path: bindings/python/dist
     - name: Publish to TestPyPI
