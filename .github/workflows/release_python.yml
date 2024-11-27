@@ -21,8 +21,6 @@ on:
   push:
     tags:
       - '*'
-    branches:
-      - bump-version-upload-artifact
   pull_request:
     branches:
       - main
@@ -124,8 +122,8 @@ jobs:
     needs: [ sdist, wheels ]
     runs-on: ubuntu-latest
     # Only publish to TestPyPi if the tag is a pre-release
-    # if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')}}
-    if: github.event_name == 'push'
+    if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')}}
+
     environment:
       name: testpypi
       url: https://test.pypi.org/p/pyiceberg_core
