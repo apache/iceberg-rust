@@ -132,12 +132,12 @@ impl ManifestListWriter {
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
-        if let Some(parent_snapshot_id) = parent_snapshot_id {
-            metadata.insert(
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            );
-        }
+        metadata.insert(
+            "parent-snapshot-id".to_string(),
+            parent_snapshot_id
+                .map(|v| v.to_string())
+                .unwrap_or("null".to_string()),
+        );
         Self::new(
             FormatVersion::V2,
             output_file,
