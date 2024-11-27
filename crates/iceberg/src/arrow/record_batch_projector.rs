@@ -62,7 +62,10 @@ impl RecordBatchProjector {
                 &field_id_fetch_func,
                 &searchable_field_func,
             )?
-            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field not found"))?;
+            .ok_or_else(|| {
+                Error::new(ErrorKind::Unexpected, "Field not found")
+                    .with_context("field_id", id.to_string())
+            })?;
             fields.push(field.clone());
             field_indices.push(field_index);
         }
