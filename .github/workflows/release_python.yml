@@ -49,9 +49,9 @@ jobs:
           command: sdist
           args: -o dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-sdist
           path: bindings/python/dist
 
   wheels:
@@ -84,9 +84,9 @@ jobs:
             # Workaround ring 0.17 build issue
             CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
         - name: Upload wheels
-          uses: actions/upload-artifact@v3
+          uses: actions/upload-artifact@v4
           with:
-            name: wheels
+            name: wheels-${{ matrix.os }}
             path: bindings/python/dist
 
   pypi-publish:
@@ -105,9 +105,10 @@ jobs:
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: wheels
+        name: wheels-*
+        merge-multiple: true
         path: bindings/python/dist
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -132,7 +133,7 @@ jobs:
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: wheels
         path: bindings/python/dist
