@@ -188,12 +188,6 @@ impl TableMetadataBuilder {
         )
     }
 
-    /// Get the current last column id
-    #[inline]
-    pub(crate) fn last_column_id(&self) -> i32 {
-        self.metadata.last_column_id
-    }
-
     /// Changes uuid of table metadata.
     pub fn assign_uuid(mut self, uuid: Uuid) -> Self {
         if self.metadata.table_uuid != uuid {
