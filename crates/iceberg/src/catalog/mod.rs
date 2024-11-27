@@ -453,23 +453,7 @@ impl TableUpdate {
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
             TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
-            TableUpdate::AddSchema {
-                schema,
-                last_column_id,
-            } => {
-                if let Some(last_column_id) = last_column_id {
-                    if builder.last_column_id() > last_column_id {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Invalid last column ID: {last_column_id} < {} (previous last column ID)",
-                                builder.last_column_id()
-                            ),
-                        ));
-                    }
-                };
-                Ok(builder.add_schema(schema))
-            }
+            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)),
             TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
             TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
             TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
