@@ -122,7 +122,7 @@ jobs:
     needs: [ sdist, linux ]
     runs-on: ubuntu-latest
     # Only publish to TestPyPi if the tag is a pre-release
-    if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')}}
+    # if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')}}
 
     environment:
       name: testpypi
