@@ -327,7 +327,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 .ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
-                        "Partition field should only be primitve type.",
+                        "Partition field should only be primitive type.",
                     )
                 })?
                 .compatible(&value.as_primitive_literal().unwrap())

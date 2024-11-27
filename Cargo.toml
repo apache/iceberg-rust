@@ -19,9 +19,9 @@
 resolver = "2"
 members = [
     "crates/catalog/*",
-    "crates/integration_tests",
     "crates/examples",
     "crates/iceberg",
+    "crates/integration_tests",
     "crates/integrations/*",
     "crates/test_utils",
 ]
