@@ -1837,22 +1837,6 @@
 <a href="#1837" id="1837">1837</a>
 <a href="#1838" id="1838">1838</a>
 <a href="#1839" id="1839">1839</a>
-<a href="#1840" id="1840">1840</a>
-<a href="#1841" id="1841">1841</a>
-<a href="#1842" id="1842">1842</a>
-<a href="#1843" id="1843">1843</a>
-<a href="#1844" id="1844">1844</a>
-<a href="#1845" id="1845">1845</a>
-<a href="#1846" id="1846">1846</a>
-<a href="#1847" id="1847">1847</a>
-<a href="#1848" id="1848">1848</a>
-<a href="#1849" id="1849">1849</a>
-<a href="#1850" id="1850">1850</a>
-<a href="#1851" id="1851">1851</a>
-<a href="#1852" id="1852">1852</a>
-<a href="#1853" id="1853">1853</a>
-<a href="#1854" id="1854">1854</a>
-<a href="#1855" id="1855">1855</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2308,23 +2292,7 @@
     </span><span class="kw">pub fn </span>apply(<span class="self">self</span>, builder: TableMetadataBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;TableMetadataBuilder&gt; {
         <span class="kw">match </span><span class="self">self </span>{
             TableUpdate::AssignUuid { uuid } =&gt; <span class="prelude-val">Ok</span>(builder.assign_uuid(uuid)),
-            TableUpdate::AddSchema {
-                schema,
-                last_column_id,
-            } =&gt; {
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(last_column_id) = last_column_id {
-                    <span class="kw">if </span>builder.last_column_id() &gt; last_column_id {
-                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                            ErrorKind::DataInvalid,
-                            <span class="macro">format!</span>(
-                                <span class="string">"Invalid last column ID: {last_column_id} &lt; {} (previous last column ID)"</span>,
-                                builder.last_column_id()
-                            ),
-                        ));
-                    }
-                };
-                <span class="prelude-val">Ok</span>(builder.add_schema(schema))
-            }
+            TableUpdate::AddSchema { schema, .. } =&gt; <span class="prelude-val">Ok</span>(builder.add_schema(schema)),
             TableUpdate::SetCurrentSchema { schema_id } =&gt; builder.set_current_schema(schema_id),
             TableUpdate::AddSpec { spec } =&gt; builder.add_partition_spec(spec),
             TableUpdate::SetDefaultSpec { spec_id } =&gt; builder.set_default_partition_spec(spec_id),
