@@ -31,7 +31,7 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
-use iceberg_e2e_test::set_test_fixture;
+use iceberg_integration_tests::set_test_fixture;
 use parquet::file::properties::WriterProperties;
 
 #[tokio::test]
