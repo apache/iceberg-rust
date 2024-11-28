@@ -1487,6 +1487,15 @@
 <a href="#1487" id="1487">1487</a>
 <a href="#1488" id="1488">1488</a>
 <a href="#1489" id="1489">1489</a>
+<a href="#1490" id="1490">1490</a>
+<a href="#1491" id="1491">1491</a>
+<a href="#1492" id="1492">1492</a>
+<a href="#1493" id="1493">1493</a>
+<a href="#1494" id="1494">1494</a>
+<a href="#1495" id="1495">1495</a>
+<a href="#1496" id="1496">1496</a>
+<a href="#1497" id="1497">1497</a>
+<a href="#1498" id="1498">1498</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1874,11 +1883,20 @@
             DataType::Timestamp(unit, <span class="prelude-val">None</span>) <span class="kw">if </span>unit == <span class="kw-2">&amp;</span>TimeUnit::Microsecond =&gt; {
                 <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Timestamp))
             }
+            DataType::Timestamp(unit, <span class="prelude-val">None</span>) <span class="kw">if </span>unit == <span class="kw-2">&amp;</span>TimeUnit::Nanosecond =&gt; {
+                <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::TimestampNs))
+            }
             DataType::Timestamp(unit, <span class="prelude-val">Some</span>(zone))
                 <span class="kw">if </span>unit == <span class="kw-2">&amp;</span>TimeUnit::Microsecond
                     &amp;&amp; (zone.as_ref() == <span class="string">"UTC" </span>|| zone.as_ref() == <span class="string">"+00:00"</span>) =&gt;
             {
                 <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Timestamptz))
+            }
+            DataType::Timestamp(unit, <span class="prelude-val">Some</span>(zone))
+                <span class="kw">if </span>unit == <span class="kw-2">&amp;</span>TimeUnit::Nanosecond
+                    &amp;&amp; (zone.as_ref() == <span class="string">"UTC" </span>|| zone.as_ref() == <span class="string">"+00:00"</span>) =&gt;
+            {
+                <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
             DataType::Binary | DataType::LargeBinary =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Binary)),
             DataType::FixedSizeBinary(width) =&gt; {
