@@ -1564,6 +1564,16 @@ impl Literal {
         Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
+    /// Creates a timestamp from unix epoch in nanoseconds.
+    pub fn timestamp_nano(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in nanoseconds.
+    pub fn timestamptz_nano(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
     /// Creates a timestamp from [`DateTime`].
     pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
         Self::timestamp(dt.with_timezone(&Utc).timestamp_micros())
