@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["data_file_writer"]};
+window.SIDEBAR_ITEMS = {"mod":["data_file_writer","equality_delete_writer"]};
