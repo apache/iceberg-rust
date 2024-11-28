@@ -129,6 +129,8 @@ pub struct ManifestWriter {
     key_metadata: Vec<u8>,
 
     field_summary: HashMap<i32, FieldSummary>,
+
+    manifset_entries: Vec<ManifestEntry>,
 }
 
 impl ManifestWriter {
@@ -146,6 +148,7 @@ impl ManifestWriter {
             min_seq_num: None,
             key_metadata,
             field_summary: HashMap::new(),
+            manifset_entries: Vec::new(),
         }
     }
 
@@ -203,12 +206,80 @@ impl ManifestWriter {
         partition_summary
     }
 
-    /// Write a manifest.
-    pub async fn write(mut self, manifest: Manifest) -> Result<ManifestFile> {
+    /// Add a new manifest entry.
+    pub fn add(&mut self, mut entry: ManifestEntry) -> Result<()> {
+        if entry.sequence_number().is_some_and(|n| n >= 0) {
+            entry.status = ManifestStatus::Added;
+            entry.snapshot_id = Some(self.snapshot_id);
+            entry.file_sequence_number = None;
+        } else {
+            entry.status = ManifestStatus::Added;
+            entry.snapshot_id = Some(self.snapshot_id);
+            entry.sequence_number = None;
+            entry.file_sequence_number = None;
+        };
+        self.add_entry(entry)?;
+        Ok(())
+    }
+
+    /// Add a delete manifest entry.
+    pub fn delete(&mut self, mut entry: ManifestEntry) -> Result<()> {
+        entry.status = ManifestStatus::Deleted;
+        entry.snapshot_id = Some(self.snapshot_id);
+        self.add_entry(entry)?;
+        Ok(())
+    }
+
+    /// Add an existing manifest entry.
+    pub fn existing(&mut self, mut entry: ManifestEntry) -> Result<()> {
+        entry.status = ManifestStatus::Existing;
+        self.add_entry(entry)?;
+        Ok(())
+    }
+
+    fn add_entry(&mut self, entry: ManifestEntry) -> Result<()> {
+        // Check if the entry has sequence number
+        if (entry.status == ManifestStatus::Deleted || entry.status == ManifestStatus::Existing)
+            && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none())
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Manifest entry with status Existing or Deleted should have sequence number",
+            ));
+        }
+
+        // Update the statistics
+        match entry.status {
+            ManifestStatus::Added => {
+                self.added_files += 1;
+                self.added_rows += entry.data_file.record_count;
+            }
+            ManifestStatus::Deleted => {
+                self.deleted_files += 1;
+                self.deleted_rows += entry.data_file.record_count;
+            }
+            ManifestStatus::Existing => {
+                self.existing_files += 1;
+                self.existing_rows += entry.data_file.record_count;
+            }
+        }
+        if entry.is_alive() {
+            if let Some(seq_num) = entry.sequence_number {
+                self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
+            }
+        }
+        self.update_field_summary(&entry);
+
+        self.manifset_entries.push(entry);
+        Ok(())
+    }
+
+    /// Write manifest file and return it.
+    pub async fn to_manifest_file(mut self, metadata: ManifestMetadata) -> Result<ManifestFile> {
         // Create the avro writer
-        let partition_type = manifest.metadata.partition_spec.partition_type();
-        let table_schema = &manifest.metadata.schema;
-        let avro_schema = match manifest.metadata.format_version {
+        let partition_type = metadata.partition_spec.partition_type();
+        let table_schema = &metadata.schema;
+        let avro_schema = match metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(partition_type.clone())?,
             FormatVersion::V2 => manifest_schema_v2(partition_type.clone())?,
         };
@@ -226,69 +297,34 @@ impl ManifestWriter {
         )?;
         avro_writer.add_user_metadata(
             "partition-spec".to_string(),
-            to_vec(&manifest.metadata.partition_spec.fields()).map_err(|err| {
+            to_vec(&metadata.partition_spec.fields()).map_err(|err| {
                 Error::new(ErrorKind::DataInvalid, "Fail to serialize partition spec")
                     .with_source(err)
             })?,
         )?;
         avro_writer.add_user_metadata(
             "partition-spec-id".to_string(),
-            manifest.metadata.partition_spec.spec_id().to_string(),
+            metadata.partition_spec.spec_id().to_string(),
         )?;
         avro_writer.add_user_metadata(
             "format-version".to_string(),
-            (manifest.metadata.format_version as u8).to_string(),
+            (metadata.format_version as u8).to_string(),
         )?;
-        if manifest.metadata.format_version == FormatVersion::V2 {
-            avro_writer
-                .add_user_metadata("content".to_string(), manifest.metadata.content.to_string())?;
+        if metadata.format_version == FormatVersion::V2 {
+            avro_writer.add_user_metadata("content".to_string(), metadata.content.to_string())?;
         }
 
         // Write manifest entries
-        for entry in manifest.entries {
-            if (entry.status == ManifestStatus::Deleted || entry.status == ManifestStatus::Existing)
-                && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none())
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Manifest entry with status Existing or Deleted should have sequence number",
-                ));
-            }
-
-            match entry.status {
-                ManifestStatus::Added => {
-                    self.added_files += 1;
-                    self.added_rows += entry.data_file.record_count;
+        for entry in std::mem::take(&mut self.manifset_entries) {
+            let value = match metadata.format_version {
+                FormatVersion::V1 => {
+                    to_value(_serde::ManifestEntryV1::try_from(entry, partition_type)?)?
+                        .resolve(&avro_schema)?
                 }
-                ManifestStatus::Deleted => {
-                    self.deleted_files += 1;
-                    self.deleted_rows += entry.data_file.record_count;
+                FormatVersion::V2 => {
+                    to_value(_serde::ManifestEntryV2::try_from(entry, partition_type)?)?
+                        .resolve(&avro_schema)?
                 }
-                ManifestStatus::Existing => {
-                    self.existing_files += 1;
-                    self.existing_rows += entry.data_file.record_count;
-                }
-            }
-
-            if entry.is_alive() {
-                if let Some(seq_num) = entry.sequence_number {
-                    self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
-                }
-            }
-
-            self.update_field_summary(&entry);
-
-            let value = match manifest.metadata.format_version {
-                FormatVersion::V1 => to_value(_serde::ManifestEntryV1::try_from(
-                    (*entry).clone(),
-                    partition_type,
-                )?)?
-                .resolve(&avro_schema)?,
-                FormatVersion::V2 => to_value(_serde::ManifestEntryV2::try_from(
-                    (*entry).clone(),
-                    partition_type,
-                )?)?
-                .resolve(&avro_schema)?,
             };
 
             avro_writer.append(value)?;
@@ -298,14 +334,13 @@ impl ManifestWriter {
         let length = content.len();
         self.output.write(Bytes::from(content)).await?;
 
-        let partition_summary =
-            self.get_field_summary_vec(manifest.metadata.partition_spec.fields());
+        let partition_summary = self.get_field_summary_vec(metadata.partition_spec.fields());
 
         Ok(ManifestFile {
             manifest_path: self.output.location().to_string(),
             manifest_length: length as i64,
-            partition_spec_id: manifest.metadata.partition_spec.spec_id(),
-            content: manifest.metadata.content,
+            partition_spec_id: metadata.partition_spec.spec_id(),
+            content: metadata.content,
             // sequence_number and min_sequence_number with UNASSIGNED_SEQUENCE_NUMBER will be replace with
             // real sequence number in `ManifestListWriter`.
             sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
@@ -912,6 +947,12 @@ impl ManifestEntry {
         self.sequence_number
     }
 
+    /// File sequence number.
+    #[inline]
+    pub fn file_sequence_number(&self) -> Option<i64> {
+        self.file_sequence_number
+    }
+
     /// File size in bytes.
     #[inline]
     pub fn file_size_in_bytes(&self) -> u64 {
@@ -1292,8 +1333,8 @@ mod _serde {
             Ok(ManifestEntry {
                 status: self.status.try_into()?,
                 snapshot_id: Some(self.snapshot_id),
-                sequence_number: Some(0),
-                file_sequence_number: Some(0),
+                sequence_number: None,
+                file_sequence_number: None,
                 data_file: self.data_file.try_into(partition_type, schema)?,
             })
         }
@@ -1596,16 +1637,18 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let manifest = Manifest {
-            metadata: ManifestMetadata {
-                schema_id: 0,
-                schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
-                content: ManifestContentType::Data,
-                format_version: FormatVersion::V2,
-            },
-            entries: vec![
-                Arc::new(ManifestEntry {
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 0,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(0)
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let mut manifest_entries = vec![
+            ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: None,
                     sequence_number: None,
@@ -1628,13 +1671,23 @@ mod tests {
                         equality_ids: Vec::new(),
                         sort_order_id: None,
                     }
-                })
-            ]
-        };
+            }
+        ];
 
-        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
-
-        test_manifest_read_write(manifest, writer).await;
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 1).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        let actual_manifest = read_manifest(&tmp_dir).await;
+        // The snapshot id is assigned when the entry is added to the manifest.
+        manifest_entries[0].snapshot_id = Some(1);
+        assert_eq!(
+            actual_manifest,
+            Manifest::new(manifest_metadata, manifest_entries)
+        );
     }
 
     #[tokio::test]
@@ -1709,22 +1762,26 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let manifest = Manifest {
-            metadata: ManifestMetadata {
-                schema_id: 0,
-                schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema)
-                .with_spec_id(0).add_partition_field("v_int", "v_int", Transform::Identity).unwrap()
-                .add_partition_field("v_long", "v_long", Transform::Identity).unwrap().build().unwrap(),
-                content: ManifestContentType::Data,
-                format_version: FormatVersion::V2,
-            },
-            entries: vec![Arc::new(ManifestEntry {
-                status: ManifestStatus::Added,
-                snapshot_id: None,
-                sequence_number: None,
-                file_sequence_number: None,
-                data_file: DataFile {
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 0,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(0)
+                .add_partition_field("v_int", "v_int", Transform::Identity)
+                .unwrap()
+                .add_partition_field("v_long", "v_long", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let mut manifest_entries = vec![ManifestEntry {
+            status: ManifestStatus::Added,
+            snapshot_id: None,
+            sequence_number: None,
+            file_sequence_number: None,
+            data_file: DataFile {
                     content: DataContentType::Data,
                     file_format: DataFileFormat::Parquet,
                     file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-378b56f5-5c52-4102-a2c2-f05f8a7cbe4a-00000.parquet".to_string(),
@@ -1782,17 +1839,29 @@ mod tests {
                     key_metadata: vec![],
                     split_offsets: vec![4],
                     equality_ids: vec![],
-                    sort_order_id: None,
-                },
-            })],
-        };
+                sort_order_id: None,
+            },
+        }];
 
-        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
-
-        let res = test_manifest_read_write(manifest, writer).await;
-
-        assert_eq!(res.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
-        assert_eq!(res.min_sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 2).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        let manifest_file = writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        assert_eq!(manifest_file.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
+        assert_eq!(
+            manifest_file.min_sequence_number,
+            UNASSIGNED_SEQUENCE_NUMBER
+        );
+        let actual_manifest = read_manifest(&tmp_dir).await;
+        // The snapshot id is assigned when the entry is added to the manifest.
+        manifest_entries[0].snapshot_id = Some(2);
+        assert_eq!(
+            actual_manifest,
+            Manifest::new(manifest_metadata, manifest_entries)
+        );
     }
 
     #[tokio::test]
@@ -1820,19 +1889,21 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let manifest = Manifest {
-            metadata: ManifestMetadata {
-                schema_id: 1,
-                schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
-                content: ManifestContentType::Data,
-                format_version: FormatVersion::V1,
-            },
-            entries: vec![Arc::new(ManifestEntry {
-                status: ManifestStatus::Added,
-                snapshot_id: Some(0),
-                sequence_number: Some(0),
-                file_sequence_number: Some(0),
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 1,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(0)
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V1,
+        };
+        let mut manifest_entries = vec![ManifestEntry {
+            status: ManifestStatus::Added,
+                snapshot_id: None,
+                sequence_number: None,
+                file_sequence_number: None,
                 data_file: DataFile {
                     content: DataContentType::Data,
                     file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
@@ -1851,13 +1922,23 @@ mod tests {
                     equality_ids: vec![],
                     sort_order_id: Some(0),
                 }
-            })],
-        };
+            }
+        ];
 
-        let writer =
-            |output_file: OutputFile| ManifestWriter::new(output_file, 2966623707104393227, vec![]);
-
-        test_manifest_read_write(manifest, writer).await;
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 3).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        let actual_manifest = read_manifest(&tmp_dir).await;
+        // The snapshot id is assigned when the entry is added to the manifest.
+        manifest_entries[0].snapshot_id = Some(3);
+        assert_eq!(
+            actual_manifest,
+            Manifest::new(manifest_metadata, manifest_entries)
+        );
     }
 
     #[tokio::test]
@@ -1884,20 +1965,23 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let manifest = Manifest {
-            metadata: ManifestMetadata {
-                schema_id: 0,
-                schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).add_partition_field("category", "category", Transform::Identity).unwrap().build().unwrap(),
-                content: ManifestContentType::Data,
-                format_version: FormatVersion::V1,
-            },
-            entries: vec![
-                Arc::new(ManifestEntry {
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 0,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .add_partition_field("category", "category", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V1,
+        };
+        let mut manifest_entries = vec![
+            ManifestEntry {
                     status: ManifestStatus::Added,
-                    snapshot_id: Some(0),
-                    sequence_number: Some(0),
-                    file_sequence_number: Some(0),
+                    snapshot_id: Some(1),
+                    sequence_number: None,
+                    file_sequence_number: None,
                     data_file: DataFile {
                         content: DataContentType::Data,
                         file_path: "s3://testbucket/prod/db/sample/data/category=x/00010-1-d5c93668-1e52-41ac-92a6-bba590cbf249-00001.parquet".to_string(),
@@ -1931,17 +2015,32 @@ mod tests {
                         equality_ids: vec![],
                         sort_order_id: Some(0),
                     },
-                })
-            ]
-        };
+            }
+        ];
 
-        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
-
-        let entry = test_manifest_read_write(manifest, writer).await;
-
-        assert_eq!(entry.partitions.len(), 1);
-        assert_eq!(entry.partitions[0].lower_bound, Some(Datum::string("x")));
-        assert_eq!(entry.partitions[0].upper_bound, Some(Datum::string("x")));
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 2).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        let manifest_file = writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        assert_eq!(manifest_file.partitions.len(), 1);
+        assert_eq!(
+            manifest_file.partitions[0].lower_bound,
+            Some(Datum::string("x"))
+        );
+        assert_eq!(
+            manifest_file.partitions[0].upper_bound,
+            Some(Datum::string("x"))
+        );
+        let actual_manifest = read_manifest(&tmp_dir).await;
+        // The snapshot id is assigned when the entry is added to the manifest.
+        manifest_entries[0].snapshot_id = Some(2);
+        assert_eq!(
+            actual_manifest,
+            Manifest::new(manifest_metadata, manifest_entries)
+        );
     }
 
     #[tokio::test]
@@ -1963,27 +2062,29 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let manifest = Manifest {
-            metadata: ManifestMetadata {
-                schema_id: 0,
-                schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(0).build().unwrap(),
-                content: ManifestContentType::Data,
-                format_version: FormatVersion::V2,
-            },
-            entries: vec![Arc::new(ManifestEntry {
-                status: ManifestStatus::Added,
-                snapshot_id: None,
-                sequence_number: None,
-                file_sequence_number: None,
-                data_file: DataFile {
-                    content: DataContentType::Data,
-                    file_format: DataFileFormat::Parquet,
-                    file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-378b56f5-5c52-4102-a2c2-f05f8a7cbe4a-00000.parquet".to_string(),
-                    partition: Struct::empty(),
-                    record_count: 1,
-                    file_size_in_bytes: 5442,
-                    column_sizes: HashMap::from([
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 0,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(0)
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let manifest_entries = vec![ManifestEntry {
+            status: ManifestStatus::Added,
+            snapshot_id: None,
+            sequence_number: None,
+            file_sequence_number: None,
+            data_file: DataFile {
+                content: DataContentType::Data,
+                file_format: DataFileFormat::Parquet,
+                file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-378b56f5-5c52-4102-a2c2-f05f8a7cbe4a-00000.parquet".to_string(),
+                partition: Struct::empty(),
+                record_count: 1,
+                file_size_in_bytes: 5442,
+                column_sizes: HashMap::from([
                         (1, 61),
                         (2, 73),
                         (3, 61),
@@ -2004,20 +2105,23 @@ mod tests {
                     key_metadata: vec![],
                     split_offsets: vec![4],
                     equality_ids: vec![],
-                    sort_order_id: None,
-                },
-            })],
-        };
+                sort_order_id: None,
+            },
+        }
+        ];
 
-        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
-
-        let (avro_bytes, _) = write_manifest(&manifest, writer).await;
-
-        // The parse should succeed.
-        let actual_manifest = Manifest::parse_avro(avro_bytes.as_slice()).unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 2).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        let actual_manifest = read_manifest(&tmp_dir).await;
 
         // Compared with original manifest, the lower_bounds and upper_bounds no longer has data for field 3, and
         // other parts should be same.
+        // The snapshot id is assigned when the entry is added to the manifest.
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -2045,7 +2149,7 @@ mod tests {
             },
             entries: vec![Arc::new(ManifestEntry {
                 status: ManifestStatus::Added,
-                snapshot_id: None,
+                snapshot_id: Some(2),
                 sequence_number: None,
                 file_sequence_number: None,
                 data_file: DataFile {
@@ -2082,30 +2186,141 @@ mod tests {
         assert_eq!(actual_manifest, expected_manifest);
     }
 
-    async fn test_manifest_read_write(
-        manifest: Manifest,
-        writer_builder: impl FnOnce(OutputFile) -> ManifestWriter,
-    ) -> ManifestFile {
-        let (bs, res) = write_manifest(&manifest, writer_builder).await;
-        let actual_manifest = Manifest::parse_avro(bs.as_slice()).unwrap();
+    #[tokio::test]
+    async fn test_add_delete_existing() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::optional(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Int),
+                    )),
+                    Arc::new(NestedField::optional(
+                        2,
+                        "name",
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
 
-        assert_eq!(actual_manifest, manifest);
-        res
+        let manifest_metadata = ManifestMetadata {
+            schema_id: 0,
+            schema: schema.clone(),
+            partition_spec: BoundPartitionSpec::builder(schema)
+                .with_spec_id(0)
+                .build()
+                .unwrap(),
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+
+        let mut manifest_entries = vec![
+            ManifestEntry {
+                status: ManifestStatus::Added,
+                snapshot_id: None,
+                sequence_number: Some(1),
+                file_sequence_number: Some(1),
+                data_file: DataFile {
+                    content: DataContentType::Data,
+                    file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                    file_format: DataFileFormat::Parquet,
+                    partition: Struct::empty(),
+                    record_count: 1,
+                    file_size_in_bytes: 5442,
+                    column_sizes: HashMap::from([(1, 61), (2, 73)]),
+                    value_counts: HashMap::from([(1, 1), (2, 1)]),
+                    null_value_counts: HashMap::from([(1, 0), (2, 0)]),
+                    nan_value_counts: HashMap::new(),
+                    lower_bounds: HashMap::new(),
+                    upper_bounds: HashMap::new(),
+                    key_metadata: Vec::new(),
+                    split_offsets: vec![4],
+                    equality_ids: Vec::new(),
+                    sort_order_id: None,
+                },
+            },
+            ManifestEntry {
+                status: ManifestStatus::Deleted,
+                snapshot_id: Some(1),
+                sequence_number: Some(1),
+                file_sequence_number: Some(1),
+                data_file: DataFile {
+                    content: DataContentType::Data,
+                    file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                    file_format: DataFileFormat::Parquet,
+                    partition: Struct::empty(),
+                    record_count: 1,
+                    file_size_in_bytes: 5442,
+                    column_sizes: HashMap::from([(1, 61), (2, 73)]),
+                    value_counts: HashMap::from([(1, 1), (2, 1)]),
+                    null_value_counts: HashMap::from([(1, 0), (2, 0)]),
+                    nan_value_counts: HashMap::new(),
+                    lower_bounds: HashMap::new(),
+                    upper_bounds: HashMap::new(),
+                    key_metadata: Vec::new(),
+                    split_offsets: vec![4],
+                    equality_ids: Vec::new(),
+                    sort_order_id: None,
+                },
+            },
+            ManifestEntry {
+                status: ManifestStatus::Existing,
+                snapshot_id: Some(1),
+                sequence_number: Some(1),
+                file_sequence_number: Some(1),
+                data_file: DataFile {
+                    content: DataContentType::Data,
+                    file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                    file_format: DataFileFormat::Parquet,
+                    partition: Struct::empty(),
+                    record_count: 1,
+                    file_size_in_bytes: 5442,
+                    column_sizes: HashMap::from([(1, 61), (2, 73)]),
+                    value_counts: HashMap::from([(1, 1), (2, 1)]),
+                    null_value_counts: HashMap::from([(1, 0), (2, 0)]),
+                    nan_value_counts: HashMap::new(),
+                    lower_bounds: HashMap::new(),
+                    upper_bounds: HashMap::new(),
+                    key_metadata: Vec::new(),
+                    split_offsets: vec![4],
+                    equality_ids: Vec::new(),
+                    sort_order_id: None,
+                },
+            },
+        ];
+
+        let tmp_dir = TempDir::new().unwrap();
+        let mut writer = create_manifest_writer(&tmp_dir, 3).await;
+        writer.add(manifest_entries[0].clone()).unwrap();
+        writer.delete(manifest_entries[1].clone()).unwrap();
+        writer.existing(manifest_entries[2].clone()).unwrap();
+        writer
+            .to_manifest_file(manifest_metadata.clone())
+            .await
+            .unwrap();
+        let actual_manifest = read_manifest(&tmp_dir).await;
+
+        // The snapshot id is assigned when the entry is added and delete to the manifest. Existing entries are keep original.
+        manifest_entries[0].snapshot_id = Some(3);
+        manifest_entries[1].snapshot_id = Some(3);
+        // file sequence number is assigned to None when the entry is added and delete to the manifest.
+        manifest_entries[0].file_sequence_number = None;
+        let expected_manifest = Manifest::new(manifest_metadata, manifest_entries);
+        assert_eq!(actual_manifest, expected_manifest);
     }
 
-    /// Utility method which writes out a manifest and returns the bytes.
-    async fn write_manifest(
-        manifest: &Manifest,
-        writer_builder: impl FnOnce(OutputFile) -> ManifestWriter,
-    ) -> (Vec<u8>, ManifestFile) {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("test_manifest.avro");
+    async fn create_manifest_writer(tmpdir: &TempDir, snapshot_id: i64) -> ManifestWriter {
+        let path = tmpdir.path().join("test_manifest.avro");
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
-        let writer = writer_builder(output_file);
-        let res = writer.write(manifest.clone()).await.unwrap();
+        ManifestWriter::new(output_file, snapshot_id, vec![])
+    }
 
-        // Verify manifest
-        (fs::read(path).expect("read_file must succeed"), res)
+    async fn read_manifest(tmpdir: &TempDir) -> Manifest {
+        let path = tmpdir.path().join("test_manifest.avro");
+        Manifest::parse_avro(&fs::read(path).expect("read_file must succeed")).unwrap()
     }
 }
