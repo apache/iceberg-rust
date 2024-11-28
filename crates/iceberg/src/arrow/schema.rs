@@ -385,11 +385,20 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Timestamp(unit, None) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Timestamp))
             }
+            DataType::Timestamp(unit, None) if unit == &TimeUnit::Nanosecond => {
+                Ok(Type::Primitive(PrimitiveType::TimestampNs))
+            }
             DataType::Timestamp(unit, Some(zone))
                 if unit == &TimeUnit::Microsecond
                     && (zone.as_ref() == "UTC" || zone.as_ref() == "+00:00") =>
             {
                 Ok(Type::Primitive(PrimitiveType::Timestamptz))
+            }
+            DataType::Timestamp(unit, Some(zone))
+                if unit == &TimeUnit::Nanosecond
+                    && (zone.as_ref() == "UTC" || zone.as_ref() == "+00:00") =>
+            {
+                Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
             DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
             DataType::FixedSizeBinary(width) => {
