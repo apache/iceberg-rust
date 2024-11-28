@@ -2292,6 +2292,18 @@
 <a href="#2292" id="2292">2292</a>
 <a href="#2293" id="2293">2293</a>
 <a href="#2294" id="2294">2294</a>
+<a href="#2295" id="2295">2295</a>
+<a href="#2296" id="2296">2296</a>
+<a href="#2297" id="2297">2297</a>
+<a href="#2298" id="2298">2298</a>
+<a href="#2299" id="2299">2299</a>
+<a href="#2300" id="2300">2300</a>
+<a href="#2301" id="2301">2301</a>
+<a href="#2302" id="2302">2302</a>
+<a href="#2303" id="2303">2303</a>
+<a href="#2304" id="2304">2304</a>
+<a href="#2305" id="2305">2305</a>
+<a href="#2306" id="2306">2306</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2493,6 +2505,18 @@
     </span><span class="attr">#[inline]
     </span><span class="kw">pub fn </span>last_sequence_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i64 {
         <span class="self">self</span>.last_sequence_number
+    }
+
+    <span class="doccomment">/// Returns the next sequence number for the table.
+    ///
+    /// For format version 1, it always returns the initial sequence number.
+    /// For other versions, it returns the last sequence number incremented by 1.
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>next_sequence_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i64 {
+        <span class="kw">match </span><span class="self">self</span>.format_version {
+            FormatVersion::V1 =&gt; INITIAL_SEQUENCE_NUMBER,
+            <span class="kw">_ </span>=&gt; <span class="self">self</span>.last_sequence_number + <span class="number">1</span>,
+        }
     }
 
     <span class="doccomment">/// Returns last updated time.
@@ -3770,7 +3794,7 @@
             .with_sequence_number(<span class="number">0</span>)
             .with_schema_id(<span class="number">0</span>)
             .with_manifest_list(<span class="string">"/home/iceberg/warehouse/nyc/taxis/metadata/snap-638933773299822130-1-7e6760f0-4f6c-4b23-b907-0a5a174e3863.avro"</span>)
-            .with_summary(Summary { operation: Operation::Append, other: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="string">"spark.app.id"</span>.to_string(), <span class="string">"local-1662532784305"</span>.to_string()), (<span class="string">"added-data-files"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-records"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-files-size"</span>.to_string(), <span class="string">"6001"</span>.to_string())]) })
+            .with_summary(Summary { operation: Operation::Append, additional_properties: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="string">"spark.app.id"</span>.to_string(), <span class="string">"local-1662532784305"</span>.to_string()), (<span class="string">"added-data-files"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-records"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-files-size"</span>.to_string(), <span class="string">"6001"</span>.to_string())]) })
             .build();
 
         <span class="kw">let </span>expected = TableMetadata {
@@ -4189,7 +4213,7 @@
             .with_manifest_list(<span class="string">"s3://a/b/1.avro"</span>)
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
@@ -4202,7 +4226,7 @@
             .with_manifest_list(<span class="string">"s3://a/b/2.avro"</span>)
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 

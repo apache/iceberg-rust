@@ -1872,9 +1872,6 @@
 <a href="#1872" id="1872">1872</a>
 <a href="#1873" id="1873">1873</a>
 <a href="#1874" id="1874">1874</a>
-<a href="#1875" id="1875">1875</a>
-<a href="#1876" id="1876">1876</a>
-<a href="#1877" id="1877">1877</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2854,7 +2851,6 @@
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, NestedField, PrimitiveType, Schema, Struct, TableMetadata, Type,
-        EMPTY_SNAPSHOT_ID,
     };
     <span class="kw">use </span><span class="kw">crate</span>::table::Table;
     <span class="kw">use </span><span class="kw">crate</span>::TableIdent;
@@ -3001,9 +2997,7 @@
                     .new_output(current_snapshot.manifest_list())
                     .unwrap(),
                 current_snapshot.snapshot_id(),
-                current_snapshot
-                    .parent_snapshot_id()
-                    .unwrap_or(EMPTY_SNAPSHOT_ID),
+                current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
             );
             manifest_list_write

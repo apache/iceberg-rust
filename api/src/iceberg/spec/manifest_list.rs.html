@@ -1518,6 +1518,22 @@
 <a href="#1518" id="1518">1518</a>
 <a href="#1519" id="1519">1519</a>
 <a href="#1520" id="1520">1520</a>
+<a href="#1521" id="1521">1521</a>
+<a href="#1522" id="1522">1522</a>
+<a href="#1523" id="1523">1523</a>
+<a href="#1524" id="1524">1524</a>
+<a href="#1525" id="1525">1525</a>
+<a href="#1526" id="1526">1526</a>
+<a href="#1527" id="1527">1527</a>
+<a href="#1528" id="1528">1528</a>
+<a href="#1529" id="1529">1529</a>
+<a href="#1530" id="1530">1530</a>
+<a href="#1531" id="1531">1531</a>
+<a href="#1532" id="1532">1532</a>
+<a href="#1533" id="1533">1533</a>
+<a href="#1534" id="1534">1534</a>
+<a href="#1535" id="1535">1535</a>
+<a href="#1536" id="1536">1536</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1626,15 +1642,17 @@
 
 <span class="kw">impl </span>ManifestListWriter {
     <span class="doccomment">/// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    </span><span class="kw">pub fn </span>v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>metadata = HashMap::from_iter([
+    </span><span class="kw">pub fn </span>v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>metadata = HashMap::from_iter([
             (<span class="string">"snapshot-id"</span>.to_string(), snapshot_id.to_string()),
-            (
-                <span class="string">"parent-snapshot-id"</span>.to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             (<span class="string">"format-version"</span>.to_string(), <span class="string">"1"</span>.to_string()),
         ]);
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(parent_snapshot_id) = parent_snapshot_id {
+            metadata.insert(
+                <span class="string">"parent-snapshot-id"</span>.to_string(),
+                parent_snapshot_id.to_string(),
+            );
+        }
         <span class="self">Self</span>::new(FormatVersion::V1, output_file, metadata, <span class="number">0</span>, snapshot_id)
     }
 
@@ -1642,18 +1660,20 @@
     </span><span class="kw">pub fn </span>v2(
         output_file: OutputFile,
         snapshot_id: i64,
-        parent_snapshot_id: i64,
+        parent_snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
         sequence_number: i64,
     ) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>metadata = HashMap::from_iter([
+        <span class="kw">let </span><span class="kw-2">mut </span>metadata = HashMap::from_iter([
             (<span class="string">"snapshot-id"</span>.to_string(), snapshot_id.to_string()),
-            (
-                <span class="string">"parent-snapshot-id"</span>.to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             (<span class="string">"sequence-number"</span>.to_string(), sequence_number.to_string()),
             (<span class="string">"format-version"</span>.to_string(), <span class="string">"2"</span>.to_string()),
         ]);
+        metadata.insert(
+            <span class="string">"parent-snapshot-id"</span>.to_string(),
+            parent_snapshot_id
+                .map(|v| v.to_string())
+                .unwrap_or(<span class="string">"null"</span>.to_string()),
+        );
         <span class="self">Self</span>::new(
             FormatVersion::V2,
             output_file,
@@ -2098,6 +2118,18 @@
     ///
     /// Implementation-specific key metadata for encryption
     </span><span class="kw">pub </span>key_metadata: Vec&lt;u8&gt;,
+}
+
+<span class="kw">impl </span>ManifestFile {
+    <span class="doccomment">/// Checks if the manifest file has any added files.
+    </span><span class="kw">pub fn </span>has_added_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.added_files_count.is_none() || <span class="self">self</span>.added_files_count.unwrap() &gt; <span class="number">0
+    </span>}
+
+    <span class="doccomment">/// Checks if the manifest file has any existed files.
+    </span><span class="kw">pub fn </span>has_existing_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.existing_files_count.is_none() || <span class="self">self</span>.existing_files_count.unwrap() &gt; <span class="number">0
+    </span>}
 }
 
 <span class="doccomment">/// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
@@ -2666,7 +2698,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(
             file_io.new_output(full_path.clone()).unwrap(),
             <span class="number">1646658105718557341</span>,
-            <span class="number">1646658105718557341</span>,
+            <span class="prelude-val">Some</span>(<span class="number">1646658105718557341</span>),
         );
 
         writer
@@ -2733,7 +2765,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(
             file_io.new_output(full_path.clone()).unwrap(),
             <span class="number">1646658105718557341</span>,
-            <span class="number">1646658105718557341</span>,
+            <span class="prelude-val">Some</span>(<span class="number">1646658105718557341</span>),
             <span class="number">1</span>,
         );
 
@@ -2855,7 +2887,7 @@
         <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
         <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(output_file, <span class="number">1646658105718557341</span>, <span class="number">0</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v1(output_file, <span class="number">1646658105718557341</span>, <span class="prelude-val">Some</span>(<span class="number">0</span>));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -2911,7 +2943,7 @@
         <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
         <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, snapshot_id, <span class="number">0</span>, seq_num);
+        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, snapshot_id, <span class="prelude-val">Some</span>(<span class="number">0</span>), seq_num);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -2965,7 +2997,7 @@
         <span class="kw">let </span>io = FileIOBuilder::new_fs_io().build().unwrap();
         <span class="kw">let </span>output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, <span class="number">1646658105718557341</span>, <span class="number">0</span>, <span class="number">1</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestListWriter::v2(output_file, <span class="number">1646658105718557341</span>, <span class="prelude-val">Some</span>(<span class="number">0</span>), <span class="number">1</span>);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

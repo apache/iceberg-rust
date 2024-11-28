@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["set_test_fixture"],"struct":["TestFixture"]};

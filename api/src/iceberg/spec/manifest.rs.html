@@ -2103,6 +2103,12 @@
 <a href="#2103" id="2103">2103</a>
 <a href="#2104" id="2104">2104</a>
 <a href="#2105" id="2105">2105</a>
+<a href="#2106" id="2106">2106</a>
+<a href="#2107" id="2107">2107</a>
+<a href="#2108" id="2108">2108</a>
+<a href="#2109" id="2109">2109</a>
+<a href="#2110" id="2110">2110</a>
+<a href="#2111" id="2111">2111</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3005,6 +3011,12 @@
         }
     }
 
+    <span class="doccomment">/// Snapshot id
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>snapshot_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
+        <span class="self">self</span>.snapshot_id
+    }
+
     <span class="doccomment">/// Data sequence number.
     </span><span class="attr">#[inline]
     </span><span class="kw">pub fn </span>sequence_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
@@ -3433,7 +3445,7 @@
             <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 content: value.content <span class="kw">as </span>i32,
                 file_path: value.file_path,
-                file_format: value.file_format.to_string(),
+                file_format: value.file_format.to_string().to_ascii_uppercase(),
                 partition: RawLiteral::try_from(
                     Literal::Struct(value.partition),
                     <span class="kw-2">&amp;</span>Type::Struct(partition_type.clone()),

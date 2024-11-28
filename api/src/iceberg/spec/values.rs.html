@@ -3463,6 +3463,19 @@
 <a href="#3463" id="3463">3463</a>
 <a href="#3464" id="3464">3464</a>
 <a href="#3465" id="3465">3465</a>
+<a href="#3466" id="3466">3466</a>
+<a href="#3467" id="3467">3467</a>
+<a href="#3468" id="3468">3468</a>
+<a href="#3469" id="3469">3469</a>
+<a href="#3470" id="3470">3470</a>
+<a href="#3471" id="3471">3471</a>
+<a href="#3472" id="3472">3472</a>
+<a href="#3473" id="3473">3473</a>
+<a href="#3474" id="3474">3474</a>
+<a href="#3475" id="3475">3475</a>
+<a href="#3476" id="3476">3476</a>
+<a href="#3477" id="3477">3477</a>
+<a href="#3478" id="3478">3478</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -5002,6 +5015,14 @@
         })<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self</span>::decimal(decimal.mantissa()))
     }
+
+    <span class="doccomment">/// Attempts to convert the Literal to a PrimitiveLiteral
+    </span><span class="kw">pub fn </span>as_primitive_literal(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;PrimitiveLiteral&gt; {
+        <span class="kw">match </span><span class="self">self </span>{
+            Literal::Primitive(primitive) =&gt; <span class="prelude-val">Some</span>(primitive.clone()),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+        }
+    }
 }
 
 <span class="doccomment">/// The partition struct stores the tuple of partition values for each file.
@@ -5040,6 +5061,11 @@
     <span class="doccomment">/// returns true if the field at position `index` is null
     </span><span class="kw">pub fn </span>is_null_at_index(<span class="kw-2">&amp;</span><span class="self">self</span>, index: usize) -&gt; bool {
         <span class="self">self</span>.null_bitmap[index]
+    }
+
+    <span class="doccomment">/// Return fields in the struct.
+    </span><span class="kw">pub fn </span>fields(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Literal] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.fields
     }
 }
 

@@ -398,8 +398,6 @@
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
 <a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -587,7 +585,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, Struct, TableMetadata, EMPTY_SNAPSHOT_ID,
+        ManifestWriter, Struct, TableMetadata,
     };
     <span class="kw">use </span><span class="kw">crate</span>::table::Table;
     <span class="kw">use </span><span class="kw">crate</span>::TableIdent;
@@ -695,9 +693,7 @@
                     .new_output(current_snapshot.manifest_list())
                     .unwrap(),
                 current_snapshot.snapshot_id(),
-                current_snapshot
-                    .parent_snapshot_id()
-                    .unwrap_or(EMPTY_SNAPSHOT_ID),
+                current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
             );
             manifest_list_write

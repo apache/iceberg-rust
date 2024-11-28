@@ -415,6 +415,21 @@
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -476,7 +491,7 @@
     </span><span class="kw">pub </span>operation: Operation,
     <span class="doccomment">/// Other summary data.
     </span><span class="attr">#[serde(flatten)]
-    </span><span class="kw">pub </span>other: HashMap&lt;String, String&gt;,
+    </span><span class="kw">pub </span>additional_properties: HashMap&lt;String, String&gt;,
 }
 
 <span class="kw">impl </span>Default <span class="kw">for </span>Operation {
@@ -708,7 +723,7 @@
                    },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
-                    other: HashMap::new(),
+                    additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
             })
@@ -789,6 +804,21 @@
     },
 }
 
+<span class="kw">impl </span>SnapshotRetention {
+    <span class="doccomment">/// Create a new branch retention policy
+    </span><span class="kw">pub fn </span>branch(
+        min_snapshots_to_keep: <span class="prelude-ty">Option</span>&lt;i32&gt;,
+        max_snapshot_age_ms: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+        max_ref_age_ms: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+    ) -&gt; <span class="self">Self </span>{
+        SnapshotRetention::Branch {
+            min_snapshots_to_keep,
+            max_snapshot_age_ms,
+            max_ref_age_ms,
+        }
+    }
+}
+
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::collections::HashMap;
@@ -825,7 +855,7 @@
         <span class="macro">assert_eq!</span>(
             Summary {
                 operation: Operation::Append,
-                other: HashMap::new()
+                additional_properties: HashMap::new()
             },
             <span class="kw-2">*</span>result.summary()
         );
