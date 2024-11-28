@@ -227,4 +227,18 @@ mod tests {
         let has_column = df_schema.has_column(&Column::from_name("z"));
         assert!(has_column);
     }
+
+    #[tokio::test]
+    async fn test_physical_input_schema_consistent_with_logical_input_schema() {
+        let table = get_test_table_from_metadata_file().await;
+        let table_provider = IcebergTableProvider::try_new_from_table(table.clone())
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("mytable", Arc::new(table_provider))
+            .unwrap();
+        let df = ctx.sql("SELECT count(*) FROM mytable").await.unwrap();
+        let physical_plan = df.create_physical_plan().await;
+        assert!(physical_plan.is_ok())
+    }
 }
