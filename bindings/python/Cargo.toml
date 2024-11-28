@@ -17,7 +17,7 @@
 
 [package]
 name = "pyiceberg_core_rust"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org"
 rust-version = "1.77.1"
