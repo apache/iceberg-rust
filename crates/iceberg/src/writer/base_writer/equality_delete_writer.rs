@@ -100,7 +100,7 @@ impl EqualityDeleteWriterConfig {
     }
 
     /// Return projected Schema
-    pub fn projected_schema_ref(&self) -> &ArrowSchemaRef {
+    pub fn projected_arrow_schema_ref(&self) -> &ArrowSchemaRef {
         self.projector.projected_schema_ref()
     }
 }
@@ -383,7 +383,8 @@ mod test {
         let equality_ids = vec![0_i32, 8];
         let equality_config =
             EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
-        let delete_schema = arrow_schema_to_schema(equality_config.projected_schema_ref()).unwrap();
+        let delete_schema =
+            arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
         let projector = equality_config.projector.clone();
 
         // prepare writer
