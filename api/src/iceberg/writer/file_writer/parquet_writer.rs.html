@@ -1770,7 +1770,7 @@
     </span><span class="kw">async fn </span>test_parquet_writer() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
         <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        <span class="kw">let </span>loccation_gen =
+        <span class="kw">let </span>location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         <span class="kw">let </span>file_name_gen =
             DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
@@ -1794,7 +1794,7 @@
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
             file_io.clone(),
-            loccation_gen,
+            location_gen,
             file_name_gen,
         )
         .build()

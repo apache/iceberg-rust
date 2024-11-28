@@ -279,7 +279,7 @@
 
 <span class="doccomment">/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
-</span><span class="attr">#[derive(Debug)]
+</span><span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>IcebergTableProvider {
     <span class="doccomment">/// A table in the catalog.
     </span>table: Table,
