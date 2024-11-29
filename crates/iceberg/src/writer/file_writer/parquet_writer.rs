@@ -18,7 +18,7 @@
 //! The module contains the file writer for parquet file format.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
@@ -81,7 +81,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
 
     async fn build(self) -> crate::Result<Self::R> {
         let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-        let written_size = Arc::new(AtomicI64::new(0));
+        let written_size = Arc::new(AtomicU64::new(0));
         let out_file = self.file_io.new_output(
             self.location_generator
                 .generate_location(&self.file_name_generator.generate_file_name()),
@@ -214,7 +214,7 @@ pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
     writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
-    written_size: Arc<AtomicI64>,
+    written_size: Arc<AtomicU64>,
     current_row_num: usize,
 }
 
