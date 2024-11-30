@@ -16,8 +16,10 @@
 // under the License.
 
 use iceberg::{Error, ErrorKind, Result};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 /// Data compression formats
 pub enum CompressionCodec {
     #[default]
