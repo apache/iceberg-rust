@@ -52,10 +52,11 @@ services:
     networks:
       rest_bridge:
     ports:
+      - 9000:9000
       - 9001:9001
     expose:
-      - 9001
       - 9000
+      - 9001
     command: ["server", "/data", "--console-address", ":9001"]
 
   mc:

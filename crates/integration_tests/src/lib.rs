@@ -41,11 +41,10 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     // Start docker compose
     docker_compose.run();
 
-    let rest_catalog_ip = docker_compose.get_container_ip("rest");
+    let rest_catalog_addr = format!("localhost:{}", REST_CATALOG_PORT);
 
-    let read_port = format!("{}:{}", rest_catalog_ip, REST_CATALOG_PORT);
     loop {
-        if !scan_port_addr(&read_port) {
+        if !scan_port_addr(&rest_catalog_addr) {
             log::info!("Waiting for 1s rest catalog to ready...");
             sleep(std::time::Duration::from_millis(1000)).await;
         } else {
@@ -53,13 +52,10 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
         }
     }
 
-    let container_ip = docker_compose.get_container_ip("minio");
-    let read_port = format!("{}:{}", container_ip, 9000);
-
     let config = RestCatalogConfig::builder()
-        .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
+        .uri(format!("http://{}", rest_catalog_addr))
         .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), format!("http://{}", read_port)),
+            (S3_ENDPOINT.to_string(), "http://localhost:9000".to_string()),
             (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
             (S3_REGION.to_string(), "us-east-1".to_string()),
