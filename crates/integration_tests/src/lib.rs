@@ -41,7 +41,7 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     // Start docker compose
     docker_compose.run();
 
-    let rest_catalog_addr = format!("localhost:{}", REST_CATALOG_PORT);
+    let rest_catalog_addr = format!("127.0.0.1:{}", REST_CATALOG_PORT);
 
     loop {
         if !scan_port_addr(&rest_catalog_addr) {
@@ -55,7 +55,7 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     let config = RestCatalogConfig::builder()
         .uri(format!("http://{}", rest_catalog_addr))
         .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), "http://localhost:9000".to_string()),
+            (S3_ENDPOINT.to_string(), "http://127.0.0.1:9000".to_string()),
             (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
             (S3_REGION.to_string(), "us-east-1".to_string()),
