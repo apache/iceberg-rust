@@ -141,10 +141,10 @@ impl TableMetadataBuilder {
     #[must_use]
     pub fn new_from_metadata(
         previous: TableMetadata,
-        previous_file_location: Option<String>,
+        current_file_location: Option<String>,
     ) -> Self {
         Self {
-            previous_history_entry: previous_file_location.map(|l| MetadataLog {
+            previous_history_entry: current_file_location.map(|l| MetadataLog {
                 metadata_file: l,
                 timestamp_ms: previous.last_updated_ms,
             }),
