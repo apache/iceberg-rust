@@ -24,8 +24,6 @@ use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
 
-const REST_CATALOG_PORT: u16 = 8181;
-
 pub struct TestFixture {
     pub _docker_compose: DockerCompose,
     pub rest_catalog: RestCatalog,
@@ -41,12 +39,12 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     // Start docker compose
     docker_compose.run();
 
-    let rest_catalog_addr = format!("127.0.0.1:{}", REST_CATALOG_PORT);
+    let rest_catalog_addr = "localhost:8181".to_string();
 
     loop {
+        sleep(std::time::Duration::from_millis(1000)).await;
         if !scan_port_addr(&rest_catalog_addr) {
             log::info!("Waiting for 1s rest catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
         } else {
             break;
         }
@@ -55,7 +53,7 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     let config = RestCatalogConfig::builder()
         .uri(format!("http://{}", rest_catalog_addr))
         .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), "http://127.0.0.1:9000".to_string()),
+            (S3_ENDPOINT.to_string(), "http://localhost:9000".to_string()),
             (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
             (S3_REGION.to_string(), "us-east-1".to_string()),
