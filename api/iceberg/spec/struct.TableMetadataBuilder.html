@@ -23,7 +23,7 @@ Some basic rules:</p>
 spec.id. It should only be used to create new table metadata from scratch.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.new_from_metadata" class="method"><a class="src rightside" href="../../src/iceberg/spec/table_metadata_builder.rs.html#142-157">source</a><h4 class="code-header">pub fn <a href="#method.new_from_metadata" class="fn">new_from_metadata</a>(
     previous: <a class="struct" href="struct.TableMetadata.html" title="struct iceberg::spec::TableMetadata">TableMetadata</a>,
-    previous_file_location: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;,
+    current_file_location: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;,
 ) -&gt; Self</h4></section></summary><div class="docblock"><p>Creates a new table metadata builder from the given metadata to modify it.
 <code>current_file_location</code> is the location where the current version
 of the metadata file is stored. This is used to update the metadata log.

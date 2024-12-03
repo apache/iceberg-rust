@@ -2295,10 +2295,10 @@
     </span><span class="attr">#[must_use]
     </span><span class="kw">pub fn </span>new_from_metadata(
         previous: TableMetadata,
-        previous_file_location: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        current_file_location: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            previous_history_entry: previous_file_location.map(|l| MetadataLog {
+            previous_history_entry: current_file_location.map(|l| MetadataLog {
                 metadata_file: l,
                 timestamp_ms: previous.last_updated_ms,
             }),
