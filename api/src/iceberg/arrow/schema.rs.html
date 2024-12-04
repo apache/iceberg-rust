@@ -1496,6 +1496,17 @@
 <a href="#1496" id="1496">1496</a>
 <a href="#1497" id="1497">1497</a>
 <a href="#1498" id="1498">1498</a>
+<a href="#1499" id="1499">1499</a>
+<a href="#1500" id="1500">1500</a>
+<a href="#1501" id="1501">1501</a>
+<a href="#1502" id="1502">1502</a>
+<a href="#1503" id="1503">1503</a>
+<a href="#1504" id="1504">1504</a>
+<a href="#1505" id="1505">1505</a>
+<a href="#1506" id="1506">1506</a>
+<a href="#1507" id="1507">1507</a>
+<a href="#1508" id="1508">1508</a>
+<a href="#1509" id="1509">1509</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2221,10 +2232,21 @@
                     <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
                         <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
                     };
-
                     <span class="prelude-val">Some</span>(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_le_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+                    ))
+                }
+                (PrimitiveType::Decimal {
+                    precision: <span class="kw">_</span>,
+                    scale: <span class="kw">_</span>,
+                }, Statistics::FixedLenByteArray(stats)) =&gt; {
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+                    };
+                    <span class="prelude-val">Some</span>(Datum::new(
+                        primitive_type.clone(),
+                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()<span class="question-mark">?</span>)),
                     ))
                 }
                 (

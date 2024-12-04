@@ -1134,6 +1134,42 @@
 <a href="#1134" id="1134">1134</a>
 <a href="#1135" id="1135">1135</a>
 <a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
+<a href="#1141" id="1141">1141</a>
+<a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a>
+<a href="#1144" id="1144">1144</a>
+<a href="#1145" id="1145">1145</a>
+<a href="#1146" id="1146">1146</a>
+<a href="#1147" id="1147">1147</a>
+<a href="#1148" id="1148">1148</a>
+<a href="#1149" id="1149">1149</a>
+<a href="#1150" id="1150">1150</a>
+<a href="#1151" id="1151">1151</a>
+<a href="#1152" id="1152">1152</a>
+<a href="#1153" id="1153">1153</a>
+<a href="#1154" id="1154">1154</a>
+<a href="#1155" id="1155">1155</a>
+<a href="#1156" id="1156">1156</a>
+<a href="#1157" id="1157">1157</a>
+<a href="#1158" id="1158">1158</a>
+<a href="#1159" id="1159">1159</a>
+<a href="#1160" id="1160">1160</a>
+<a href="#1161" id="1161">1161</a>
+<a href="#1162" id="1162">1162</a>
+<a href="#1163" id="1163">1163</a>
+<a href="#1164" id="1164">1164</a>
+<a href="#1165" id="1165">1165</a>
+<a href="#1166" id="1166">1166</a>
+<a href="#1167" id="1167">1167</a>
+<a href="#1168" id="1168">1168</a>
+<a href="#1169" id="1169">1169</a>
+<a href="#1170" id="1170">1170</a>
+<a href="#1171" id="1171">1171</a>
+<a href="#1172" id="1172">1172</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1674,6 +1710,17 @@
                 NestedField::optional(<span class="number">14</span>, <span class="string">"uuid"</span>, Type::Primitive(PrimitiveType::Uuid)).into(),
                 NestedField::optional(<span class="number">15</span>, <span class="string">"fixed"</span>, Type::Primitive(PrimitiveType::Fixed(<span class="number">10</span>)))
                     .into(),
+                <span class="comment">// Parquet Statistics will use different representation for Decimal with precision 38 and scale 5,
+                // so we need to add a new field for it.
+                </span>NestedField::optional(
+                    <span class="number">16</span>,
+                    <span class="string">"decimal_38"</span>,
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: <span class="number">38</span>,
+                        scale: <span class="number">5</span>,
+                    }),
+                )
+                .into(),
             ])
             .build()
             .unwrap()
@@ -2164,9 +2211,14 @@
             )
             .unwrap(),
         ) <span class="kw">as </span>ArrayRef;
+        <span class="kw">let </span>col16 = Arc::new(
+            arrow_array::Decimal128Array::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="number">1</span>), <span class="prelude-val">Some</span>(<span class="number">2</span>), <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="number">100</span>)])
+                .with_precision_and_scale(<span class="number">38</span>, <span class="number">5</span>)
+                .unwrap(),
+        ) <span class="kw">as </span>ArrayRef;
         <span class="kw">let </span>to_write = RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[
             col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
-            col14, col15,
+            col14, col15, col16,
         ])
         .unwrap();
 
@@ -2228,6 +2280,16 @@
                 ),
                 (<span class="number">14</span>, Datum::uuid(Uuid::from_u128(<span class="number">0</span>))),
                 (<span class="number">15</span>, Datum::fixed(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>])),
+                (
+                    <span class="number">16</span>,
+                    Datum::new(
+                        PrimitiveType::Decimal {
+                            precision: <span class="number">38</span>,
+                            scale: <span class="number">5
+                        </span>},
+                        PrimitiveLiteral::Int128(<span class="number">1</span>)
+                    )
+                ),
             ])
         );
         <span class="macro">assert_eq!</span>(
@@ -2260,6 +2322,16 @@
                 (
                     <span class="number">15</span>,
                     Datum::fixed(<span class="macro">vec!</span>[<span class="number">21</span>, <span class="number">22</span>, <span class="number">23</span>, <span class="number">24</span>, <span class="number">25</span>, <span class="number">26</span>, <span class="number">27</span>, <span class="number">28</span>, <span class="number">29</span>, <span class="number">30</span>])
+                ),
+                (
+                    <span class="number">16</span>,
+                    Datum::new(
+                        PrimitiveType::Decimal {
+                            precision: <span class="number">38</span>,
+                            scale: <span class="number">5
+                        </span>},
+                        PrimitiveLiteral::Int128(<span class="number">100</span>)
+                    )
                 ),
             ])
         );
