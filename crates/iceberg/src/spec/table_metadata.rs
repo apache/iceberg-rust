@@ -1046,11 +1046,7 @@ pub(super) mod _serde {
                     .map(|x| Arc::try_unwrap(x).unwrap_or_else(|s| s.as_ref().clone()))
                     .collect(),
                 default_sort_order_id: v.default_sort_order_id,
-                refs: if v.refs.is_empty() {
-                    None
-                } else {
-                    Some(v.refs)
-                },
+                refs: Some(v.refs),
             }
         }
     }
@@ -1287,6 +1283,7 @@ mod tests {
                         "timestamp-ms": 1515100
                     }
                 ],
+                "refs": {},
                 "sort-orders": [
                     {
                     "order-id": 0,
@@ -1562,6 +1559,7 @@ mod tests {
                     "fields": []
                 }
             ],
+            "refs": {},
             "default-spec-id": 0,
             "last-partition-id": 1000,
             "metadata-log": [
