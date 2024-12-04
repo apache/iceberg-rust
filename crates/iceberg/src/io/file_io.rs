@@ -344,6 +344,16 @@ impl OutputFile {
         writer.close().await
     }
 
+    /// Create a new output file with given bytes.
+    /// Error out if the file already exists
+    pub async fn write_exclusive(&self, bs: Bytes) -> crate::Result<()> {
+        self.op
+            .write_with(&self.path[self.relative_path_pos..], bs)
+            .if_none_match("*")
+            .await?;
+        Ok(())
+    }
+
     /// Creates output file for continues writing.
     ///
     /// # Notes
