@@ -2152,6 +2152,8 @@
 <a href="#2152" id="2152">2152</a>
 <a href="#2153" id="2153">2153</a>
 <a href="#2154" id="2154">2154</a>
+<a href="#2155" id="2155">2155</a>
+<a href="#2156" id="2156">2156</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3374,6 +3376,7 @@
         <span class="macro">assert_eq!</span>(metadata.last_partition_id, <span class="number">1000</span>);
         <span class="macro">assert_eq!</span>(metadata.last_column_id, <span class="number">3</span>);
         <span class="macro">assert_eq!</span>(metadata.snapshots.len(), <span class="number">0</span>);
+        <span class="macro">assert_eq!</span>(metadata.current_snapshot_id, <span class="prelude-val">None</span>);
         <span class="macro">assert_eq!</span>(metadata.refs.len(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(metadata.properties.len(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(metadata.metadata_log.len(), <span class="number">0</span>);
@@ -3422,6 +3425,7 @@
         <span class="macro">assert_eq!</span>(metadata.last_partition_id, UNPARTITIONED_LAST_ASSIGNED_ID);
         <span class="macro">assert_eq!</span>(metadata.last_column_id, <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(metadata.snapshots.len(), <span class="number">0</span>);
+        <span class="macro">assert_eq!</span>(metadata.current_snapshot_id, <span class="prelude-val">None</span>);
         <span class="macro">assert_eq!</span>(metadata.refs.len(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(metadata.properties.len(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(metadata.metadata_log.len(), <span class="number">0</span>);
