@@ -900,6 +900,12 @@ impl ManifestEntry {
         }
     }
 
+    /// Snapshot id
+    #[inline]
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
+    }
+
     /// Data sequence number.
     #[inline]
     pub fn sequence_number(&self) -> Option<i64> {
@@ -1328,7 +1334,7 @@ mod _serde {
             Ok(Self {
                 content: value.content as i32,
                 file_path: value.file_path,
-                file_format: value.file_format.to_string(),
+                file_format: value.file_format.to_string().to_ascii_uppercase(),
                 partition: RawLiteral::try_from(
                     Literal::Struct(value.partition),
                     &Type::Struct(partition_type.clone()),

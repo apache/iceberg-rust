@@ -16,21 +16,22 @@
 # under the License.
 
 [package]
-name = "pyiceberg_core_rust"
-version = "0.1.0"
-edition = "2021"
-homepage = "https://rust.iceberg.apache.org"
-rust-version = "1.77.1"
-# This crate is used to build python bindings, we don't want to publish it
-publish = false
-
-license = "Apache-2.0"
-keywords = ["iceberg"]
-
-[lib]
-crate-type = ["cdylib"]
+name = "iceberg-integration-tests"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
-iceberg = { path = "../../crates/iceberg" }
-pyo3 = { version = "0.22.3", features = ["extension-module", "abi3-py39"] }
-arrow = { version = "53", features = ["pyarrow"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+futures = { workspace = true }
+iceberg = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
+iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+log = { workspace = true }
+parquet = { workspace = true }
+port_scanner = { workspace = true }
+tokio = { workspace = true }

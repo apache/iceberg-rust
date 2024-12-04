@@ -141,10 +141,10 @@ impl TableMetadataBuilder {
     #[must_use]
     pub fn new_from_metadata(
         previous: TableMetadata,
-        previous_file_location: Option<String>,
+        current_file_location: Option<String>,
     ) -> Self {
         Self {
-            previous_history_entry: previous_file_location.map(|l| MetadataLog {
+            previous_history_entry: current_file_location.map(|l| MetadataLog {
                 metadata_file: l,
                 timestamp_ms: previous.last_updated_ms,
             }),
@@ -1818,7 +1818,7 @@ mod tests {
             .with_manifest_list("/snap-1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::from_iter(vec![
+                additional_properties: HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -1881,7 +1881,7 @@ mod tests {
             .with_manifest_list("/snap-1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::from_iter(vec![
+                additional_properties: HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -1901,7 +1901,7 @@ mod tests {
             .with_manifest_list("/snap-1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::from_iter(vec![
+                additional_properties: HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -1949,7 +1949,7 @@ mod tests {
             .with_manifest_list("/snap-1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
@@ -1994,7 +1994,7 @@ mod tests {
             .with_manifest_list("/snap-1.avro")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::from_iter(vec![
+                additional_properties: HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -2114,7 +2114,7 @@ mod tests {
             .with_manifest_list("/snap-1")
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
@@ -2140,7 +2140,7 @@ mod tests {
             .with_parent_snapshot_id(Some(1))
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::new(),
+                additional_properties: HashMap::new(),
             })
             .build();
 
