@@ -1,0 +1,1 @@
+searchState.loadedDescShard("iceberg_puffin", 0, "Iceberg Puffin implementation.\nData compression formats\nLZ4 single compression frame with content size present\nNo compression\nZstandard single compression frame with content size …\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")
