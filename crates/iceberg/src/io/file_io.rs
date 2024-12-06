@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -278,20 +279,70 @@ impl InputFile {
 ///
 /// It's possible for us to remove the async_trait, but we need to figure
 /// out how to handle the object safety.
-#[async_trait::async_trait]
-pub trait FileWrite: Send + Unpin + 'static {
+pub trait FileWrite: Send + 'static {
     /// Write bytes to file.
     ///
     /// TODO: we can support writing non-contiguous bytes in the future.
-    async fn write(&mut self, bs: Bytes) -> crate::Result<()>;
+    fn write(&mut self, bs: Bytes) -> impl Future<Output = Result<()>> + Send + '_;
 
     /// Close file.
     ///
     /// Calling close on closed file will generate an error.
-    async fn close(&mut self) -> crate::Result<()>;
+    fn close(&mut self) -> impl Future<Output = Result<()>> + Send + '_;
 }
 
-#[async_trait::async_trait]
+mod dyn_trait {
+    use bytes::Bytes;
+
+    use crate::io::FileWrite;
+
+    /// Object safe `FileWrite`
+    #[async_trait::async_trait]
+    pub trait DynFileWrite: Send + 'static {
+        /// `write` of `FileWrite`
+        async fn write(&mut self, bs: Bytes) -> crate::Result<()>;
+        /// `close` of `FileWrite`
+
+        async fn close(&mut self) -> crate::Result<()>;
+    }
+
+    #[async_trait::async_trait]
+    impl<W: FileWrite> DynFileWrite for W {
+        async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
+            self.write(bs).await
+        }
+
+        async fn close(&mut self) -> crate::Result<()> {
+            self.close().await
+        }
+    }
+
+    /// Type alias for `Box<dyn DynFileWrite>`
+    pub type BoxedFileWrite = Box<dyn DynFileWrite>;
+
+    impl FileWrite for BoxedFileWrite {
+        async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
+            (**self).write(bs).await
+        }
+
+        async fn close(&mut self) -> crate::Result<()> {
+            (**self).close().await
+        }
+    }
+
+    /// Provides extra methods for `FileWrite`
+    pub trait FileWriteDynExt: FileWrite + Sized {
+        /// Create type erased `FileWrite` wrapped with `Box`
+        fn boxed(self) -> BoxedFileWrite {
+            Box::new(self) as _
+        }
+    }
+
+    impl<W: FileWrite + Sized> FileWriteDynExt for W {}
+}
+
+pub use dyn_trait::{BoxedFileWrite, FileWriteDynExt};
+
 impl FileWrite for opendal::Writer {
     async fn write(&mut self, bs: Bytes) -> crate::Result<()> {
         Ok(opendal::Writer::write(self, bs).await?)
@@ -341,7 +392,8 @@ impl OutputFile {
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
         let mut writer = self.writer().await?;
         writer.write(bs).await?;
-        writer.close().await
+        writer.close().await?;
+        Ok(())
     }
 
     /// Creates output file for continues writing.
@@ -349,10 +401,8 @@ impl OutputFile {
     /// # Notes
     ///
     /// For one-time writing, use [`Self::write`] instead.
-    pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        Ok(Box::new(
-            self.op.writer(&self.path[self.relative_path_pos..]).await?,
-        ))
+    pub async fn writer(&self) -> crate::Result<opendal::Writer> {
+        Ok(self.op.writer(&self.path[self.relative_path_pos..]).await?)
     }
 }
 

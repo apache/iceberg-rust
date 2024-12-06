@@ -213,7 +213,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
+    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter<opendal::Writer>>>,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
 }
