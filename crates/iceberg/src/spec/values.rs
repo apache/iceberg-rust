@@ -1053,6 +1053,33 @@ impl Datum {
         }
     }
 
+    /// Try to create a decimal literal from [`Decimal`] with precision.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let t = Datum::decimal_with_precision(Decimal::new(123, 2), 30).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1.23");
+    /// ```
+    pub fn decimal_with_precision(value: impl Into<Decimal>, precision: u32) -> Result<Self> {
+        let decimal = value.into();
+        let scale = decimal.scale();
+
+        let r#type = Type::decimal(precision, scale)?;
+        if let Type::Primitive(p) = r#type {
+            Ok(Self {
+                r#type: p,
+                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
+            })
+        } else {
+            unreachable!("Decimal type must be primitive.")
+        }
+    }
+
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
         match target_type {
@@ -3087,27 +3114,30 @@ mod tests {
 
     #[test]
     fn avro_bytes_decimal() {
-        let bytes = vec![4u8, 210u8];
+        // (input_bytes, decimal_num, expect_scale, expect_precision)
+        let cases = vec![
+            (vec![4u8, 210u8], 1234, 2, 38),
+            (vec![251u8, 46u8], -1234, 2, 38),
+            (vec![4u8, 210u8], 1234, 3, 38),
+            (vec![251u8, 46u8], -1234, 3, 38),
+            (vec![42u8], 42, 2, 1),
+            (vec![214u8], -42, 2, 1),
+        ];
 
-        check_avro_bytes_serde(
-            bytes,
-            Datum::decimal(Decimal::new(1234, 2)).unwrap(),
-            &PrimitiveType::Decimal {
-                precision: 38,
-                scale: 2,
-            },
-        );
-
-        let bytes = vec![251u8, 46u8];
-
-        check_avro_bytes_serde(
-            bytes,
-            Datum::decimal(Decimal::new(-1234, 2)).unwrap(),
-            &PrimitiveType::Decimal {
-                precision: 38,
-                scale: 2,
-            },
-        );
+        for (input_bytes, decimal_num, expect_scale, expect_precision) in cases {
+            check_avro_bytes_serde(
+                input_bytes,
+                Datum::decimal_with_precision(
+                    Decimal::new(decimal_num, expect_scale),
+                    expect_precision,
+                )
+                .unwrap(),
+                &PrimitiveType::Decimal {
+                    precision: expect_precision,
+                    scale: expect_scale,
+                },
+            );
+        }
     }
 
     #[test]
