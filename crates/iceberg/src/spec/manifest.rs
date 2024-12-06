@@ -206,8 +206,12 @@ impl ManifestWriter {
         partition_summary
     }
 
-    /// Add a new manifest entry.
-    pub fn add(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    /// Add a new manifest entry. This method will update following status of the entry:
+    /// - Update the entry status to `Added`
+    /// - Set the snapshot id to the current snapshot id
+    /// - Set the sequence number to `None` if it is invalid(smaller than 0)
+    /// - Set the file sequence number to `None`
+    pub(crate) fn add(&mut self, mut entry: ManifestEntry) -> Result<()> {
         if entry.sequence_number().is_some_and(|n| n >= 0) {
             entry.status = ManifestStatus::Added;
             entry.snapshot_id = Some(self.snapshot_id);
@@ -222,16 +226,27 @@ impl ManifestWriter {
         Ok(())
     }
 
-    /// Add a delete manifest entry.
-    pub fn delete(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    /// Add a delete manifest entry. This method will update following status of the entry:
+    /// - Update the entry status to `Deleted`
+    /// - Set the snapshot id to the current snapshot id
+    ///
+    /// # TODO
+    /// Remove this check after merge append.
+    #[allow(dead_code)]
+    pub(crate) fn delete(&mut self, mut entry: ManifestEntry) -> Result<()> {
         entry.status = ManifestStatus::Deleted;
         entry.snapshot_id = Some(self.snapshot_id);
         self.add_entry(entry)?;
         Ok(())
     }
 
-    /// Add an existing manifest entry.
-    pub fn existing(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    /// Add an existing manifest entry. This method will update following status of the entry:
+    /// - Update the entry status to `Existing`
+    ///
+    /// # TODO
+    /// Remove this check after merge append.
+    #[allow(dead_code)]
+    pub(crate) fn existing(&mut self, mut entry: ManifestEntry) -> Result<()> {
         entry.status = ManifestStatus::Existing;
         self.add_entry(entry)?;
         Ok(())
