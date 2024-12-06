@@ -100,7 +100,7 @@ mod dyn_trait {
     where B::C: Send
     {
         async fn build(self, config: B::C) -> Result<BoxedIcebergWriter<I, O>> {
-            Ok(Box::new(self.build(config).await?) as _)
+            Ok(self.build(config).await?.boxed())
         }
     }
 
