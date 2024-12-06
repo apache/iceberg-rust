@@ -52,7 +52,6 @@ impl DataFileWriterConfig {
     }
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
     type C = DataFileWriterConfig;
@@ -71,7 +70,6 @@ pub struct DataFileWriter<B: FileWriterBuilder> {
     partition_value: Struct,
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         self.inner_writer.as_mut().unwrap().write(&batch).await
