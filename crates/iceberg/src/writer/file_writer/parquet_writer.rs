@@ -42,7 +42,7 @@ use crate::spec::{
     visit_schema, DataFileBuilder, DataFileFormat, Datum, ListType, MapType, NestedFieldRef,
     PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
 };
-use crate::writer::CurrentFileStatus;
+use crate::writer::CurrentWriterStatus;
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
@@ -422,7 +422,7 @@ impl FileWriter for ParquetWriter {
     }
 }
 
-impl CurrentFileStatus for ParquetWriter {
+impl CurrentWriterStatus for ParquetWriter {
     fn current_file_path(&self) -> String {
         self.out_file.location().to_string()
     }

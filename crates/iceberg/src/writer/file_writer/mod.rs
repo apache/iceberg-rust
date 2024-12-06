@@ -20,7 +20,7 @@
 use arrow_array::RecordBatch;
 use futures::Future;
 
-use super::CurrentFileStatus;
+use super::CurrentWriterStatus;
 use crate::spec::DataFileBuilder;
 use crate::Result;
 
@@ -41,7 +41,7 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
-pub trait FileWriter<O = DefaultOutput>: Send + CurrentFileStatus + 'static {
+pub trait FileWriter<O = DefaultOutput>: Send + CurrentWriterStatus + 'static {
     /// Write record batch to file.
     fn write(&mut self, batch: &RecordBatch) -> impl Future<Output = Result<()>> + Send;
     /// Close file writer.

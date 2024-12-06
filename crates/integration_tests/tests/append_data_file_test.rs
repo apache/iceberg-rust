@@ -24,7 +24,7 @@ use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
-use iceberg::writer::base_writer::data_file_writer::{DataFileWriterBuilder, DataFileWriterConfig};
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
@@ -97,11 +97,8 @@ async fn test_append_data_file() {
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder);
-    let mut data_file_writer = data_file_writer_builder
-        .build(DataFileWriterConfig::new(None))
-        .await
-        .unwrap();
+    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
+    let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
     let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
