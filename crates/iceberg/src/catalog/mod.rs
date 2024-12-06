@@ -29,8 +29,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, Schema, Snapshot, SnapshotReference, SortOrder, TableMetadataBuilder,
-    UnboundPartitionSpec, ViewRepresentations,
+    FormatVersion, Schema, SchemaId, Snapshot, SnapshotReference, SortOrder, TableMetadata,
+    TableMetadataBuilder, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations,
+    ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -237,15 +238,15 @@ pub struct TableCreation {
     /// The name of the table.
     pub name: String,
     /// The location of the table.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = location_opt)))]
     pub location: Option<String>,
     /// The schema of the table.
     pub schema: Schema,
     /// The partition spec of the table, could be None.
-    #[builder(default, setter(strip_option, into))]
+    #[builder(default, setter(strip_option(fallback = partition_spec_opt), into))]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// The sort order of the table.
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
     /// The properties of the table.
     #[builder(default)]
@@ -312,14 +313,14 @@ pub enum TableRequirement {
     LastAssignedFieldIdMatch {
         /// The last assigned field id of the table to assert.
         #[serde(rename = "last-assigned-field-id")]
-        last_assigned_field_id: i64,
+        last_assigned_field_id: i32,
     },
     /// The table's current schema id must match the requirement.
     #[serde(rename = "assert-current-schema-id")]
     CurrentSchemaIdMatch {
         /// Current schema id of the table to assert.
         #[serde(rename = "current-schema-id")]
-        current_schema_id: i64,
+        current_schema_id: SchemaId,
     },
     /// The table's last assigned partition id must match the
     /// requirement.
@@ -327,14 +328,14 @@ pub enum TableRequirement {
     LastAssignedPartitionIdMatch {
         /// Last assigned partition id of the table to assert.
         #[serde(rename = "last-assigned-partition-id")]
-        last_assigned_partition_id: i64,
+        last_assigned_partition_id: i32,
     },
     /// The table's default spec id must match the requirement.
     #[serde(rename = "assert-default-spec-id")]
     DefaultSpecIdMatch {
         /// Default spec id of the table to assert.
         #[serde(rename = "default-spec-id")]
-        default_spec_id: i64,
+        default_spec_id: i32,
     },
     /// The table's default sort order id must match the requirement.
     #[serde(rename = "assert-default-sort-order-id")]
@@ -367,6 +368,10 @@ pub enum TableUpdate {
         /// The schema to add.
         schema: Schema,
         /// The last column id of the table.
+        #[deprecated(
+            since = "0.3.0",
+            note = "This field is handled internally, and should not be part of the update."
+        )]
         last_column_id: Option<i32>,
     },
     /// Set table's current schema
@@ -447,9 +452,165 @@ impl TableUpdate {
     /// Applies the update to the table metadata builder.
     pub fn apply(self, builder: TableMetadataBuilder) -> Result<TableMetadataBuilder> {
         match self {
-            TableUpdate::AssignUuid { uuid } => builder.assign_uuid(uuid),
-            _ => unimplemented!(),
+            TableUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
+            TableUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)),
+            TableUpdate::SetCurrentSchema { schema_id } => builder.set_current_schema(schema_id),
+            TableUpdate::AddSpec { spec } => builder.add_partition_spec(spec),
+            TableUpdate::SetDefaultSpec { spec_id } => builder.set_default_partition_spec(spec_id),
+            TableUpdate::AddSortOrder { sort_order } => builder.add_sort_order(sort_order),
+            TableUpdate::SetDefaultSortOrder { sort_order_id } => {
+                builder.set_default_sort_order(sort_order_id)
+            }
+            TableUpdate::AddSnapshot { snapshot } => builder.add_snapshot(snapshot),
+            TableUpdate::SetSnapshotRef {
+                ref_name,
+                reference,
+            } => builder.set_ref(&ref_name, reference),
+            TableUpdate::RemoveSnapshots { snapshot_ids } => {
+                Ok(builder.remove_snapshots(&snapshot_ids))
+            }
+            TableUpdate::RemoveSnapshotRef { ref_name } => Ok(builder.remove_ref(&ref_name)),
+            TableUpdate::SetLocation { location } => Ok(builder.set_location(location)),
+            TableUpdate::SetProperties { updates } => builder.set_properties(updates),
+            TableUpdate::RemoveProperties { removals } => builder.remove_properties(&removals),
+            TableUpdate::UpgradeFormatVersion { format_version } => {
+                builder.upgrade_format_version(format_version)
+            }
         }
+    }
+}
+
+impl TableRequirement {
+    /// Check that the requirement is met by the table metadata.
+    /// If the requirement is not met, an appropriate error is returned.
+    ///
+    /// Provide metadata as `None` if the table does not exist.
+    pub fn check(&self, metadata: Option<&TableMetadata>) -> Result<()> {
+        if let Some(metadata) = metadata {
+            match self {
+                TableRequirement::NotExist => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Requirement failed: Table with id {} already exists",
+                            metadata.uuid()
+                        ),
+                    ));
+                }
+                TableRequirement::UuidMatch { uuid } => {
+                    if &metadata.uuid() != uuid {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Table UUID does not match",
+                        )
+                        .with_context("expected", *uuid)
+                        .with_context("found", metadata.uuid()));
+                    }
+                }
+                TableRequirement::CurrentSchemaIdMatch { current_schema_id } => {
+                    // ToDo: Harmonize the types of current_schema_id
+                    if metadata.current_schema_id != *current_schema_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Current schema id does not match",
+                        )
+                        .with_context("expected", current_schema_id.to_string())
+                        .with_context("found", metadata.current_schema_id.to_string()));
+                    }
+                }
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id,
+                } => {
+                    if metadata.default_sort_order().order_id != *default_sort_order_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Default sort order id does not match",
+                        )
+                        .with_context("expected", default_sort_order_id.to_string())
+                        .with_context(
+                            "found",
+                            metadata.default_sort_order().order_id.to_string(),
+                        ));
+                    }
+                }
+                TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } => {
+                    let snapshot_ref = metadata.snapshot_for_ref(r#ref);
+                    if let Some(snapshot_id) = snapshot_id {
+                        let snapshot_ref = snapshot_ref.ok_or(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Requirement failed: Branch or tag `{}` not found", r#ref),
+                        ))?;
+                        if snapshot_ref.snapshot_id() != *snapshot_id {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Requirement failed: Branch or tag `{}`'s snapshot has changed",
+                                    r#ref
+                                ),
+                            )
+                            .with_context("expected", snapshot_id.to_string())
+                            .with_context("found", snapshot_ref.snapshot_id().to_string()));
+                        }
+                    } else if snapshot_ref.is_some() {
+                        // a null snapshot ID means the ref should not exist already
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Requirement failed: Branch or tag `{}` already exists",
+                                r#ref
+                            ),
+                        ));
+                    }
+                }
+                TableRequirement::DefaultSpecIdMatch { default_spec_id } => {
+                    // ToDo: Harmonize the types of default_spec_id
+                    if metadata.default_partition_spec_id() != *default_spec_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Default partition spec id does not match",
+                        )
+                        .with_context("expected", default_spec_id.to_string())
+                        .with_context("found", metadata.default_partition_spec_id().to_string()));
+                    }
+                }
+                TableRequirement::LastAssignedPartitionIdMatch {
+                    last_assigned_partition_id,
+                } => {
+                    if metadata.last_partition_id != *last_assigned_partition_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Last assigned partition id does not match",
+                        )
+                        .with_context("expected", last_assigned_partition_id.to_string())
+                        .with_context("found", metadata.last_partition_id.to_string()));
+                    }
+                }
+                TableRequirement::LastAssignedFieldIdMatch {
+                    last_assigned_field_id,
+                } => {
+                    if &metadata.last_column_id != last_assigned_field_id {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Requirement failed: Last assigned field id does not match",
+                        )
+                        .with_context("expected", last_assigned_field_id.to_string())
+                        .with_context("found", metadata.last_column_id.to_string()));
+                    }
+                }
+            };
+        } else {
+            match self {
+                TableRequirement::NotExist => {}
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Requirement failed: Table does not exist",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -537,6 +698,64 @@ pub struct ViewCreation {
     pub summary: HashMap<String, String>,
 }
 
+/// ViewUpdate represents an update to a view in the catalog.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum ViewUpdate {
+    /// Assign a new UUID to the view
+    #[serde(rename_all = "kebab-case")]
+    AssignUuid {
+        /// The new UUID to assign.
+        uuid: uuid::Uuid,
+    },
+    /// Upgrade view's format version
+    #[serde(rename_all = "kebab-case")]
+    UpgradeFormatVersion {
+        /// Target format upgrade to.
+        format_version: ViewFormatVersion,
+    },
+    /// Add a new schema to the view
+    #[serde(rename_all = "kebab-case")]
+    AddSchema {
+        /// The schema to add.
+        schema: Schema,
+        /// The last column id of the view.
+        last_column_id: Option<i32>,
+    },
+    /// Set view's current schema
+    #[serde(rename_all = "kebab-case")]
+    SetLocation {
+        /// New location for view.
+        location: String,
+    },
+    /// Set view's properties
+    ///
+    /// Matching keys are updated, and non-matching keys are left unchanged.
+    #[serde(rename_all = "kebab-case")]
+    SetProperties {
+        /// Properties to update for view.
+        updates: HashMap<String, String>,
+    },
+    /// Remove view's properties
+    #[serde(rename_all = "kebab-case")]
+    RemoveProperties {
+        /// Properties to remove
+        removals: Vec<String>,
+    },
+    /// Add a new version to the view
+    #[serde(rename_all = "kebab-case")]
+    AddViewVersion {
+        /// The view version to add.
+        view_version: ViewVersion,
+    },
+    /// Set view's current version
+    #[serde(rename_all = "kebab-case")]
+    SetCurrentViewVersion {
+        /// View version id to set as current, or -1 to set last added version
+        view_version_id: i32,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -546,10 +765,13 @@ mod tests {
     use serde::Serialize;
     use uuid::uuid;
 
+    use super::ViewUpdate;
     use crate::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
+        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+        SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
+        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
+        ViewVersion, MAIN_BRANCH,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -591,6 +813,186 @@ mod tests {
             restored, expected,
             "Parsed restored value is not equal to expected"
         );
+    }
+
+    fn metadata() -> TableMetadata {
+        let tbl_creation = TableCreation::builder()
+            .name("table".to_string())
+            .location("/path/to/table".to_string())
+            .schema(Schema::builder().build().unwrap())
+            .build();
+
+        TableMetadataBuilder::from_table_creation(tbl_creation)
+            .unwrap()
+            .assign_uuid(uuid::Uuid::nil())
+            .build()
+            .unwrap()
+            .metadata
+    }
+
+    #[test]
+    fn test_check_requirement_not_exist() {
+        let metadata = metadata();
+        let requirement = TableRequirement::NotExist;
+
+        assert!(requirement.check(Some(&metadata)).is_err());
+        assert!(requirement.check(None).is_ok());
+    }
+
+    #[test]
+    fn test_check_table_uuid() {
+        let metadata = metadata();
+
+        let requirement = TableRequirement::UuidMatch {
+            uuid: uuid::Uuid::now_v7(),
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::UuidMatch {
+            uuid: uuid::Uuid::nil(),
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+    }
+
+    #[test]
+    fn test_check_ref_snapshot_id() {
+        let metadata = metadata();
+
+        // Ref does not exist but should
+        let requirement = TableRequirement::RefSnapshotIdMatch {
+            r#ref: "my_branch".to_string(),
+            snapshot_id: Some(1),
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        // Ref does not exist and should not
+        let requirement = TableRequirement::RefSnapshotIdMatch {
+            r#ref: "my_branch".to_string(),
+            snapshot_id: None,
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+
+        // Add snapshot
+        let record = r#"
+        {
+            "snapshot-id": 3051729675574597004,
+            "sequence-number": 10,
+            "timestamp-ms": 9992191116217,
+            "summary": {
+                "operation": "append"
+            },
+            "manifest-list": "s3://b/wh/.../s1.avro",
+            "schema-id": 0
+        }
+        "#;
+
+        let snapshot = serde_json::from_str::<Snapshot>(record).unwrap();
+        let builder = metadata.into_builder(None);
+        let builder = TableUpdate::AddSnapshot {
+            snapshot: snapshot.clone(),
+        }
+        .apply(builder)
+        .unwrap();
+        let metadata = TableUpdate::SetSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string(),
+            reference: SnapshotReference {
+                snapshot_id: snapshot.snapshot_id(),
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: Some(10),
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            },
+        }
+        .apply(builder)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Ref exists and should matches
+        let requirement = TableRequirement::RefSnapshotIdMatch {
+            r#ref: "main".to_string(),
+            snapshot_id: Some(3051729675574597004),
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+
+        // Ref exists but does not match
+        let requirement = TableRequirement::RefSnapshotIdMatch {
+            r#ref: "main".to_string(),
+            snapshot_id: Some(1),
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+    }
+
+    #[test]
+    fn test_check_last_assigned_field_id() {
+        let metadata = metadata();
+
+        let requirement = TableRequirement::LastAssignedFieldIdMatch {
+            last_assigned_field_id: 1,
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::LastAssignedFieldIdMatch {
+            last_assigned_field_id: 0,
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+    }
+
+    #[test]
+    fn test_check_current_schema_id() {
+        let metadata = metadata();
+
+        let requirement = TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: 1,
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: 0,
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+    }
+
+    #[test]
+    fn test_check_last_assigned_partition_id() {
+        let metadata = metadata();
+        let requirement = TableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id: 0,
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id: 999,
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+    }
+
+    #[test]
+    fn test_check_default_spec_id() {
+        let metadata = metadata();
+
+        let requirement = TableRequirement::DefaultSpecIdMatch { default_spec_id: 1 };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::DefaultSpecIdMatch { default_spec_id: 0 };
+        assert!(requirement.check(Some(&metadata)).is_ok());
+    }
+
+    #[test]
+    fn test_check_default_sort_order_id() {
+        let metadata = metadata();
+
+        let requirement = TableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: 1,
+        };
+        assert!(requirement.check(Some(&metadata)).is_err());
+
+        let requirement = TableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: 0,
+        };
+        assert!(requirement.check(Some(&metadata)).is_ok());
     }
 
     #[test]
@@ -1021,7 +1423,7 @@ mod tests {
                 .with_schema_id(1)
                 .with_summary(Summary {
                     operation: Operation::Append,
-                    other: HashMap::default(),
+                    additional_properties: HashMap::default(),
                 })
                 .build(),
         };
@@ -1055,7 +1457,7 @@ mod tests {
                 .with_manifest_list("s3://a/b/2.avro")
                 .with_summary(Summary {
                     operation: Operation::Append,
-                    other: HashMap::default(),
+                    additional_properties: HashMap::default(),
                 })
                 .build(),
         };
@@ -1221,8 +1623,12 @@ mod tests {
         let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
             .unwrap()
             .build()
-            .unwrap();
-        let table_metadata_builder = TableMetadataBuilder::new(table_metadata);
+            .unwrap()
+            .metadata;
+        let table_metadata_builder = TableMetadataBuilder::new_from_metadata(
+            table_metadata,
+            Some("s3://db/table/metadata/metadata1.gz.json".to_string()),
+        );
 
         let uuid = uuid::Uuid::new_v4();
         let update = TableUpdate::AssignUuid { uuid };
@@ -1230,7 +1636,204 @@ mod tests {
             .apply(table_metadata_builder)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
         assert_eq!(updated_metadata.uuid(), uuid);
+    }
+
+    #[test]
+    fn test_view_assign_uuid() {
+        test_serde_json(
+            r#"
+{
+    "action": "assign-uuid",
+    "uuid": "2cc52516-5e73-41f2-b139-545d41a4e151"
+}        
+        "#,
+            ViewUpdate::AssignUuid {
+                uuid: uuid!("2cc52516-5e73-41f2-b139-545d41a4e151"),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_upgrade_format_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "upgrade-format-version",
+    "format-version": 1
+}        
+        "#,
+            ViewUpdate::UpgradeFormatVersion {
+                format_version: ViewFormatVersion::V1,
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_add_schema() {
+        let test_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()
+            .unwrap();
+        test_serde_json(
+            r#"
+{
+    "action": "add-schema",
+    "schema": {
+        "type": "struct",
+        "schema-id": 1,
+        "fields": [
+            {
+                "id": 1,
+                "name": "foo",
+                "required": false,
+                "type": "string"
+            },
+            {
+                "id": 2,
+                "name": "bar",
+                "required": true,
+                "type": "int"
+            },
+            {
+                "id": 3,
+                "name": "baz",
+                "required": false,
+                "type": "boolean"
+            }
+        ],
+        "identifier-field-ids": [
+            2
+        ]
+    },
+    "last-column-id": 3
+}
+        "#,
+            ViewUpdate::AddSchema {
+                schema: test_schema.clone(),
+                last_column_id: Some(3),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_location() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-location",
+    "location": "s3://db/view"
+}        
+        "#,
+            ViewUpdate::SetLocation {
+                location: "s3://db/view".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_properties() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-properties",
+    "updates": {
+        "prop1": "v1",
+        "prop2": "v2"
+    }
+}        
+        "#,
+            ViewUpdate::SetProperties {
+                updates: vec![
+                    ("prop1".to_string(), "v1".to_string()),
+                    ("prop2".to_string(), "v2".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_remove_properties() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-properties",
+    "removals": [
+        "prop1",
+        "prop2"
+    ]
+}        
+        "#,
+            ViewUpdate::RemoveProperties {
+                removals: vec!["prop1".to_string(), "prop2".to_string()],
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_add_view_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "add-view-version",
+    "view-version": {
+            "version-id" : 1,
+            "timestamp-ms" : 1573518431292,
+            "schema-id" : 1,
+            "default-catalog" : "prod",
+            "default-namespace" : [ "default" ],
+            "summary" : {
+              "engine-name" : "Spark"
+            },
+            "representations" : [ {
+              "type" : "sql",
+              "sql" : "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2",
+              "dialect" : "spark"
+            } ]
+    }
+}        
+        "#,
+            ViewUpdate::AddViewVersion {
+                view_version: ViewVersion::builder()
+                    .with_version_id(1)
+                    .with_timestamp_ms(1573518431292)
+                    .with_schema_id(1)
+                    .with_default_catalog(Some("prod".to_string()))
+                    .with_default_namespace(NamespaceIdent::from_strs(vec!["default"]).unwrap())
+                    .with_summary(
+                        vec![("engine-name".to_string(), "Spark".to_string())]
+                            .into_iter()
+                            .collect(),
+                    )
+                    .with_representations(ViewRepresentations(vec![ViewRepresentation::Sql(SqlViewRepresentation {
+                        sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2".to_string(),
+                        dialect: "spark".to_string(),
+                    })]))
+                    .build(),
+            },
+        );
+    }
+
+    #[test]
+    fn test_view_set_current_view_version() {
+        test_serde_json(
+            r#"
+{
+    "action": "set-current-view-version",
+    "view-version-id": 1
+}        
+        "#,
+            ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
+        );
     }
 }

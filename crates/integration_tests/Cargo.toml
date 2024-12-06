@@ -15,31 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
+[package]
+name = "iceberg-integration-tests"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
-
-jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check typos
-        uses: crate-ci/typos@v1.27.3
+[dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+futures = { workspace = true }
+iceberg = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
+iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+log = { workspace = true }
+parquet = { workspace = true }
+port_scanner = { workspace = true }
+tokio = { workspace = true }

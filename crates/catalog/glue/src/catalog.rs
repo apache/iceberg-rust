@@ -39,9 +39,9 @@ use crate::with_catalog_id;
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
 pub struct GlueCatalogConfig {
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = uri_opt)))]
     uri: Option<String>,
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = catalog_id_opt)))]
     catalog_id: Option<String>,
     warehouse: String,
     #[builder(default)]
@@ -355,7 +355,9 @@ impl Catalog for GlueCatalog {
             }
         };
 
-        let metadata = TableMetadataBuilder::from_table_creation(creation)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?
+            .build()?
+            .metadata;
         let metadata_location = create_metadata_location(&location, 0)?;
 
         self.file_io

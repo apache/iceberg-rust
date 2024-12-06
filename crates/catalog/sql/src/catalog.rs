@@ -699,7 +699,9 @@ impl Catalog for SqlCatalog {
             }
         };
 
-        let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?.build()?;
+        let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
+            .build()?
+            .metadata;
         let tbl_metadata_location = format!(
             "{}/metadata/0-{}.metadata.json",
             location.clone(),
@@ -781,7 +783,7 @@ mod tests {
     use std::hash::Hash;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::spec::{BoundPartitionSpec, NestedField, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
     use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
     use itertools::Itertools;
@@ -874,10 +876,11 @@ mod tests {
 
         assert_eq!(metadata.current_schema().as_ref(), expected_schema);
 
-        let expected_partition_spec = PartitionSpec::builder(expected_schema)
+        let expected_partition_spec = BoundPartitionSpec::builder(expected_schema.clone())
             .with_spec_id(0)
             .build()
-            .unwrap();
+            .unwrap()
+            .into_schemaless();
 
         assert_eq!(
             metadata

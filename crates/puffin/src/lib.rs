@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Conversion between Iceberg and Arrow schema
+//! Iceberg Puffin implementation.
 
-mod schema;
-pub use schema::*;
-mod reader;
-pub(crate) mod record_batch_projector;
-pub(crate) mod record_batch_transformer;
+#![deny(missing_docs)]
+// Temporarily allowing this while crate is under active development
+#![allow(dead_code)]
 
-pub use reader::*;
+mod compression;
+pub use compression::CompressionCodec;

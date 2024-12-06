@@ -385,11 +385,20 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Timestamp(unit, None) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Timestamp))
             }
+            DataType::Timestamp(unit, None) if unit == &TimeUnit::Nanosecond => {
+                Ok(Type::Primitive(PrimitiveType::TimestampNs))
+            }
             DataType::Timestamp(unit, Some(zone))
                 if unit == &TimeUnit::Microsecond
                     && (zone.as_ref() == "UTC" || zone.as_ref() == "+00:00") =>
             {
                 Ok(Type::Primitive(PrimitiveType::Timestamptz))
+            }
+            DataType::Timestamp(unit, Some(zone))
+                if unit == &TimeUnit::Nanosecond
+                    && (zone.as_ref() == "UTC" || zone.as_ref() == "+00:00") =>
+            {
+                Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
             DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
             DataType::FixedSizeBinary(width) => {
@@ -714,10 +723,21 @@ macro_rules! get_parquet_stat_as_datum {
                     let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
                         return Ok(None);
                     };
-
                     Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_le_bytes(bytes.try_into()?)),
+                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                    ))
+                }
+                (PrimitiveType::Decimal {
+                    precision: _,
+                    scale: _,
+                }, Statistics::FixedLenByteArray(stats)) => {
+                    let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
+                        return Ok(None);
+                    };
+                    Some(Datum::new(
+                        primitive_type.clone(),
+                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
                     ))
                 }
                 (

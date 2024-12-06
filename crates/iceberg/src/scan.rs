@@ -706,7 +706,7 @@ impl PartitionFilterCache {
         &self,
         spec_id: i32,
         table_metadata: &TableMetadataRef,
-        schema: &SchemaRef,
+        schema: &Schema,
         case_sensitive: bool,
         filter: BoundPredicate,
     ) -> Result<Arc<BoundPredicate>> {
@@ -732,11 +732,11 @@ impl PartitionFilterCache {
                 format!("Could not find partition spec for id {}", spec_id),
             ))?;
 
-        let partition_type = partition_spec.partition_type(schema.as_ref())?;
+        let partition_type = partition_spec.partition_type(schema)?;
         let partition_fields = partition_type.fields().to_owned();
         let partition_schema = Arc::new(
             Schema::builder()
-                .with_schema_id(partition_spec.spec_id)
+                .with_schema_id(partition_spec.spec_id())
                 .with_fields(partition_fields)
                 .build()?,
         );
@@ -977,7 +977,6 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, NestedField, PrimitiveType, Schema, Struct, TableMetadata, Type,
-        EMPTY_SNAPSHOT_ID,
     };
     use crate::table::Table;
     use crate::TableIdent;
@@ -1057,7 +1056,7 @@ mod tests {
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Data)
                     .format_version(FormatVersion::V2)
                     .partition_spec((**current_partition_spec).clone())
@@ -1124,9 +1123,7 @@ mod tests {
                     .new_output(current_snapshot.manifest_list())
                     .unwrap(),
                 current_snapshot.snapshot_id(),
-                current_snapshot
-                    .parent_snapshot_id()
-                    .unwrap_or(EMPTY_SNAPSHOT_ID),
+                current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
             );
             manifest_list_write

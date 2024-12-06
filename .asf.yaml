@@ -48,9 +48,8 @@ github:
     issues: true
     projects: true
   collaborators:
-    - Xuanwo
-    - liurenjie1024
     - JanKaul
+    - c-thiel
   ghp_branch: gh-pages
   ghp_path: /
 

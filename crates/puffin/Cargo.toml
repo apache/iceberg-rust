@@ -15,31 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
+[package]
+name = "iceberg-puffin"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+rust-version = { workspace = true }
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+categories = ["database"]
+description = "Apache Iceberg Puffin"
+repository = { workspace = true }
+license = { workspace = true }
+keywords = ["iceberg", "puffin"]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+[dependencies]
+iceberg = { workspace = true }
+zstd = { workspace = true }
 
-env:
-  RUST_BACKTRACE: 1
-
-jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check typos
-        uses: crate-ci/typos@v1.27.3
+[dev-dependencies]
+tokio = { workspace = true }

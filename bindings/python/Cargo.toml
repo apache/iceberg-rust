@@ -17,7 +17,7 @@
 
 [package]
 name = "pyiceberg_core_rust"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org"
 rust-version = "1.77.1"
@@ -32,5 +32,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 iceberg = { path = "../../crates/iceberg" }
-pyo3 = { version = "0.22.3", features = ["extension-module"] }
+pyo3 = { version = "0.22.3", features = ["extension-module", "abi3-py39"] }
 arrow = { version = "53", features = ["pyarrow"] }

@@ -1567,6 +1567,14 @@ impl Literal {
         })?;
         Ok(Self::decimal(decimal.mantissa()))
     }
+
+    /// Attempts to convert the Literal to a PrimitiveLiteral
+    pub fn as_primitive_literal(&self) -> Option<PrimitiveLiteral> {
+        match self {
+            Literal::Primitive(primitive) => Some(primitive.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// The partition struct stores the tuple of partition values for each file.
@@ -1590,7 +1598,7 @@ impl Struct {
     }
 
     /// Create a iterator to read the field in order of field_value.
-    pub fn iter(&self) -> impl Iterator<Item = Option<&Literal>> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Option<&Literal>> {
         self.null_bitmap.iter().zip(self.fields.iter()).map(
             |(null, value)| {
                 if *null {
@@ -1605,6 +1613,11 @@ impl Struct {
     /// returns true if the field at position `index` is null
     pub fn is_null_at_index(&self, index: usize) -> bool {
         self.null_bitmap[index]
+    }
+
+    /// Return fields in the struct.
+    pub fn fields(&self) -> &[Literal] {
+        &self.fields
     }
 }
 

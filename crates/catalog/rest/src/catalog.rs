@@ -50,7 +50,7 @@ const PATH_V1: &str = "v1";
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RestCatalogConfig {
     uri: String,
-    #[builder(default, setter(strip_option))]
+    #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
     warehouse: Option<String>,
 
     #[builder(default)]
@@ -1376,7 +1376,7 @@ mod tests {
             .with_schema_id(0)
             .with_summary(Summary {
                 operation: Operation::Append,
-                other: HashMap::from_iter([
+                additional_properties: HashMap::from_iter([
                     ("spark.app.id", "local-1646787004168"),
                     ("added-data-files", "1"),
                     ("added-records", "1"),

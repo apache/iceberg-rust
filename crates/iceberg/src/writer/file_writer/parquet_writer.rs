@@ -538,6 +538,17 @@ mod tests {
                 NestedField::optional(14, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
                 NestedField::optional(15, "fixed", Type::Primitive(PrimitiveType::Fixed(10)))
                     .into(),
+                // Parquet Statistics will use different representation for Decimal with precision 38 and scale 5,
+                // so we need to add a new field for it.
+                NestedField::optional(
+                    16,
+                    "decimal_38",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 38,
+                        scale: 5,
+                    }),
+                )
+                .into(),
             ])
             .build()
             .unwrap()
@@ -634,7 +645,7 @@ mod tests {
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let loccation_gen =
+        let location_gen =
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
@@ -658,7 +669,7 @@ mod tests {
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
             file_io.clone(),
-            loccation_gen,
+            location_gen,
             file_name_gen,
         )
         .build()
@@ -1028,9 +1039,14 @@ mod tests {
             )
             .unwrap(),
         ) as ArrayRef;
+        let col16 = Arc::new(
+            arrow_array::Decimal128Array::from(vec![Some(1), Some(2), None, Some(100)])
+                .with_precision_and_scale(38, 5)
+                .unwrap(),
+        ) as ArrayRef;
         let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
             col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
-            col14, col15,
+            col14, col15, col16,
         ])
         .unwrap();
 
@@ -1092,6 +1108,16 @@ mod tests {
                 ),
                 (14, Datum::uuid(Uuid::from_u128(0))),
                 (15, Datum::fixed(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+                (
+                    16,
+                    Datum::new(
+                        PrimitiveType::Decimal {
+                            precision: 38,
+                            scale: 5
+                        },
+                        PrimitiveLiteral::Int128(1)
+                    )
+                ),
             ])
         );
         assert_eq!(
@@ -1124,6 +1150,16 @@ mod tests {
                 (
                     15,
                     Datum::fixed(vec![21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
+                ),
+                (
+                    16,
+                    Datum::new(
+                        PrimitiveType::Decimal {
+                            precision: 38,
+                            scale: 5
+                        },
+                        PrimitiveLiteral::Int128(100)
+                    )
                 ),
             ])
         );
