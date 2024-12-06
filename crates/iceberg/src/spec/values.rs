@@ -440,8 +440,8 @@ impl Datum {
     /// Convert the value to bytes
     ///
     /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
-    pub fn to_bytes(&self) -> ByteBuf {
-        match &self.literal {
+    pub fn to_bytes(&self) -> Result<ByteBuf> {
+        let buf = match &self.literal {
             PrimitiveLiteral::Boolean(val) => {
                 if *val {
                     ByteBuf::from([1u8])
@@ -458,10 +458,13 @@ impl Datum {
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
             PrimitiveLiteral::Int128(val) => {
                 let PrimitiveType::Decimal { precision, .. } = self.r#type else {
-                    unreachable!(
-                        "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
-                        &self.r#type
-                    )
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
+                            &self.r#type
+                        ),
+                    ));
                 };
 
                 // It's required by iceberg spec that we must keep the minimum
@@ -480,7 +483,9 @@ impl Datum {
 
                 ByteBuf::from(bytes)
             }
-        }
+        };
+
+        Ok(buf)
     }
 
     /// Creates a boolean value.
@@ -2758,7 +2763,7 @@ mod tests {
         assert_eq!(datum, expected_datum);
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        writer.append_ser(datum.to_bytes()).unwrap();
+        writer.append_ser(datum.to_bytes().unwrap()).unwrap();
         let encoded = writer.into_inner().unwrap();
         let reader = apache_avro::Reader::with_schema(&schema, &*encoded).unwrap();
 
