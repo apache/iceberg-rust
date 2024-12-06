@@ -20,6 +20,7 @@
 mod datatypes;
 mod manifest;
 mod manifest_list;
+mod name_mapping;
 mod partition;
 mod schema;
 mod snapshot;
