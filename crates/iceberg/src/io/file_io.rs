@@ -63,8 +63,8 @@ impl FileIO {
                         ErrorKind::DataInvalid,
                         "Input is neither a valid url nor path",
                     )
-                        .with_context("input", path.as_ref().to_string())
-                        .with_source(e)
+                    .with_context("input", path.as_ref().to_string())
+                    .with_source(e)
                 })
             })?;
 
@@ -179,7 +179,7 @@ impl FileIOBuilder {
     /// Add argument for operator.
     pub fn with_props(
         mut self,
-        args: impl IntoIterator<Item=(impl ToString, impl ToString)>,
+        args: impl IntoIterator<Item = (impl ToString, impl ToString)>,
     ) -> Self {
         self.props
             .extend(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
@@ -208,15 +208,17 @@ pub trait FileRead: Send + Sync + 'static {
     /// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
-    fn read(&self, range: Range<u64>) -> impl Future<Output=Result<Bytes>> + Send + '_;
+    fn read(&self, range: Range<u64>) -> impl Future<Output = Result<Bytes>> + Send + '_;
 }
 
 mod dyn_trait {
     use std::ops::{Deref, Range};
     use std::sync::Arc;
+
     use bytes::Bytes;
-    use crate::io::FileRead;
+
     use super::Result;
+    use crate::io::FileRead;
     #[async_trait::async_trait]
     /// `FileRead` with object safety
     pub trait DynFileRead: Send + Sync + 'static {
@@ -231,7 +233,7 @@ mod dyn_trait {
         }
     }
 
-    trait DynFileReadPointer: Deref<Target=dyn DynFileRead> + Send + Sync + 'static {}
+    trait DynFileReadPointer: Deref<Target = dyn DynFileRead> + Send + Sync + 'static {}
 
     impl<P: DynFileReadPointer> FileRead for P {
         async fn read(&self, range: Range<u64>) -> Result<Bytes> {
@@ -258,6 +260,8 @@ mod dyn_trait {
     fn assert_file_read<R: FileRead>(read: R) -> R {
         read
     }
+
+    impl<R: FileRead + Sized> FileReadDynExt for R {}
 }
 
 pub use dyn_trait::{DynFileRead, FileReadDynExt};
