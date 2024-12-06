@@ -167,17 +167,16 @@ mod dyn_trait {
     }
 
     /// Extension methods for `IcebergWriter`
-    pub trait IcebergWriterDynExt<I, O>: IcebergWriter<I, O> {
+    pub trait IcebergWriterDynExt<I: Send + 'static, O: Send + 'static>:
+        IcebergWriter<I, O> + Sized
+    {
         /// Create a type erased `IcebergWriter` wrapped with `Box`.
-        fn boxed(self) -> BoxedIcebergWriter<I, O>
-        where
-            Self: Sized,
-            I: Send + 'static,
-            O: Send + 'static,
-        {
+        fn boxed(self) -> BoxedIcebergWriter<I, O> {
             Box::new(self) as _
         }
     }
+
+    impl<I: Send + 'static, O: Send + 'static, W: IcebergWriter<I, O>> IcebergWriterDynExt<I, O> for W {}
 }
 
 pub use dyn_trait::{
