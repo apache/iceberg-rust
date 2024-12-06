@@ -1220,6 +1220,7 @@ mod tests {
         assert_eq!(metadata.last_partition_id, 1000);
         assert_eq!(metadata.last_column_id, 3);
         assert_eq!(metadata.snapshots.len(), 0);
+        assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
         assert_eq!(metadata.properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
@@ -1268,6 +1269,7 @@ mod tests {
         assert_eq!(metadata.last_partition_id, UNPARTITIONED_LAST_ASSIGNED_ID);
         assert_eq!(metadata.last_column_id, 0);
         assert_eq!(metadata.snapshots.len(), 0);
+        assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
         assert_eq!(metadata.properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
