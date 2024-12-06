@@ -141,10 +141,10 @@ impl TableMetadataBuilder {
     #[must_use]
     pub fn new_from_metadata(
         previous: TableMetadata,
-        previous_file_location: Option<String>,
+        current_file_location: Option<String>,
     ) -> Self {
         Self {
-            previous_history_entry: previous_file_location.map(|l| MetadataLog {
+            previous_history_entry: current_file_location.map(|l| MetadataLog {
                 metadata_file: l,
                 timestamp_ms: previous.last_updated_ms,
             }),
@@ -1220,6 +1220,7 @@ mod tests {
         assert_eq!(metadata.last_partition_id, 1000);
         assert_eq!(metadata.last_column_id, 3);
         assert_eq!(metadata.snapshots.len(), 0);
+        assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
         assert_eq!(metadata.properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);
@@ -1268,6 +1269,7 @@ mod tests {
         assert_eq!(metadata.last_partition_id, UNPARTITIONED_LAST_ASSIGNED_ID);
         assert_eq!(metadata.last_column_id, 0);
         assert_eq!(metadata.snapshots.len(), 0);
+        assert_eq!(metadata.current_snapshot_id, None);
         assert_eq!(metadata.refs.len(), 0);
         assert_eq!(metadata.properties.len(), 0);
         assert_eq!(metadata.metadata_log.len(), 0);

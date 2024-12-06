@@ -1010,10 +1010,14 @@ pub(super) mod _serde {
                     .collect(),
                 default_spec_id: v.default_spec.spec_id(),
                 last_partition_id: v.last_partition_id,
-                properties: Some(v.properties),
-                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                properties: if v.properties.is_empty() {
+                    None
+                } else {
+                    Some(v.properties)
+                },
+                current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {
-                    Some(vec![])
+                    None
                 } else {
                     Some(
                         v.snapshots
@@ -1091,7 +1095,7 @@ pub(super) mod _serde {
                 } else {
                     Some(v.properties)
                 },
-                current_snapshot_id: v.current_snapshot_id.or(Some(-1)),
+                current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {
                     None
                 } else {
@@ -1279,6 +1283,7 @@ mod tests {
                         "timestamp-ms": 1515100
                     }
                 ],
+                "refs": {},
                 "sort-orders": [
                     {
                     "order-id": 0,
@@ -1349,7 +1354,11 @@ mod tests {
             refs: HashMap::new(),
         };
 
+        let expected_json_value = serde_json::to_value(&expected).unwrap();
         check_table_metadata_serde(data, expected);
+
+        let json_value = serde_json::from_str::<serde_json::Value>(data).unwrap();
+        assert_eq!(json_value, expected_json_value);
     }
 
     #[test]
@@ -1517,6 +1526,106 @@ mod tests {
         };
 
         check_table_metadata_serde(data, expected);
+    }
+
+    #[test]
+    fn test_table_data_v2_no_snapshots() {
+        let data = r#"
+        {
+            "format-version" : 2,
+            "table-uuid": "fb072c92-a02b-11e9-ae9c-1bb7bc9eca94",
+            "location": "s3://b/wh/data.db/table",
+            "last-sequence-number" : 1,
+            "last-updated-ms": 1515100955770,
+            "last-column-id": 1,
+            "schemas": [
+                {
+                    "schema-id" : 1,
+                    "type" : "struct",
+                    "fields" :[
+                        {
+                            "id": 1,
+                            "name": "struct_name",
+                            "required": true,
+                            "type": "fixed[1]"
+                        }
+                    ]
+                }
+            ],
+            "current-schema-id" : 1,
+            "partition-specs": [
+                {
+                    "spec-id": 0,
+                    "fields": []
+                }
+            ],
+            "refs": {},
+            "default-spec-id": 0,
+            "last-partition-id": 1000,
+            "metadata-log": [
+                {
+                    "metadata-file": "s3://bucket/.../v1.json",
+                    "timestamp-ms": 1515100
+                }
+            ],
+            "sort-orders": [
+                {
+                "order-id": 0,
+                "fields": []
+                }
+            ],
+            "default-sort-order-id": 0
+        }
+        "#;
+
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "struct_name",
+                Type::Primitive(PrimitiveType::Fixed(1)),
+            ))])
+            .build()
+            .unwrap();
+
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
+            location: "s3://b/wh/data.db/table".to_string(),
+            last_updated_ms: 1515100955770,
+            last_column_id: 1,
+            schemas: HashMap::from_iter(vec![(1, Arc::new(schema))]),
+            current_schema_id: 1,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: partition_spec.into(),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![(0, SortOrder::unsorted_order().into())]),
+            snapshots: HashMap::default(),
+            current_snapshot_id: None,
+            last_sequence_number: 1,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: vec![MetadataLog {
+                metadata_file: "s3://bucket/.../v1.json".to_string(),
+                timestamp_ms: 1515100,
+            }],
+            refs: HashMap::new(),
+        };
+
+        let expected_json_value = serde_json::to_value(&expected).unwrap();
+        check_table_metadata_serde(data, expected);
+
+        let json_value = serde_json::from_str::<serde_json::Value>(data).unwrap();
+        assert_eq!(json_value, expected_json_value);
     }
 
     #[test]
