@@ -469,9 +469,15 @@ impl Datum {
 
                 // It's required by iceberg spec that we must keep the minimum
                 // number of bytes for the value
-                let required_bytes = Type::decimal_required_bytes(precision)
-                    .expect("PrimitiveType must has valid precision")
-                    as usize;
+                let Ok(required_bytes) = Type::decimal_required_bytes(precision) else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "PrimitiveType Decimal must has valid precision but got {}",
+                            precision
+                        ),
+                    ));
+                };
 
                 // The primitive literal is unscaled value.
                 let unscaled_value = BigInt::from(*val);
@@ -479,7 +485,7 @@ impl Datum {
                 // in big-endian byte order.
                 let mut bytes = unscaled_value.to_signed_bytes_be();
                 // Truncate with required bytes to make sure.
-                bytes.truncate(required_bytes);
+                bytes.truncate(required_bytes as usize);
 
                 ByteBuf::from(bytes)
             }
