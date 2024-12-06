@@ -775,7 +775,7 @@ impl ManifestMetadata {
                 .unwrap_or(0);
             BoundPartitionSpec::builder(schema.clone())
                 .with_spec_id(spec_id)
-                .add_unbound_fields(fields.into_iter().map(|f| f.into_unbound()))?
+                .add_unbound_fields(fields)?
                 .build()?
         };
         let format_version = if let Some(bs) = meta.get("format-version") {

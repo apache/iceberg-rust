@@ -880,7 +880,7 @@ mod tests {
             .with_spec_id(0)
             .build()
             .unwrap()
-            .into_schemaless();
+            .into_unbound();
 
         assert_eq!(
             metadata

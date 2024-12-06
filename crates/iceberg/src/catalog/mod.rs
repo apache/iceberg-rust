@@ -1318,6 +1318,49 @@ mod tests {
     }
 
     #[test]
+    fn test_add_spec_with_field_id() {
+        test_serde_json(
+            r#"
+{
+    "action": "add-spec",
+    "spec": {
+        "fields": [
+            {
+                "source-id": 4,
+                "name": "ts_day",
+                "transform": "day",
+                "field-id": 1000
+            },
+            {
+                "source-id": 1,
+                "name": "id_bucket",
+                "transform": "bucket[16]",
+                "field-id": 1001
+            },
+            {
+                "source-id": 2,
+                "name": "id_truncate",
+                "transform": "truncate[4]",
+                "field-id": 1002
+            }
+        ]
+    }
+}
+        "#,
+            TableUpdate::AddSpec {
+                spec: UnboundPartitionSpec::builder()
+                    .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                    .unwrap()
+                    .add_partition_field(1, "id_bucket".to_string(), Transform::Bucket(16))
+                    .unwrap()
+                    .add_partition_field(2, "id_truncate".to_string(), Transform::Truncate(4))
+                    .unwrap()
+                    .build(),
+            },
+        );
+    }
+
+    #[test]
     fn test_set_default_spec() {
         test_serde_json(
             r#"

@@ -496,7 +496,7 @@ mod test {
     };
     use crate::spec::{
         BoundPartitionSpec, DataContentType, DataFile, DataFileFormat, Datum, NestedField,
-        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
+        PrimitiveType, Schema, Struct, Transform, Type,
     };
 
     const INT_MIN_VALUE: i32 = 30;
@@ -1658,12 +1658,7 @@ mod test {
 
         let partition_spec = BoundPartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(1)
-            .add_unbound_fields(vec![UnboundPartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
+            .add_partition_field("a", "a", Transform::Identity)
             .unwrap()
             .build()
             .unwrap();

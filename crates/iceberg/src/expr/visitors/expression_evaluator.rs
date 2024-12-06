@@ -260,7 +260,6 @@ mod tests {
     use crate::spec::{
         BoundPartitionSpec, BoundPartitionSpecRef, DataContentType, DataFile, DataFileFormat,
         Datum, Literal, NestedField, PrimitiveType, Schema, Struct, Transform, Type,
-        UnboundPartitionField,
     };
     use crate::Result;
 
@@ -275,12 +274,7 @@ mod tests {
 
         let spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(1)
-            .add_unbound_fields(vec![UnboundPartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
+            .add_partition_field("a", "a", Transform::Identity)
             .unwrap()
             .build()
             .unwrap();
@@ -302,7 +296,7 @@ mod tests {
             .build()?;
 
         let mut inclusive_projection =
-            InclusiveProjection::new((*partition_spec).clone().into_schemaless().into());
+            InclusiveProjection::new((*partition_spec).clone().into_unbound().into());
 
         let partition_filter = inclusive_projection
             .project(predicate)?
