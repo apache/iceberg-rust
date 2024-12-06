@@ -700,9 +700,9 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use iceberg::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
-        UnboundPartitionField, UnboundPartitionSpec,
+        FormatVersion, NestedField, NullOrder, Operation, PartitionField, PrimitiveType, Schema,
+        Snapshot, SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        UnboundPartitionSpec,
     };
     use iceberg::transaction::Transaction;
     use mockito::{Mock, Server, ServerGuard};
@@ -1489,9 +1489,10 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![UnboundPartitionField::builder()
+                    .add_partition_fields(vec![PartitionField::builder()
                         .source_id(1)
                         .transform(Transform::Truncate(3))
+                        .field_id(1000)
                         .name("id".to_string())
                         .build()])
                     .unwrap()

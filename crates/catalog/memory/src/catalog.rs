@@ -367,7 +367,7 @@ mod tests {
                 .partition_specs_iter()
                 .map(|p| p.as_ref())
                 .collect_vec(),
-            vec![&expected_partition_spec.into_schemaless()]
+            vec![&expected_partition_spec.into_unbound()]
         );
 
         let expected_sorted_order = SortOrder::builder()
