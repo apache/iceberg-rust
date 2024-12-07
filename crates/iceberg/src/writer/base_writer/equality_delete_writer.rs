@@ -105,7 +105,6 @@ impl EqualityDeleteWriterConfig {
     }
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
     type C = EqualityDeleteWriterConfig;
@@ -128,7 +127,6 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     partition_value: Struct,
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.projector.project_bacth(batch)?;

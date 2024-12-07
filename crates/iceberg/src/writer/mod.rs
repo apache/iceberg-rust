@@ -48,6 +48,8 @@
 pub mod base_writer;
 pub mod file_writer;
 
+use std::future::Future;
+
 use arrow_array::RecordBatch;
 
 use crate::spec::DataFile;
@@ -57,29 +59,129 @@ type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
 
 /// The builder for iceberg writer.
-#[async_trait::async_trait]
 pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
     Send + Clone + 'static
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
     /// The associated writer config type used to build the writer.
-    type C;
+    type C: Send + 'static;
     /// Build the iceberg writer.
-    async fn build(self, config: Self::C) -> Result<Self::R>;
+    fn build(self, config: Self::C) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// The iceberg writer used to write data to iceberg table.
-#[async_trait::async_trait]
 pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Write data to iceberg table.
-    async fn write(&mut self, input: I) -> Result<()>;
+    fn write(&mut self, input: I) -> impl Future<Output = Result<()>> + Send + '_;
     /// Close the writer and return the written data files.
     /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
     /// # NOTE
     /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
-    async fn close(&mut self) -> Result<O>;
+    fn close(&mut self) -> impl Future<Output = Result<O>> + Send + '_;
 }
+
+mod dyn_trait {
+    use dyn_clone::{clone_trait_object, DynClone};
+
+    use super::Result;
+    use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
+
+    #[async_trait::async_trait]
+    pub trait DynIcebergWriterBuilder<C, I, O>: Send + DynClone + 'static {
+        async fn build(self, config: C) -> Result<BoxedIcebergWriter<I, O>>;
+    }
+
+    clone_trait_object!(<C, I, O> DynIcebergWriterBuilder<C, I, O>);
+
+    #[async_trait::async_trait]
+    impl<I: 'static + Send, O: 'static + Send, B: IcebergWriterBuilder<I, O>>
+        DynIcebergWriterBuilder<B::C, I, O> for B
+    where B::C: Send
+    {
+        async fn build(self, config: B::C) -> Result<BoxedIcebergWriter<I, O>> {
+            Ok(self.build(config).await?.boxed())
+        }
+    }
+
+    /// Type alias for `Box<dyn DynIcebergWriterBuilder>`
+    pub type BoxedIcebergWriterBuilder<C, I = DefaultInput, O = DefaultOutput> =
+        Box<dyn DynIcebergWriterBuilder<C, I, O>>;
+
+    impl<C: Send + 'static, I: Send + 'static, O: Send + 'static> IcebergWriterBuilder<I, O>
+        for BoxedIcebergWriterBuilder<C, I, O>
+    {
+        type R = BoxedIcebergWriter<I, O>;
+        type C = C;
+
+        async fn build(self, config: Self::C) -> Result<Self::R> {
+            DynIcebergWriterBuilder::build(self, config).await
+        }
+    }
+
+    /// Extension methods for `IcebergWriterBuilder`
+    pub trait IcebergWriterBuilderDynExt<I: Send + 'static, O: Send + 'static>:
+        IcebergWriterBuilder<I, O> + Sized
+    {
+        /// Create a type erased `IcebergWriterBuilder` wrapped with `Box`.
+        fn boxed(self) -> BoxedIcebergWriterBuilder<Self::C, I, O> {
+            Box::new(self) as _
+        }
+    }
+
+    impl<B, I: Send + 'static, O: Send + 'static> IcebergWriterBuilderDynExt<I, O> for B where B: IcebergWriterBuilder<I, O>
+    {}
+
+    /// The dyn iceberg writer used to write data to iceberg table.
+    #[async_trait::async_trait]
+    pub trait DynIcebergWriter<I, O>: Send + 'static {
+        /// `write` of trait `IcebergWriter`
+        async fn write(&mut self, input: I) -> Result<()>;
+        /// `close` of trait `IcebergWriter`
+        async fn close(&mut self) -> Result<O>;
+    }
+
+    #[async_trait::async_trait]
+    impl<I: 'static + Send, O: 'static + Send, W: IcebergWriter<I, O>> DynIcebergWriter<I, O> for W {
+        async fn write(&mut self, input: I) -> Result<()> {
+            self.write(input).await
+        }
+
+        async fn close(&mut self) -> Result<O> {
+            self.close().await
+        }
+    }
+
+    /// Type alias for `Box<dyn DynIcebergWriter>`
+    pub type BoxedIcebergWriter<I = DefaultInput, O = DefaultOutput> =
+        Box<dyn DynIcebergWriter<I, O>>;
+
+    impl<I: 'static + Send, O: 'static + Send> IcebergWriter<I, O> for BoxedIcebergWriter<I, O> {
+        async fn write(&mut self, input: I) -> Result<()> {
+            (**self).write(input).await
+        }
+
+        async fn close(&mut self) -> Result<O> {
+            (**self).close().await
+        }
+    }
+
+    /// Extension methods for `IcebergWriter`
+    pub trait IcebergWriterDynExt<I: Send + 'static, O: Send + 'static>:
+        IcebergWriter<I, O> + Sized
+    {
+        /// Create a type erased `IcebergWriter` wrapped with `Box`.
+        fn boxed(self) -> BoxedIcebergWriter<I, O> {
+            Box::new(self) as _
+        }
+    }
+
+    impl<I: Send + 'static, O: Send + 'static, W: IcebergWriter<I, O>> IcebergWriterDynExt<I, O> for W {}
+}
+
+pub use dyn_trait::{
+    BoxedIcebergWriter, BoxedIcebergWriterBuilder, IcebergWriterBuilderDynExt, IcebergWriterDynExt,
+};
 
 /// The current file status of iceberg writer. It implement for the writer which write a single
 /// file.
@@ -99,12 +201,12 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    use super::IcebergWriter;
+    use super::{BoxedIcebergWriter, IcebergWriter};
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
     // This function is used to guarantee the trait can be used as a object safe trait.
-    async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
+    async fn _guarantee_object_safe(mut w: BoxedIcebergWriter) {
         let _ = w
             .write(RecordBatch::new_empty(Schema::empty().into()))
             .await;
