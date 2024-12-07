@@ -23,7 +23,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    RecordBatch, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    TimestampNanosecondArray,
+};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
 use arrow_string::like::starts_with;
@@ -32,7 +36,9 @@ use fnv::FnvHashSet;
 use futures::channel::mpsc::{channel, Sender};
 use futures::future::BoxFuture;
 use futures::{try_join, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
@@ -44,11 +50,17 @@ use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
+use crate::expr::{Bind, BoundPredicate, BoundReference, Reference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::runtime::spawn;
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, Schema};
+use crate::scan::{
+    ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream,
+};
+use crate::spec::{
+    parse_equality_delete_file, parse_positional_delete_file, DataContentType, Datum, Deletes,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef,
+};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -176,6 +188,350 @@ impl ArrowReader {
         return Ok(rx.boxed());
     }
 
+    // retrieve all delete files concurrently from FileIO and parse them
+    // into `Deletes` objects
+    async fn get_deletes(
+        delete_file_entries: Option<Arc<Vec<FileScanTaskDeleteFile>>>,
+        file_io: FileIO,
+        concurrency_limit_data_files: usize,
+    ) -> Result<Option<Vec<Deletes>>> {
+        let Some(delete_file_entries) = delete_file_entries else {
+            return Ok(None);
+        };
+
+        let (tx, rx) = channel(concurrency_limit_data_files);
+        let mut channel_for_error = tx.clone();
+
+        spawn(async move {
+            #[allow(clippy::redundant_closure)] // recommendation from Clippy fails to compile
+            let result =
+                futures::stream::iter(delete_file_entries.iter().map(|df| crate::Result::Ok(df)))
+                    .try_for_each_concurrent(concurrency_limit_data_files, |entry| {
+                        let file_io = file_io.clone();
+                        let mut tx = tx.clone();
+                        async move {
+                            let FileScanTaskDeleteFile {
+                                ref file_path,
+                                file_type,
+                            } = entry;
+
+                            let record_batch_stream =
+                                Self::create_parquet_record_batch_stream_builder(
+                                    file_path,
+                                    file_io.clone(),
+                                    false,
+                                )
+                                .await?
+                                .build()?
+                                .map(|item| match item {
+                                    Ok(val) => Ok(val),
+                                    Err(err) => {
+                                        Err(Error::new(ErrorKind::DataInvalid, err.to_string())
+                                            .with_source(err))
+                                    }
+                                })
+                                .boxed();
+
+                            let result = match file_type {
+                                DataContentType::PositionDeletes => {
+                                    parse_positional_delete_file(record_batch_stream).await
+                                }
+                                DataContentType::EqualityDeletes => {
+                                    parse_equality_delete_file(record_batch_stream).await
+                                }
+                                _ => Err(Error::new(
+                                    ErrorKind::Unexpected,
+                                    "Expected equality or positional delete",
+                                )),
+                            }?;
+
+                            tx.send(Ok(result)).await?;
+                            Ok(())
+                        }
+                    })
+                    .await;
+
+            if let Err(error) = result {
+                let _ = channel_for_error.send(Err(error)).await;
+            }
+        });
+
+        let results = rx.try_collect::<Vec<_>>().await?;
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
+    fn get_positional_delete_indexes(
+        data_file_path: &str,
+        deletes: &[Deletes],
+    ) -> Option<Vec<usize>> {
+        let mut results = deletes
+            .iter()
+            .filter_map(|d| {
+                if let Deletes::Positional(map) = d {
+                    if let Some(indices) = map.get(data_file_path) {
+                        return Some(indices.iter().map(|&i| i as usize));
+                    }
+                }
+
+                None
+            })
+            .peekable();
+
+        if results.peek().is_none() {
+            None
+        } else {
+            Some(results.flatten().collect())
+        }
+    }
+
+    fn get_equality_deletes(
+        delete_files: &[Deletes],
+        snapshot_schema: SchemaRef,
+    ) -> Result<Option<BoundPredicate>> {
+        let mut result_predicate = AlwaysFalse;
+
+        for delete_file in delete_files {
+            if let Deletes::Equality(record_batches) = delete_file {
+                for record_batch in record_batches {
+                    let batch_schema_arrow = record_batch.schema();
+                    let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
+
+                    let datum_columns_with_names: Result<Vec<_>> = record_batch
+                        .columns()
+                        .iter()
+                        .zip(batch_schema_iceberg.as_struct().fields())
+                        .map(|(column, field)| {
+                            let col_as_datum_vec =
+                                Self::equality_delete_column_to_datum_vec(column, field);
+                            col_as_datum_vec.map(|c| (c, field.name.to_string()))
+                        })
+                        .collect();
+                    let datum_columns_with_names = datum_columns_with_names?;
+
+                    for row_idx in 0..record_batch.num_rows() {
+                        let mut row_predicate = AlwaysTrue;
+                        for (column, field_name) in &datum_columns_with_names {
+                            if let Some(Some(datum)) = column.get(row_idx) {
+                                row_predicate = row_predicate
+                                    .and(Reference::new(field_name).equal_to(datum.clone()));
+                            }
+                        }
+                        result_predicate = result_predicate.or(row_predicate);
+                    }
+                }
+            }
+        }
+
+        Ok(if result_predicate == AlwaysFalse {
+            None
+        } else {
+            // This is a deletion filter, not a selection filter, so we need to invert it
+            result_predicate = result_predicate.negate();
+            Some(result_predicate.bind(snapshot_schema, true)?)
+        })
+    }
+
+    fn equality_delete_column_to_datum_vec(
+        column: &ArrayRef,
+        field: &NestedFieldRef,
+    ) -> Result<Vec<Option<Datum>>> {
+        Ok(match field.field_type.as_primitive_type() {
+            Some(primitive_type) => match primitive_type {
+                PrimitiveType::Int => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Int32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::int))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Boolean => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to BooleanArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::bool))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Long => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Int64Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::long))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Float => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Float32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::float))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Double => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Float64Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::double))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::String => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to StringArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::string))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Date => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Date32Array",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::date))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Time => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<Time64MicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to Time64MicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| match val {
+                            None => Ok(None),
+                            Some(val) => Datum::time_micros(val).map(Some),
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                }
+                PrimitiveType::Timestamp => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampMicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamp_micros))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Timestamptz => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampMicrosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamptz_micros))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::TimestampNs => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampNanosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamp_nanos))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::TimestamptzNs => {
+                    let arr = column
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "could not downcast ArrayRef to TimestampNanosecondArray",
+                        ))?;
+                    arr.iter()
+                        .map(|val| val.map(Datum::timestamptz_nanos))
+                        .collect::<Vec<_>>()
+                }
+                PrimitiveType::Decimal { .. } => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Decimal column are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Uuid => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Uuid column are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Fixed(_) => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a column of type Fixed are not yet supported",
+                        )
+                    );
+                }
+                PrimitiveType::Binary => {
+                    return Err(
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Equality deletes where a predicate acts upon a Binary column are not yet supported",
+                        )
+                    );
+                }
+            },
+            None => {
+                return Err(
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        "Equality deletes where a predicate acts upon a non-primitive (i.e. Struct, List, or Map) typed column are not yet supported",
+                    )
+                );
+            }
+        })
+    }
+
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
@@ -184,19 +540,19 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<()> {
-        // Get the metadata for the Parquet file we need to read and build
-        // a reader for the data within
-        let parquet_file = file_io.new_input(&task.data_file_path)?;
-        let (parquet_metadata, parquet_reader) =
-            try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        // start gathering the delete files
+        let delete_file_tasks = task.deletes.clone();
+        let delete_files_fut = spawn({
+            let file_io = file_io.clone();
+            async move { Self::get_deletes(delete_file_tasks, file_io, 5).await }
+        });
 
-        let should_load_page_index = row_selection_enabled && task.predicate.is_some();
-
-        // Start creating the record batch stream, which wraps the parquet file reader
-        let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+        let should_load_page_index =
+            (row_selection_enabled && task.predicate.is_some()) || task.deletes.is_some();
+        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
+            &task.data_file_path,
+            file_io,
+            should_load_page_index,
         )
         .await?;
 
@@ -220,49 +576,113 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        if let Some(predicate) = &task.predicate {
+        let delete_files = delete_files_fut.await?;
+        let delete_predicate = if let Some(ref delete_files) = delete_files {
+            Self::get_equality_deletes(delete_files, task.schema.clone())?
+        } else {
+            None
+        };
+
+        // As well as the optional predicate supplied in the FileScanTask,
+        // if there are any equality delete files that apply to this file,
+        // we also need to construct a predicate that will implement the filtering
+        // that they require. If both are present, we logical-AND them together
+        // to form a single filter predicate that we can pass to
+        // Arrow's RecordBatchStreamBuilder.
+        let final_predicate = match (&task.predicate, delete_predicate) {
+            (None, None) => None,
+            (Some(predicate), None) => Some(predicate.clone()),
+            (None, Some(ref predicate)) => Some(predicate.clone()),
+            (Some(filter_predicate), Some(delete_predicate)) => {
+                Some(filter_predicate.clone().and(delete_predicate.clone()))
+            }
+        };
+
+        // Just as above with the row filter, there are two possible sources
+        // for potential lists of selected RowGroup indices and `RowSelection`s.
+        // Lists of selected RowGroup indices can come from two sources:
+        //   * As above, when there are equality delete files that are applicable;
+        //   * When there is a scan predicate
+        //  and row_group_filtering_enabled = true.
+        // `RowSelection`s can be created in either or both of the following cases:
+        //   * When there are positional delete files that are applicable;
+        //   * When there is a scan predicate and row_selection_enabled = true
+        // Note that, in the former case we only perform row group filtering when
+        // there is a scan predicate AND row_group_filtering_enabled = true,
+        // but we perform row selection filtering if there are applicable
+        // equality delete files OR (there is a scan predicate AND row_selection_enabled),
+        // since it is expected that the mos efficient way to apply positional deletes will
+        // always be by using a `RowSelection`.
+        let mut selected_row_group_indices = None;
+        let mut row_selection = None;
+
+        if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                predicate,
+                &predicate,
             )?;
 
             let row_filter = Self::get_row_filter(
-                predicate,
+                &predicate,
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
             )?;
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
-            let mut selected_row_groups = None;
             if row_group_filtering_enabled {
                 let result = Self::get_selected_row_group_indices(
-                    predicate,
+                    &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     &task.schema,
                 )?;
 
-                selected_row_groups = Some(result);
+                selected_row_group_indices = Some(result);
             }
 
             if row_selection_enabled {
-                let row_selection = Self::get_row_selection(
-                    predicate,
+                row_selection = Some(Self::get_predicate_row_selection(
+                    &predicate,
                     record_batch_stream_builder.metadata(),
-                    &selected_row_groups,
+                    &selected_row_group_indices,
                     &field_id_map,
                     &task.schema,
-                )?;
-
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_selection(row_selection);
+                )?);
             }
+        }
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_groups(selected_row_groups);
-            }
+        let positional_delete_indexes = if let Some(ref delete_files) = delete_files {
+            Self::get_positional_delete_indexes(&task.data_file_path, delete_files)
+        } else {
+            None
+        };
+
+        if let Some(positional_delete_indexes) = positional_delete_indexes {
+            let delete_row_selection = Self::get_deleted_row_selection(
+                record_batch_stream_builder.metadata(),
+                &selected_row_group_indices,
+                &positional_delete_indexes,
+            )?;
+
+            // merge the row selection from the delete files with the row selection
+            // from the filter predicate, if there is one from the filter predicate
+            row_selection = match row_selection {
+                None => Some(delete_row_selection),
+                Some(filter_row_selection) => {
+                    Some(filter_row_selection.intersection(&delete_row_selection))
+                }
+            };
+        }
+
+        if let Some(row_selection) = row_selection {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_selection(row_selection);
+        }
+
+        if let Some(selected_row_group_indices) = selected_row_group_indices {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
@@ -275,6 +695,27 @@ impl ArrowReader {
         }
 
         Ok(())
+    }
+
+    async fn create_parquet_record_batch_stream_builder(
+        data_file_path: &str,
+        file_io: FileIO,
+        should_load_page_index: bool,
+    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
+        // Get the metadata for the Parquet file we need to read and build
+        // a reader for the data within
+        let parquet_file = file_io.new_input(data_file_path)?;
+        let (parquet_metadata, parquet_reader) =
+            try_join!(parquet_file.metadata(), parquet_file.reader())?;
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+
+        // Start creating the record batch stream, which wraps the parquet file reader
+        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            parquet_file_reader,
+            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+        )
+        .await?;
+        Ok(record_batch_stream_builder)
     }
 
     fn build_field_id_set_and_map(
@@ -415,7 +856,7 @@ impl ArrowReader {
         Ok(results)
     }
 
-    fn get_row_selection(
+    fn get_predicate_row_selection(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
         selected_row_groups: &Option<Vec<usize>>,
@@ -474,6 +915,84 @@ impl ArrowReader {
         }
 
         Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
+    }
+
+    fn get_deleted_row_selection(
+        parquet_metadata: &Arc<ParquetMetaData>,
+        selected_row_groups: &Option<Vec<usize>>,
+        positional_deletes: &[usize],
+    ) -> Result<RowSelection> {
+        let mut selected_row_groups_idx = 0;
+        let mut curr_pos_del_idx = 0;
+        let pos_del_len = positional_deletes.len();
+
+        let page_index = parquet_metadata.row_groups().iter().enumerate();
+
+        let mut results: Vec<RowSelector> = Vec::new();
+        let mut current_page_base_idx: usize = 0;
+        for (idx, row_group_metadata) in page_index {
+            let page_num_rows = row_group_metadata.num_rows() as usize;
+            let next_page_base_idx = current_page_base_idx + page_num_rows;
+
+            // skip any row groups that aren't in the row group selection
+            if let Some(selected_row_groups) = selected_row_groups {
+                // skip row groups that aren't present in selected_row_groups
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+                if idx == selected_row_groups[selected_row_groups_idx] {
+                    selected_row_groups_idx += 1;
+                } else {
+                    current_page_base_idx += page_num_rows;
+                    continue;
+                }
+            }
+
+            let mut next_deleted_row_idx = positional_deletes[curr_pos_del_idx];
+
+            // if the index of the next deleted row is beyond this page, skip
+            // to the next page
+            if next_deleted_row_idx >= next_page_base_idx {
+                continue;
+            }
+
+            let mut current_idx = current_page_base_idx;
+            while next_deleted_row_idx < next_page_base_idx {
+                // select all rows that precede the next delete index
+                if current_idx < next_deleted_row_idx {
+                    let run_length = next_deleted_row_idx - current_idx;
+                    results.push(RowSelector::select(run_length));
+                    current_idx += run_length;
+                }
+
+                // skip all consecutive deleted rows
+                let mut run_length = 1;
+                while curr_pos_del_idx < pos_del_len - 1
+                    && positional_deletes[curr_pos_del_idx + 1] == next_deleted_row_idx + 1
+                {
+                    run_length += 1;
+                    curr_pos_del_idx += 1;
+                }
+                results.push(RowSelector::skip(run_length));
+                current_idx += run_length;
+
+                curr_pos_del_idx += 1;
+                if curr_pos_del_idx >= pos_del_len {
+                    break;
+                }
+                next_deleted_row_idx = positional_deletes[curr_pos_del_idx];
+            }
+
+            if let Some(selected_row_groups) = selected_row_groups {
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+            }
+
+            current_page_base_idx += page_num_rows;
+        }
+
+        Ok(results.into())
     }
 }
 
@@ -1005,10 +1524,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let literals: Result<Vec<_>> = literals.iter().map(get_arrow_datum).collect();
+            let literals = literals?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
@@ -1033,10 +1550,8 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+            let literals: Result<Vec<_>> = literals.iter().map(get_arrow_datum).collect();
+            let literals = literals?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
