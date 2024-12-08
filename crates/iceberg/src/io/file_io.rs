@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -70,14 +71,26 @@ impl FileIO {
         Ok(FileIOBuilder::new(url.scheme()))
     }
 
+    /// TODO: docs
+    pub fn from_extension(ext: Arc<dyn FileIOExtension>) -> FileIO {
+        Self {
+            inner: Arc::new(Storage::Extension(ext)),
+        }
+    }
+
     /// Deletes file.
     ///
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn delete(&self, path: impl AsRef<str>) -> Result<()> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.delete(relative_path).await?)
+        match self.inner.as_ref() {
+            Storage::Extension(e) => e.delete(path.as_ref()).await,
+            _ => {
+                let (op, relative_path) = self.inner.create_operator(&path)?;
+                Ok(op.delete(relative_path).await?)
+            }
+        }
     }
 
     /// Remove the path and all nested dirs and files recursively.
@@ -86,8 +99,13 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.remove_all(relative_path).await?)
+        match self.inner.as_ref() {
+            Storage::Extension(e) => e.remove_all(path.as_ref()).await,
+            _ => {
+                let (op, relative_path) = self.inner.create_operator(&path)?;
+                Ok(op.remove_all(relative_path).await?)
+            }
+        }
     }
 
     /// Check file exists.
@@ -96,8 +114,13 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub async fn exists(&self, path: impl AsRef<str>) -> Result<bool> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.exists(relative_path).await?)
+        match self.inner.as_ref() {
+            Storage::Extension(e) => e.exists(path.as_ref()).await,
+            _ => {
+                let (op, relative_path) = self.inner.create_operator(&path)?;
+                Ok(op.exists(relative_path).await?)
+            }
+        }
     }
 
     /// Creates input file.
@@ -106,14 +129,19 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_input(&self, path: impl AsRef<str>) -> Result<InputFile> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        let path = path.as_ref().to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(InputFile {
-            op,
-            path,
-            relative_path_pos,
-        })
+        match self.inner.as_ref() {
+            Storage::Extension(e) => e.new_input(path.as_ref()),
+            _ => {
+                let (op, relative_path) = self.inner.create_operator(&path)?;
+                let path = path.as_ref().to_string();
+                let relative_path_pos = path.len() - relative_path.len();
+                Ok(InputFile::OpenDAL {
+                    op,
+                    path,
+                    relative_path_pos,
+                })
+            }
+        }
     }
 
     /// Creates output file.
@@ -122,14 +150,19 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
-        let (op, relative_path) = self.inner.create_operator(&path)?;
-        let path = path.as_ref().to_string();
-        let relative_path_pos = path.len() - relative_path.len();
-        Ok(OutputFile {
-            op,
-            path,
-            relative_path_pos,
-        })
+        match self.inner.as_ref() {
+            Storage::Extension(e) => e.new_output(path.as_ref()),
+            _ => {
+                let (op, relative_path) = self.inner.create_operator(&path)?;
+                let path = path.as_ref().to_string();
+                let relative_path_pos = path.len() - relative_path.len();
+                Ok(OutputFile::OpenDAL {
+                    op,
+                    path,
+                    relative_path_pos,
+                })
+            }
+        }
     }
 }
 
@@ -193,6 +226,20 @@ impl FileIOBuilder {
         })
     }
 }
+/// TODO: docs
+#[async_trait::async_trait]
+pub trait FileIOExtension: Debug + Send + Sync {
+    /// TODO: docs
+    fn new_input(&self, path: &str) -> Result<InputFile>;
+    /// TODO: docs
+    fn new_output(&self, path: &str) -> Result<OutputFile>;
+    /// TODO: docs
+    async fn delete(&self, path: &str) -> Result<()>;
+    /// TODO: docs
+    async fn remove_all(&self, path: &str) -> Result<()>;
+    /// TODO: docs
+    async fn exists(&self, path: &str) -> Result<bool>;
+}
 
 /// The struct the represents the metadata of a file.
 ///
@@ -225,50 +272,104 @@ impl FileRead for opendal::Reader {
 
 /// Input file is used for reading from files.
 #[derive(Debug)]
-pub struct InputFile {
-    op: Operator,
-    // Absolution path of file.
-    path: String,
-    // Relative path of file to uri, starts at [`relative_path_pos`]
-    relative_path_pos: usize,
+pub enum InputFile {
+    /// TODO: docs
+    OpenDAL {
+        /// TODO: docs
+        op: Operator,
+        /// Absolution path of file.
+        path: String,
+        /// Relative path of file to uri, starts at [`relative_path_pos`]
+        relative_path_pos: usize,
+    },
+    /// TODO: docs
+    Extension(Arc<dyn InputFileExtension>),
+}
+
+/// TODO: docs
+#[async_trait::async_trait]
+pub trait InputFileExtension: Debug + Send + Sync {
+    /// TODO: docs
+    fn location(&self) -> &str;
+    /// TODO: docs
+    async fn exists(&self) -> crate::Result<bool>;
+    /// TODO: docs
+    async fn metadata(&self) -> crate::Result<FileMetadata>;
+    /// TODO: docs
+    async fn read(&self) -> crate::Result<Bytes>;
+    // NOTE: async fn reader(&self) -> crate::Result<impl FileRead> cannot be implemented, as the
+    // return type is not object safe
 }
 
 impl InputFile {
     /// Absolute path to root uri.
     pub fn location(&self) -> &str {
-        &self.path
+        match self {
+            Self::OpenDAL {
+                op: _,
+                path,
+                relative_path_pos: _,
+            } => path,
+            Self::Extension(e) => e.location(),
+        }
     }
 
     /// Check if file exists.
     pub async fn exists(&self) -> crate::Result<bool> {
-        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => Ok(op.exists(&path[*relative_path_pos..]).await?),
+            Self::Extension(e) => e.exists().await,
+        }
     }
 
     /// Fetch and returns metadata of file.
     pub async fn metadata(&self) -> crate::Result<FileMetadata> {
-        let meta = self.op.stat(&self.path[self.relative_path_pos..]).await?;
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => {
+                let meta = op.stat(&path[*relative_path_pos..]).await?;
 
-        Ok(FileMetadata {
-            size: meta.content_length(),
-        })
+                Ok(FileMetadata {
+                    size: meta.content_length(),
+                })
+            }
+            Self::Extension(e) => e.metadata().await,
+        }
     }
 
     /// Read and returns whole content of file.
     ///
     /// For continues reading, use [`Self::reader`] instead.
     pub async fn read(&self) -> crate::Result<Bytes> {
-        Ok(self
-            .op
-            .read(&self.path[self.relative_path_pos..])
-            .await?
-            .to_bytes())
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => Ok(op.read(&path[*relative_path_pos..]).await?.to_bytes()),
+            Self::Extension(e) => e.read().await,
+        }
     }
 
     /// Creates [`FileRead`] for continues reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
     pub async fn reader(&self) -> crate::Result<impl FileRead> {
-        Ok(self.op.reader(&self.path[self.relative_path_pos..]).await?)
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => Ok(op.reader(&path[*relative_path_pos..]).await?),
+            Self::Extension(_) => unimplemented!(),
+        }
     }
 }
 
@@ -304,31 +405,73 @@ impl FileWrite for opendal::Writer {
 
 /// Output file is used for writing to files..
 #[derive(Debug)]
-pub struct OutputFile {
-    op: Operator,
-    // Absolution path of file.
-    path: String,
-    // Relative path of file to uri, starts at [`relative_path_pos`]
-    relative_path_pos: usize,
+pub enum OutputFile {
+    /// TODO: docs
+    OpenDAL {
+        /// TODO: docs
+        op: Operator,
+        /// Absolution path of file.
+        path: String,
+        /// Relative path of file to uri, starts at [`relative_path_pos`]
+        relative_path_pos: usize,
+    },
+    /// TODO: docs
+    Extension(Arc<dyn OutputFileExtension>),
+}
+
+/// TODO: docs
+#[async_trait::async_trait]
+pub trait OutputFileExtension: Debug + Send + Sync {
+    /// TODO: docs
+    fn location(&self) -> &str;
+    /// TODO: docs
+    async fn exists(&self) -> crate::Result<bool>;
+    /// TODO: docs
+    fn to_input_file(&self) -> InputFile;
+    /// TODO: docs
+    async fn write(&self, bs: Bytes) -> crate::Result<()>;
+    /// TODO: docs
+    async fn writer(&self) -> crate::Result<Box<dyn FileWrite>>;
 }
 
 impl OutputFile {
     /// Relative path to root uri.
     pub fn location(&self) -> &str {
-        &self.path
+        match self {
+            Self::OpenDAL {
+                op: _,
+                path,
+                relative_path_pos: _,
+            } => path,
+            Self::Extension(e) => e.location(),
+        }
     }
 
     /// Checks if file exists.
     pub async fn exists(&self) -> crate::Result<bool> {
-        Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => Ok(op.exists(&path[*relative_path_pos..]).await?),
+            Self::Extension(e) => e.exists().await,
+        }
     }
 
     /// Converts into [`InputFile`].
     pub fn to_input_file(self) -> InputFile {
-        InputFile {
-            op: self.op,
-            path: self.path,
-            relative_path_pos: self.relative_path_pos,
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => InputFile::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            },
+            Self::Extension(e) => e.to_input_file(),
         }
     }
 
@@ -339,9 +482,14 @@ impl OutputFile {
     /// Calling `write` will overwrite the file if it exists.
     /// For continues writing, use [`Self::writer`].
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
-        let mut writer = self.writer().await?;
-        writer.write(bs).await?;
-        writer.close().await
+        match self {
+            Self::OpenDAL { .. } => {
+                let mut writer = self.writer().await?;
+                writer.write(bs).await?;
+                writer.close().await
+            }
+            Self::Extension(e) => e.write(bs).await,
+        }
     }
 
     /// Creates output file for continues writing.
@@ -350,9 +498,14 @@ impl OutputFile {
     ///
     /// For one-time writing, use [`Self::write`] instead.
     pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
-        Ok(Box::new(
-            self.op.writer(&self.path[self.relative_path_pos..]).await?,
-        ))
+        match self {
+            Self::OpenDAL {
+                op,
+                path,
+                relative_path_pos,
+            } => Ok(Box::new(op.writer(&path[*relative_path_pos..]).await?)),
+            Self::Extension(e) => e.writer().await,
+        }
     }
 }
 
