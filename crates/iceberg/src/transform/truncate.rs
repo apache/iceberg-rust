@@ -712,11 +712,11 @@ mod test {
         );
 
         // test decimal
-        let mut buidler = PrimitiveBuilder::<Decimal128Type>::new()
+        let mut builder = PrimitiveBuilder::<Decimal128Type>::new()
             .with_precision_and_scale(20, 2)
             .unwrap();
-        buidler.append_value(1065);
-        let input = Arc::new(buidler.finish());
+        builder.append_value(1065);
+        let input = Arc::new(builder.finish());
         let res = super::Truncate::new(50).transform(input).unwrap();
         assert_eq!(
             res.as_any()
