@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
+use iceberg::spec::{Schema, SortOrder, TableMetadata, UnPartitionSpec};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
 };
@@ -167,7 +167,7 @@ pub(super) struct CreateTableRequest {
     pub(super) name: String,
     pub(super) location: Option<String>,
     pub(super) schema: Schema,
-    pub(super) partition_spec: Option<UnboundPartitionSpec>,
+    pub(super) partition_spec: Option<UnPartitionSpec>,
     pub(super) write_order: Option<SortOrder>,
     pub(super) stage_create: Option<bool>,
     pub(super) properties: Option<HashMap<String, String>>,
