@@ -1538,11 +1538,11 @@
         </span>);
 
         <span class="comment">// test decimal
-        </span><span class="kw">let </span><span class="kw-2">mut </span>buidler = PrimitiveBuilder::&lt;Decimal128Type&gt;::new()
+        </span><span class="kw">let </span><span class="kw-2">mut </span>builder = PrimitiveBuilder::&lt;Decimal128Type&gt;::new()
             .with_precision_and_scale(<span class="number">20</span>, <span class="number">2</span>)
             .unwrap();
-        buidler.append_value(<span class="number">1065</span>);
-        <span class="kw">let </span>input = Arc::new(buidler.finish());
+        builder.append_value(<span class="number">1065</span>);
+        <span class="kw">let </span>input = Arc::new(builder.finish());
         <span class="kw">let </span>res = <span class="kw">super</span>::Truncate::new(<span class="number">50</span>).transform(input).unwrap();
         <span class="macro">assert_eq!</span>(
             res.as_any()
