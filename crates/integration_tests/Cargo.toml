@@ -31,7 +31,5 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
-log = { workspace = true }
 parquet = { workspace = true }
-port_scanner = { workspace = true }
 tokio = { workspace = true }
