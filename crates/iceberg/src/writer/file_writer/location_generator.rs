@@ -35,7 +35,7 @@ const WRITE_DATA_LOCATION: &str = "write.data.path";
 const WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
 const DEFAULT_DATA_DIR: &str = "/data";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
@@ -87,7 +87,7 @@ pub trait FileNameGenerator: Clone + Send + 'static {
 /// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
 /// passed to `LocationGenerator` to generate the location of the file.
 /// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DefaultFileNameGenerator {
     prefix: String,
     suffix: String,

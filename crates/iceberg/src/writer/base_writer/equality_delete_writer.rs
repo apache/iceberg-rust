@@ -32,7 +32,7 @@ use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EqualityDeleteFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     config: EqualityDeleteWriterConfig,
@@ -46,7 +46,7 @@ impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
 }
 
 /// Config for `EqualityDeleteWriter`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EqualityDeleteWriterConfig {
     // Field ids used to determine row equality in equality delete files.
     equality_ids: Vec<i32>,
@@ -122,6 +122,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
 }
 
 /// Writer used to write equality delete files.
+#[derive(Debug)]
 pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     projector: RecordBatchProjector,

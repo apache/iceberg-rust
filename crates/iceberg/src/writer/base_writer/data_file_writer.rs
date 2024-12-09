@@ -26,7 +26,7 @@ use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::Result;
 
 /// Builder for `DataFileWriter`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     partition_value: Option<Struct>,
@@ -55,6 +55,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 }
 
 /// A writer write data is within one spec/partition.
+#[derive(Debug)]
 pub struct DataFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     partition_value: Struct,
