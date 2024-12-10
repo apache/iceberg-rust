@@ -30,8 +30,7 @@ use uuid::Uuid;
 
 use crate::spec::{
     FormatVersion, Schema, SchemaId, Snapshot, SnapshotReference, SortOrder, TableMetadata,
-    TableMetadataBuilder, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations,
-    ViewVersion,
+    TableMetadataBuilder, UnPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -244,7 +243,7 @@ pub struct TableCreation {
     pub schema: Schema,
     /// The partition spec of the table, could be None.
     #[builder(default, setter(strip_option(fallback = partition_spec_opt), into))]
-    pub partition_spec: Option<UnboundPartitionSpec>,
+    pub partition_spec: Option<UnPartitionSpec>,
     /// The sort order of the table.
     #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
@@ -383,7 +382,7 @@ pub enum TableUpdate {
     /// Add a new partition spec to the table
     AddSpec {
         /// The partition spec to add.
-        spec: UnboundPartitionSpec,
+        spec: UnPartitionSpec,
     },
     /// Set table's default spec
     #[serde(rename_all = "kebab-case")]
@@ -770,8 +769,8 @@ mod tests {
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
         SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
-        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion, MAIN_BRANCH,
+        UnPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations, ViewVersion,
+        MAIN_BRANCH,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -1305,7 +1304,7 @@ mod tests {
 }
         "#,
             TableUpdate::AddSpec {
-                spec: UnboundPartitionSpec::builder()
+                spec: UnPartitionSpec::builder()
                     .add_partition_field(4, "ts_day".to_string(), Transform::Day)
                     .unwrap()
                     .add_partition_field(1, "id_bucket".to_string(), Transform::Bucket(16))
