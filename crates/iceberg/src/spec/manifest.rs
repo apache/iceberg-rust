@@ -2179,8 +2179,8 @@ mod tests {
     ) -> ManifestFile {
         let (bs, res) = write_manifest(&manifest, writer_builder).await;
         let actual_manifest = Manifest::parse_avro(bs.as_slice()).unwrap();
-        let (entries1, metadata1) = manifest.clone().into_parts();
-        let (entries2, metadata2) = actual_manifest.clone().into_parts();
+        let (entries1, _metadata1) = manifest.clone().into_parts();
+        let (entries2, _metadata2) = actual_manifest.clone().into_parts();
         for (e1, e2) in entries1.into_iter().zip(entries2.into_iter()) {
             let file1 = e1.data_file();
             let file2 = e2.data_file();
