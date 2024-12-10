@@ -23,3 +23,8 @@
 
 mod compression;
 pub use compression::CompressionCodec;
+
+mod metadata;
+
+#[cfg(test)]
+mod test_utils;

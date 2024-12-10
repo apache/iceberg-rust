@@ -29,8 +29,13 @@ license = { workspace = true }
 keywords = ["iceberg", "puffin"]
 
 [dependencies]
+bytes = { workspace = true }
 iceberg = { workspace = true }
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 tokio = { workspace = true }
