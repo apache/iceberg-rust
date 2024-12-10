@@ -132,19 +132,19 @@ mod dyn_trait {
     #[async_trait::async_trait]
     pub trait DynIcebergWriter<I, O>: Send + 'static {
         /// `write` of trait `IcebergWriter`
-        async fn write(&mut self, input: I) -> Result<()>;
+        async fn dyn_write(&mut self, input: I) -> Result<()>;
         /// `close` of trait `IcebergWriter`
-        async fn close(self: Box<Self>) -> Result<O>;
+        async fn dyn_close(self: Box<Self>) -> Result<O>;
     }
 
     #[async_trait::async_trait]
     impl<I: 'static + Send, O: 'static + Send, W: IcebergWriter<I, O>> DynIcebergWriter<I, O> for W {
-        async fn write(&mut self, input: I) -> Result<()> {
+        async fn dyn_write(&mut self, input: I) -> Result<()> {
             self.write(input).await
         }
 
-        async fn close(self: Box<Self>) -> Result<O> {
-            self.close().await
+        async fn dyn_close(self: Box<Self>) -> Result<O> {
+            (*self).close().await
         }
     }
 
@@ -154,11 +154,11 @@ mod dyn_trait {
 
     impl<I: 'static + Send, O: 'static + Send> IcebergWriter<I, O> for BoxedIcebergWriter<I, O> {
         async fn write(&mut self, input: I) -> Result<()> {
-            (**self).write(input).await
+            (**self).dyn_write(input).await
         }
 
         async fn close(self) -> Result<O> {
-            DynIcebergWriter::close(self).await
+            self.dyn_close().await
         }
     }
 
@@ -206,7 +206,7 @@ mod tests {
         let _ = w
             .write(RecordBatch::new_empty(Schema::empty().into()))
             .await;
-        let _ = w.close().await;
+        let _ = w.dyn_close().await;
     }
 
     // This function check:
