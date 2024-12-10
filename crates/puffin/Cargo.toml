@@ -16,20 +16,21 @@
 # under the License.
 
 [package]
-name = "iceberg-integration-tests"
+name = "iceberg-puffin"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
 rust-version = { workspace = true }
 
+categories = ["database"]
+description = "Apache Iceberg Puffin"
+repository = { workspace = true }
+license = { workspace = true }
+keywords = ["iceberg", "puffin"]
+
 [dependencies]
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
-futures = { workspace = true }
 iceberg = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
-iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
-parquet = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
 tokio = { workspace = true }

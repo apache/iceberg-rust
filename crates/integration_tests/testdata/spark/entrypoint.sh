@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,22 +16,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "iceberg-integration-tests"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-rust-version = { workspace = true }
+start-master.sh -p 7077
+start-worker.sh spark://spark-iceberg:7077
+start-history-server.sh
 
-[dependencies]
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
-futures = { workspace = true }
-iceberg = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
-iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
-parquet = { workspace = true }
-tokio = { workspace = true }
+python3 ./provision.py
+
+touch /tmp/ready
+
+tail -f /dev/null

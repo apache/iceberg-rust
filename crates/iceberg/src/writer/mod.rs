@@ -64,10 +64,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// The associated writer config type used to build the writer.
-    type C: Send + 'static;
     /// Build the iceberg writer.
-    fn build(self, config: Self::C) -> impl Future<Output = Result<Self::R>> + Send;
+    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// The iceberg writer used to write data to iceberg table.
@@ -88,34 +86,32 @@ mod dyn_trait {
     use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
 
     #[async_trait::async_trait]
-    pub trait DynIcebergWriterBuilder<C, I, O>: Send + DynClone + 'static {
-        async fn build(self, config: C) -> Result<BoxedIcebergWriter<I, O>>;
+    pub trait DynIcebergWriterBuilder<I, O>: Send + DynClone + 'static {
+        async fn build(self) -> Result<BoxedIcebergWriter<I, O>>;
     }
 
-    clone_trait_object!(<C, I, O> DynIcebergWriterBuilder<C, I, O>);
+    clone_trait_object!(<I, O> DynIcebergWriterBuilder<I, O>);
 
     #[async_trait::async_trait]
     impl<I: 'static + Send, O: 'static + Send, B: IcebergWriterBuilder<I, O>>
-        DynIcebergWriterBuilder<B::C, I, O> for B
-    where B::C: Send
+        DynIcebergWriterBuilder<I, O> for B
     {
-        async fn build(self, config: B::C) -> Result<BoxedIcebergWriter<I, O>> {
-            Ok(self.build(config).await?.boxed())
+        async fn build(self) -> Result<BoxedIcebergWriter<I, O>> {
+            Ok(self.build().await?.boxed())
         }
     }
 
     /// Type alias for `Box<dyn DynIcebergWriterBuilder>`
-    pub type BoxedIcebergWriterBuilder<C, I = DefaultInput, O = DefaultOutput> =
-        Box<dyn DynIcebergWriterBuilder<C, I, O>>;
+    pub type BoxedIcebergWriterBuilder<I = DefaultInput, O = DefaultOutput> =
+        Box<dyn DynIcebergWriterBuilder<I, O>>;
 
-    impl<C: Send + 'static, I: Send + 'static, O: Send + 'static> IcebergWriterBuilder<I, O>
-        for BoxedIcebergWriterBuilder<C, I, O>
+    impl<I: Send + 'static, O: Send + 'static> IcebergWriterBuilder<I, O>
+        for BoxedIcebergWriterBuilder<I, O>
     {
         type R = BoxedIcebergWriter<I, O>;
-        type C = C;
 
-        async fn build(self, config: Self::C) -> Result<Self::R> {
-            DynIcebergWriterBuilder::build(self, config).await
+        async fn build(self) -> Result<Self::R> {
+            DynIcebergWriterBuilder::build(self).await
         }
     }
 
@@ -124,7 +120,7 @@ mod dyn_trait {
         IcebergWriterBuilder<I, O> + Sized
     {
         /// Create a type erased `IcebergWriterBuilder` wrapped with `Box`.
-        fn boxed(self) -> BoxedIcebergWriterBuilder<Self::C, I, O> {
+        fn boxed(self) -> BoxedIcebergWriterBuilder<I, O> {
             Box::new(self) as _
         }
     }
