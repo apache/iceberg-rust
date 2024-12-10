@@ -275,12 +275,14 @@ mod tests {
 
         let spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(1)
-            .add_unbound_field(UnboundPartitionField::builder()
-                .source_id(1)
-                .name("a".to_string())
-                .field_id(1)
-                .transform(Transform::Identity)
-                .build()])
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_id(1)
+                    .name("a".to_string())
+                    .field_id(1)
+                    .transform(Transform::Identity)
+                    .build(),
+            )
             .unwrap()
             .build()
             .unwrap();
