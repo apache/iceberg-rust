@@ -26,28 +26,18 @@ use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::Result;
 
 /// Builder for `DataFileWriter`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
+    partition_value: Option<Struct>,
 }
 
 impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     /// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B) -> Self {
-        Self { inner }
-    }
-}
-
-/// Config for `DataFileWriter`.
-pub struct DataFileWriterConfig {
-    partition_value: Struct,
-}
-
-impl DataFileWriterConfig {
-    /// Create a new `DataFileWriterConfig` with partition value.
-    pub fn new(partition_value: Option<Struct>) -> Self {
+    pub fn new(inner: B, partition_value: Option<Struct>) -> Self {
         Self {
-            partition_value: partition_value.unwrap_or(Struct::empty()),
+            inner,
+            partition_value,
         }
     }
 }
@@ -55,17 +45,17 @@ impl DataFileWriterConfig {
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
-    type C = DataFileWriterConfig;
 
-    async fn build(self, config: Self::C) -> Result<Self::R> {
+    async fn build(self) -> Result<Self::R> {
         Ok(DataFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
-            partition_value: config.partition_value,
+            partition_value: self.partition_value.unwrap_or(Struct::empty()),
         })
     }
 }
 
 /// A writer write data is within one spec/partition.
+#[derive(Debug)]
 pub struct DataFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     partition_value: Struct,
@@ -115,9 +105,7 @@ mod test {
 
     use crate::io::FileIOBuilder;
     use crate::spec::{DataContentType, DataFileFormat, Schema, Struct};
-    use crate::writer::base_writer::data_file_writer::{
-        DataFileWriterBuilder, DataFileWriterConfig,
-    };
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::file_writer::ParquetWriterBuilder;
@@ -140,9 +128,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut data_file_writer = DataFileWriterBuilder::new(pw)
-            .build(DataFileWriterConfig::new(None))
-            .await?;
+        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await?;
 
         let data_file = data_file_writer.close().await.unwrap();
         assert_eq!(data_file.len(), 1);

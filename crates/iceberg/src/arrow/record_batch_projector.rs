@@ -24,7 +24,7 @@ use crate::error::Result;
 use crate::{Error, ErrorKind};
 
 /// Help to project specific field from `RecordBatch`` according to the fields id.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RecordBatchProjector {
     // A vector of vectors, where each inner vector represents the index path to access a specific field in a nested structure.
     // E.g. [[0], [1, 2]] means the first field is accessed directly from the first column,
