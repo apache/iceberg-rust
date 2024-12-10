@@ -266,7 +266,7 @@
 <span class="kw">const </span>WRITE_FOLDER_STORAGE_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"write.folder-storage.path"</span>;
 <span class="kw">const </span>DEFAULT_DATA_DIR: <span class="kw-2">&amp;</span>str = <span class="string">"/data"</span>;
 
-<span class="attr">#[derive(Clone)]
+<span class="attr">#[derive(Clone, Debug)]
 </span><span class="doccomment">/// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 </span><span class="kw">pub struct </span>DefaultLocationGenerator {
@@ -318,7 +318,7 @@
 <span class="doccomment">/// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
 /// passed to `LocationGenerator` to generate the location of the file.
 /// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
-</span><span class="attr">#[derive(Clone)]
+</span><span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub struct </span>DefaultFileNameGenerator {
     prefix: String,
     suffix: String,

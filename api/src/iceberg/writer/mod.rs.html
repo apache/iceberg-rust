@@ -132,8 +132,6 @@
 <a href="#132" id="132">132</a>
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a>
-<a href="#136" id="136">136</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -199,10 +197,8 @@
 </span>{
     <span class="doccomment">/// The associated writer type.
     </span><span class="kw">type </span>R: IcebergWriter&lt;I, O&gt;;
-    <span class="doccomment">/// The associated writer config type used to build the writer.
-    </span><span class="kw">type </span>C;
     <span class="doccomment">/// Build the iceberg writer.
-    </span><span class="kw">async fn </span>build(<span class="self">self</span>, config: <span class="self">Self</span>::C) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;;
+    </span><span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt;;
 }
 
 <span class="doccomment">/// The iceberg writer used to write data to iceberg table.

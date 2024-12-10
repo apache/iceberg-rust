@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["DataFileWriter","DataFileWriterBuilder","DataFileWriterConfig"]};
+window.SIDEBAR_ITEMS = {"struct":["DataFileWriter","DataFileWriterBuilder"]};

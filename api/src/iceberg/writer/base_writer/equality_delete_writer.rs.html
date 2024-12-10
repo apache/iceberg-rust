@@ -657,6 +657,7 @@
 <a href="#657" id="657">657</a>
 <a href="#658" id="658">658</a>
 <a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -691,19 +692,21 @@
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
 <span class="doccomment">/// Builder for `EqualityDeleteWriter`.
-</span><span class="attr">#[derive(Clone)]
+</span><span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub struct </span>EqualityDeleteFileWriterBuilder&lt;B: FileWriterBuilder&gt; {
     inner: B,
+    config: EqualityDeleteWriterConfig,
 }
 
 <span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; EqualityDeleteFileWriterBuilder&lt;B&gt; {
     <span class="doccomment">/// Create a new `EqualityDeleteFileWriterBuilder` using a `FileWriterBuilder`.
-    </span><span class="kw">pub fn </span>new(inner: B) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ inner }
+    </span><span class="kw">pub fn </span>new(inner: B, config: EqualityDeleteWriterConfig) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ inner, config }
     }
 }
 
 <span class="doccomment">/// Config for `EqualityDeleteWriter`.
+</span><span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub struct </span>EqualityDeleteWriterConfig {
     <span class="comment">// Field ids used to determine row equality in equality delete files.
     </span>equality_ids: Vec&lt;i32&gt;,
@@ -767,19 +770,19 @@
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; IcebergWriterBuilder <span class="kw">for </span>EqualityDeleteFileWriterBuilder&lt;B&gt; {
     <span class="kw">type </span>R = EqualityDeleteFileWriter&lt;B&gt;;
-    <span class="kw">type </span>C = EqualityDeleteWriterConfig;
 
-    <span class="kw">async fn </span>build(<span class="self">self</span>, config: <span class="self">Self</span>::C) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
+    <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
         <span class="prelude-val">Ok</span>(EqualityDeleteFileWriter {
             inner_writer: <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.clone().build().<span class="kw">await</span><span class="question-mark">?</span>),
-            projector: config.projector,
-            equality_ids: config.equality_ids,
-            partition_value: config.partition_value,
+            projector: <span class="self">self</span>.config.projector,
+            equality_ids: <span class="self">self</span>.config.equality_ids,
+            partition_value: <span class="self">self</span>.config.partition_value,
         })
     }
 }
 
 <span class="doccomment">/// Writer used to write equality delete files.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>EqualityDeleteFileWriter&lt;B: FileWriterBuilder&gt; {
     inner_writer: <span class="prelude-ty">Option</span>&lt;B::R&gt;,
     projector: RecordBatchProjector,
@@ -1055,9 +1058,8 @@
             location_gen,
             file_name_gen,
         );
-
-        <span class="kw">let </span><span class="kw-2">mut </span>equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
-            .build(equality_config)
+        <span class="kw">let </span><span class="kw-2">mut </span>equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, equality_config)
+            .build()
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// write
@@ -1220,8 +1222,8 @@
             location_gen,
             file_name_gen,
         );
-        <span class="kw">let </span><span class="kw-2">mut </span>equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
-            .build(config)
+        <span class="kw">let </span><span class="kw-2">mut </span>equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, config)
+            .build()
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// prepare data

@@ -61,17 +61,6 @@
 <a href="#61" id="61">61</a>
 <a href="#62" id="62">62</a>
 <a href="#63" id="63">63</a>
-<a href="#64" id="64">64</a>
-<a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a>
-<a href="#68" id="68">68</a>
-<a href="#69" id="69">69</a>
-<a href="#70" id="70">70</a>
-<a href="#71" id="71">71</a>
-<a href="#72" id="72">72</a>
-<a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -95,8 +84,6 @@
 <span class="kw">use </span>iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 <span class="kw">use </span>iceberg_test_utils::docker::DockerCompose;
 <span class="kw">use </span>iceberg_test_utils::{normalize_test_name, set_up};
-<span class="kw">use </span>port_scanner::scan_port_addr;
-<span class="kw">use </span>tokio::time::sleep;
 
 <span class="kw">const </span>REST_CATALOG_PORT: u16 = <span class="number">8181</span>;
 
@@ -116,24 +103,15 @@
     </span>docker_compose.run();
 
     <span class="kw">let </span>rest_catalog_ip = docker_compose.get_container_ip(<span class="string">"rest"</span>);
-
-    <span class="kw">let </span>read_port = <span class="macro">format!</span>(<span class="string">"{}:{}"</span>, rest_catalog_ip, REST_CATALOG_PORT);
-    <span class="kw">loop </span>{
-        <span class="kw">if </span>!scan_port_addr(<span class="kw-2">&amp;</span>read_port) {
-            <span class="macro">log::info!</span>(<span class="string">"Waiting for 1s rest catalog to ready..."</span>);
-            sleep(std::time::Duration::from_millis(<span class="number">1000</span>)).<span class="kw">await</span>;
-        } <span class="kw">else </span>{
-            <span class="kw">break</span>;
-        }
-    }
-
-    <span class="kw">let </span>container_ip = docker_compose.get_container_ip(<span class="string">"minio"</span>);
-    <span class="kw">let </span>read_port = <span class="macro">format!</span>(<span class="string">"{}:{}"</span>, container_ip, <span class="number">9000</span>);
+    <span class="kw">let </span>minio_ip = docker_compose.get_container_ip(<span class="string">"minio"</span>);
 
     <span class="kw">let </span>config = RestCatalogConfig::builder()
         .uri(<span class="macro">format!</span>(<span class="string">"http://{}:{}"</span>, rest_catalog_ip, REST_CATALOG_PORT))
         .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), <span class="macro">format!</span>(<span class="string">"http://{}"</span>, read_port)),
+            (
+                S3_ENDPOINT.to_string(),
+                <span class="macro">format!</span>(<span class="string">"http://{}:{}"</span>, minio_ip, <span class="number">9000</span>),
+            ),
             (S3_ACCESS_KEY_ID.to_string(), <span class="string">"admin"</span>.to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), <span class="string">"password"</span>.to_string()),
             (S3_REGION.to_string(), <span class="string">"us-east-1"</span>.to_string()),

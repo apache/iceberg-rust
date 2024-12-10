@@ -139,20 +139,6 @@
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
-<a href="#142" id="142">142</a>
-<a href="#143" id="143">143</a>
-<a href="#144" id="144">144</a>
-<a href="#145" id="145">145</a>
-<a href="#146" id="146">146</a>
-<a href="#147" id="147">147</a>
-<a href="#148" id="148">148</a>
-<a href="#149" id="149">149</a>
-<a href="#150" id="150">150</a>
-<a href="#151" id="151">151</a>
-<a href="#152" id="152">152</a>
-<a href="#153" id="153">153</a>
-<a href="#154" id="154">154</a>
-<a href="#155" id="155">155</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -181,28 +167,18 @@
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
 <span class="doccomment">/// Builder for `DataFileWriter`.
-</span><span class="attr">#[derive(Clone)]
+</span><span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub struct </span>DataFileWriterBuilder&lt;B: FileWriterBuilder&gt; {
     inner: B,
+    partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;,
 }
 
 <span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; DataFileWriterBuilder&lt;B&gt; {
     <span class="doccomment">/// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    </span><span class="kw">pub fn </span>new(inner: B) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ inner }
-    }
-}
-
-<span class="doccomment">/// Config for `DataFileWriter`.
-</span><span class="kw">pub struct </span>DataFileWriterConfig {
-    partition_value: Struct,
-}
-
-<span class="kw">impl </span>DataFileWriterConfig {
-    <span class="doccomment">/// Create a new `DataFileWriterConfig` with partition value.
-    </span><span class="kw">pub fn </span>new(partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(inner: B, partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            partition_value: partition_value.unwrap_or(Struct::empty()),
+            inner,
+            partition_value,
         }
     }
 }
@@ -210,17 +186,17 @@
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; IcebergWriterBuilder <span class="kw">for </span>DataFileWriterBuilder&lt;B&gt; {
     <span class="kw">type </span>R = DataFileWriter&lt;B&gt;;
-    <span class="kw">type </span>C = DataFileWriterConfig;
 
-    <span class="kw">async fn </span>build(<span class="self">self</span>, config: <span class="self">Self</span>::C) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
+    <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
         <span class="prelude-val">Ok</span>(DataFileWriter {
             inner_writer: <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.clone().build().<span class="kw">await</span><span class="question-mark">?</span>),
-            partition_value: config.partition_value,
+            partition_value: <span class="self">self</span>.partition_value.unwrap_or(Struct::empty()),
         })
     }
 }
 
 <span class="doccomment">/// A writer write data is within one spec/partition.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>DataFileWriter&lt;B: FileWriterBuilder&gt; {
     inner_writer: <span class="prelude-ty">Option</span>&lt;B::R&gt;,
     partition_value: Struct,
@@ -270,9 +246,7 @@
 
     <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
     <span class="kw">use </span><span class="kw">crate</span>::spec::{DataContentType, DataFileFormat, Schema, Struct};
-    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::{
-        DataFileWriterBuilder, DataFileWriterConfig,
-    };
+    <span class="kw">use </span><span class="kw">crate</span>::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::test::MockLocationGenerator;
     <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::location_generator::DefaultFileNameGenerator;
     <span class="kw">use </span><span class="kw">crate</span>::writer::file_writer::ParquetWriterBuilder;
@@ -295,9 +269,7 @@
             location_gen,
             file_name_gen,
         );
-        <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = DataFileWriterBuilder::new(pw)
-            .build(DataFileWriterConfig::new(<span class="prelude-val">None</span>))
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = DataFileWriterBuilder::new(pw, <span class="prelude-val">None</span>).build().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>data_file = data_file_writer.close().<span class="kw">await</span>.unwrap();
         <span class="macro">assert_eq!</span>(data_file.len(), <span class="number">1</span>);
