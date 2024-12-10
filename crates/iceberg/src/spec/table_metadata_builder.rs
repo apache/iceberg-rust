@@ -23,7 +23,7 @@ use uuid::Uuid;
 use super::{
     FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, Schema, SchemaRef, Snapshot,
     SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StructType,
-    TableMetadata, UnPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
+    TableMetadata, UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
     ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
     PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, RESERVED_PROPERTIES,
     UNPARTITIONED_LAST_ASSIGNED_ID,
@@ -77,7 +77,7 @@ impl TableMetadataBuilder {
     /// spec.id. It should only be used to create new table metadata from scratch.
     pub fn new(
         schema: Schema,
-        spec: impl Into<UnPartitionSpec>,
+        spec: impl Into<UnboundPartitionSpec>,
         sort_order: SortOrder,
         location: String,
         format_version: FormatVersion,
@@ -174,7 +174,7 @@ impl TableMetadataBuilder {
                 "Can't create table without location",
             )
         })?;
-        let partition_spec = partition_spec.unwrap_or(UnPartitionSpec {
+        let partition_spec = partition_spec.unwrap_or(UnboundPartitionSpec {
             spec_id: None,
             fields: vec![],
         });
@@ -637,7 +637,7 @@ impl TableMetadataBuilder {
     /// # Errors
     /// - The partition spec cannot be bound to the current schema.
     /// - The partition spec has non-sequential field ids and the table format version is 1.
-    pub fn add_partition_spec(mut self, unbound_spec: UnPartitionSpec) -> Result<Self> {
+    pub fn add_partition_spec(mut self, unbound_spec: UnboundPartitionSpec) -> Result<Self> {
         let schema = self.get_current_schema()?.clone();
         let spec = PartitionSpecBuilder::new_from_unbound(unbound_spec.clone(), schema)?
             .with_last_assigned_field_id(self.metadata.last_partition_id)
@@ -735,7 +735,7 @@ impl TableMetadataBuilder {
     }
 
     /// Add a partition spec and set it as the default
-    pub fn add_default_partition_spec(self, unbound_spec: UnPartitionSpec) -> Result<Self> {
+    pub fn add_default_partition_spec(self, unbound_spec: UnboundPartitionSpec) -> Result<Self> {
         self.add_partition_spec(unbound_spec)?
             .set_default_partition_spec(Self::LAST_ADDED)
     }
@@ -980,7 +980,7 @@ impl TableMetadataBuilder {
 
     fn reassign_ids(
         schema: Schema,
-        spec: UnPartitionSpec,
+        spec: UnboundPartitionSpec,
         sort_order: SortOrder,
     ) -> Result<(Schema, PartitionSpec, SortOrder)> {
         // Re-assign field ids and schema ids for a new table.
@@ -1170,8 +1170,8 @@ mod tests {
             .unwrap()
     }
 
-    fn partition_spec() -> UnPartitionSpec {
-        UnPartitionSpec::builder()
+    fn partition_spec() -> UnboundPartitionSpec {
+        UnboundPartitionSpec::builder()
             .with_spec_id(0)
             .add_partition_field(2, "y", Transform::Identity)
             .unwrap()
@@ -1485,7 +1485,7 @@ mod tests {
     fn test_add_partition_spec() {
         let builder = builder_without_changes(FormatVersion::V2);
 
-        let added_spec = UnPartitionSpec::builder()
+        let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
                 UnboundPartitionField {
@@ -1549,7 +1549,7 @@ mod tests {
     fn test_set_default_partition_spec() {
         let builder = builder_without_changes(FormatVersion::V2);
         let schema = builder.get_current_schema().unwrap().clone();
-        let added_spec = UnPartitionSpec::builder()
+        let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_field(1, "y_bucket[2]", Transform::Bucket(2))
             .unwrap()
@@ -1590,7 +1590,7 @@ mod tests {
     fn test_set_existing_default_partition_spec() {
         let builder = builder_without_changes(FormatVersion::V2);
         // Add and set an unbound spec as current
-        let unbound_spec = UnPartitionSpec::builder().with_spec_id(1).build();
+        let unbound_spec = UnboundPartitionSpec::builder().with_spec_id(1).build();
         let build_result = builder
             .add_partition_spec(unbound_spec.clone())
             .unwrap()
@@ -2036,7 +2036,7 @@ mod tests {
     fn test_add_partition_spec_for_v1_requires_sequential_ids() {
         let builder = builder_without_changes(FormatVersion::V1);
 
-        let added_spec = UnPartitionSpec::builder()
+        let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
                 UnboundPartitionField {
