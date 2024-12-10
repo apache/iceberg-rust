@@ -28,10 +28,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry, ManifestFile,
-    ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType,
-    Summary, Transform, MAIN_BRANCH,
+    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
+    ManifestMetadata, ManifestWriter, NullOrder, Operation, Snapshot, SnapshotReference,
+    SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform,
+    MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
@@ -382,21 +382,19 @@ impl<'a> SnapshotProduceAction<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
-        let manifest_entries = added_data_files
-            .into_iter()
-            .map(|data_file| {
-                let builder = ManifestEntry::builder()
-                    .status(crate::spec::ManifestStatus::Added)
-                    .data_file(data_file);
-                if self.tx.table.metadata().format_version() == FormatVersion::V1 {
-                    builder.snapshot_id(self.snapshot_id).build()
-                } else {
-                    // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
-                    // commit failed.
-                    builder.build()
-                }
-            })
-            .collect();
+        let snapshot_id = self.snapshot_id;
+        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+            let builder = ManifestEntry::builder()
+                .status(crate::spec::ManifestStatus::Added)
+                .data_file(data_file);
+            if self.tx.table.metadata().format_version() == FormatVersion::V1 {
+                builder.snapshot_id(snapshot_id).build()
+            } else {
+                // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
+                // commit failed.
+                builder.build()
+            }
+        });
         let schema = self.tx.table.metadata().current_schema();
         let manifest_meta = ManifestMetadata::builder()
             .schema(schema.clone())
@@ -412,13 +410,15 @@ impl<'a> SnapshotProduceAction<'a> {
             )
             .content(crate::spec::ManifestContentType::Data)
             .build();
-        let manifest = Manifest::new(manifest_meta, manifest_entries);
-        let writer = ManifestWriter::new(
+        let mut writer = ManifestWriter::new(
             self.new_manifest_output()?,
             self.snapshot_id,
             self.key_metadata.clone(),
         );
-        writer.write(manifest).await
+        for entry in manifest_entries {
+            writer.add(entry)?;
+        }
+        writer.to_manifest_file(manifest_meta).await
     }
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
