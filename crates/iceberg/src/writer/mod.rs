@@ -197,16 +197,35 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    use super::{BoxedIcebergWriter, IcebergWriter};
+    use super::{
+        IcebergWriter, IcebergWriterBuilder, IcebergWriterBuilderDynExt, IcebergWriterDynExt,
+    };
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
     // This function is used to guarantee the trait can be used as a object safe trait.
-    async fn _guarantee_object_safe(mut w: BoxedIcebergWriter) {
-        let _ = w
+    async fn _guarantee_dyn_trait(builder: impl IcebergWriterBuilder) {
+        fn ensure_writer_builder<WB: IcebergWriterBuilder>(builder: WB) -> WB {
+            builder
+        }
+
+        fn ensure_writer<W: IcebergWriter>(writer: W) -> W {
+            writer
+        }
+
+        let writer = ensure_writer(builder.clone().build().await.unwrap());
+        let mut boxed_writer = ensure_writer(writer.boxed());
+        let _ = boxed_writer
             .write(RecordBatch::new_empty(Schema::empty().into()))
             .await;
-        let _ = w.dyn_close().await;
+        let _ = boxed_writer.close().await;
+        let boxed_builder = ensure_writer_builder(builder.boxed());
+        let mut boxed_writer = ensure_writer(boxed_builder.clone().build().await.unwrap());
+
+        let _ = boxed_writer
+            .write(RecordBatch::new_empty(Schema::empty().into()))
+            .await;
+        let _ = boxed_writer.close().await;
     }
 
     // This function check:
