@@ -2082,13 +2082,115 @@ mod tests {
         assert_eq!(actual_manifest, expected_manifest);
     }
 
+    #[tokio::test]
+    async fn test_parse_manifest_parition_eq_issue() {
+        // Create a schema with a single nested field.
+        let schema_fields = (0..4).map(|i| {
+            Arc::new(NestedField {
+                id: i,
+                name: format!("field_{}", i),
+                required: true,
+                field_type: Box::new(Type::Primitive(PrimitiveType::Boolean)),
+                doc: None,
+                initial_default: None,
+                write_default: None,
+            })
+        });
+
+        let schema = Arc::new(
+            Schema::builder()
+            .with_fields(schema_fields)
+            .with_schema_id(0)
+            .build()
+            .unwrap()
+        );
+
+        // Get the schema id, and create an arbitrary snapshot id.
+        let schema_id = schema.schema_id();
+        let snapshot_id = 0;
+
+        // Create a partition spec with a single partition field.
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        // Create the manifest metadata with `schema` and `partition_spec`.
+        let metadata = ManifestMetadata::builder()
+            .schema(schema)
+            .schema_id(schema_id)
+            .content(ManifestContentType::Data)
+            .partition_spec(partition_spec)
+            .format_version(FormatVersion::V2)
+            .build();
+
+        let partition = Struct::from_iter(
+                            vec![
+                                Some(
+                                    Literal::bool(false),
+                                ),
+                            ]
+                                .into_iter()
+                        );
+
+        let mut column_sizes = HashMap::new();
+        column_sizes.insert(0i32, 4u64);
+
+        let mut lower_bounds = HashMap::new();
+        lower_bounds.insert(0i32, Datum::bool(false));
+
+        let mut upper_bounds = HashMap::new();
+        upper_bounds.insert(1i32, Datum::bool(true));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("data.parquet");
+
+        // Create an arbitrary data file.
+        let data_file: DataFile = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(file_path.to_str().unwrap().to_string())
+            .file_format(DataFileFormat::Parquet)
+            .column_sizes(column_sizes)
+            .partition(partition)
+            .equality_ids(vec![0, 1, 2, 3])
+            .record_count(0)
+            .file_size_in_bytes(0)
+            .key_metadata(Vec::new())
+            .lower_bounds(lower_bounds)
+            .upper_bounds(upper_bounds)
+            .build()
+            .unwrap();
+
+        // Create an arbitrary manifest entry with `snapshot_id` and `data_file`.
+        let manifest_entry = ManifestEntry::builder()
+            .status(ManifestStatus::Added)
+            .snapshot_id(snapshot_id)
+            .data_file(data_file)
+            .build();
+
+        // Create new `Manifest`
+        let manifest = Manifest::new(metadata, vec![manifest_entry]);
+        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
+
+        let res = test_manifest_read_write(manifest, writer).await;
+
+        assert_eq!(res.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
+        assert_eq!(res.min_sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
+    }
+
     async fn test_manifest_read_write(
         manifest: Manifest,
         writer_builder: impl FnOnce(OutputFile) -> ManifestWriter,
     ) -> ManifestFile {
         let (bs, res) = write_manifest(&manifest, writer_builder).await;
         let actual_manifest = Manifest::parse_avro(bs.as_slice()).unwrap();
-
+        let (entries1, metadata1) = manifest.clone().into_parts();
+        let (entries2, metadata2) = actual_manifest.clone().into_parts();
+        for (e1, e2) in entries1.into_iter().zip(entries2.into_iter()) {
+            let file1 = e1.data_file();
+            let file2 = e2.data_file();
+            assert_eq!(file1.partition(), file2.partition());
+        }
         assert_eq!(actual_manifest, manifest);
         res
     }
