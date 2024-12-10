@@ -784,7 +784,7 @@ pub(super) mod _serde {
             let default_spec_id = value.default_spec_id;
             let default_spec: PartitionSpecRef = partition_specs
                 .get(&value.default_spec_id)
-                .map(|schemaless_spec| (**schemaless_spec).clone())
+                .map(|spec| (**spec).clone())
                 .or_else(|| {
                     (DEFAULT_PARTITION_SPEC_ID == default_spec_id)
                         .then(PartitionSpec::unpartition_spec)
