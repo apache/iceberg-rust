@@ -2083,7 +2083,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parse_manifest_parition_eq_issue() {
+    async fn test_parse_manifest_partition_eq_issue() {
         // Create a schema with a single nested field.
         let schema_fields = (0..4).map(|i| {
             Arc::new(NestedField {
@@ -2099,10 +2099,10 @@ mod tests {
 
         let schema = Arc::new(
             Schema::builder()
-            .with_fields(schema_fields)
-            .with_schema_id(0)
-            .build()
-            .unwrap()
+                .with_fields(schema_fields)
+                .with_schema_id(0)
+                .build()
+                .unwrap(),
         );
 
         // Get the schema id, and create an arbitrary snapshot id.
@@ -2112,6 +2112,8 @@ mod tests {
         // Create a partition spec with a single partition field.
         let partition_spec = BoundPartitionSpec::builder(schema.clone())
             .with_spec_id(0)
+            .add_partition_field("field_0", "field_0", Transform::Identity)
+            .unwrap()
             .build()
             .unwrap();
 
@@ -2124,14 +2126,7 @@ mod tests {
             .format_version(FormatVersion::V2)
             .build();
 
-        let partition = Struct::from_iter(
-                            vec![
-                                Some(
-                                    Literal::bool(false),
-                                ),
-                            ]
-                                .into_iter()
-                        );
+        let partition = Struct::from_iter(vec![Some(Literal::bool(false))].into_iter());
 
         let mut column_sizes = HashMap::new();
         column_sizes.insert(0i32, 4u64);
