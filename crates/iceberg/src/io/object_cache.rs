@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
         ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
         ManifestWriter, Struct, TableMetadata,
     };
@@ -255,36 +255,41 @@ mod tests {
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
-            let data_file_manifest = ManifestWriter::new(
+            let mut writer = ManifestWriter::new(
                 self.next_manifest_file(),
                 current_snapshot.snapshot_id(),
                 vec![],
-            )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema(current_schema.clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((**current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
-                    .build(),
-                vec![ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFileBuilder::default()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/1.parquet", &self.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(100))]))
-                            .build()
-                            .unwrap(),
-                    )
-                    .build()],
-            ))
-            .await
-            .unwrap();
+            );
+            writer
+                .add(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer
+                .to_manifest_file(
+                    ManifestMetadata::builder()
+                        .schema(current_schema.clone())
+                        .content(ManifestContentType::Data)
+                        .format_version(FormatVersion::V2)
+                        .partition_spec((**current_partition_spec).clone())
+                        .schema_id(current_schema.schema_id())
+                        .build(),
+                )
+                .await
+                .unwrap();
 
             // Write to manifest list
             let mut manifest_list_write = ManifestListWriter::v2(
