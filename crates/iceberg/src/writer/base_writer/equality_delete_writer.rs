@@ -107,7 +107,6 @@ impl EqualityDeleteWriterConfig {
     }
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
 
@@ -130,7 +129,6 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     partition_value: Struct,
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         let batch = self.projector.project_bacth(batch)?;
@@ -144,7 +142,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
         }
     }
 
-    async fn close(&mut self) -> Result<Vec<DataFile>> {
+    async fn close(mut self) -> Result<Vec<DataFile>> {
         if let Some(writer) = self.inner_writer.take() {
             Ok(writer
                 .close()
@@ -342,11 +340,11 @@ mod test {
         ])) as ArrayRef;
         let col3 = Arc::new({
             let list_parts = arrow_array::ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-              Some(
-                  vec![Some(1),]
-              );
-              1024
-          ])
+                Some(
+                    vec![Some(1), ]
+                );
+                1024
+            ])
             .into_parts();
             arrow_array::ListArray::new(
                 if let DataType::List(field) = arrow_schema.fields.get(3).unwrap().data_type() {

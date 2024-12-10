@@ -48,6 +48,8 @@
 pub mod base_writer;
 pub mod file_writer;
 
+use std::future::Future;
+
 use arrow_array::RecordBatch;
 
 use crate::spec::DataFile;
@@ -57,27 +59,125 @@ type DefaultInput = RecordBatch;
 type DefaultOutput = Vec<DataFile>;
 
 /// The builder for iceberg writer.
-#[async_trait::async_trait]
 pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
     Send + Clone + 'static
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
     /// Build the iceberg writer.
-    async fn build(self) -> Result<Self::R>;
+    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// The iceberg writer used to write data to iceberg table.
-#[async_trait::async_trait]
 pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// Write data to iceberg table.
-    async fn write(&mut self, input: I) -> Result<()>;
+    fn write(&mut self, input: I) -> impl Future<Output = Result<()>> + Send + '_;
     /// Close the writer and return the written data files.
     /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
     /// # NOTE
     /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
-    async fn close(&mut self) -> Result<O>;
+    fn close(self) -> impl Future<Output = Result<O>> + Send;
 }
+
+mod dyn_trait {
+    use dyn_clone::{clone_trait_object, DynClone};
+
+    use super::Result;
+    use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
+
+    #[async_trait::async_trait]
+    pub trait DynIcebergWriterBuilder<I, O>: Send + DynClone + 'static {
+        async fn build(self) -> Result<BoxedIcebergWriter<I, O>>;
+    }
+
+    clone_trait_object!(<I, O> DynIcebergWriterBuilder<I, O>);
+
+    #[async_trait::async_trait]
+    impl<I: 'static + Send, O: 'static + Send, B: IcebergWriterBuilder<I, O>>
+        DynIcebergWriterBuilder<I, O> for B
+    {
+        async fn build(self) -> Result<BoxedIcebergWriter<I, O>> {
+            Ok(self.build().await?.boxed())
+        }
+    }
+
+    /// Type alias for `Box<dyn DynIcebergWriterBuilder>`
+    pub type BoxedIcebergWriterBuilder<I = DefaultInput, O = DefaultOutput> =
+        Box<dyn DynIcebergWriterBuilder<I, O>>;
+
+    impl<I: Send + 'static, O: Send + 'static> IcebergWriterBuilder<I, O>
+        for BoxedIcebergWriterBuilder<I, O>
+    {
+        type R = BoxedIcebergWriter<I, O>;
+
+        async fn build(self) -> Result<Self::R> {
+            DynIcebergWriterBuilder::build(self).await
+        }
+    }
+
+    /// Extension methods for `IcebergWriterBuilder`
+    pub trait IcebergWriterBuilderDynExt<I: Send + 'static, O: Send + 'static>:
+        IcebergWriterBuilder<I, O> + Sized
+    {
+        /// Create a type erased `IcebergWriterBuilder` wrapped with `Box`.
+        fn boxed(self) -> BoxedIcebergWriterBuilder<I, O> {
+            Box::new(self) as _
+        }
+    }
+
+    impl<B, I: Send + 'static, O: Send + 'static> IcebergWriterBuilderDynExt<I, O> for B where B: IcebergWriterBuilder<I, O>
+    {}
+
+    /// The dyn iceberg writer used to write data to iceberg table.
+    #[async_trait::async_trait]
+    pub trait DynIcebergWriter<I, O>: Send + 'static {
+        /// `write` of trait `IcebergWriter`
+        async fn dyn_write(&mut self, input: I) -> Result<()>;
+        /// `close` of trait `IcebergWriter`
+        async fn dyn_close(self: Box<Self>) -> Result<O>;
+    }
+
+    #[async_trait::async_trait]
+    impl<I: 'static + Send, O: 'static + Send, W: IcebergWriter<I, O>> DynIcebergWriter<I, O> for W {
+        async fn dyn_write(&mut self, input: I) -> Result<()> {
+            self.write(input).await
+        }
+
+        async fn dyn_close(self: Box<Self>) -> Result<O> {
+            (*self).close().await
+        }
+    }
+
+    /// Type alias for `Box<dyn DynIcebergWriter>`
+    pub type BoxedIcebergWriter<I = DefaultInput, O = DefaultOutput> =
+        Box<dyn DynIcebergWriter<I, O>>;
+
+    impl<I: 'static + Send, O: 'static + Send> IcebergWriter<I, O> for BoxedIcebergWriter<I, O> {
+        async fn write(&mut self, input: I) -> Result<()> {
+            (**self).dyn_write(input).await
+        }
+
+        async fn close(self) -> Result<O> {
+            self.dyn_close().await
+        }
+    }
+
+    /// Extension methods for `IcebergWriter`
+    pub trait IcebergWriterDynExt<I: Send + 'static, O: Send + 'static>:
+        IcebergWriter<I, O> + Sized
+    {
+        /// Create a type erased `IcebergWriter` wrapped with `Box`.
+        fn boxed(self) -> BoxedIcebergWriter<I, O> {
+            Box::new(self) as _
+        }
+    }
+
+    impl<I: Send + 'static, O: Send + 'static, W: IcebergWriter<I, O>> IcebergWriterDynExt<I, O> for W {}
+}
+
+pub use dyn_trait::{
+    BoxedIcebergWriter, BoxedIcebergWriterBuilder, IcebergWriterBuilderDynExt, IcebergWriterDynExt,
+};
 
 /// The current file status of iceberg writer. It implement for the writer which write a single
 /// file.
@@ -97,16 +197,35 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    use super::IcebergWriter;
+    use super::{
+        IcebergWriter, IcebergWriterBuilder, IcebergWriterBuilderDynExt, IcebergWriterDynExt,
+    };
     use crate::io::FileIO;
     use crate::spec::{DataFile, DataFileFormat};
 
     // This function is used to guarantee the trait can be used as a object safe trait.
-    async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {
-        let _ = w
+    async fn _guarantee_dyn_trait(builder: impl IcebergWriterBuilder) {
+        fn ensure_writer_builder<WB: IcebergWriterBuilder>(builder: WB) -> WB {
+            builder
+        }
+
+        fn ensure_writer<W: IcebergWriter>(writer: W) -> W {
+            writer
+        }
+
+        let writer = ensure_writer(builder.clone().build().await.unwrap());
+        let mut boxed_writer = ensure_writer(writer.boxed());
+        let _ = boxed_writer
             .write(RecordBatch::new_empty(Schema::empty().into()))
             .await;
-        let _ = w.close().await;
+        let _ = boxed_writer.close().await;
+        let boxed_builder = ensure_writer_builder(builder.boxed());
+        let mut boxed_writer = ensure_writer(boxed_builder.clone().build().await.unwrap());
+
+        let _ = boxed_writer
+            .write(RecordBatch::new_empty(Schema::empty().into()))
+            .await;
+        let _ = boxed_writer.close().await;
     }
 
     // This function check:
