@@ -76,7 +76,7 @@ pub trait IcebergWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
     /// If close failed, the data written before maybe be lost. User may need to recreate the writer and rewrite the data again.
     /// # NOTE
     /// After close, regardless of success or failure, the writer should never be used again, otherwise the writer will panic.
-    fn close(&mut self) -> impl Future<Output = Result<O>> + Send + '_;
+    fn close(self) -> impl Future<Output = Result<O>> + Send;
 }
 
 mod dyn_trait {
@@ -134,7 +134,7 @@ mod dyn_trait {
         /// `write` of trait `IcebergWriter`
         async fn write(&mut self, input: I) -> Result<()>;
         /// `close` of trait `IcebergWriter`
-        async fn close(&mut self) -> Result<O>;
+        async fn close(self: Box<Self>) -> Result<O>;
     }
 
     #[async_trait::async_trait]
@@ -143,7 +143,7 @@ mod dyn_trait {
             self.write(input).await
         }
 
-        async fn close(&mut self) -> Result<O> {
+        async fn close(self: Box<Self>) -> Result<O> {
             self.close().await
         }
     }
@@ -157,8 +157,8 @@ mod dyn_trait {
             (**self).write(input).await
         }
 
-        async fn close(&mut self) -> Result<O> {
-            (**self).close().await
+        async fn close(self) -> Result<O> {
+            DynIcebergWriter::close(self).await
         }
     }
 

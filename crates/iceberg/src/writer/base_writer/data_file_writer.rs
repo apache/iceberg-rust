@@ -65,7 +65,7 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
         self.inner_writer.as_mut().unwrap().write(&batch).await
     }
 
-    async fn close(&mut self) -> Result<Vec<DataFile>> {
+    async fn close(mut self) -> Result<Vec<DataFile>> {
         let writer = self.inner_writer.take().unwrap();
         Ok(writer
             .close()
@@ -126,7 +126,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await?;
+        let data_file_writer = DataFileWriterBuilder::new(pw, None).build().await?;
 
         let data_file = data_file_writer.close().await.unwrap();
         assert_eq!(data_file.len(), 1);
