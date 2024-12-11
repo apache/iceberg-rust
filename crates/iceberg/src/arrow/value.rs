@@ -399,13 +399,14 @@ fn visit_arrow_struct_array<V: ArrowArrayVistor>(
 
     let mut columns = Vec::with_capacity(array.columns().len());
 
-    for ((array, arrow_type), iceberg_field) in array
+    for ((array, arrow_field), iceberg_field) in array
         .columns()
         .iter()
-        .zip_eq(arrow_struct_fields.iter().map(|field| field.data_type()))
+        .zip_eq(arrow_struct_fields.iter())
         .zip_eq(iceberg_type.fields().iter())
     {
-        if array.is_nullable() == iceberg_field.required {
+        let arrow_type = arrow_field.data_type();
+        if arrow_field.is_nullable() == iceberg_field.required {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The nullable field of arrow struct array is not compatitable with iceberg type",
@@ -552,7 +553,7 @@ fn visit_arrow_struct_array_from_field_id<V: ArrowArrayVistor>(
         };
         let array = array.column(idx);
         let arrow_type = field.data_type();
-        if array.is_nullable() == iceberg_field.required {
+        if field.is_nullable() == iceberg_field.required {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The nullable field of arrow struct array is not compatitable with iceberg type",
