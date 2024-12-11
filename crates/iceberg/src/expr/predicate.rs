@@ -693,6 +693,12 @@ pub enum BoundPredicate {
     Set(SetExpression<BoundReference>),
 }
 
+impl BoundPredicate {
+    pub(crate) fn and(self, other: BoundPredicate) -> BoundPredicate {
+        BoundPredicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
+    }
+}
+
 impl Display for BoundPredicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
