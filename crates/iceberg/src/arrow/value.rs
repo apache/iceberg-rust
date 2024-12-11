@@ -76,7 +76,7 @@ trait ArrowArrayVistor {
         &self,
         array: &StructArray,
         iceberg_type: &StructType,
-        childs: Vec<Vec<Self::T>>,
+        columns: Vec<Vec<Self::T>>,
     ) -> Result<Vec<Self::T>>;
 }
 
@@ -511,7 +511,7 @@ fn visit_arrow_struct_array<V: ArrowArrayVistor>(
 }
 
 // # TODO
-// Add support for fullfill the missing field in arrow struct array
+// Add support for fulfill the missing field in arrow struct array
 fn visit_arrow_struct_array_from_field_id<V: ArrowArrayVistor>(
     array: &StructArray,
     iceberg_type: &StructType,
