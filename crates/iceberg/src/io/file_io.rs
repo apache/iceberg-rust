@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -203,20 +204,68 @@ pub struct FileMetadata {
 }
 
 /// Trait for reading file.
-///
-/// # TODO
-///
-/// It's possible for us to remove the async_trait, but we need to figure
-/// out how to handle the object safety.
-#[async_trait::async_trait]
-pub trait FileRead: Send + Unpin + 'static {
+pub trait FileRead: Send + Sync + 'static {
     /// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
-    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes>;
+    fn read(&self, range: Range<u64>) -> impl Future<Output = Result<Bytes>> + Send + '_;
 }
 
-#[async_trait::async_trait]
+mod dyn_trait {
+    use std::ops::{Deref, Range};
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+
+    use super::Result;
+    use crate::io::FileRead;
+    #[async_trait::async_trait]
+    /// `FileRead` with object safety
+    pub trait DynFileRead: Send + Sync + 'static {
+        /// `read` of `FileRead`
+        async fn read(&self, range: Range<u64>) -> Result<Bytes>;
+    }
+
+    #[async_trait::async_trait]
+    impl<R: FileRead> DynFileRead for R {
+        async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+            self.read(range).await
+        }
+    }
+
+    trait DynFileReadPointer: Deref<Target = dyn DynFileRead> + Send + Sync + 'static {}
+
+    impl<P: DynFileReadPointer> FileRead for P {
+        async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+            (**self).read(range).await
+        }
+    }
+
+    impl DynFileReadPointer for Box<dyn DynFileRead> {}
+    impl DynFileReadPointer for Arc<dyn DynFileRead> {}
+
+    /// Provides extra methods for `FileRead`
+    pub trait FileReadDynExt: FileRead + Sized {
+        /// Create a type erased `FileRead` wrapped with `Box`
+        fn boxed(self) -> Box<dyn DynFileRead> {
+            assert_file_read(Box::new(self) as _)
+        }
+
+        /// Create a type erased `FileRead` wrapped with `Arc`
+        fn arc(self) -> Arc<dyn DynFileRead> {
+            assert_file_read(Arc::new(self) as _)
+        }
+    }
+
+    fn assert_file_read<R: FileRead>(read: R) -> R {
+        read
+    }
+
+    impl<R: FileRead + Sized> FileReadDynExt for R {}
+}
+
+pub use dyn_trait::{DynFileRead, FileReadDynExt};
+
 impl FileRead for opendal::Reader {
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
         Ok(opendal::Reader::read(self, range).await?.to_bytes())
