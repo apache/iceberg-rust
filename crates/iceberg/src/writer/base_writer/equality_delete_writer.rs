@@ -32,19 +32,21 @@ use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EqualityDeleteFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
+    config: EqualityDeleteWriterConfig,
 }
 
 impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
     /// Create a new `EqualityDeleteFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B) -> Self {
-        Self { inner }
+    pub fn new(inner: B, config: EqualityDeleteWriterConfig) -> Self {
+        Self { inner, config }
     }
 }
 
 /// Config for `EqualityDeleteWriter`.
+#[derive(Clone, Debug)]
 pub struct EqualityDeleteWriterConfig {
     // Field ids used to determine row equality in equality delete files.
     equality_ids: Vec<i32>,
@@ -108,19 +110,19 @@ impl EqualityDeleteWriterConfig {
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
-    type C = EqualityDeleteWriterConfig;
 
-    async fn build(self, config: Self::C) -> Result<Self::R> {
+    async fn build(self) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
-            projector: config.projector,
-            equality_ids: config.equality_ids,
-            partition_value: config.partition_value,
+            projector: self.config.projector,
+            equality_ids: self.config.equality_ids,
+            partition_value: self.config.partition_value,
         })
     }
 }
 
 /// Writer used to write equality delete files.
+#[derive(Debug)]
 pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     projector: RecordBatchProjector,
@@ -396,9 +398,8 @@ mod test {
             location_gen,
             file_name_gen,
         );
-
-        let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
-            .build(equality_config)
+        let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, equality_config)
+            .build()
             .await?;
 
         // write
@@ -561,8 +562,8 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb)
-            .build(config)
+        let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, config)
+            .build()
             .await?;
 
         // prepare data
