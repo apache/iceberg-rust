@@ -28,6 +28,8 @@ use crate::spec::{Literal, PrimitiveType, Struct, StructType, Type};
 use crate::{Error, ErrorKind, Result};
 
 /// A post order arrow array visitor.
+/// # TODO
+/// - Add support for ListArray, MapArray
 trait ArrowArrayVistor {
     type T;
     fn null(&self, array: &NullArray, iceberg_type: &PrimitiveType) -> Result<Vec<Self::T>>;
@@ -508,6 +510,8 @@ fn visit_arrow_struct_array<V: ArrowArrayVistor>(
     visitor.r#struct(array, iceberg_type, columns)
 }
 
+// # TODO
+// Add support for fullfill the missing field in arrow struct array
 fn visit_arrow_struct_array_from_field_id<V: ArrowArrayVistor>(
     array: &StructArray,
     iceberg_type: &StructType,
