@@ -363,6 +363,9 @@ pub struct OutputFile {
     relative_path_pos: usize,
 }
 
+/// A static opaque type of trait `FileWrite` returned from the `writer` method of `OutputFile`
+pub type OutputFileWrite = impl FileWrite;
+
 impl OutputFile {
     /// Relative path to root uri.
     pub fn location(&self) -> &str {
@@ -401,7 +404,7 @@ impl OutputFile {
     /// # Notes
     ///
     /// For one-time writing, use [`Self::write`] instead.
-    pub async fn writer(&self) -> crate::Result<opendal::Writer> {
+    pub async fn writer(&self) -> Result<OutputFileWrite> {
         Ok(self.op.writer(&self.path[self.relative_path_pos..]).await?)
     }
 }

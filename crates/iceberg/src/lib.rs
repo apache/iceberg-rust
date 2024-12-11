@@ -52,6 +52,7 @@
 //! ```
 
 #![deny(missing_docs)]
+#![feature(type_alias_impl_trait)]
 
 #[macro_use]
 extern crate derive_builder;
