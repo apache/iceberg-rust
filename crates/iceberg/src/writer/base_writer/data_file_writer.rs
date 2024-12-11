@@ -42,7 +42,6 @@ impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     }
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
 
@@ -61,13 +60,12 @@ pub struct DataFileWriter<B: FileWriterBuilder> {
     partition_value: Struct,
 }
 
-#[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         self.inner_writer.as_mut().unwrap().write(&batch).await
     }
 
-    async fn close(&mut self) -> Result<Vec<DataFile>> {
+    async fn close(mut self) -> Result<Vec<DataFile>> {
         let writer = self.inner_writer.take().unwrap();
         Ok(writer
             .close()
@@ -128,7 +126,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await?;
+        let data_file_writer = DataFileWriterBuilder::new(pw, None).build().await?;
 
         let data_file = data_file_writer.close().await.unwrap();
         assert_eq!(data_file.len(), 1);
