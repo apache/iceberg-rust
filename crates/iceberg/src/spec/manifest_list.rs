@@ -28,7 +28,7 @@ use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEM
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{Datum, FormatVersion, Manifest, StructType};
 use crate::error::Result;
-use crate::io::{FileIO, OutputFile};
+use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::{Error, ErrorKind};
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -1197,7 +1197,7 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1)) }],
                     key_metadata: vec![],
                 },
                 ManifestFile {
@@ -1214,7 +1214,7 @@ mod test {
                     added_rows_count: Some(3),
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
-                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1)), upper_bound: Some(Datum::float(2.1))}],
+                    partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1)), upper_bound: Some(Datum::float(2.1)) }],
                     key_metadata: vec![],
                 }
             ]
@@ -1270,7 +1270,7 @@ mod test {
 
     #[test]
     fn test_serialize_manifest_list_v1() {
-        let manifest_list:ManifestListV1 = ManifestList {
+        let manifest_list: ManifestListV1 = ManifestList {
             entries: vec![ManifestFile {
                 manifest_path: "/opt/bitnami/spark/warehouse/db/table/metadata/10d28031-9739-484c-92db-cdf2975cead4-m0.avro".to_string(),
                 manifest_length: 5806,
@@ -1298,7 +1298,7 @@ mod test {
 
     #[test]
     fn test_serialize_manifest_list_v2() {
-        let manifest_list:ManifestListV2 = ManifestList {
+        let manifest_list: ManifestListV2 = ManifestList {
             entries: vec![ManifestFile {
                 manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/05ffe08b-810f-49b3-a8f4-e88fc99b254a-m0.avro".to_string(),
                 manifest_length: 6926,
@@ -1313,7 +1313,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1)) }],
                 key_metadata: vec![],
             }]
         }.try_into().unwrap();
@@ -1341,7 +1341,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1)) }],
                 key_metadata: vec![],
             }]
         };
@@ -1397,7 +1397,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1)) }],
                 key_metadata: vec![],
             }]
         };
@@ -1451,7 +1451,7 @@ mod test {
                 added_rows_count: Some(3),
                 existing_rows_count: Some(0),
                 deleted_rows_count: Some(0),
-                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1))}],
+                partitions: vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::long(1)), upper_bound: Some(Datum::long(1)) }],
                 key_metadata: vec![],
             }]
         };
