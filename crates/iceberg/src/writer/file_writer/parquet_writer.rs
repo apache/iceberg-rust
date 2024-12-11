@@ -46,7 +46,7 @@ use crate::writer::CurrentFileStatus;
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
     props: WriterProperties,
     schema: SchemaRef,

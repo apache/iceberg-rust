@@ -63,10 +63,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// The associated writer config type used to build the writer.
-    type C;
     /// Build the iceberg writer.
-    async fn build(self, config: Self::C) -> Result<Self::R>;
+    async fn build(self) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.

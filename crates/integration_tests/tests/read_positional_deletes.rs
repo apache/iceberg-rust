@@ -15,32 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Spec for Iceberg.
+//! Integration tests for rest catalog.
 
-mod datatypes;
-mod manifest;
-mod manifest_list;
-mod name_mapping;
-mod partition;
-mod schema;
-mod snapshot;
-mod sort;
-mod table_metadata;
-mod table_metadata_builder;
-mod transform;
-mod values;
-mod view_metadata;
-mod view_version;
+use iceberg::{Catalog, TableIdent};
+use iceberg_integration_tests::set_test_fixture;
 
-pub use datatypes::*;
-pub use manifest::*;
-pub use manifest_list::*;
-pub use partition::*;
-pub use schema::*;
-pub use snapshot::*;
-pub use sort::*;
-pub use table_metadata::*;
-pub use transform::*;
-pub use values::*;
-pub use view_metadata::*;
-pub use view_version::*;
+#[tokio::test]
+async fn test_read_table_with_positional_deletes() {
+    let fixture = set_test_fixture("read_table_with_positional_deletes").await;
+
+    let catalog = fixture.rest_catalog;
+
+    let table = catalog
+        .load_table(
+            &TableIdent::from_strs(["default", "test_positional_merge_on_read_double_deletes"])
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // 😱 If we don't support positional deletes, we should not be able to plan them
+    println!("{:?}", table.scan().build().unwrap());
+}
