@@ -107,6 +107,10 @@ impl IcebergTableProvider {
             schema,
         })
     }
+
+    pub fn table(&self) -> Table {
+        self.table.clone()
+    }
 }
 
 #[async_trait]
