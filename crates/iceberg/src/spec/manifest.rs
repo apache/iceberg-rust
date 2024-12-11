@@ -1452,8 +1452,10 @@ mod _serde {
     }
 
     fn to_bytes_entry(v: impl IntoIterator<Item = (i32, Datum)>) -> Result<Vec<BytesEntry>, Error> {
-        let mut bs = vec![];
-        for (k, d) in v {
+        let iter = v.into_iter();
+        // Reserve the capacity to the lower bound.
+        let mut bs = Vec::with_capacity(iter.size_hint().0);
+        for (k, d) in iter {
             bs.push(BytesEntry {
                 key: k,
                 value: d.to_bytes()?,

@@ -1069,6 +1069,19 @@ impl Datum {
         let decimal = value.into();
         let scale = decimal.scale();
 
+        let available_bytes = Type::decimal_required_bytes(precision)? as usize;
+        let unscaled_value = BigInt::from(decimal.mantissa());
+        let actual_bytes = unscaled_value.to_signed_bytes_be();
+        if actual_bytes.len() > available_bytes {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Decimal value {} is too large for precision {}",
+                    decimal, precision
+                ),
+            ));
+        }
+
         let r#type = Type::decimal(precision, scale)?;
         if let Type::Primitive(p) = r#type {
             Ok(Self {
@@ -3136,6 +3149,25 @@ mod tests {
                     precision: expect_precision,
                     scale: expect_scale,
                 },
+            );
+        }
+    }
+
+    #[test]
+    fn avro_bytes_decimal_expect_error() {
+        // (decimal_num, expect_scale, expect_precision)
+        let cases = vec![(1234, 2, 1)];
+
+        for (decimal_num, expect_scale, expect_precision) in cases {
+            let result = Datum::decimal_with_precision(
+                Decimal::new(decimal_num, expect_scale),
+                expect_precision,
+            );
+            assert!(result.is_err(), "expect error but got {:?}", result);
+            assert_eq!(
+                result.unwrap_err().kind(),
+                ErrorKind::DataInvalid,
+                "expect error DataInvalid",
             );
         }
     }
