@@ -63,6 +63,11 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    // TODO: defaults to false for now whilst delete file processing
+    // is still being worked on but will switch to a default of true
+    // once this work is complete
+    delete_file_processing_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -81,6 +86,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            delete_file_processing_enabled: false,
         }
     }
 
@@ -184,6 +190,17 @@ impl<'a> TableScanBuilder<'a> {
     /// order to get the best performance from using row selection.
     pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
         self.row_selection_enabled = row_selection_enabled;
+        self
+    }
+
+    /// Determines whether to enable delete file processing (currently disabled by default)
+    ///
+    /// When disabled, delete files are ignored.
+    pub fn with_delete_file_processing_enabled(
+        mut self,
+        delete_file_processing_enabled: bool,
+    ) -> Self {
+        self.delete_file_processing_enabled = delete_file_processing_enabled;
         self
     }
 
@@ -305,6 +322,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            delete_file_processing_enabled: self.delete_file_processing_enabled,
         })
     }
 }
@@ -330,6 +348,7 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    delete_file_processing_enabled: bool,
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -366,9 +385,18 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        // used to stream delete files into the DeleteFileIndex
-        let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
-        let delete_file_index = DeleteFileIndex::from_receiver(delete_file_rx);
+        let delete_file_idx_and_tx: Option<(
+            DeleteFileIndex,
+            Sender<Result<FileScanTaskDeleteFile>>,
+        )> = if self.delete_file_processing_enabled {
+            // used to stream delete files into the DeleteFileIndex
+            let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
+            let delete_file_index = DeleteFileIndex::from_receiver(delete_file_rx);
+
+            Some((delete_file_index, delete_file_tx))
+        } else {
+            None
+        };
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
@@ -378,8 +406,13 @@ impl TableScan {
         let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
-            manifest_entry_delete_ctx_tx,
-            delete_file_index.clone(),
+            delete_file_idx_and_tx
+                .as_ref()
+                .map(|_| manifest_entry_delete_ctx_tx),
+            delete_file_idx_and_tx
+                .as_ref()
+                .map(|(delete_file_idx, _)| delete_file_idx.clone()),
+            // delete_file_index.clone(),
         )?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
@@ -398,30 +431,34 @@ impl TableScan {
         });
 
         let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
-        // Process the delete file [`ManifestEntry`] stream in parallel
-        spawn(async move {
-            let result = manifest_entry_delete_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
-                    },
-                )
-                .await;
+        if let Some((_, delete_file_tx)) = delete_file_idx_and_tx {
+            let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
-            if let Err(error) = result {
-                let _ = channel_for_delete_manifest_entry_error
-                    .send(Err(error))
+            // Process the delete file [`ManifestEntry`] stream in parallel
+            spawn(async move {
+                let result = manifest_entry_delete_ctx_rx
+                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                    .try_for_each_concurrent(
+                        concurrency_limit_manifest_entries,
+                        |(manifest_entry_context, tx)| async move {
+                            spawn(async move {
+                                Self::process_delete_manifest_entry(manifest_entry_context, tx)
+                                    .await
+                            })
+                            .await
+                        },
+                    )
                     .await;
-            }
-        })
-        .await;
+
+                if let Err(error) = result {
+                    let _ = channel_for_delete_manifest_entry_error
+                        .send(Err(error))
+                        .await;
+                }
+            })
+            .await;
+        }
 
         // Process the data file [`ManifestEntry`] stream in parallel
         spawn(async move {
@@ -591,7 +628,7 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: DeleteFileIndex,
+    delete_file_index: Option<DeleteFileIndex>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -604,7 +641,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
-    delete_file_index: DeleteFileIndex,
+    delete_file_index: Option<DeleteFileIndex>,
 }
 
 impl ManifestFileContext {
@@ -651,10 +688,13 @@ impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
     async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        let deletes = self
-            .delete_file_index
-            .get_deletes_for_data_file(self.manifest_entry.data_file())
-            .await?;
+        let deletes = if let Some(delete_file_index) = self.delete_file_index {
+            delete_file_index
+                .get_deletes_for_data_file(self.manifest_entry.data_file())
+                .await?
+        } else {
+            None
+        };
 
         Ok(FileScanTask {
             start: 0,
@@ -709,16 +749,21 @@ impl PlanContext {
         &self,
         manifest_list: Arc<ManifestList>,
         sender_data: Sender<ManifestEntryContext>,
-        sender_delete: Sender<ManifestEntryContext>,
-        delete_file_index: DeleteFileIndex,
+        sender_delete: Option<Sender<ManifestEntryContext>>,
+        delete_file_index: Option<DeleteFileIndex>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
         let manifest_files = manifest_list.entries().iter();
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
 
-        if self.predicate.is_some() {
-            for manifest_file in manifest_files {
+        for manifest_file in manifest_files {
+            if manifest_file.content == ManifestContentType::Deletes && delete_file_index.is_none()
+            {
+                continue;
+            }
+
+            if self.predicate.is_some() {
                 let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
@@ -737,23 +782,21 @@ impl PlanContext {
                         if manifest_file.content == ManifestContentType::Data {
                             sender_data.clone()
                         } else {
-                            sender_delete.clone()
+                            sender_delete.as_ref().unwrap().clone()
                         },
                         delete_file_index.clone(),
                     );
 
                     filtered_mfcs.push(Ok(mfc));
                 }
-            }
-        } else {
-            for manifest_file in manifest_files {
+            } else {
                 let mfc = self.create_manifest_file_context(
                     manifest_file,
                     None,
                     if manifest_file.content == ManifestContentType::Data {
                         sender_data.clone()
                     } else {
-                        sender_delete.clone()
+                        sender_delete.as_ref().unwrap().clone()
                     },
                     delete_file_index.clone(),
                 );
@@ -770,7 +813,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
-        delete_file_index: DeleteFileIndex,
+        delete_file_index: Option<DeleteFileIndex>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =

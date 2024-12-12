@@ -663,7 +663,13 @@ mod tests {
         fixture.setup_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture.table.scan().select(["x", "z"]).build().unwrap();
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", "z"])
+            .with_delete_file_processing_enabled(true)
+            .build()
+            .unwrap();
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
 
@@ -732,6 +738,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_with_positional_deletes_delete_processing_disabled() {
+        let mut fixture = TableDeleteTestFixture::new();
+        fixture.setup_files().await;
+
+        // Create table scan for current snapshot and plan files
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", "z"])
+            .with_delete_file_processing_enabled(false)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let mut batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // The default batch size is 1024 and all of our parquet files have 1024 rows.
+        // 2.parquet is in a deleted manifest, so only 1.parquet and 3.parquet should
+        // be included, so we should expect two batches to come back.
+        assert_eq!(batches.len(), 2);
+
+        // ensure we have the expected number of columns
+        assert_eq!(batches[0].num_columns(), 2);
+
+        // the batches can come back in arbitrary order. Sort them by
+        // the value of the first value in their z column to ensure that
+        // we see them in the order we expect
+        batches.sort_by(|a, b| {
+            let z_col_a = a.column_by_name("z").unwrap();
+            let z_arr_a = z_col_a.as_any().downcast_ref::<Int64Array>().unwrap();
+            let a = z_arr_a.value(0);
+
+            let z_col_b = b.column_by_name("z").unwrap();
+            let z_arr_b = z_col_b.as_any().downcast_ref::<Int64Array>().unwrap();
+            let b = z_arr_b.value(0);
+
+            a.cmp(&b)
+        });
+
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // the delete file should have deleted the rows with these indices from the
+        // first batch:
+        // 0, 1, 3, 5, 6, 8, 1022, 1023
+        // The x column originally contained vales monotonically increasing from 1000,
+        // so if the delete file applied successfully the first 5 values should be:
+        // 1002, 1004, 1007, 1009, 1010
+        assert_eq!(int64_arr.value(0), 1000);
+        assert_eq!(int64_arr.value(1), 1001);
+        assert_eq!(int64_arr.value(2), 1002);
+        assert_eq!(int64_arr.value(3), 1003);
+        assert_eq!(int64_arr.value(4), 1004);
+
+        let col1 = batches[1].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // the delete file should have deleted the rows with these indices from
+        // the second batch:
+        // 1, 2, 3, 5, 6, 8, 1022, 1023
+        // The x column originally contained vales monotonically increasing from 1000,
+        // so if the delete file applied successfully the first 5 values should be:
+        // 1000, 1004, 1007, 1009, 1010
+        assert_eq!(int64_arr.value(0), 1000);
+        assert_eq!(int64_arr.value(1), 1001);
+        assert_eq!(int64_arr.value(2), 1002);
+        assert_eq!(int64_arr.value(3), 1003);
+        assert_eq!(int64_arr.value(4), 1004);
+
+        let col2 = batches[0].column_by_name("z").unwrap();
+        let int64_arr = col2.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        let col2 = batches[1].column_by_name("z").unwrap();
+        let int64_arr = col2.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 3);
+    }
+
+    #[tokio::test]
     async fn test_scan_with_positional_deletes_and_filter() {
         let mut fixture = TableDeleteTestFixture::new();
         fixture.setup_files().await;
@@ -740,7 +826,9 @@ mod tests {
         let predicate = Reference::new("y")
             .greater_than_or_equal_to(Datum::long(2020))
             .and(Reference::new("z").less_than(Datum::long(3)));
-        builder = builder.with_filter(predicate);
+        builder = builder
+            .with_filter(predicate)
+            .with_delete_file_processing_enabled(true);
 
         // Create table scan for current snapshot and plan files
         let table_scan = builder.select(["y", "z"]).build().unwrap();
