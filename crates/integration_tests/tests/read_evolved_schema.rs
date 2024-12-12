@@ -18,12 +18,11 @@
 //! Integration tests for rest catalog.
 
 use arrow_array::{Int64Array, StringArray};
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use iceberg::expr::Reference;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, TableIdent};
 use iceberg_integration_tests::set_test_fixture;
-use std::fmt::Pointer;
 
 #[tokio::test]
 async fn test_evolved_schema() {
