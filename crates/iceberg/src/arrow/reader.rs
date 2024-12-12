@@ -25,7 +25,9 @@ use std::sync::Arc;
 use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    ArrowError, DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
@@ -328,22 +330,27 @@ impl ArrowReader {
             let mut column_map = HashMap::new();
 
             let fields = arrow_schema.fields();
-            let iceberg_schema = arrow_schema_to_schema(arrow_schema)?;
+            // Pre-project only the fields that have been selected, possibly avoiding converting
+            // some Arrow types that are not yet supported.
+            let mut projected_fields: HashMap<FieldRef, i32> = HashMap::new();
+            let projected_arrow_schema = ArrowSchema::new_with_metadata(
+                fields.filter_leaves(|_, f| {
+                    f.metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .and_then(|field_id| i32::from_str(field_id).ok())
+                        .map_or(false, |field_id| {
+                            projected_fields.insert((*f).clone(), field_id);
+                            field_ids.contains(&field_id)
+                        })
+                }),
+                arrow_schema.metadata().clone(),
+            );
+            let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
+
             fields.filter_leaves(|idx, field| {
-                let field_id = field.metadata().get(PARQUET_FIELD_ID_META_KEY);
-                if field_id.is_none() {
+                let Some(field_id) = projected_fields.get(field).cloned() else {
                     return false;
-                }
-
-                let field_id = i32::from_str(field_id.unwrap());
-                if field_id.is_err() {
-                    return false;
-                }
-                let field_id = field_id.unwrap();
-
-                if !field_ids.contains(&field_id) {
-                    return false;
-                }
+                };
 
                 let iceberg_field = iceberg_schema_of_task.field_by_id(field_id);
                 let parquet_iceberg_field = iceberg_schema.field_by_id(field_id);
@@ -1128,13 +1135,20 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use crate::arrow::reader::CollectFieldIdVisitor;
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use parquet::arrow::ProjectionMask;
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
+
+    use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
+    use crate::arrow::ArrowReader;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::ErrorKind;
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -1207,5 +1221,63 @@ mod tests {
         expected.insert(3);
 
         assert_eq!(visitor.field_ids, expected);
+    }
+
+    #[test]
+    fn test_arrow_projection_mask() {
+        let schema = table_schema_simple();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("foo", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("bar", DataType::Duration(TimeUnit::Microsecond), false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+            ),
+            Field::new("baz", DataType::Boolean, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "3".to_string(),
+            )])),
+            Field::new("qux", DataType::Float32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "4".to_string(),
+            )])),
+        ]));
+
+        let message_type = "
+message schema {
+  optional binary foo (STRING) = 1;
+  required int32 bar (INTEGER(8,true)) = 2;
+  optional boolean baz = 3;
+  optional float qux = 4;
+}
+    ";
+        let parquet_type = parse_message_type(message_type).expect("should parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        // Try projecting the field "bar" with the unsupported data type
+        let err = ArrowReader::get_arrow_projection_mask(
+            &[1, 2, 3, 4],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.to_string(),
+            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+        );
+
+        // Now avoid selecting "bar"
+        let mask = ArrowReader::get_arrow_projection_mask(
+            &[1, 4],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+        )
+        .expect("Some ProjectionMask");
+        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0, 3]));
     }
 }
