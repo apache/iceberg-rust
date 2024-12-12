@@ -58,11 +58,17 @@ pub const S3_ASSUME_ROLE_ARN: &str = "client.assume-role.arn";
 pub const S3_ASSUME_ROLE_EXTERNAL_ID: &str = "client.assume-role.external-id";
 /// Optional session name used to assume an IAM role.
 pub const S3_ASSUME_ROLE_SESSION_NAME: &str = "client.assume-role.session-name";
-/// Option to skip signing request (e.g. for public buckets/folders)
+/// Option to skip signing requests (e.g. for public buckets/folders).
 pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 /// Option to skip loading the credential from EC2 metadata (typically used in conjunction with
-/// `S3_ALLOW_ANONYMOUS`)
+/// `S3_ALLOW_ANONYMOUS`).
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
+/// Option to skip loading configuration from config file and the env.
+pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
+
+fn is_truthy(value: &str) -> bool {
+    ["true", "t", "1", "on"].contains(&value)
+}
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -86,7 +92,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         cfg.region = Some(region);
     };
     if let Some(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
-        if ["true", "t", "1"].contains(&path_style_access.to_lowercase().as_str()) {
+        if is_truthy(path_style_access.to_lowercase().as_str()) {
             cfg.enable_virtual_host_style = true;
         }
     };
@@ -132,13 +138,18 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
     };
 
     if let Some(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS) {
-        if ["true", "t", "1", "on"].contains(&allow_anonymous.to_lowercase().as_str()) {
+        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
             cfg.allow_anonymous = true;
         }
     }
     if let Some(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA) {
-        if ["true", "t", "1", "on"].contains(&disable_ec2_metadata.to_lowercase().as_str()) {
+        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
             cfg.disable_ec2_metadata = true;
+        }
+    };
+    if let Some(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD) {
+        if is_truthy(disable_config_load.to_lowercase().as_str()) {
+            cfg.disable_config_load = true;
         }
     };
 
