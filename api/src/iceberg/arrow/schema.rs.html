@@ -1507,6 +1507,10 @@
 <a href="#1507" id="1507">1507</a>
 <a href="#1508" id="1508">1508</a>
 <a href="#1509" id="1509">1509</a>
+<a href="#1510" id="1510">1510</a>
+<a href="#1511" id="1511">1511</a>
+<a href="#1512" id="1512">1512</a>
+<a href="#1513" id="1513">1513</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1876,7 +1880,9 @@
     <span class="kw">fn </span>primitive(<span class="kw-2">&amp;mut </span><span class="self">self</span>, p: <span class="kw-2">&amp;</span>DataType) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::T&gt; {
         <span class="kw">match </span>p {
             DataType::Boolean =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Boolean)),
-            DataType::Int32 =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Int)),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 =&gt; {
+                <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Int))
+            }
             DataType::Int64 =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Long)),
             DataType::Float32 =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Double)),
@@ -1913,7 +1919,9 @@
             DataType::FixedSizeBinary(width) =&gt; {
                 <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Fixed(<span class="kw-2">*</span>width <span class="kw">as </span>u64)))
             }
-            DataType::Utf8 | DataType::LargeUtf8 =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::String)),
+            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 =&gt; {
+                <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::String))
+            }
             <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::DataInvalid,
                 <span class="macro">format!</span>(<span class="string">"Unsupported Arrow data type: {p}"</span>),
