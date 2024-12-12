@@ -367,7 +367,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
         match p {
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
-            DataType::Int32 => Ok(Type::Primitive(PrimitiveType::Int)),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+                Ok(Type::Primitive(PrimitiveType::Int))
+            }
             DataType::Int64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
@@ -404,7 +406,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::FixedSizeBinary(width) => {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
-            DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::Primitive(PrimitiveType::String)),
+            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
+                Ok(Type::Primitive(PrimitiveType::String))
+            }
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Unsupported Arrow data type: {p}"),
