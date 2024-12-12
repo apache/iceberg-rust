@@ -272,7 +272,7 @@ mod tests {
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Data)
                     .format_version(FormatVersion::V2)
                     .partition_spec((**current_partition_spec).clone())
@@ -340,7 +340,7 @@ mod tests {
             )
             .write(Manifest::new(
                 ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
+                    .schema(current_schema.clone())
                     .content(ManifestContentType::Deletes)
                     .format_version(FormatVersion::V2)
                     .partition_spec((**current_partition_spec).clone())
@@ -429,7 +429,7 @@ mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot
                     .parent_snapshot_id()
-                    .unwrap_or(EMPTY_SNAPSHOT_ID),
+                    .or(Some(EMPTY_SNAPSHOT_ID)),
                 current_snapshot.sequence_number(),
             );
             manifest_list_write
