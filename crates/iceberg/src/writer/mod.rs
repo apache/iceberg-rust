@@ -87,7 +87,7 @@ mod dyn_trait {
 
     #[async_trait::async_trait]
     pub trait DynIcebergWriterBuilder<I, O>: Send + DynClone + 'static {
-        async fn build(self) -> Result<BoxedIcebergWriter<I, O>>;
+        async fn dyn_build(self: Box<Self>) -> Result<BoxedIcebergWriter<I, O>>;
     }
 
     clone_trait_object!(<I, O> DynIcebergWriterBuilder<I, O>);
@@ -96,8 +96,10 @@ mod dyn_trait {
     impl<I: 'static + Send, O: 'static + Send, B: IcebergWriterBuilder<I, O>>
         DynIcebergWriterBuilder<I, O> for B
     {
-        async fn build(self) -> Result<BoxedIcebergWriter<I, O>> {
-            Ok(self.build().await?.boxed())
+        async fn dyn_build(self: Box<Self>) -> Result<BoxedIcebergWriter<I, O>> {
+            Ok(<Self as IcebergWriterBuilder<I, O>>::build(*self)
+                .await?
+                .boxed())
         }
     }
 
@@ -111,7 +113,7 @@ mod dyn_trait {
         type R = BoxedIcebergWriter<I, O>;
 
         async fn build(self) -> Result<Self::R> {
-            DynIcebergWriterBuilder::build(self).await
+            self.dyn_build().await
         }
     }
 
@@ -192,16 +194,23 @@ pub trait CurrentFileStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::file::properties::WriterProperties;
 
     use super::{
         IcebergWriter, IcebergWriterBuilder, IcebergWriterBuilderDynExt, IcebergWriterDynExt,
     };
-    use crate::io::FileIO;
+    use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{DataFile, DataFileFormat};
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
+    use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
+    use crate::writer::file_writer::ParquetWriterBuilder;
 
     // This function is used to guarantee the trait can be used as a object safe trait.
     async fn _guarantee_dyn_trait(builder: impl IcebergWriterBuilder) {
@@ -249,5 +258,26 @@ mod tests {
         let batches = reader.map(|batch| batch.unwrap()).collect::<Vec<_>>();
         let res = concat_batches(&batch.schema(), &batches).unwrap();
         assert_eq!(*batch, res);
+    }
+
+    #[tokio::test]
+    async fn test_build_box_writer() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(crate::spec::Schema::builder().build().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let data_file_builder = DataFileWriterBuilder::new(pw, None).boxed();
+
+        let _writer = data_file_builder.build().await.unwrap();
     }
 }
