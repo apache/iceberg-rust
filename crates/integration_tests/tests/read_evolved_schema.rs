@@ -25,7 +25,6 @@ use iceberg::{Catalog, TableIdent};
 use iceberg_integration_tests::set_test_fixture;
 use std::fmt::Pointer;
 
-
 #[tokio::test]
 async fn test_evolved_schema() {
     let fixture = set_test_fixture("read_evolved_schema").await;
@@ -33,15 +32,11 @@ async fn test_evolved_schema() {
     let catalog = fixture.rest_catalog;
 
     let table = catalog
-        .load_table(
-            &TableIdent::from_strs(["default", "test_rename_column"])
-                .unwrap(),
-        )
+        .load_table(&TableIdent::from_strs(["default", "test_rename_column"]).unwrap())
         .await
         .unwrap();
 
-    let predicate =
-        Reference::new("language").not_equal_to(Datum::string("Rust"));
+    let predicate = Reference::new("language").not_equal_to(Datum::string("Rust"));
 
     let scan = table.scan().with_filter(predicate).build();
     let batch_stream = scan.unwrap().to_arrow().await.unwrap();
@@ -49,22 +44,29 @@ async fn test_evolved_schema() {
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
     let mut actual = vec![
-        batches[0].column_by_name("language").unwrap().as_any().downcast_ref::<StringArray>().unwrap().value(0),
-        batches[1].column_by_name("language").unwrap().as_any().downcast_ref::<StringArray>().unwrap().value(0)
+        batches[0]
+            .column_by_name("language")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0),
+        batches[1]
+            .column_by_name("language")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0),
     ];
 
     actual.sort();
 
     assert_eq!(actual, vec!["Java", "Python"]);
 
-
-
     // Evolve column
     let table = catalog
-        .load_table(
-            &TableIdent::from_strs(["default", "test_promote_column"])
-                .unwrap(),
-        )
+        .load_table(&TableIdent::from_strs(["default", "test_promote_column"]).unwrap())
         .await
         .unwrap();
 
@@ -77,8 +79,20 @@ async fn test_evolved_schema() {
 
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     let mut actual = vec![
-        batches[0].column_by_name("foo").unwrap().as_any().downcast_ref::<Int64Array>().unwrap().value(0),
-        batches[1].column_by_name("foo").unwrap().as_any().downcast_ref::<Int64Array>().unwrap().value(0)
+        batches[0]
+            .column_by_name("foo")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        batches[1]
+            .column_by_name("foo")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
     ];
 
     actual.sort();

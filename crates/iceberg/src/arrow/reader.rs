@@ -299,16 +299,27 @@ impl ArrowReader {
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
     ) -> Result<ProjectionMask> {
-        fn type_promotion_is_valid(file_type: Option<&PrimitiveType>, projected_type: Option<&PrimitiveType>) -> bool {
+        fn type_promotion_is_valid(
+            file_type: Option<&PrimitiveType>,
+            projected_type: Option<&PrimitiveType>,
+        ) -> bool {
             match (file_type, projected_type) {
                 (Some(lhs), Some(rhs)) if lhs == rhs => true,
                 (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
                 (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
-                (Some(PrimitiveType::Decimal { precision: file_precision, scale: file_scale }), Some(PrimitiveType::Decimal { precision: requested_precision, scale: requested_scale })) if requested_precision >= file_precision && file_scale == requested_scale => true,
-                _ => false
+                (
+                    Some(PrimitiveType::Decimal {
+                        precision: file_precision,
+                        scale: file_scale,
+                    }),
+                    Some(PrimitiveType::Decimal {
+                        precision: requested_precision,
+                        scale: requested_scale,
+                    }),
+                ) if requested_precision >= file_precision && file_scale == requested_scale => true,
+                _ => false,
             }
         }
-
 
         if field_ids.is_empty() {
             Ok(ProjectionMask::all())
@@ -342,8 +353,12 @@ impl ArrowReader {
                 }
 
                 if !type_promotion_is_valid(
-                    parquet_iceberg_field.unwrap().field_type.as_primitive_type(),
-                    iceberg_field.unwrap().field_type.as_primitive_type()) {
+                    parquet_iceberg_field
+                        .unwrap()
+                        .field_type
+                        .as_primitive_type(),
+                    iceberg_field.unwrap().field_type.as_primitive_type(),
+                ) {
                     return false;
                 }
 
