@@ -406,13 +406,9 @@ impl TableScan {
         let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
-            delete_file_idx_and_tx
-                .as_ref()
-                .map(|_| manifest_entry_delete_ctx_tx),
-            delete_file_idx_and_tx
-                .as_ref()
-                .map(|(delete_file_idx, _)| delete_file_idx.clone()),
-            // delete_file_index.clone(),
+            delete_file_idx_and_tx.as_ref().map(|(delete_file_idx, _)| {
+                (delete_file_idx.clone(), manifest_entry_delete_ctx_tx)
+            }),
         )?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
@@ -748,9 +744,8 @@ impl PlanContext {
     fn build_manifest_file_contexts(
         &self,
         manifest_list: Arc<ManifestList>,
-        sender_data: Sender<ManifestEntryContext>,
-        sender_delete: Option<Sender<ManifestEntryContext>>,
-        delete_file_index: Option<DeleteFileIndex>,
+        tx_data: Sender<ManifestEntryContext>,
+        delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
         let manifest_files = manifest_list.entries().iter();
 
@@ -758,17 +753,24 @@ impl PlanContext {
         let mut filtered_mfcs = vec![];
 
         for manifest_file in manifest_files {
-            if manifest_file.content == ManifestContentType::Deletes && delete_file_index.is_none()
-            {
-                continue;
-            }
+            let (delete_file_idx, tx) = if manifest_file.content == ManifestContentType::Deletes {
+                let Some((delete_file_idx, tx)) = delete_file_idx_and_tx.as_ref() else {
+                    continue;
+                };
+                (Some(delete_file_idx.clone()), tx.clone())
+            } else {
+                (
+                    delete_file_idx_and_tx.as_ref().map(|x| x.0.clone()),
+                    tx_data.clone(),
+                )
+            };
 
-            if self.predicate.is_some() {
+            let partition_bound_predicate = if self.predicate.is_some() {
                 let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
                 // if it cannot contain any matching rows
-                if self
+                if !self
                     .manifest_evaluator_cache
                     .get(
                         manifest_file.partition_spec_id,
@@ -776,33 +778,22 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
-                    let mfc = self.create_manifest_file_context(
-                        manifest_file,
-                        Some(partition_bound_predicate),
-                        if manifest_file.content == ManifestContentType::Data {
-                            sender_data.clone()
-                        } else {
-                            sender_delete.as_ref().unwrap().clone()
-                        },
-                        delete_file_index.clone(),
-                    );
-
-                    filtered_mfcs.push(Ok(mfc));
+                    continue;
                 }
-            } else {
-                let mfc = self.create_manifest_file_context(
-                    manifest_file,
-                    None,
-                    if manifest_file.content == ManifestContentType::Data {
-                        sender_data.clone()
-                    } else {
-                        sender_delete.as_ref().unwrap().clone()
-                    },
-                    delete_file_index.clone(),
-                );
 
-                filtered_mfcs.push(Ok(mfc));
-            }
+                Some(partition_bound_predicate)
+            } else {
+                None
+            };
+
+            let mfc = self.create_manifest_file_context(
+                manifest_file,
+                partition_bound_predicate,
+                tx,
+                delete_file_idx,
+            );
+
+            filtered_mfcs.push(Ok(mfc));
         }
 
         Ok(Box::new(filtered_mfcs.into_iter()))
