@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
 #[cfg(feature = "storage-s3")]
@@ -94,7 +95,7 @@ impl Storage {
         path: &'a impl AsRef<str>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
-        match self {
+        let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
             Storage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
@@ -155,7 +156,13 @@ impl Storage {
                 ErrorKind::FeatureUnsupported,
                 "No storage service has been enabled",
             )),
-        }
+        }?;
+
+        // Transient errors are common for object stores; however there's no
+        // harm in retrying temporary failures for other storage backends as well.
+        let operator = operator.layer(RetryLayer::new());
+
+        Ok((operator, relative_path))
     }
 
     /// Parse scheme.
