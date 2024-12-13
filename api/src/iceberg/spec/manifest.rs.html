@@ -2109,6 +2109,10 @@
 <a href="#2109" id="2109">2109</a>
 <a href="#2110" id="2110">2110</a>
 <a href="#2111" id="2111">2111</a>
+<a href="#2112" id="2112">2112</a>
+<a href="#2113" id="2113">2113</a>
+<a href="#2114" id="2114">2114</a>
+<a href="#2115" id="2115">2115</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3457,8 +3461,8 @@
                 value_counts: <span class="prelude-val">Some</span>(to_i64_entry(value.value_counts)<span class="question-mark">?</span>),
                 null_value_counts: <span class="prelude-val">Some</span>(to_i64_entry(value.null_value_counts)<span class="question-mark">?</span>),
                 nan_value_counts: <span class="prelude-val">Some</span>(to_i64_entry(value.nan_value_counts)<span class="question-mark">?</span>),
-                lower_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.lower_bounds)),
-                upper_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.upper_bounds)),
+                lower_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.lower_bounds)<span class="question-mark">?</span>),
+                upper_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.upper_bounds)<span class="question-mark">?</span>),
                 key_metadata: <span class="prelude-val">Some</span>(serde_bytes::ByteBuf::from(value.key_metadata)),
                 split_offsets: <span class="prelude-val">Some</span>(value.split_offsets),
                 equality_ids: <span class="prelude-val">Some</span>(value.equality_ids),
@@ -3562,13 +3566,17 @@
         <span class="prelude-val">Ok</span>(m)
     }
 
-    <span class="kw">fn </span>to_bytes_entry(v: <span class="kw">impl </span>IntoIterator&lt;Item = (i32, Datum)&gt;) -&gt; Vec&lt;BytesEntry&gt; {
-        v.into_iter()
-            .map(|e| BytesEntry {
-                key: e.<span class="number">0</span>,
-                value: e.<span class="number">1</span>.to_bytes(),
-            })
-            .collect()
+    <span class="kw">fn </span>to_bytes_entry(v: <span class="kw">impl </span>IntoIterator&lt;Item = (i32, Datum)&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;BytesEntry&gt;, Error&gt; {
+        <span class="kw">let </span>iter = v.into_iter();
+        <span class="comment">// Reserve the capacity to the lower bound.
+        </span><span class="kw">let </span><span class="kw-2">mut </span>bs = Vec::with_capacity(iter.size_hint().<span class="number">0</span>);
+        <span class="kw">for </span>(k, d) <span class="kw">in </span>iter {
+            bs.push(BytesEntry {
+                key: k,
+                value: d.to_bytes()<span class="question-mark">?</span>,
+            });
+        }
+        <span class="prelude-val">Ok</span>(bs)
     }
 
     <span class="attr">#[derive(Serialize, Deserialize)]
