@@ -434,7 +434,7 @@ mod tests {
         let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
-        let expected = "day <= 19722".to_string();
+        let expected = "day <= 2023-12-31".to_string();
 
         assert_eq!(result.to_string(), expected);
     }

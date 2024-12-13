@@ -272,7 +272,7 @@ impl Day {
 
 impl TransformFunction for Day {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let res: Int32Array = match input.data_type() {
+        let res: Date32Array = match input.data_type() {
             DataType::Timestamp(TimeUnit::Microsecond, _) => input
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
@@ -324,7 +324,7 @@ impl TransformFunction for Day {
                 ))
             }
         };
-        Ok(Some(Datum::int(val)))
+        Ok(Some(Datum::date(val)))
     }
 }
 
@@ -1214,7 +1214,7 @@ mod test {
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 0"),
+            Some("name <= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1222,7 +1222,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 0"),
+            Some("name <= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1230,7 +1230,7 @@ mod test {
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 0"),
+            Some("name >= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1238,12 +1238,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= -1"),
+            Some("name >= 1969-12-31"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
-            Some("name IN (-1, 0)"),
+            Some("name IN (1969-12-31, 1970-01-01)"),
         )?;
 
         fixture.assert_projection(
@@ -1256,7 +1256,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (0, -1)"),
+            Some("name IN (1970-01-01, 1969-12-31)"),
         )?;
 
         fixture.assert_projection(
@@ -1288,7 +1288,7 @@ mod test {
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 17501"),
+            Some("name <= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1296,7 +1296,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 17501"),
+            Some("name <= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1304,7 +1304,7 @@ mod test {
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 17502"),
+            Some("name >= 2017-12-02"),
         )?;
 
         fixture.assert_projection(
@@ -1312,12 +1312,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 17501"),
+            Some("name >= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
-            Some("name = 17501"),
+            Some("name = 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1330,7 +1330,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (17501, 17502)"),
+            Some("name IN (2017-12-02, 2017-12-01)"),
         )?;
 
         fixture.assert_projection(
@@ -1362,7 +1362,7 @@ mod test {
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= -365"),
+            Some("name <= 1969-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1370,7 +1370,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= -364"),
+            Some("name <= 1969-01-02"),
         )?;
 
         fixture.assert_projection(
@@ -1378,7 +1378,7 @@ mod test {
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= -365"),
+            Some("name >= 1969-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1386,12 +1386,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= -365"),
+            Some("name >= 1969-01-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
-            Some("name IN (-364, -365)"),
+            Some("name IN (1969-01-01, 1969-01-02)"),
         )?;
 
         fixture.assert_projection(
@@ -1404,7 +1404,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (-363, -365, -364)"),
+            Some("name IN (1969-01-02, 1969-01-01, 1969-01-03)"),
         )?;
 
         fixture.assert_projection(
@@ -1436,7 +1436,7 @@ mod test {
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 17500"),
+            Some("name <= 2017-11-30"),
         )?;
 
         fixture.assert_projection(
@@ -1444,7 +1444,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 17501"),
+            Some("name <= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1452,7 +1452,7 @@ mod test {
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 17501"),
+            Some("name >= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1460,12 +1460,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 17501"),
+            Some("name >= 2017-12-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
-            Some("name = 17501"),
+            Some("name = 2017-12-01"),
         )?;
 
         fixture.assert_projection(
@@ -1478,7 +1478,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (17501, 17502)"),
+            Some("name IN (2017-12-02, 2017-12-01)"),
         )?;
 
         fixture.assert_projection(
@@ -1510,7 +1510,7 @@ mod test {
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 0"),
+            Some("name <= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1518,7 +1518,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name <= 0"),
+            Some("name <= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1526,7 +1526,7 @@ mod test {
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 0"),
+            Some("name >= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1534,12 +1534,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)?,
             ),
-            Some("name >= 0"),
+            Some("name >= 1970-01-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)?),
-            Some("name = 0"),
+            Some("name = 1970-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1552,7 +1552,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (1, 0)"),
+            Some("name IN (1970-01-01, 1970-01-02)"),
         )?;
 
         fixture.assert_projection(
@@ -1581,7 +1581,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
-            Some("name <= -3"),
+            Some("name <= 1969-12-29"),
         )?;
 
         fixture.assert_projection(
@@ -1589,12 +1589,12 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::date_from_str(value)?,
             ),
-            Some("name <= -2"),
+            Some("name <= 1969-12-30"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
-            Some("name >= -1"),
+            Some("name >= 1969-12-31"),
         )?;
 
         fixture.assert_projection(
@@ -1602,12 +1602,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::date_from_str(value)?,
             ),
-            Some("name >= -2"),
+            Some("name >= 1969-12-30"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
-            Some("name = -2"),
+            Some("name = 1969-12-30"),
         )?;
 
         fixture.assert_projection(
@@ -1620,7 +1620,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (-2, -4)"),
+            Some("name IN (1969-12-28, 1969-12-30)"),
         )?;
 
         fixture.assert_projection(
@@ -1649,7 +1649,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)?),
-            Some("name <= 17166"),
+            Some("name <= 2016-12-31"),
         )?;
 
         fixture.assert_projection(
@@ -1657,12 +1657,12 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::date_from_str(value)?,
             ),
-            Some("name <= 17167"),
+            Some("name <= 2017-01-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)?),
-            Some("name >= 17168"),
+            Some("name >= 2017-01-02"),
         )?;
 
         fixture.assert_projection(
@@ -1670,12 +1670,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::date_from_str(value)?,
             ),
-            Some("name >= 17167"),
+            Some("name >= 2017-01-01"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)?),
-            Some("name = 17167"),
+            Some("name = 2017-01-01"),
         )?;
 
         fixture.assert_projection(
@@ -1688,7 +1688,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (17531, 17167)"),
+            Some("name IN (2017-01-01, 2017-12-31)"),
         )?;
 
         fixture.assert_projection(
@@ -2629,7 +2629,7 @@ mod test {
                 .collect::<Vec<i32>>(),
         ));
         let res = day.transform(date_array).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(res.len(), 5);
         assert_eq!(res.value(0), expect_day[0]);
         assert_eq!(res.value(1), expect_day[1]);
@@ -2668,7 +2668,7 @@ mod test {
                 .collect::<Vec<i64>>(),
         ));
         let res = day.transform(date_array).unwrap();
-        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(res.len(), 5);
         assert_eq!(res.value(0), expect_day[0]);
         assert_eq!(res.value(1), expect_day[1]);
@@ -2681,18 +2681,18 @@ mod test {
     fn test_transform_days_literal() {
         let day = Box::new(super::Day) as BoxedTransformFunction;
         // Test Date32
-        test_date(18628, &day, Datum::int(18628));
-        test_date(-31, &day, Datum::int(-31));
+        test_date(18628, &day, Datum::date(18628));
+        test_date(-31, &day, Datum::date(-31));
 
         // Test TimestampMicrosecond
-        test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17501));
-        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-2));
-        test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
+        test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::date(17501));
+        test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::date(-2));
+        test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::date(17501));
 
         // Test TimestampNanosecond
-        test_timestamp_ns_and_tz_transform_using_i64(1512151975038194, &day, Datum::int(17));
-        test_timestamp_ns_and_tz_transform_using_i64(-115200000000, &day, Datum::int(-1));
-        test_timestamp_ns_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::int(17501));
+        test_timestamp_ns_and_tz_transform_using_i64(1512151975038194, &day, Datum::date(17));
+        test_timestamp_ns_and_tz_transform_using_i64(-115200000000, &day, Datum::date(-1));
+        test_timestamp_ns_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::date(17501));
     }
 
     #[test]
