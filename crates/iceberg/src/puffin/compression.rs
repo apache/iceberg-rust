@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 /// Data compression formats
@@ -70,7 +70,7 @@ impl CompressionCodec {
 
 #[cfg(test)]
 mod tests {
-    use crate::compression::CompressionCodec;
+    use crate::puffin::compression::CompressionCodec;
 
     #[tokio::test]
     async fn test_compression_codec_none() {
