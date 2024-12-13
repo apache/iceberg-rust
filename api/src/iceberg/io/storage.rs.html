@@ -169,6 +169,13 @@
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -188,6 +195,7 @@
 
 </span><span class="kw">use </span>std::sync::Arc;
 
+<span class="kw">use </span>opendal::layers::RetryLayer;
 <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
 </span><span class="kw">use </span>opendal::services::GcsConfig;
 <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
@@ -265,7 +273,7 @@
         path: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw">impl </span>AsRef&lt;str&gt;,
     ) -&gt; <span class="kw">crate</span>::Result&lt;(Operator, <span class="kw-2">&amp;</span><span class="lifetime">'a </span>str)&gt; {
         <span class="kw">let </span>path = path.as_ref();
-        <span class="kw">match </span><span class="self">self </span>{
+        <span class="kw">let </span>(operator, relative_path): (Operator, <span class="kw-2">&amp;</span>str) = <span class="kw">match </span><span class="self">self </span>{
             <span class="attr">#[cfg(feature = <span class="string">"storage-memory"</span>)]
             </span>Storage::Memory(op) =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(stripped) = path.strip_prefix(<span class="string">"memory:/"</span>) {
@@ -326,7 +334,13 @@
                 ErrorKind::FeatureUnsupported,
                 <span class="string">"No storage service has been enabled"</span>,
             )),
-        }
+        }<span class="question-mark">?</span>;
+
+        <span class="comment">// Transient errors are common for object stores; however there's no
+        // harm in retrying temporary failures for other storage backends as well.
+        </span><span class="kw">let </span>operator = operator.layer(RetryLayer::new());
+
+        <span class="prelude-val">Ok</span>((operator, relative_path))
     }
 
     <span class="doccomment">/// Parse scheme.

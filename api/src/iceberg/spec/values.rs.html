@@ -3476,6 +3476,7 @@
 <a href="#3476" id="3476">3476</a>
 <a href="#3477" id="3477">3477</a>
 <a href="#3478" id="3478">3478</a>
+<a href="#3479" id="3479">3479</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -4497,6 +4498,7 @@
                 <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.literal, <span class="kw-2">&amp;</span><span class="self">self</span>.r#type, target_primitive_type) {
                     (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Int) =&gt; <span class="prelude-val">Ok</span>(Datum::int(<span class="kw-2">*</span>val)),
                     (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Date) =&gt; <span class="prelude-val">Ok</span>(Datum::date(<span class="kw-2">*</span>val)),
+                    (PrimitiveLiteral::Int(val), <span class="kw">_</span>, PrimitiveType::Long) =&gt; <span class="prelude-val">Ok</span>(Datum::long(<span class="kw-2">*</span>val)),
                     <span class="comment">// TODO: implement more type conversions
                     </span>(<span class="kw">_</span>, self_type, target_type) <span class="kw">if </span>self_type == target_type =&gt; <span class="prelude-val">Ok</span>(<span class="self">self</span>),
                     <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
