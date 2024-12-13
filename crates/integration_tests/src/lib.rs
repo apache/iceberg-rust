@@ -21,8 +21,6 @@ use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
-use port_scanner::scan_port_addr;
-use tokio::time::sleep;
 
 const REST_CATALOG_PORT: u16 = 8181;
 
@@ -42,24 +40,15 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
     docker_compose.run();
 
     let rest_catalog_ip = docker_compose.get_container_ip("rest");
-
-    let read_port = format!("{}:{}", rest_catalog_ip, REST_CATALOG_PORT);
-    loop {
-        if !scan_port_addr(&read_port) {
-            log::info!("Waiting for 1s rest catalog to ready...");
-            sleep(std::time::Duration::from_millis(1000)).await;
-        } else {
-            break;
-        }
-    }
-
-    let container_ip = docker_compose.get_container_ip("minio");
-    let read_port = format!("{}:{}", container_ip, 9000);
+    let minio_ip = docker_compose.get_container_ip("minio");
 
     let config = RestCatalogConfig::builder()
         .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
         .props(HashMap::from([
-            (S3_ENDPOINT.to_string(), format!("http://{}", read_port)),
+            (
+                S3_ENDPOINT.to_string(),
+                format!("http://{}:{}", minio_ip, 9000),
+            ),
             (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
             (S3_REGION.to_string(), "us-east-1".to_string()),

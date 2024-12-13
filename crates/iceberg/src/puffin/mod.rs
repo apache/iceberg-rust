@@ -22,4 +22,3 @@
 #![allow(dead_code)]
 
 mod compression;
-pub use compression::CompressionCodec;

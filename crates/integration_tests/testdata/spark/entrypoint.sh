@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,23 +16,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "iceberg-puffin"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-rust-version = { workspace = true }
+start-master.sh -p 7077
+start-worker.sh spark://spark-iceberg:7077
+start-history-server.sh
 
-categories = ["database"]
-description = "Apache Iceberg Puffin"
-repository = { workspace = true }
-license = { workspace = true }
-keywords = ["iceberg", "puffin"]
+python3 ./provision.py
 
-[dependencies]
-iceberg = { workspace = true }
-zstd = { workspace = true }
+touch /tmp/ready
 
-[dev-dependencies]
-tokio = { workspace = true }
+tail -f /dev/null
