@@ -24,7 +24,7 @@ use crate::io::FileWrite;
 use crate::Result;
 
 /// `TrackWriter` is used to track the written size.
-pub struct TrackWriter {
+pub(crate) struct TrackWriter {
     inner: Box<dyn FileWrite>,
     written_size: Arc<AtomicU64>,
 }

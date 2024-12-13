@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+use crate::{Error, ErrorKind, Result};
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 /// Data compression formats
 pub enum CompressionCodec {
     #[default]
@@ -73,7 +73,7 @@ impl CompressionCodec {
 
 #[cfg(test)]
 mod tests {
-    use crate::compression::CompressionCodec;
+    use crate::puffin::compression::CompressionCodec;
 
     #[tokio::test]
     async fn test_compression_codec_none() {

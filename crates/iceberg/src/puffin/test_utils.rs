@@ -17,14 +17,13 @@
 
 use std::collections::HashMap;
 
-use iceberg::io::{FileIOBuilder, InputFile};
+use crate::io::{FileIOBuilder, InputFile};
+use crate::puffin::blob::Blob;
+use crate::puffin::compression::CompressionCodec;
+use crate::puffin::metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
 
-use crate::blob::Blob;
-use crate::compression::CompressionCodec;
-use crate::metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
-
-const V1_RUST: &str = "testdata/v1/rust-generated";
-const V1_JAVA: &str = "testdata/v1/java-generated";
+const RUST_TESTDATA: &str = "testdata/puffin/rust-generated";
+const JAVA_TESTDATA: &str = "testdata/puffin/java-generated";
 const EMPTY_UNCOMPRESSED: &str = "empty-puffin-uncompressed.bin";
 const METRIC_UNCOMPRESSED: &str = "sample-metric-data-uncompressed.bin";
 const METRIC_ZSTD_COMPRESSED: &str = "sample-metric-data-compressed-zstd.bin";
@@ -38,27 +37,27 @@ fn input_file_for_test_data(path: &str) -> InputFile {
 }
 
 pub(crate) fn java_empty_uncompressed_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_JAVA, EMPTY_UNCOMPRESSED].join("/"))
+    input_file_for_test_data(&[JAVA_TESTDATA, EMPTY_UNCOMPRESSED].join("/"))
 }
 
 pub(crate) fn rust_empty_uncompressed_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_RUST, EMPTY_UNCOMPRESSED].join("/"))
+    input_file_for_test_data(&[RUST_TESTDATA, EMPTY_UNCOMPRESSED].join("/"))
 }
 
 pub(crate) fn java_uncompressed_metric_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_JAVA, METRIC_UNCOMPRESSED].join("/"))
+    input_file_for_test_data(&[JAVA_TESTDATA, METRIC_UNCOMPRESSED].join("/"))
 }
 
 pub(crate) fn rust_uncompressed_metric_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_RUST, METRIC_UNCOMPRESSED].join("/"))
+    input_file_for_test_data(&[RUST_TESTDATA, METRIC_UNCOMPRESSED].join("/"))
 }
 
 pub(crate) fn java_zstd_compressed_metric_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_JAVA, METRIC_ZSTD_COMPRESSED].join("/"))
+    input_file_for_test_data(&[JAVA_TESTDATA, METRIC_ZSTD_COMPRESSED].join("/"))
 }
 
 pub(crate) fn rust_zstd_compressed_metric_input_file() -> InputFile {
-    input_file_for_test_data(&[V1_RUST, METRIC_ZSTD_COMPRESSED].join("/"))
+    input_file_for_test_data(&[RUST_TESTDATA, METRIC_ZSTD_COMPRESSED].join("/"))
 }
 
 pub(crate) fn empty_footer_payload() -> FileMetadata {

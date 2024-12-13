@@ -18,12 +18,12 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use iceberg::io::{FileRead, InputFile};
-use iceberg::{Error, ErrorKind, Result};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use crate::compression::CompressionCodec;
+use crate::io::{FileRead, InputFile};
+use crate::puffin::compression::CompressionCodec;
+use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
 /// Example: "Trino version 381"
@@ -286,11 +286,11 @@ mod tests {
     use std::collections::HashMap;
 
     use bytes::Bytes;
-    use iceberg::io::{FileIOBuilder, InputFile};
     use tempfile::TempDir;
 
-    use crate::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
-    use crate::test_utils::{
+    use crate::io::{FileIOBuilder, InputFile};
+    use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
+    use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,
         rust_empty_uncompressed_input_file, rust_uncompressed_metric_input_file,
         rust_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,

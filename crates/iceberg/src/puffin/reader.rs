@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use iceberg::io::{FileRead, InputFile};
-use iceberg::Result;
-
-use crate::blob::Blob;
-use crate::metadata::{BlobMetadata, FileMetadata};
+use crate::io::{FileRead, InputFile};
+use crate::puffin::blob::Blob;
+use crate::puffin::metadata::{BlobMetadata, FileMetadata};
+use crate::Result;
 
 /// Puffin reader
 pub struct PuffinReader {
@@ -68,12 +67,12 @@ impl PuffinReader {
 #[cfg(test)]
 mod tests {
 
-    use crate::test_utils::{
+    use crate::puffin::test_utils::{
         blob_0, blob_1, rust_uncompressed_metric_input_file,
         rust_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,
         zstd_compressed_metric_file_metadata,
     };
-    use crate::PuffinReader;
+    use crate::puffin::PuffinReader;
 
     #[tokio::test]
     async fn test_puffin_reader_uncompressed_metric_data() {

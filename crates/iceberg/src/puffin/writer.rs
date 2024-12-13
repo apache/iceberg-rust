@@ -20,13 +20,13 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use iceberg::io::{FileWrite, OutputFile};
-use iceberg::writer::file_writer::TrackWriter;
-use iceberg::{Error, ErrorKind, Result};
 
-use crate::blob::Blob;
-use crate::compression::CompressionCodec;
-use crate::metadata::{BlobMetadata, ByteNumber, FileMetadata, Flag};
+use crate::io::{FileWrite, OutputFile};
+use crate::puffin::blob::Blob;
+use crate::puffin::compression::CompressionCodec;
+use crate::puffin::metadata::{BlobMetadata, ByteNumber, FileMetadata, Flag};
+use crate::writer::file_writer::track_writer::TrackWriter;
+use crate::{Error, ErrorKind, Result};
 
 /// Puffin writer
 pub struct PuffinWriter {
@@ -186,21 +186,21 @@ impl PuffinWriter {
 mod tests {
     use std::collections::HashMap;
 
-    use iceberg::io::{FileIOBuilder, InputFile, OutputFile};
-    use iceberg::Result;
     use tempfile::TempDir;
 
-    use crate::blob::Blob;
-    use crate::compression::CompressionCodec;
-    use crate::metadata::FileMetadata;
-    use crate::test_utils::{
+    use crate::io::{FileIOBuilder, InputFile, OutputFile};
+    use crate::puffin::blob::Blob;
+    use crate::puffin::compression::CompressionCodec;
+    use crate::puffin::metadata::FileMetadata;
+    use crate::puffin::test_utils::{
         blob_0, blob_1, empty_footer_payload, empty_footer_payload_bytes, file_properties,
         java_empty_uncompressed_input_file, java_uncompressed_metric_input_file,
         java_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,
         zstd_compressed_metric_file_metadata,
     };
-    use crate::writer::PuffinWriter;
-    use crate::PuffinReader;
+    use crate::puffin::writer::PuffinWriter;
+    use crate::puffin::PuffinReader;
+    use crate::Result;
 
     #[tokio::test]
     async fn test_throws_error_if_attempt_to_add_blob_after_closing() {

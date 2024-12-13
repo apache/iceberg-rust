@@ -81,6 +81,7 @@ tokio = { workspace = true, optional = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }

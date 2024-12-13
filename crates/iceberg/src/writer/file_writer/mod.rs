@@ -27,8 +27,7 @@ use crate::Result;
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
 
-mod track_writer;
-pub use track_writer::TrackWriter;
+pub(crate) mod track_writer;
 
 pub mod location_generator;
 
