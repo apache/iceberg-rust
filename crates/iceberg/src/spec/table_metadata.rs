@@ -21,6 +21,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use _serde::TableMetadataEnum;
@@ -32,8 +33,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    BoundPartitionSpecRef, SchemaId, SchemaRef, SchemalessPartitionSpecRef, Snapshot, SnapshotRef,
-    SnapshotRetention, SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
+    BoundPartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
+    SchemalessPartitionSpecRef, Snapshot, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef,
+    StatisticsFile, DEFAULT_PARTITION_SPEC_ID,
 };
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind};
@@ -158,11 +160,15 @@ pub struct TableMetadata {
     /// writers, but is not used when reading because reads use the specs
     /// stored in manifest files.
     pub(crate) default_sort_order_id: i64,
-    ///A map of snapshot references. The map keys are the unique snapshot reference
+    /// A map of snapshot references. The map keys are the unique snapshot reference
     /// names in the table, and the map values are snapshot reference objects.
     /// There is always a main branch reference pointing to the current-snapshot-id
     /// even if the refs map is null.
     pub(crate) refs: HashMap<String, SnapshotReference>,
+    /// Mapping of snapshot ids to statistics files.
+    pub(crate) statistics: HashMap<i64, StatisticsFile>,
+    /// Mapping of snapshot ids to partition statistics files.
+    pub(crate) partition_statistics: HashMap<i64, PartitionStatisticsFile>,
 }
 
 impl TableMetadata {
@@ -355,6 +361,33 @@ impl TableMetadata {
     #[inline]
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    /// Return location of statistics files.
+    #[inline]
+    pub fn statistics(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {
+        self.statistics.values()
+    }
+
+    /// Return location of partition statistics files.
+    #[inline]
+    pub fn partition_statistics(&self) -> impl ExactSizeIterator<Item = &PartitionStatisticsFile> {
+        self.partition_statistics.values()
+    }
+
+    /// Get a statistics file for a snapshot id.
+    #[inline]
+    pub fn statistics_for_snapshot(&self, snapshot_id: i64) -> Option<&StatisticsFile> {
+        self.statistics.get(&snapshot_id)
+    }
+
+    /// Get a partition statistics file for a snapshot id.
+    #[inline]
+    pub fn partition_statistics_for_snapshot(
+        &self,
+        snapshot_id: i64,
+    ) -> Option<&PartitionStatisticsFile> {
+        self.partition_statistics.get(&snapshot_id)
     }
 
     /// Append snapshot to table
@@ -610,8 +643,9 @@ pub(super) mod _serde {
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
     use crate::spec::{
-        BoundPartitionSpec, PartitionField, Schema, SchemaRef, SchemalessPartitionSpec, Snapshot,
-        SnapshotReference, SnapshotRetention, SortOrder,
+        BoundPartitionSpec, PartitionField, PartitionStatisticsFile, Schema, SchemaRef,
+        SchemalessPartitionSpec, Snapshot, SnapshotReference, SnapshotRetention, SortOrder,
+        StatisticsFile,
     };
     use crate::{Error, ErrorKind};
 
@@ -651,6 +685,10 @@ pub(super) mod _serde {
         pub default_sort_order_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub refs: Option<HashMap<String, SnapshotReference>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub statistics: Vec<StatisticsFile>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub partition_statistics: Vec<PartitionStatisticsFile>,
     }
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -687,6 +725,10 @@ pub(super) mod _serde {
         pub metadata_log: Option<Vec<MetadataLog>>,
         pub sort_orders: Option<Vec<SortOrder>>,
         pub default_sort_order_id: Option<i64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub statistics: Vec<StatisticsFile>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub partition_statistics: Vec<PartitionStatisticsFile>,
     }
 
     /// Helper to serialize and deserialize the format version.
@@ -843,6 +885,8 @@ pub(super) mod _serde {
                         HashMap::new()
                     }
                 }),
+                statistics: index_statistics(value.statistics),
+                partition_statistics: index_partition_statistics(value.partition_statistics),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -977,6 +1021,8 @@ pub(super) mod _serde {
                 } else {
                     HashMap::new()
                 },
+                statistics: index_statistics(value.statistics),
+                partition_statistics: index_partition_statistics(value.partition_statistics),
             };
 
             metadata.borrow_mut().try_normalize()?;
@@ -1047,6 +1093,8 @@ pub(super) mod _serde {
                     .collect(),
                 default_sort_order_id: v.default_sort_order_id,
                 refs: Some(v.refs),
+                statistics: v.statistics.into_values().collect(),
+                partition_statistics: v.partition_statistics.into_values().collect(),
             }
         }
     }
@@ -1123,8 +1171,28 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 default_sort_order_id: Some(v.default_sort_order_id),
+                statistics: v.statistics.into_values().collect(),
+                partition_statistics: v.partition_statistics.into_values().collect(),
             })
         }
+    }
+
+    fn index_statistics(statistics: Vec<StatisticsFile>) -> HashMap<i64, StatisticsFile> {
+        statistics
+            .into_iter()
+            .rev()
+            .map(|s| (s.snapshot_id, s))
+            .collect()
+    }
+
+    fn index_partition_statistics(
+        statistics: Vec<PartitionStatisticsFile>,
+    ) -> HashMap<i64, PartitionStatisticsFile> {
+        statistics
+            .into_iter()
+            .rev()
+            .map(|s| (s.snapshot_id, s))
+            .collect()
     }
 }
 
@@ -1205,9 +1273,10 @@ mod tests {
     use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
-        BoundPartitionSpec, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
-        Transform, Type, UnboundPartitionField,
+        BlobMetadata, BoundPartitionSpec, NestedField, NullOrder, Operation,
+        PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
+        SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile, Summary, Transform,
+        Type, UnboundPartitionField,
     };
     use crate::TableCreation;
 
@@ -1352,6 +1421,8 @@ mod tests {
                 timestamp_ms: 1515100,
             }],
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1523,6 +1594,8 @@ mod tests {
             }],
             metadata_log: vec![MetadataLog { metadata_file: "/home/iceberg/warehouse/nyc/taxis/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string(), timestamp_ms: 1662532805245 }],
             refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference { snapshot_id: 638933773299822130, retention: SnapshotRetention::Branch { min_snapshots_to_keep: None, max_snapshot_age_ms: None, max_ref_age_ms: None } })]),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         check_table_metadata_serde(data, expected);
@@ -1619,6 +1692,8 @@ mod tests {
                 timestamp_ms: 1515100,
             }],
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         let expected_json_value = serde_json::to_value(&expected).unwrap();
@@ -1921,6 +1996,293 @@ mod tests {
     }
 
     #[test]
+    fn test_statistic_files() {
+        let data = r#"
+        {
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 34,
+            "last-updated-ms": 1602638573590,
+            "last-column-id": 3,
+            "current-schema-id": 0,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "x",
+                            "required": true,
+                            "type": "long"
+                        }
+                    ]
+                }
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [
+                {
+                    "spec-id": 0,
+                    "fields": []
+                }
+            ],
+            "last-partition-id": 1000,
+            "default-sort-order-id": 0,
+            "sort-orders": [
+                {
+                    "order-id": 0,
+                    "fields": []
+                }
+            ],
+            "properties": {},
+            "current-snapshot-id": 3055729675574597004,
+            "snapshots": [
+                {
+                    "snapshot-id": 3055729675574597004,
+                    "timestamp-ms": 1555100955770,
+                    "sequence-number": 1,
+                    "summary": {
+                        "operation": "append"
+                    },
+                    "manifest-list": "s3://a/b/2.avro",
+                    "schema-id": 0
+                }
+            ],
+            "statistics": [
+                {
+                    "snapshot-id": 3055729675574597004,
+                    "statistics-path": "s3://a/b/stats.puffin",
+                    "file-size-in-bytes": 413,
+                    "file-footer-size-in-bytes": 42,
+                    "blob-metadata": [
+                        {
+                            "type": "ndv",
+                            "snapshot-id": 3055729675574597004,
+                            "sequence-number": 1,
+                            "fields": [
+                                1
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "snapshot-log": [],
+            "metadata-log": []
+        }
+    "#;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "x",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .unwrap();
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(3055729675574597004)
+            .with_timestamp_ms(1555100955770)
+            .with_sequence_number(1)
+            .with_manifest_list("s3://a/b/2.avro")
+            .with_schema_id(0)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
+            location: "s3://bucket/test/location".to_string(),
+            last_updated_ms: 1602638573590,
+            last_column_id: 3,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: Arc::new(partition_spec),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![(0, SortOrder::unsorted_order().into())]),
+            snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
+            current_snapshot_id: Some(3055729675574597004),
+            last_sequence_number: 34,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: Vec::new(),
+            statistics: HashMap::from_iter(vec![(3055729675574597004, StatisticsFile {
+                snapshot_id: 3055729675574597004,
+                statistics_path: "s3://a/b/stats.puffin".to_string(),
+                file_size_in_bytes: 413,
+                file_footer_size_in_bytes: 42,
+                key_metadata: None,
+                blob_metadata: vec![BlobMetadata {
+                    snapshot_id: 3055729675574597004,
+                    sequence_number: 1,
+                    fields: vec![1],
+                    r#type: "ndv".to_string(),
+                    properties: HashMap::new(),
+                }],
+            })]),
+            partition_statistics: HashMap::new(),
+            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
+                snapshot_id: 3055729675574597004,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })]),
+        };
+
+        check_table_metadata_serde(data, expected);
+    }
+
+    #[test]
+    fn test_partition_statistics_file() {
+        let data = r#"
+        {
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 34,
+            "last-updated-ms": 1602638573590,
+            "last-column-id": 3,
+            "current-schema-id": 0,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "x",
+                            "required": true,
+                            "type": "long"
+                        }
+                    ]
+                }
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [
+                {
+                    "spec-id": 0,
+                    "fields": []
+                }
+            ],
+            "last-partition-id": 1000,
+            "default-sort-order-id": 0,
+            "sort-orders": [
+                {
+                    "order-id": 0,
+                    "fields": []
+                }
+            ],
+            "properties": {},
+            "current-snapshot-id": 3055729675574597004,
+            "snapshots": [
+                {
+                    "snapshot-id": 3055729675574597004,
+                    "timestamp-ms": 1555100955770,
+                    "sequence-number": 1,
+                    "summary": {
+                        "operation": "append"
+                    },
+                    "manifest-list": "s3://a/b/2.avro",
+                    "schema-id": 0
+                }
+            ],
+            "partition-statistics": [
+                {
+                    "snapshot-id": 3055729675574597004,
+                    "statistics-path": "s3://a/b/partition-stats.parquet",
+                    "file-size-in-bytes": 43
+                }
+            ],
+            "snapshot-log": [],
+            "metadata-log": []
+        }
+        "#;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "x",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .unwrap();
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(3055729675574597004)
+            .with_timestamp_ms(1555100955770)
+            .with_sequence_number(1)
+            .with_manifest_list("s3://a/b/2.avro")
+            .with_schema_id(0)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let expected = TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap(),
+            location: "s3://bucket/test/location".to_string(),
+            last_updated_ms: 1602638573590,
+            last_column_id: 3,
+            schemas: HashMap::from_iter(vec![(0, Arc::new(schema))]),
+            current_schema_id: 0,
+            partition_specs: HashMap::from_iter(vec![(
+                0,
+                partition_spec.clone().into_schemaless().into(),
+            )]),
+            default_spec: Arc::new(partition_spec),
+            last_partition_id: 1000,
+            default_sort_order_id: 0,
+            sort_orders: HashMap::from_iter(vec![(0, SortOrder::unsorted_order().into())]),
+            snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
+            current_snapshot_id: Some(3055729675574597004),
+            last_sequence_number: 34,
+            properties: HashMap::new(),
+            snapshot_log: Vec::new(),
+            metadata_log: Vec::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::from_iter(vec![(
+                3055729675574597004,
+                PartitionStatisticsFile {
+                    snapshot_id: 3055729675574597004,
+                    statistics_path: "s3://a/b/partition-stats.parquet".to_string(),
+                    file_size_in_bytes: 43,
+                },
+            )]),
+            refs: HashMap::from_iter(vec![("main".to_string(), SnapshotReference {
+                snapshot_id: 3055729675574597004,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })]),
+        };
+
+        check_table_metadata_serde(data, expected);
+    }
+
+    #[test]
     fn test_invalid_table_uuid() -> Result<()> {
         let data = r#"
             {
@@ -2075,6 +2437,8 @@ mod tests {
                     max_ref_age_ms: None,
                 },
             })]),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2158,6 +2522,8 @@ mod tests {
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);
@@ -2225,6 +2591,8 @@ mod tests {
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         check_table_metadata_serde(&metadata, expected);

@@ -177,6 +177,8 @@ pub(crate) mod test {
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         let file_name_genertaor = super::DefaultFileNameGenerator::new(
