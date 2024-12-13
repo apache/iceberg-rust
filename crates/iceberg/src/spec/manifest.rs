@@ -1346,8 +1346,8 @@ mod _serde {
                 value_counts: Some(to_i64_entry(value.value_counts)?),
                 null_value_counts: Some(to_i64_entry(value.null_value_counts)?),
                 nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
-                lower_bounds: Some(to_bytes_entry(value.lower_bounds)),
-                upper_bounds: Some(to_bytes_entry(value.upper_bounds)),
+                lower_bounds: Some(to_bytes_entry(value.lower_bounds)?),
+                upper_bounds: Some(to_bytes_entry(value.upper_bounds)?),
                 key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
                 split_offsets: Some(value.split_offsets),
                 equality_ids: Some(value.equality_ids),
@@ -1451,13 +1451,17 @@ mod _serde {
         Ok(m)
     }
 
-    fn to_bytes_entry(v: impl IntoIterator<Item = (i32, Datum)>) -> Vec<BytesEntry> {
-        v.into_iter()
-            .map(|e| BytesEntry {
-                key: e.0,
-                value: e.1.to_bytes(),
-            })
-            .collect()
+    fn to_bytes_entry(v: impl IntoIterator<Item = (i32, Datum)>) -> Result<Vec<BytesEntry>, Error> {
+        let iter = v.into_iter();
+        // Reserve the capacity to the lower bound.
+        let mut bs = Vec::with_capacity(iter.size_hint().0);
+        for (k, d) in iter {
+            bs.push(BytesEntry {
+                key: k,
+                value: d.to_bytes()?,
+            });
+        }
+        Ok(bs)
     }
 
     #[derive(Serialize, Deserialize)]
