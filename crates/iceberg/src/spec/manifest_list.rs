@@ -857,12 +857,22 @@ pub(super) mod _serde {
                 contains_nan: self.contains_nan,
                 lower_bound: self
                     .lower_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| {
+                        err.with_context("type", format!("{:?}", r#type))
+                            .with_context("bytes", format!("{:?}", self.lower_bound))
+                    })?,
                 upper_bound: self
                     .upper_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| {
+                        err.with_context("type", format!("{:?}", r#type))
+                            .with_context("bytes", format!("{:?}", self.upper_bound))
+                    })?,
             })
         }
     }
