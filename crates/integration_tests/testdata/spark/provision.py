@@ -97,3 +97,15 @@ VALUES
 #  Creates two positional deletes that should be merged
 spark.sql(f"DELETE FROM rest.default.test_positional_merge_on_read_double_deletes WHERE number = 9")
 spark.sql(f"DELETE FROM rest.default.test_positional_merge_on_read_double_deletes WHERE letter == 'f'")
+
+#  Create a table, and do some renaming
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_rename_column (lang string) USING iceberg")
+spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Python')")
+spark.sql("ALTER TABLE rest.default.test_rename_column RENAME COLUMN lang TO language")
+spark.sql("INSERT INTO rest.default.test_rename_column VALUES ('Java')")
+
+#  Create a table, and do some evolution
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) USING iceberg")
+spark.sql("INSERT INTO rest.default.test_promote_column VALUES (19)")
+spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bigint")
+spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
