@@ -1225,39 +1225,55 @@ mod tests {
 
     #[test]
     fn test_arrow_projection_mask() {
-        let schema = table_schema_simple();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(2, "c2", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        3,
+                        "c3",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 38,
+                            scale: 3,
+                        }),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("foo", DataType::Utf8, true).with_metadata(HashMap::from([(
+            Field::new("c1", DataType::Utf8, false).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "1".to_string(),
             )])),
-            Field::new("bar", DataType::Duration(TimeUnit::Microsecond), false).with_metadata(
+            // Type not supported
+            Field::new("c2", DataType::Duration(TimeUnit::Microsecond), true).with_metadata(
                 HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
             ),
-            Field::new("baz", DataType::Boolean, true).with_metadata(HashMap::from([(
+            // Precision is beyond the supported range
+            Field::new("c3", DataType::Decimal128(39, 3), true).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "3".to_string(),
-            )])),
-            Field::new("qux", DataType::Float32, true).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "4".to_string(),
             )])),
         ]));
 
         let message_type = "
 message schema {
-  optional binary foo (STRING) = 1;
-  required int32 bar (INTEGER(8,true)) = 2;
-  optional boolean baz = 3;
-  optional float qux = 4;
+  required binary c1 (STRING) = 1;
+  optional int32 c2 (INTEGER(8,true)) = 2;
+  optional fixed_len_byte_array(17) c3 (DECIMAL(39,3)) = 3;
 }
     ";
         let parquet_type = parse_message_type(message_type).expect("should parse schema");
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
 
-        // Try projecting the field "bar" with the unsupported data type
+        // Try projecting the fields c2 and c3 with the unsupported data types
         let err = ArrowReader::get_arrow_projection_mask(
-            &[1, 2, 3, 4],
+            &[1, 2, 3],
             &schema,
             &parquet_schema,
             &arrow_schema,
@@ -1270,14 +1286,25 @@ message schema {
             "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
         );
 
-        // Now avoid selecting "bar"
-        let mask = ArrowReader::get_arrow_projection_mask(
-            &[1, 4],
+        // Omitting field c2, we still get an error due to c3 being selected
+        let err = ArrowReader::get_arrow_projection_mask(
+            &[1, 3],
             &schema,
             &parquet_schema,
             &arrow_schema,
         )
-        .expect("Some ProjectionMask");
-        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0, 3]));
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.to_string(),
+            "DataInvalid => Failed to create decimal type, source: DataInvalid => Decimals with precision larger than 38 are not supported: 39".to_string()
+        );
+
+        // Finally avoid selecting fields with unsupported data types
+        let mask =
+            ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
+                .expect("Some ProjectionMask");
+        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
 }
