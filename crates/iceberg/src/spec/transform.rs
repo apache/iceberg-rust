@@ -197,7 +197,27 @@ impl Transform {
                     ))
                 }
             }
-            Transform::Year | Transform::Month | Transform::Day => {
+            Transform::Year | Transform::Month => {
+                if let Type::Primitive(p) = input_type {
+                    match p {
+                        PrimitiveType::Timestamp
+                        | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
+                        | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Int)),
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of {self} transform",),
+                        )),
+                    }
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of {self} transform",),
+                    ))
+                }
+            }
+            Transform::Day => {
                 if let Type::Primitive(p) = input_type {
                     match p {
                         PrimitiveType::Timestamp
