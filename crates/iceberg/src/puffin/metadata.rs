@@ -240,24 +240,16 @@ impl FileMetadata {
         let decompressed_footer_payload_bytes =
             footer_compression_codec.decompress(footer_payload_bytes.into())?;
 
-        match String::from_utf8(decompressed_footer_payload_bytes) {
-            Err(src) => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Footer is not a valid UTF-8 string",
-            )
-            .with_source(src)),
-            Ok(str) => Ok(str),
-        }
+        String::from_utf8(decompressed_footer_payload_bytes).map_err(|src| {
+            Error::new(ErrorKind::DataInvalid, "Footer is not a valid UTF-8 string")
+                .with_source(src)
+        })
     }
 
     fn from_json_str(string: &str) -> Result<FileMetadata> {
-        match serde_json::from_str::<FileMetadata>(string) {
-            Ok(file_metadata) => Ok(file_metadata),
-            Err(src) => Err(
-                Error::new(ErrorKind::DataInvalid, "Given string is not valid JSON")
-                    .with_source(src),
-            ),
-        }
+        serde_json::from_str::<FileMetadata>(string).map_err(|src| {
+            Error::new(ErrorKind::DataInvalid, "Given string is not valid JSON").with_source(src)
+        })
     }
 
     /// Returns the file metadata about a Puffin file
