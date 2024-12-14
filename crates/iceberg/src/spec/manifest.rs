@@ -142,40 +142,48 @@ impl PartitionFieldStats {
     pub(crate) fn new(partition_type: PrimitiveType) -> Self {
         Self {
             partition_type,
-            summary: Default::default(),
+            summary: FieldSummary::default(),
         }
     }
 
     pub(crate) fn update(&mut self, value: Option<PrimitiveLiteral>) -> Result<()> {
-        if let Some(value) = value {
-            if !self.partition_type.compatible(&value) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "value is not compatitable with type",
-                ));
-            }
-            let value = Datum::new(self.partition_type.clone(), value);
-            if value.is_nan() {
-                self.summary.contains_nan = Some(true);
-            } else {
-                if let Some(lower) = self.summary.lower_bound.as_mut() {
-                    if value < *lower {
-                        *lower = value.clone();
-                    }
-                } else {
-                    self.summary.lower_bound = Some(value.clone());
-                }
-                if let Some(upper) = self.summary.upper_bound.as_mut() {
-                    if value > *upper {
-                        *upper = value;
-                    }
-                } else {
-                    self.summary.upper_bound = Some(value);
-                }
-            }
-        } else {
+        let Some(value) = value else {
             self.summary.contains_null = true;
+            return Ok(());
+        };
+        if !self.partition_type.compatible(&value) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "value is not compatitable with type",
+            ));
         }
+        let value = Datum::new(self.partition_type.clone(), value);
+
+        if value.is_nan() {
+            self.summary.contains_nan = Some(true);
+            return Ok(());
+        }
+
+        self.summary.lower_bound = Some(self.summary.lower_bound.take().map_or(
+            value.clone(),
+            |original| {
+                if value < original {
+                    value.clone()
+                } else {
+                    original
+                }
+            },
+        ));
+        self.summary.upper_bound = Some(self.summary.upper_bound.take().map_or(
+            value.clone(),
+            |original| {
+                if value > original {
+                    value
+                } else {
+                    original
+                }
+            },
+        ));
 
         Ok(())
     }
@@ -1540,7 +1548,6 @@ mod _serde {
 
 #[cfg(test)]
 mod tests {
-    use core::f32;
     use std::fs;
     use std::sync::Arc;
 

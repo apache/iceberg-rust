@@ -860,19 +860,13 @@ pub(super) mod _serde {
                     .as_ref()
                     .map(|v| Datum::try_from_bytes(v, r#type.clone()))
                     .transpose()
-                    .map_err(|err| {
-                        err.with_context("type", format!("{:?}", r#type))
-                            .with_context("bytes", format!("{:?}", self.lower_bound))
-                    })?,
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
                 upper_bound: self
                     .upper_bound
                     .as_ref()
                     .map(|v| Datum::try_from_bytes(v, r#type.clone()))
                     .transpose()
-                    .map_err(|err| {
-                        err.with_context("type", format!("{:?}", r#type))
-                            .with_context("bytes", format!("{:?}", self.upper_bound))
-                    })?,
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
             })
         }
     }
