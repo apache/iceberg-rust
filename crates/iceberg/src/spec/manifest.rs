@@ -1074,7 +1074,7 @@ pub struct DataFile {
     ///
     /// Implementation-specific key metadata for encryption
     #[builder(default)]
-    pub(crate) key_metadata: Vec<u8>,
+    pub(crate) key_metadata: Option<Vec<u8>>,
     /// field id: 132
     /// element field id: 133
     ///
@@ -1164,7 +1164,7 @@ impl DataFile {
         &self.upper_bounds
     }
     /// Get the Implementation-specific key metadata for the data file.
-    pub fn key_metadata(&self) -> &[u8] {
+    pub fn key_metadata(&self) -> &Option<Vec<u8>> {
         &self.key_metadata
     }
     /// Get the split offsets of the data file.
@@ -1378,12 +1378,13 @@ mod _serde {
                 nan_value_counts: Some(to_i64_entry(value.nan_value_counts)?),
                 lower_bounds: Some(to_bytes_entry(value.lower_bounds)?),
                 upper_bounds: Some(to_bytes_entry(value.upper_bounds)?),
-                key_metadata: Some(serde_bytes::ByteBuf::from(value.key_metadata)),
+                key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
                 split_offsets: Some(value.split_offsets),
                 equality_ids: Some(value.equality_ids),
                 sort_order_id: value.sort_order_id,
             })
         }
+
         pub fn try_into(
             self,
             partition_type: &StructType,
@@ -1441,7 +1442,7 @@ mod _serde {
                     .map(|v| parse_bytes_entry(v, schema))
                     .transpose()?
                     .unwrap_or_default(),
-                key_metadata: self.key_metadata.map(|v| v.to_vec()).unwrap_or_default(),
+                key_metadata: self.key_metadata.map(|v| v.to_vec()),
                 split_offsets: self.split_offsets.unwrap_or_default(),
                 equality_ids: self.equality_ids.unwrap_or_default(),
                 sort_order_id: self.sort_order_id,
@@ -1657,7 +1658,7 @@ mod tests {
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
-                        key_metadata: Vec::new(),
+                        key_metadata: Some(Vec::new()),
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
@@ -1813,7 +1814,7 @@ mod tests {
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::new(),
                     upper_bounds: HashMap::new(),
-                    key_metadata: vec![],
+                    key_metadata: Some(vec![]),
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
@@ -1880,7 +1881,7 @@ mod tests {
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
                     upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
-                    key_metadata: vec![],
+                    key_metadata: Some(vec![]),
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: Some(0),
@@ -1960,7 +1961,7 @@ mod tests {
                         (2, Datum::string("a")),
                         (3, Datum::string("x"))
                         ]),
-                        key_metadata: vec![],
+                        key_metadata: Some(vec![]),
                         split_offsets: vec![4],
                         equality_ids: vec![],
                         sort_order_id: Some(0),
@@ -2035,7 +2036,7 @@ mod tests {
                         (2, Datum::int(2)),
                         (3, Datum::string("x"))
                     ]),
-                    key_metadata: vec![],
+                    key_metadata: Some(vec![]),
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
@@ -2105,7 +2106,7 @@ mod tests {
                         (1, Datum::long(1)),
                         (2, Datum::int(2)),
                     ]),
-                    key_metadata: vec![],
+                    key_metadata: Some(vec![]),
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
