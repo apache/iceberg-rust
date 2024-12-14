@@ -256,9 +256,10 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let catalog_config = RestCatalog::load_config(&self.user_config).await?;
+                let client = HttpClient::new(&self.user_config)?;
+                let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = HttpClient::new(&config)?;
+                let client = client.update_with(&config)?;
 
                 Ok(RestContext { config, client })
             })
@@ -268,9 +269,10 @@ impl RestCatalog {
     /// Load the runtime config from the server by user_config.
     ///
     /// It's required for a rest catalog to update it's config after creation.
-    async fn load_config(user_config: &RestCatalogConfig) -> Result<CatalogConfig> {
-        let client = HttpClient::new(user_config)?;
-
+    async fn load_config(
+        client: &HttpClient,
+        user_config: &RestCatalogConfig,
+    ) -> Result<CatalogConfig> {
         let mut request = client.request(Method::GET, user_config.config_endpoint());
 
         if let Some(warehouse_location) = &user_config.warehouse {
@@ -280,6 +282,7 @@ impl RestCatalog {
         let config = client
             .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
+
         Ok(config)
     }
 

@@ -54,6 +54,7 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
+    /// Create a new http client.
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
             client: Client::new(),
@@ -63,6 +64,32 @@ impl HttpClient {
             credential: cfg.credential(),
             extra_headers: cfg.extra_headers()?,
             extra_oauth_params: cfg.extra_oauth_params(),
+        })
+    }
+
+    /// Update the http client with new configuration.
+    ///
+    /// If cfg carries new value, we will use cfg instead.
+    /// Otherwise, we will keep the old value.
+    pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
+        Ok(HttpClient {
+            client: self.client,
+
+            token: Mutex::new(
+                cfg.token()
+                    .or_else(|| self.token.into_inner().ok().flatten()),
+            ),
+            token_endpoint: (!cfg.get_token_endpoint().is_empty())
+                .then(|| cfg.get_token_endpoint())
+                .unwrap_or(self.token_endpoint),
+            credential: cfg.credential().or(self.credential),
+            extra_headers: (!cfg.extra_headers()?.is_empty())
+                .then(|| cfg.extra_headers())
+                .transpose()?
+                .unwrap_or(self.extra_headers),
+            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
+                .then(|| cfg.extra_oauth_params())
+                .unwrap_or(self.extra_oauth_params),
         })
     }
 
