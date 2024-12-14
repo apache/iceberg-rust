@@ -43,10 +43,21 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gcs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
+    scheme: String,
+    props: HashMap<String, String>,
+
     inner: Arc<Storage>,
 }
 
 impl FileIO {
+    /// Split file IO into scheme and props which used to build this FileIO.
+    ///
+    /// This function is useful when you want serialize and deserialize FileIO across
+    /// distributed systems.
+    pub fn into_props(self) -> (String, HashMap<String, String>) {
+        (self.scheme, self.props)
+    }
+
     /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
     /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
@@ -187,8 +198,12 @@ impl FileIOBuilder {
 
     /// Builds [`FileIO`].
     pub fn build(self) -> crate::Result<FileIO> {
+        let scheme = self.scheme_str.clone().unwrap_or_default();
+        let props = self.props.clone();
         let storage = Storage::build(self)?;
         Ok(FileIO {
+            scheme,
+            props,
             inner: Arc::new(storage),
         })
     }
