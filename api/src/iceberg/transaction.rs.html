@@ -1195,7 +1195,7 @@
         <span class="kw">if </span>partition_value.fields().len() != partition_type.fields().len() {
             <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::DataInvalid,
-                <span class="string">"Partition value is not compatitable with partition type"</span>,
+                <span class="string">"Partition value is not compatible with partition type"</span>,
             ));
         }
         <span class="kw">for </span>(value, field) <span class="kw">in </span>partition_value.fields().iter().zip(partition_type.fields()) {
@@ -1212,7 +1212,7 @@
             {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
-                    <span class="string">"Partition value is not compatitable partition type"</span>,
+                    <span class="string">"Partition value is not compatible partition type"</span>,
                 ));
             }
         }
@@ -1662,7 +1662,7 @@
         <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
         <span class="kw">let </span><span class="kw-2">mut </span>action = tx.fast_append(<span class="prelude-val">None</span>, <span class="macro">vec!</span>[]).unwrap();
 
-        <span class="comment">// check add data file with uncompatitable partition value
+        <span class="comment">// check add data file with incompatible partition value
         </span><span class="kw">let </span>data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path(<span class="string">"test/3.parquet"</span>.to_string())
