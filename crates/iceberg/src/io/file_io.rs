@@ -43,19 +43,18 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gcs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
-    scheme: String,
-    props: HashMap<String, String>,
+    builder: FileIOBuilder,
 
     inner: Arc<Storage>,
 }
 
 impl FileIO {
-    /// Split file IO into scheme and props which used to build this FileIO.
+    /// Convert FileIO into [`FileIOBuilder`] which used to build this FileIO.
     ///
     /// This function is useful when you want serialize and deserialize FileIO across
     /// distributed systems.
-    pub fn into_props(self) -> (String, HashMap<String, String>) {
-        (self.scheme, self.props)
+    pub fn into_builder(self) -> FileIOBuilder {
+        self.builder
     }
 
     /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
@@ -145,7 +144,7 @@ impl FileIO {
 }
 
 /// Builder for [`FileIO`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
     ///
@@ -176,7 +175,7 @@ impl FileIOBuilder {
     /// Fetch the scheme string.
     ///
     /// The scheme_str will be empty if it's None.
-    pub(crate) fn into_parts(self) -> (String, HashMap<String, String>) {
+    pub fn into_parts(self) -> (String, HashMap<String, String>) {
         (self.scheme_str.unwrap_or_default(), self.props)
     }
 
@@ -197,13 +196,10 @@ impl FileIOBuilder {
     }
 
     /// Builds [`FileIO`].
-    pub fn build(self) -> crate::Result<FileIO> {
-        let scheme = self.scheme_str.clone().unwrap_or_default();
-        let props = self.props.clone();
-        let storage = Storage::build(self)?;
+    pub fn build(self) -> Result<FileIO> {
+        let storage = Storage::build(self.clone())?;
         Ok(FileIO {
-            scheme,
-            props,
+            builder: self,
             inner: Arc::new(storage),
         })
     }
