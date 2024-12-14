@@ -185,13 +185,9 @@ impl FileMetadata {
                 - usize::from(FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH)
                 + usize::from(byte_number);
 
-            let mut flag_byte = match footer_bytes.get(byte_offset) {
-                None => Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Index range is out of bounds.",
-                )),
-                Some(byte) => Ok(*byte),
-            }?;
+            let mut flag_byte = *footer_bytes.get(byte_offset).ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "Index range is out of bounds.")
+            })?;
             let mut bit_number = 0;
             while flag_byte != 0 {
                 if flag_byte & 0x1 != 0 {
@@ -229,13 +225,9 @@ impl FileMetadata {
         let start_offset = usize::from(FileMetadata::MAGIC_LENGTH);
         let end_offset =
             usize::from(FileMetadata::MAGIC_LENGTH) + usize::try_from(footer_payload_length)?;
-        let footer_payload_bytes = match footer_bytes.get(start_offset..end_offset) {
-            None => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Index range is out of bounds.",
-            )),
-            Some(data) => Ok(data),
-        }?;
+        let footer_payload_bytes = footer_bytes
+            .get(start_offset..end_offset)
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Index range is out of bounds."))?;
         let decompressed_footer_payload_bytes =
             footer_compression_codec.decompress(footer_payload_bytes.into())?;
 
