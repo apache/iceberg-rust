@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, ErrorKind, Result};
 
+/// Data compression formats
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-/// Data compression formats
 pub enum CompressionCodec {
     #[default]
     /// No compression
