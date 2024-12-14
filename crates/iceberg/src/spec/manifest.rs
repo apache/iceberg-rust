@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
 use bytes::Bytes;
+use itertools::Itertools;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::to_vec;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -31,7 +32,8 @@ use typed_builder::TypedBuilder;
 use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 use super::{
     BoundPartitionSpec, Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile,
-    Schema, SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
+    PrimitiveLiteral, PrimitiveType, Schema, SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER,
+    UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
 use crate::io::OutputFile;
@@ -128,7 +130,69 @@ pub struct ManifestWriter {
 
     key_metadata: Vec<u8>,
 
-    field_summary: HashMap<i32, FieldSummary>,
+    partitions: Vec<Struct>,
+}
+
+struct PartitionFieldStats {
+    partition_type: PrimitiveType,
+    summary: FieldSummary,
+}
+
+impl PartitionFieldStats {
+    pub(crate) fn new(partition_type: PrimitiveType) -> Self {
+        Self {
+            partition_type,
+            summary: FieldSummary::default(),
+        }
+    }
+
+    pub(crate) fn update(&mut self, value: Option<PrimitiveLiteral>) -> Result<()> {
+        let Some(value) = value else {
+            self.summary.contains_null = true;
+            return Ok(());
+        };
+        if !self.partition_type.compatible(&value) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "value is not compatitable with type",
+            ));
+        }
+        let value = Datum::new(self.partition_type.clone(), value);
+
+        if value.is_nan() {
+            self.summary.contains_nan = Some(true);
+            return Ok(());
+        }
+
+        self.summary.lower_bound = Some(self.summary.lower_bound.take().map_or(
+            value.clone(),
+            |original| {
+                if value < original {
+                    value.clone()
+                } else {
+                    original
+                }
+            },
+        ));
+        self.summary.upper_bound = Some(self.summary.upper_bound.take().map_or(
+            value.clone(),
+            |original| {
+                if value > original {
+                    value
+                } else {
+                    original
+                }
+            },
+        ));
+
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> FieldSummary {
+        // Always set contains_nan
+        self.summary.contains_nan = self.summary.contains_nan.or(Some(false));
+        self.summary
+    }
 }
 
 impl ManifestWriter {
@@ -145,62 +209,28 @@ impl ManifestWriter {
             deleted_rows: 0,
             min_seq_num: None,
             key_metadata,
-            field_summary: HashMap::new(),
+            partitions: vec![],
         }
     }
 
-    fn update_field_summary(&mut self, entry: &ManifestEntry) {
-        // Update field summary
-        for (&k, &v) in &entry.data_file.null_value_counts {
-            let field_summary = self.field_summary.entry(k).or_default();
-            if v > 0 {
-                field_summary.contains_null = true;
+    fn construct_partition_summaries(
+        &mut self,
+        partition_spec: &BoundPartitionSpec,
+    ) -> Result<Vec<FieldSummary>> {
+        let partitions = std::mem::take(&mut self.partitions);
+        let mut field_stats: Vec<_> = partition_spec
+            .partition_type()
+            .fields()
+            .iter()
+            .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
+            .collect();
+        for partition in partitions {
+            for (literal, stat) in partition.into_iter().zip_eq(field_stats.iter_mut()) {
+                let primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
+                stat.update(primitive_literal)?;
             }
         }
-
-        for (&k, &v) in &entry.data_file.nan_value_counts {
-            let field_summary = self.field_summary.entry(k).or_default();
-            if v > 0 {
-                field_summary.contains_nan = Some(true);
-            }
-            if v == 0 {
-                field_summary.contains_nan = Some(false);
-            }
-        }
-
-        for (&k, v) in &entry.data_file.lower_bounds {
-            let field_summary = self.field_summary.entry(k).or_default();
-            if let Some(cur) = &field_summary.lower_bound {
-                if v < cur {
-                    field_summary.lower_bound = Some(v.clone());
-                }
-            } else {
-                field_summary.lower_bound = Some(v.clone());
-            }
-        }
-
-        for (&k, v) in &entry.data_file.upper_bounds {
-            let field_summary = self.field_summary.entry(k).or_default();
-            if let Some(cur) = &field_summary.upper_bound {
-                if v > cur {
-                    field_summary.upper_bound = Some(v.clone());
-                }
-            } else {
-                field_summary.upper_bound = Some(v.clone());
-            }
-        }
-    }
-
-    fn get_field_summary_vec(&mut self, spec_fields: &[PartitionField]) -> Vec<FieldSummary> {
-        let mut partition_summary = Vec::with_capacity(self.field_summary.len());
-        for field in spec_fields {
-            let entry = self
-                .field_summary
-                .remove(&field.source_id)
-                .unwrap_or_default();
-            partition_summary.push(entry);
-        }
-        partition_summary
+        Ok(field_stats.into_iter().map(|stat| stat.finish()).collect())
     }
 
     /// Write a manifest.
@@ -276,7 +306,7 @@ impl ManifestWriter {
                 }
             }
 
-            self.update_field_summary(&entry);
+            self.partitions.push(entry.data_file.partition.clone());
 
             let value = match manifest.metadata.format_version {
                 FormatVersion::V1 => to_value(_serde::ManifestEntryV1::try_from(
@@ -299,7 +329,7 @@ impl ManifestWriter {
         self.output.write(Bytes::from(content)).await?;
 
         let partition_summary =
-            self.get_field_summary_vec(manifest.metadata.partition_spec.fields());
+            self.construct_partition_summaries(&manifest.metadata.partition_spec)?;
 
         Ok(ManifestFile {
             manifest_path: self.output.location().to_string(),
@@ -2084,6 +2114,198 @@ mod tests {
         };
 
         assert_eq!(actual_manifest, expected_manifest);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_summary() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::optional(
+                        1,
+                        "time",
+                        Type::Primitive(PrimitiveType::Date),
+                    )),
+                    Arc::new(NestedField::optional(
+                        2,
+                        "v_float",
+                        Type::Primitive(PrimitiveType::Float),
+                    )),
+                    Arc::new(NestedField::optional(
+                        3,
+                        "v_double",
+                        Type::Primitive(PrimitiveType::Double),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = BoundPartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("time", "year_of_time", Transform::Year)
+            .unwrap()
+            .add_partition_field("v_float", "f", Transform::Identity)
+            .unwrap()
+            .add_partition_field("v_double", "d", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let manifest = Manifest {
+            metadata: ManifestMetadata {
+                schema_id: 0,
+                schema,
+                partition_spec,
+                content: ManifestContentType::Data,
+                format_version: FormatVersion::V2,
+            },
+            entries: vec![
+                Arc::new(ManifestEntry {
+                    status: ManifestStatus::Added,
+                    snapshot_id: None,
+                    sequence_number: None,
+                    file_sequence_number: None,
+                    data_file: DataFile {
+                        content: DataContentType::Data,
+                        file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                        file_format: DataFileFormat::Parquet,
+                        partition: Struct::from_iter(
+                            vec![
+                                Some(Literal::int(2021)),
+                                Some(Literal::float(1.0)),
+                                Some(Literal::double(2.0)),
+                            ]
+                        ),
+                        record_count: 1,
+                        file_size_in_bytes: 5442,
+                        column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                        value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                        null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                        nan_value_counts: HashMap::new(),
+                        lower_bounds: HashMap::new(),
+                        upper_bounds: HashMap::new(),
+                        key_metadata: Vec::new(),
+                        split_offsets: vec![4],
+                        equality_ids: Vec::new(),
+                        sort_order_id: None,
+                    }
+                }),
+                Arc::new(
+                    ManifestEntry {
+                        status: ManifestStatus::Added,
+                        snapshot_id: None,
+                        sequence_number: None,
+                        file_sequence_number: None,
+                        data_file: DataFile {
+                            content: DataContentType::Data,
+                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                            file_format: DataFileFormat::Parquet,
+                            partition: Struct::from_iter(
+                                vec![
+                                    Some(Literal::int(1111)),
+                                    Some(Literal::float(15.5)),
+                                    Some(Literal::double(25.5)),
+                                ]
+                            ),
+                            record_count: 1,
+                            file_size_in_bytes: 5442,
+                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                            nan_value_counts: HashMap::new(),
+                            lower_bounds: HashMap::new(),
+                            upper_bounds: HashMap::new(),
+                            key_metadata: Vec::new(),
+                            split_offsets: vec![4],
+                            equality_ids: Vec::new(),
+                            sort_order_id: None,
+                        }
+                    }
+                ),
+                Arc::new(
+                    ManifestEntry {
+                        status: ManifestStatus::Added,
+                        snapshot_id: None,
+                        sequence_number: None,
+                        file_sequence_number: None,
+                        data_file: DataFile {
+                            content: DataContentType::Data,
+                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                            file_format: DataFileFormat::Parquet,
+                            partition: Struct::from_iter(
+                                vec![
+                                    Some(Literal::int(1211)),
+                                    Some(Literal::float(f32::NAN)),
+                                    Some(Literal::double(1.0)),
+                                ]
+                            ),
+                            record_count: 1,
+                            file_size_in_bytes: 5442,
+                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                            nan_value_counts: HashMap::new(),
+                            lower_bounds: HashMap::new(),
+                            upper_bounds: HashMap::new(),
+                            key_metadata: Vec::new(),
+                            split_offsets: vec![4],
+                            equality_ids: Vec::new(),
+                            sort_order_id: None,
+                        }
+                    }
+                ),
+                Arc::new(
+                    ManifestEntry {
+                        status: ManifestStatus::Added,
+                        snapshot_id: None,
+                        sequence_number: None,
+                        file_sequence_number: None,
+                        data_file: DataFile {
+                            content: DataContentType::Data,
+                            file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
+                            file_format: DataFileFormat::Parquet,
+                            partition: Struct::from_iter(
+                                vec![
+                                    Some(Literal::int(1111)),
+                                    None,
+                                    Some(Literal::double(11.0)),
+                                ]
+                            ),
+                            record_count: 1,
+                            file_size_in_bytes: 5442,
+                            column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
+                            value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
+                            null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
+                            nan_value_counts: HashMap::new(),
+                            lower_bounds: HashMap::new(),
+                            upper_bounds: HashMap::new(),
+                            key_metadata: Vec::new(),
+                            split_offsets: vec![4],
+                            equality_ids: Vec::new(),
+                            sort_order_id: None,
+                        }
+                    }
+                ),
+            ]
+        };
+
+        let writer = |output_file: OutputFile| ManifestWriter::new(output_file, 1, vec![]);
+
+        let res = test_manifest_read_write(manifest, writer).await;
+        assert!(res.partitions.len() == 3);
+        assert!(res.partitions[0].lower_bound == Some(Datum::int(1111)));
+        assert!(res.partitions[0].upper_bound == Some(Datum::int(2021)));
+        assert!(!res.partitions[0].contains_null);
+        assert!(res.partitions[0].contains_nan == Some(false));
+
+        assert!(res.partitions[1].lower_bound == Some(Datum::float(1.0)));
+        assert!(res.partitions[1].upper_bound == Some(Datum::float(15.5)));
+        assert!(res.partitions[1].contains_null);
+        assert!(res.partitions[1].contains_nan == Some(true));
+
+        assert!(res.partitions[2].lower_bound == Some(Datum::double(1.0)));
+        assert!(res.partitions[2].upper_bound == Some(Datum::double(25.5)));
+        assert!(!res.partitions[2].contains_null);
+        assert!(res.partitions[2].contains_nan == Some(false));
     }
 
     async fn test_manifest_read_write(
