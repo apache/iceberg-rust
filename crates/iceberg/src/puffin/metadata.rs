@@ -29,10 +29,10 @@ use crate::{Error, ErrorKind, Result};
 /// Example: "Trino version 381"
 pub(crate) const CREATED_BY_PROPERTY: &str = "created-by";
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "kebab-case")]
 /// Metadata about a blob.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) struct BlobMetadata {
     /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
     pub(crate) r#type: String,
@@ -98,15 +98,15 @@ impl Flag {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 /// Metadata about a puffin file.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub(crate) struct FileMetadata {
     /// Metadata about blobs in file
     pub(crate) blobs: Vec<BlobMetadata>,
+    /// Arbitrary meta-information, like writer identification/version.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
-    /// Arbitrary meta-information, like writer identification/version.
     pub(crate) properties: HashMap<String, String>,
 }
 
@@ -260,8 +260,8 @@ impl FileMetadata {
         }
     }
 
-    #[rustfmt::skip]
     /// Returns the file metadata about a Puffin file
+    #[rustfmt::skip]
     pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
         let file_read = input_file.reader().await?;
 
@@ -273,8 +273,10 @@ impl FileMetadata {
         let footer_bytes = FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length).await?;
 
         let magic_length = usize::from(FileMetadata::MAGIC_LENGTH);
-        FileMetadata::check_magic(&footer_bytes[..magic_length])?;                      // first four bytes of footer
-        FileMetadata::check_magic(&footer_bytes[footer_bytes.len() - magic_length..])?; // last four bytes of footer
+        // check first four bytes of footer
+        FileMetadata::check_magic(&footer_bytes[..magic_length])?;
+        // check last four bytes of footer
+        FileMetadata::check_magic(&footer_bytes[footer_bytes.len() - magic_length..])?;
 
         let footer_payload_str = FileMetadata::extract_footer_payload_as_str(&footer_bytes, footer_payload_length)?;
         FileMetadata::from_json_str(&footer_payload_str)
