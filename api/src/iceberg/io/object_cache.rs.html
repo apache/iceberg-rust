@@ -399,6 +399,14 @@
 <a href="#399" id="399">399</a>
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -542,7 +550,15 @@
             .entry_by_ref(<span class="kw-2">&amp;</span>key)
             .or_try_insert_with(<span class="self">self</span>.fetch_and_parse_manifest_list(snapshot, table_metadata))
             .<span class="kw">await
-            </span>.map_err(|err| Error::new(ErrorKind::Unexpected, err.as_ref().message()))<span class="question-mark">?
+            </span>.map_err(|err| {
+                Arc::try_unwrap(err).unwrap_or_else(|err| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        <span class="string">"Failed to load manifest list in cache"</span>,
+                    )
+                    .with_source(err)
+                })
+            })<span class="question-mark">?
             </span>.into_value();
 
         <span class="kw">match </span>cache_entry {
