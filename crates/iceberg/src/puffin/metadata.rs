@@ -244,7 +244,6 @@ impl FileMetadata {
     }
 
     /// Returns the file metadata about a Puffin file
-    #[rustfmt::skip]
     pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
         let file_read = input_file.reader().await?;
 
@@ -252,8 +251,11 @@ impl FileMetadata {
         FileMetadata::check_magic(&first_four_bytes)?;
 
         let input_file_length = input_file.metadata().await?.size;
-        let footer_payload_length = FileMetadata::read_footer_payload_length(&file_read, input_file_length).await?;
-        let footer_bytes = FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length).await?;
+        let footer_payload_length =
+            FileMetadata::read_footer_payload_length(&file_read, input_file_length).await?;
+        let footer_bytes =
+            FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length)
+                .await?;
 
         let magic_length = usize::from(FileMetadata::MAGIC_LENGTH);
         // check first four bytes of footer
@@ -261,7 +263,8 @@ impl FileMetadata {
         // check last four bytes of footer
         FileMetadata::check_magic(&footer_bytes[footer_bytes.len() - magic_length..])?;
 
-        let footer_payload_str = FileMetadata::extract_footer_payload_as_str(&footer_bytes, footer_payload_length)?;
+        let footer_payload_str =
+            FileMetadata::extract_footer_payload_as_str(&footer_bytes, footer_payload_length)?;
         FileMetadata::from_json_str(&footer_payload_str)
     }
 }
