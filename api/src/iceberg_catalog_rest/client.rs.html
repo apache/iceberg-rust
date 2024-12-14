@@ -315,6 +315,33 @@
 <a href="#315" id="315">315</a>
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -371,7 +398,8 @@
 }
 
 <span class="kw">impl </span>HttpClient {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>RestCatalogConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="doccomment">/// Create a new http client.
+    </span><span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>RestCatalogConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(HttpClient {
             client: Client::new(),
 
@@ -380,6 +408,32 @@
             credential: cfg.credential(),
             extra_headers: cfg.extra_headers()<span class="question-mark">?</span>,
             extra_oauth_params: cfg.extra_oauth_params(),
+        })
+    }
+
+    <span class="doccomment">/// Update the http client with new configuration.
+    ///
+    /// If cfg carries new value, we will use cfg instead.
+    /// Otherwise, we will keep the old value.
+    </span><span class="kw">pub fn </span>update_with(<span class="self">self</span>, cfg: <span class="kw-2">&amp;</span>RestCatalogConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="prelude-val">Ok</span>(HttpClient {
+            client: <span class="self">self</span>.client,
+
+            token: Mutex::new(
+                cfg.token()
+                    .or_else(|| <span class="self">self</span>.token.into_inner().ok().flatten()),
+            ),
+            token_endpoint: (!cfg.get_token_endpoint().is_empty())
+                .then(|| cfg.get_token_endpoint())
+                .unwrap_or(<span class="self">self</span>.token_endpoint),
+            credential: cfg.credential().or(<span class="self">self</span>.credential),
+            extra_headers: (!cfg.extra_headers()<span class="question-mark">?</span>.is_empty())
+                .then(|| cfg.extra_headers())
+                .transpose()<span class="question-mark">?
+                </span>.unwrap_or(<span class="self">self</span>.extra_headers),
+            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
+                .then(|| cfg.extra_oauth_params())
+                .unwrap_or(<span class="self">self</span>.extra_oauth_params),
         })
     }
 

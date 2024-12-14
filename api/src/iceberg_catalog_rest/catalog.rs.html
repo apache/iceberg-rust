@@ -1828,6 +1828,9 @@
 <a href="#1828" id="1828">1828</a>
 <a href="#1829" id="1829">1829</a>
 <a href="#1830" id="1830">1830</a>
+<a href="#1831" id="1831">1831</a>
+<a href="#1832" id="1832">1832</a>
+<a href="#1833" id="1833">1833</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2086,9 +2089,10 @@
     </span><span class="kw">async fn </span>context(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span>RestContext&gt; {
         <span class="self">self</span>.ctx
             .get_or_try_init(|| <span class="kw">async </span>{
-                <span class="kw">let </span>catalog_config = RestCatalog::load_config(<span class="kw-2">&amp;</span><span class="self">self</span>.user_config).<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="kw">let </span>client = HttpClient::new(<span class="kw-2">&amp;</span><span class="self">self</span>.user_config)<span class="question-mark">?</span>;
+                <span class="kw">let </span>catalog_config = RestCatalog::load_config(<span class="kw-2">&amp;</span>client, <span class="kw-2">&amp;</span><span class="self">self</span>.user_config).<span class="kw">await</span><span class="question-mark">?</span>;
                 <span class="kw">let </span>config = <span class="self">self</span>.user_config.clone().merge_with_config(catalog_config);
-                <span class="kw">let </span>client = HttpClient::new(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
+                <span class="kw">let </span>client = client.update_with(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
 
                 <span class="prelude-val">Ok</span>(RestContext { config, client })
             })
@@ -2098,9 +2102,10 @@
     <span class="doccomment">/// Load the runtime config from the server by user_config.
     ///
     /// It's required for a rest catalog to update it's config after creation.
-    </span><span class="kw">async fn </span>load_config(user_config: <span class="kw-2">&amp;</span>RestCatalogConfig) -&gt; <span class="prelude-ty">Result</span>&lt;CatalogConfig&gt; {
-        <span class="kw">let </span>client = HttpClient::new(user_config)<span class="question-mark">?</span>;
-
+    </span><span class="kw">async fn </span>load_config(
+        client: <span class="kw-2">&amp;</span>HttpClient,
+        user_config: <span class="kw-2">&amp;</span>RestCatalogConfig,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;CatalogConfig&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>request = client.request(Method::GET, user_config.config_endpoint());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(warehouse_location) = <span class="kw-2">&amp;</span>user_config.warehouse {
@@ -2110,6 +2115,7 @@
         <span class="kw">let </span>config = client
             .query::&lt;CatalogConfig, ErrorResponse, OK&gt;(request.build()<span class="question-mark">?</span>)
             .<span class="kw">await</span><span class="question-mark">?</span>;
+
         <span class="prelude-val">Ok</span>(config)
     }
 
@@ -2607,7 +2613,7 @@
                 "expires_in": 86400
                 }"#</span>,
             )
-            .expect(<span class="number">2</span>)
+            .expect(<span class="number">1</span>)
             .create_async()
             .<span class="kw">await
     </span>}
@@ -2661,7 +2667,7 @@
                 "expires_in": 86400
                 }"#</span>,
             )
-            .expect(<span class="number">2</span>)
+            .expect(<span class="number">1</span>)
             .create_async()
             .<span class="kw">await</span>;
 
