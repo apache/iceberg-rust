@@ -137,7 +137,9 @@ impl FileMetadata {
         FileMetadata::FOOTER_STRUCT_MAGIC_OFFSET + FileMetadata::MAGIC_LENGTH;
 
     fn check_magic(bytes: &[u8]) -> Result<()> {
-        if bytes != FileMetadata::MAGIC {
+        if bytes == FileMetadata::MAGIC {
+            Ok(())
+        } else {
             Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -146,8 +148,6 @@ impl FileMetadata {
                     FileMetadata::MAGIC
                 ),
             ))
-        } else {
-            Ok(())
         }
     }
 
