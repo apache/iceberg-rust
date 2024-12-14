@@ -501,13 +501,15 @@ impl TableUpdate {
                 builder.upgrade_format_version(format_version)
             }
             TableUpdate::SetStatistics { statistics } => Ok(builder.set_statistics(statistics)),
+            TableUpdate::RemoveStatistics { snapshot_id } => {
+                Ok(builder.remove_statistics(snapshot_id))
+            }
             TableUpdate::SetPartitionStatistics {
                 partition_statistics,
             } => Ok(builder.set_partition_statistics(partition_statistics)),
             TableUpdate::RemovePartitionStatistics { snapshot_id } => {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
-            _ => todo!(),
         }
     }
 }
