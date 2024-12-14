@@ -398,6 +398,7 @@
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
 <a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -678,6 +679,7 @@
                             .file_size_in_bytes(<span class="number">100</span>)
                             .record_count(<span class="number">1</span>)
                             .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">100</span>))]))
+                            .key_metadata(<span class="prelude-val">None</span>)
                             .build()
                             .unwrap(),
                     )

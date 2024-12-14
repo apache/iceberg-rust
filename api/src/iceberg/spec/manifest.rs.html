@@ -2335,6 +2335,7 @@
 <a href="#2335" id="2335">2335</a>
 <a href="#2336" id="2336">2336</a>
 <a href="#2337" id="2337">2337</a>
+<a href="#2338" id="2338">2338</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3411,7 +3412,7 @@
     ///
     /// Implementation-specific key metadata for encryption
     </span><span class="attr">#[builder(default)]
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) key_metadata: Vec&lt;u8&gt;,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) key_metadata: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
     <span class="doccomment">/// field id: 132
     /// element field id: 133
     ///
@@ -3501,8 +3502,8 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.upper_bounds
     }
     <span class="doccomment">/// Get the Implementation-specific key metadata for the data file.
-    </span><span class="kw">pub fn </span>key_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.key_metadata
+    </span><span class="kw">pub fn </span>key_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u8]&gt; {
+        <span class="self">self</span>.key_metadata.as_deref()
     }
     <span class="doccomment">/// Get the split offsets of the data file.
     /// For example, all row group offsets in a Parquet file.
@@ -3715,12 +3716,13 @@
                 nan_value_counts: <span class="prelude-val">Some</span>(to_i64_entry(value.nan_value_counts)<span class="question-mark">?</span>),
                 lower_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.lower_bounds)<span class="question-mark">?</span>),
                 upper_bounds: <span class="prelude-val">Some</span>(to_bytes_entry(value.upper_bounds)<span class="question-mark">?</span>),
-                key_metadata: <span class="prelude-val">Some</span>(serde_bytes::ByteBuf::from(value.key_metadata)),
+                key_metadata: value.key_metadata.map(serde_bytes::ByteBuf::from),
                 split_offsets: <span class="prelude-val">Some</span>(value.split_offsets),
                 equality_ids: <span class="prelude-val">Some</span>(value.equality_ids),
                 sort_order_id: value.sort_order_id,
             })
         }
+
         <span class="kw">pub fn </span>try_into(
             <span class="self">self</span>,
             partition_type: <span class="kw-2">&amp;</span>StructType,
@@ -3778,7 +3780,7 @@
                     .map(|v| parse_bytes_entry(v, schema))
                     .transpose()<span class="question-mark">?
                     </span>.unwrap_or_default(),
-                key_metadata: <span class="self">self</span>.key_metadata.map(|v| v.to_vec()).unwrap_or_default(),
+                key_metadata: <span class="self">self</span>.key_metadata.map(|v| v.to_vec()),
                 split_offsets: <span class="self">self</span>.split_offsets.unwrap_or_default(),
                 equality_ids: <span class="self">self</span>.equality_ids.unwrap_or_default(),
                 sort_order_id: <span class="self">self</span>.sort_order_id,
@@ -3994,7 +3996,7 @@
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
-                        key_metadata: Vec::new(),
+                        key_metadata: <span class="prelude-val">None</span>,
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
@@ -4150,7 +4152,7 @@
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::new(),
                     upper_bounds: HashMap::new(),
-                    key_metadata: <span class="macro">vec!</span>[],
+                    key_metadata: <span class="prelude-val">None</span>,
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
@@ -4217,7 +4219,7 @@
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::from([(<span class="number">1</span>,Datum::int(<span class="number">1</span>)),(<span class="number">2</span>,Datum::string(<span class="string">"a"</span>)),(<span class="number">3</span>,Datum::string(<span class="string">"AC/DC"</span>))]),
                     upper_bounds: HashMap::from([(<span class="number">1</span>,Datum::int(<span class="number">1</span>)),(<span class="number">2</span>,Datum::string(<span class="string">"a"</span>)),(<span class="number">3</span>,Datum::string(<span class="string">"AC/DC"</span>))]),
-                    key_metadata: <span class="macro">vec!</span>[],
+                    key_metadata: <span class="prelude-val">None</span>,
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
@@ -4297,7 +4299,7 @@
                         (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
                         (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>))
                         ]),
-                        key_metadata: <span class="macro">vec!</span>[],
+                        key_metadata: <span class="prelude-val">None</span>,
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: <span class="macro">vec!</span>[],
                         sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
@@ -4372,7 +4374,7 @@
                         (<span class="number">2</span>, Datum::int(<span class="number">2</span>)),
                         (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>))
                     ]),
-                    key_metadata: <span class="macro">vec!</span>[],
+                    key_metadata: <span class="prelude-val">None</span>,
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
@@ -4442,7 +4444,7 @@
                         (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
                         (<span class="number">2</span>, Datum::int(<span class="number">2</span>)),
                     ]),
-                    key_metadata: <span class="macro">vec!</span>[],
+                    key_metadata: <span class="prelude-val">None</span>,
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
@@ -4520,7 +4522,7 @@
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
-                        key_metadata: Vec::new(),
+                        key_metadata: <span class="prelude-val">None</span>,
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
@@ -4551,7 +4553,7 @@
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: <span class="prelude-val">None</span>,
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,
@@ -4583,7 +4585,7 @@
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: <span class="prelude-val">None</span>,
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,
@@ -4615,7 +4617,7 @@
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: <span class="prelude-val">None</span>,
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,

@@ -1872,6 +1872,7 @@
 <a href="#1872" id="1872">1872</a>
 <a href="#1873" id="1873">1873</a>
 <a href="#1874" id="1874">1874</a>
+<a href="#1875" id="1875">1875</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2947,6 +2948,7 @@
                                 .file_size_in_bytes(<span class="number">100</span>)
                                 .record_count(<span class="number">1</span>)
                                 .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">100</span>))]))
+                                .key_metadata(<span class="prelude-val">None</span>)
                                 .build()
                                 .unwrap(),
                         )
