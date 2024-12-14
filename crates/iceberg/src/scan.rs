@@ -1073,6 +1073,7 @@ mod tests {
                                 .file_size_in_bytes(100)
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .key_metadata(None)
                                 .build()
                                 .unwrap(),
                         )
