@@ -1165,7 +1165,7 @@ impl DataFile {
     }
     /// Get the Implementation-specific key metadata for the data file.
     pub fn key_metadata(&self) -> Option<&[u8]> {
-        self.key_metadata.as_ref().map(|x| x as &[u8])
+        self.key_metadata.as_deref()
     }
     /// Get the split offsets of the data file.
     /// For example, all row group offsets in a Parquet file.
