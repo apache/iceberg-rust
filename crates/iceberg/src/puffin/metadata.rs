@@ -177,13 +177,6 @@ impl FileMetadata {
         file_read.read(start..end).await
     }
 
-    fn err_out_of_bounds<T>() -> Result<T> {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Index range is out of bounds.",
-        ))
-    }
-
     fn decode_flags(footer_bytes: &[u8]) -> Result<HashSet<Flag>> {
         let mut flags = HashSet::new();
         for byte_number in 0..FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH {
@@ -193,7 +186,10 @@ impl FileMetadata {
                 + usize::from(byte_number);
 
             let mut flag_byte = match footer_bytes.get(byte_offset) {
-                None => FileMetadata::err_out_of_bounds(),
+                None => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Index range is out of bounds.",
+                )),
                 Some(byte) => Ok(*byte),
             }?;
             let mut bit_number = 0;
@@ -234,7 +230,10 @@ impl FileMetadata {
         let end_offset =
             usize::from(FileMetadata::MAGIC_LENGTH) + usize::try_from(footer_payload_length)?;
         let footer_payload_bytes = match footer_bytes.get(start_offset..end_offset) {
-            None => FileMetadata::err_out_of_bounds(),
+            None => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Index range is out of bounds.",
+            )),
             Some(data) => Ok(data),
         }?;
         let decompressed_footer_payload_bytes =
