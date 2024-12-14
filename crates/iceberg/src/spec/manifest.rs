@@ -1164,8 +1164,8 @@ impl DataFile {
         &self.upper_bounds
     }
     /// Get the Implementation-specific key metadata for the data file.
-    pub fn key_metadata(&self) -> &Option<Vec<u8>> {
-        &self.key_metadata
+    pub fn key_metadata(&self) -> Option<&[u8]> {
+        self.key_metadata.as_ref().map(|x| x as &[u8])
     }
     /// Get the split offsets of the data file.
     /// For example, all row group offsets in a Parquet file.
@@ -1658,7 +1658,7 @@ mod tests {
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
-                        key_metadata: Some(Vec::new()),
+                        key_metadata: None,
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
@@ -1814,7 +1814,7 @@ mod tests {
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::new(),
                     upper_bounds: HashMap::new(),
-                    key_metadata: Some(vec![]),
+                    key_metadata: None,
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
@@ -1881,7 +1881,7 @@ mod tests {
                     nan_value_counts: HashMap::new(),
                     lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
                     upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
-                    key_metadata: Some(vec![]),
+                    key_metadata: None,
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: Some(0),
@@ -1961,7 +1961,7 @@ mod tests {
                         (2, Datum::string("a")),
                         (3, Datum::string("x"))
                         ]),
-                        key_metadata: Some(vec![]),
+                        key_metadata: None,
                         split_offsets: vec![4],
                         equality_ids: vec![],
                         sort_order_id: Some(0),
@@ -2036,7 +2036,7 @@ mod tests {
                         (2, Datum::int(2)),
                         (3, Datum::string("x"))
                     ]),
-                    key_metadata: Some(vec![]),
+                    key_metadata: None,
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
@@ -2106,7 +2106,7 @@ mod tests {
                         (1, Datum::long(1)),
                         (2, Datum::int(2)),
                     ]),
-                    key_metadata: Some(vec![]),
+                    key_metadata: None,
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
@@ -2184,7 +2184,7 @@ mod tests {
                         nan_value_counts: HashMap::new(),
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
-                        key_metadata: Vec::new(),
+                        key_metadata: None,
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
@@ -2215,7 +2215,7 @@ mod tests {
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: None,
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
@@ -2247,7 +2247,7 @@ mod tests {
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: None,
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
@@ -2279,7 +2279,7 @@ mod tests {
                             nan_value_counts: HashMap::new(),
                             lower_bounds: HashMap::new(),
                             upper_bounds: HashMap::new(),
-                            key_metadata: Vec::new(),
+                            key_metadata: None,
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
