@@ -857,12 +857,16 @@ pub(super) mod _serde {
                 contains_nan: self.contains_nan,
                 lower_bound: self
                     .lower_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
                 upper_bound: self
                     .upper_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
             })
         }
     }
@@ -973,21 +977,22 @@ pub(super) mod _serde {
 
     fn convert_to_serde_field_summary(
         partitions: Vec<super::FieldSummary>,
-    ) -> Option<Vec<FieldSummary>> {
+    ) -> Result<Option<Vec<FieldSummary>>> {
         if partitions.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(
-                partitions
-                    .into_iter()
-                    .map(|v| FieldSummary {
-                        contains_null: v.contains_null,
-                        contains_nan: v.contains_nan,
-                        lower_bound: v.lower_bound.map(|v| v.to_bytes()),
-                        upper_bound: v.upper_bound.map(|v| v.to_bytes()),
-                    })
-                    .collect(),
-            )
+            let mut vs = Vec::with_capacity(partitions.len());
+
+            for v in partitions {
+                let fs = FieldSummary {
+                    contains_null: v.contains_null,
+                    contains_nan: v.contains_nan,
+                    lower_bound: v.lower_bound.map(|v| v.to_bytes()).transpose()?,
+                    upper_bound: v.upper_bound.map(|v| v.to_bytes()).transpose()?,
+                };
+                vs.push(fs);
+            }
+            Ok(Some(vs))
         }
     }
 
@@ -1003,7 +1008,7 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions);
+            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,
@@ -1077,7 +1082,7 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions);
+            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,

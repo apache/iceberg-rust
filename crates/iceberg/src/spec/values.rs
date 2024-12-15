@@ -29,7 +29,9 @@ use std::str::FromStr;
 pub use _serde::RawLiteral;
 use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::de::{
     MapAccess, {self},
@@ -422,10 +424,15 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Decimal {
-                precision: _,
-                scale: _,
-            } => todo!(),
+            PrimitiveType::Decimal { .. } => {
+                let unscaled_value = BigInt::from_signed_bytes_be(bytes);
+                PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Can't convert bytes to i128: {:?}", bytes),
+                    )
+                })?)
+            }
         };
         Ok(Datum::new(data_type, literal))
     }
@@ -433,8 +440,8 @@ impl Datum {
     /// Convert the value to bytes
     ///
     /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
-    pub fn to_bytes(&self) -> ByteBuf {
-        match &self.literal {
+    pub fn to_bytes(&self) -> Result<ByteBuf> {
+        let buf = match &self.literal {
             PrimitiveLiteral::Boolean(val) => {
                 if *val {
                     ByteBuf::from([1u8])
@@ -449,8 +456,42 @@ impl Datum {
             PrimitiveLiteral::String(val) => ByteBuf::from(val.as_bytes()),
             PrimitiveLiteral::UInt128(val) => ByteBuf::from(val.to_be_bytes()),
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
-            PrimitiveLiteral::Int128(_) => todo!(),
-        }
+            PrimitiveLiteral::Int128(val) => {
+                let PrimitiveType::Decimal { precision, .. } = self.r#type else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
+                            &self.r#type
+                        ),
+                    ));
+                };
+
+                // It's required by iceberg spec that we must keep the minimum
+                // number of bytes for the value
+                let Ok(required_bytes) = Type::decimal_required_bytes(precision) else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "PrimitiveType Decimal must has valid precision but got {}",
+                            precision
+                        ),
+                    ));
+                };
+
+                // The primitive literal is unscaled value.
+                let unscaled_value = BigInt::from(*val);
+                // Convert into two's-complement byte representation of the BigInt
+                // in big-endian byte order.
+                let mut bytes = unscaled_value.to_signed_bytes_be();
+                // Truncate with required bytes to make sure.
+                bytes.truncate(required_bytes as usize);
+
+                ByteBuf::from(bytes)
+            }
+        };
+
+        Ok(buf)
     }
 
     /// Creates a boolean value.
@@ -1012,6 +1053,46 @@ impl Datum {
         }
     }
 
+    /// Try to create a decimal literal from [`Decimal`] with precision.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use iceberg::spec::Datum;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let t = Datum::decimal_with_precision(Decimal::new(123, 2), 30).unwrap();
+    ///
+    /// assert_eq!(&format!("{t}"), "1.23");
+    /// ```
+    pub fn decimal_with_precision(value: impl Into<Decimal>, precision: u32) -> Result<Self> {
+        let decimal = value.into();
+        let scale = decimal.scale();
+
+        let available_bytes = Type::decimal_required_bytes(precision)? as usize;
+        let unscaled_value = BigInt::from(decimal.mantissa());
+        let actual_bytes = unscaled_value.to_signed_bytes_be();
+        if actual_bytes.len() > available_bytes {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Decimal value {} is too large for precision {}",
+                    decimal, precision
+                ),
+            ));
+        }
+
+        let r#type = Type::decimal(precision, scale)?;
+        if let Type::Primitive(p) = r#type {
+            Ok(Self {
+                r#type: p,
+                literal: PrimitiveLiteral::Int128(decimal.mantissa()),
+            })
+        } else {
+            unreachable!("Decimal type must be primitive.")
+        }
+    }
+
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
         match target_type {
@@ -1019,6 +1100,7 @@ impl Datum {
                 match (&self.literal, &self.r#type, target_primitive_type) {
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
+                    (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
                     // TODO: implement more type conversions
                     (_, self_type, target_type) if self_type == target_type => Ok(self),
                     _ => Err(Error::new(
@@ -2728,7 +2810,7 @@ mod tests {
         assert_eq!(datum, expected_datum);
 
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        writer.append_ser(datum.to_bytes()).unwrap();
+        writer.append_ser(datum.to_bytes().unwrap()).unwrap();
         let encoded = writer.into_inner().unwrap();
         let reader = apache_avro::Reader::with_schema(&schema, &*encoded).unwrap();
 
@@ -3042,6 +3124,53 @@ mod tests {
         let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
 
         check_avro_bytes_serde(bytes, Datum::string("iceberg"), &PrimitiveType::String);
+    }
+
+    #[test]
+    fn avro_bytes_decimal() {
+        // (input_bytes, decimal_num, expect_scale, expect_precision)
+        let cases = vec![
+            (vec![4u8, 210u8], 1234, 2, 38),
+            (vec![251u8, 46u8], -1234, 2, 38),
+            (vec![4u8, 210u8], 1234, 3, 38),
+            (vec![251u8, 46u8], -1234, 3, 38),
+            (vec![42u8], 42, 2, 1),
+            (vec![214u8], -42, 2, 1),
+        ];
+
+        for (input_bytes, decimal_num, expect_scale, expect_precision) in cases {
+            check_avro_bytes_serde(
+                input_bytes,
+                Datum::decimal_with_precision(
+                    Decimal::new(decimal_num, expect_scale),
+                    expect_precision,
+                )
+                .unwrap(),
+                &PrimitiveType::Decimal {
+                    precision: expect_precision,
+                    scale: expect_scale,
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn avro_bytes_decimal_expect_error() {
+        // (decimal_num, expect_scale, expect_precision)
+        let cases = vec![(1234, 2, 1)];
+
+        for (decimal_num, expect_scale, expect_precision) in cases {
+            let result = Datum::decimal_with_precision(
+                Decimal::new(decimal_num, expect_scale),
+                expect_precision,
+            );
+            assert!(result.is_err(), "expect error but got {:?}", result);
+            assert_eq!(
+                result.unwrap_err().kind(),
+                ErrorKind::DataInvalid,
+                "expect error DataInvalid",
+            );
+        }
     }
 
     #[test]

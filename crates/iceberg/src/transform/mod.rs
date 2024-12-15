@@ -157,6 +157,7 @@ mod test {
     }
 
     impl TestTransformFixture {
+        #[track_caller]
         pub(crate) fn assert_transform(&self, trans: Transform) {
             assert_eq!(self.display, format!("{trans}"));
             assert_eq!(self.json, serde_json::to_string(&trans).unwrap());
@@ -175,8 +176,13 @@ mod test {
                 );
             }
 
-            for (input_type, result_type) in &self.trans_types {
-                assert_eq!(result_type, &trans.result_type(input_type).ok());
+            for (i, (input_type, result_type)) in self.trans_types.iter().enumerate() {
+                let actual = trans.result_type(input_type).ok();
+                assert_eq!(
+                    result_type, &actual,
+                    "type mismatch at index {}, input: {}, expected: {:?}, actual: {:?}",
+                    i, input_type, result_type, actual
+                );
             }
         }
     }

@@ -495,8 +495,9 @@ mod test {
         UnaryExpression,
     };
     use crate::spec::{
-        BoundPartitionSpec, DataContentType, DataFile, DataFileFormat, Datum, NestedField,
-        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        UnboundPartitionField,
     };
 
     const INT_MIN_VALUE: i32 = 30;
@@ -504,10 +505,10 @@ mod test {
 
     #[test]
     fn test_data_file_no_partitions() {
-        let partition_spec_ref = create_test_partition_spec();
+        let (_partition_spec_ref, schema_ref) = create_test_partition_spec();
 
         let partition_filter = Predicate::AlwaysTrue
-            .bind(partition_spec_ref.schema_ref().clone(), false)
+            .bind(schema_ref.clone(), false)
             .unwrap();
 
         let case_sensitive = false;
@@ -1645,7 +1646,7 @@ mod test {
         assert!(result, "Should read: NotIn on no nulls column");
     }
 
-    fn create_test_partition_spec() -> Arc<BoundPartitionSpec> {
+    fn create_test_partition_spec() -> (PartitionSpecRef, SchemaRef) {
         let table_schema = Schema::builder()
             .with_fields(vec![Arc::new(NestedField::optional(
                 1,
@@ -1656,7 +1657,7 @@ mod test {
             .unwrap();
         let table_schema_ref = Arc::new(table_schema);
 
-        let partition_spec = BoundPartitionSpec::builder(table_schema_ref.clone())
+        let partition_spec = PartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField::builder()
                 .source_id(1)
@@ -1667,7 +1668,7 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        Arc::new(partition_spec)
+        (Arc::new(partition_spec), table_schema_ref)
     }
 
     fn not_null(reference: &str) -> BoundPredicate {
@@ -1991,7 +1992,7 @@ mod test {
             nan_value_counts: Default::default(),
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2012,7 +2013,7 @@ mod test {
             nan_value_counts: Default::default(),
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2069,7 +2070,7 @@ mod test {
             ]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2095,7 +2096,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("dC"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2122,7 +2123,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("3str3"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2149,7 +2150,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("イロハニホヘト"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
