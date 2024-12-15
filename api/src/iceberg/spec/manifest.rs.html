@@ -2336,6 +2336,7 @@
 <a href="#2336" id="2336">2336</a>
 <a href="#2337" id="2337">2337</a>
 <a href="#2338" id="2338">2338</a>
+<a href="#2339" id="2339">2339</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2369,9 +2370,9 @@
 
 <span class="kw">use </span><span class="self">self</span>::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 <span class="kw">use super</span>::{
-    BoundPartitionSpec, Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile,
-    PrimitiveLiteral, PrimitiveType, Schema, SchemaId, SchemaRef, Struct, INITIAL_SEQUENCE_NUMBER,
-    UNASSIGNED_SEQUENCE_NUMBER,
+    Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec,
+    PrimitiveLiteral, PrimitiveType, Schema, SchemaId, SchemaRef, Struct, StructType,
+    INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
 };
 <span class="kw">use </span><span class="kw">crate</span>::error::Result;
 <span class="kw">use </span><span class="kw">crate</span>::io::OutputFile;
@@ -2395,7 +2396,7 @@
         <span class="kw">let </span>metadata = ManifestMetadata::parse(meta)<span class="question-mark">?</span>;
 
         <span class="comment">// Parse manifest entries
-        </span><span class="kw">let </span>partition_type = metadata.partition_spec.partition_type();
+        </span><span class="kw">let </span>partition_type = metadata.partition_spec.partition_type(<span class="kw-2">&amp;</span>metadata.schema)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>entries = <span class="kw">match </span>metadata.format_version {
             FormatVersion::V1 =&gt; {
@@ -2405,7 +2406,7 @@
                     .into_iter()
                     .map(|value| {
                         from_value::&lt;_serde::ManifestEntryV1&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -2416,7 +2417,7 @@
                     .into_iter()
                     .map(|value| {
                         from_value::&lt;_serde::ManifestEntryV2&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -2553,11 +2554,10 @@
 
     <span class="kw">fn </span>construct_partition_summaries(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        partition_spec: <span class="kw-2">&amp;</span>BoundPartitionSpec,
+        partition_type: <span class="kw-2">&amp;</span>StructType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;FieldSummary&gt;&gt; {
         <span class="kw">let </span>partitions = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.partitions);
-        <span class="kw">let </span><span class="kw-2">mut </span>field_stats: Vec&lt;<span class="kw">_</span>&gt; = partition_spec
-            .partition_type()
+        <span class="kw">let </span><span class="kw-2">mut </span>field_stats: Vec&lt;<span class="kw">_</span>&gt; = partition_type
             .fields()
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
@@ -2574,7 +2574,10 @@
     <span class="doccomment">/// Write a manifest.
     </span><span class="kw">pub async fn </span>write(<span class="kw-2">mut </span><span class="self">self</span>, manifest: Manifest) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestFile&gt; {
         <span class="comment">// Create the avro writer
-        </span><span class="kw">let </span>partition_type = manifest.metadata.partition_spec.partition_type();
+        </span><span class="kw">let </span>partition_type = manifest
+            .metadata
+            .partition_spec
+            .partition_type(<span class="kw-2">&amp;</span>manifest.metadata.schema)<span class="question-mark">?</span>;
         <span class="kw">let </span>table_schema = <span class="kw-2">&amp;</span>manifest.metadata.schema;
         <span class="kw">let </span>avro_schema = <span class="kw">match </span>manifest.metadata.format_version {
             FormatVersion::V1 =&gt; manifest_schema_v1(partition_type.clone())<span class="question-mark">?</span>,
@@ -2649,12 +2652,12 @@
             <span class="kw">let </span>value = <span class="kw">match </span>manifest.metadata.format_version {
                 FormatVersion::V1 =&gt; to_value(_serde::ManifestEntryV1::try_from(
                     (<span class="kw-2">*</span>entry).clone(),
-                    partition_type,
+                    <span class="kw-2">&amp;</span>partition_type,
                 )<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>,
                 FormatVersion::V2 =&gt; to_value(_serde::ManifestEntryV2::try_from(
                     (<span class="kw-2">*</span>entry).clone(),
-                    partition_type,
+                    <span class="kw-2">&amp;</span>partition_type,
                 )<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>,
             };
@@ -2666,8 +2669,7 @@
         <span class="kw">let </span>length = content.len();
         <span class="self">self</span>.output.write(Bytes::from(content)).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>partition_summary =
-            <span class="self">self</span>.construct_partition_summaries(<span class="kw-2">&amp;</span>manifest.metadata.partition_spec)<span class="question-mark">?</span>;
+        <span class="kw">let </span>partition_summary = <span class="self">self</span>.construct_partition_summaries(<span class="kw-2">&amp;</span>partition_type)<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(ManifestFile {
             manifest_path: <span class="self">self</span>.output.location().to_string(),
@@ -3074,7 +3076,7 @@
     <span class="doccomment">/// ID of the schema used to write the manifest as a string
     </span>schema_id: SchemaId,
     <span class="doccomment">/// The partition spec used  to write the manifest
-    </span>partition_spec: BoundPartitionSpec,
+    </span>partition_spec: PartitionSpec,
     <span class="doccomment">/// Table format version number of the manifest as a string
     </span>format_version: FormatVersion,
     <span class="doccomment">/// Type of content files tracked by the manifest: “data” or “deletes”
@@ -3141,7 +3143,7 @@
                 })
                 .transpose()<span class="question-mark">?
                 </span>.unwrap_or(<span class="number">0</span>);
-            BoundPartitionSpec::builder(schema.clone())
+            PartitionSpec::builder(schema.clone())
                 .with_spec_id(spec_id)
                 .add_unbound_fields(fields.into_iter().map(|f| f.into_unbound()))<span class="question-mark">?
                 </span>.build()<span class="question-mark">?
@@ -3973,7 +3975,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
+                partition_spec: PartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -4086,7 +4088,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema)
+                partition_spec: PartitionSpec::builder(schema)
                 .with_spec_id(<span class="number">0</span>).add_partition_field(<span class="string">"v_int"</span>, <span class="string">"v_int"</span>, Transform::Identity).unwrap()
                 .add_partition_field(<span class="string">"v_long"</span>, <span class="string">"v_long"</span>, Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
@@ -4197,7 +4199,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">1</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
+                partition_spec: PartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -4261,7 +4263,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).add_partition_field(<span class="string">"category"</span>, <span class="string">"category"</span>, Transform::Identity).unwrap().build().unwrap(),
+                partition_spec: PartitionSpec::builder(schema).add_partition_field(<span class="string">"category"</span>, <span class="string">"category"</span>, Transform::Identity).unwrap().build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V1,
             },
@@ -4340,7 +4342,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
+                partition_spec: PartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -4412,7 +4414,7 @@
             metadata: ManifestMetadata {
                 schema_id: <span class="number">0</span>,
                 schema: schema.clone(),
-                partition_spec: BoundPartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
+                partition_spec: PartitionSpec::builder(schema).with_spec_id(<span class="number">0</span>).build().unwrap(),
                 content: ManifestContentType::Data,
                 format_version: FormatVersion::V2,
             },
@@ -4479,7 +4481,7 @@
                 .build()
                 .unwrap(),
         );
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_partition_field(<span class="string">"time"</span>, <span class="string">"year_of_time"</span>, Transform::Year)
             .unwrap()

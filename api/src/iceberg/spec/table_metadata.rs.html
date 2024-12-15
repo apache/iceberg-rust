@@ -2409,10 +2409,6 @@
 <a href="#2409" id="2409">2409</a>
 <a href="#2410" id="2410">2410</a>
 <a href="#2411" id="2411">2411</a>
-<a href="#2412" id="2412">2412</a>
-<a href="#2413" id="2413">2413</a>
-<a href="#2414" id="2414">2414</a>
-<a href="#2415" id="2415">2415</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2447,8 +2443,8 @@
 <span class="kw">use </span><span class="kw">super</span>::snapshot::SnapshotReference;
 <span class="kw">pub use </span><span class="kw">super</span>::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 <span class="kw">use super</span>::{
-    BoundPartitionSpecRef, SchemaId, SchemaRef, SchemalessPartitionSpecRef, Snapshot, SnapshotRef,
-    SnapshotRetention, SortOrder, SortOrderRef, DEFAULT_PARTITION_SPEC_ID,
+    PartitionSpecRef, SchemaId, SchemaRef, Snapshot, SnapshotRef, SnapshotRetention, SortOrder,
+    SortOrderRef, StructType, DEFAULT_PARTITION_SPEC_ID,
 };
 <span class="kw">use </span><span class="kw">crate</span>::error::{timestamp_ms_to_utc, <span class="prelude-ty">Result</span>};
 <span class="kw">use crate</span>::{Error, ErrorKind};
@@ -2534,9 +2530,11 @@
     <span class="doccomment">/// ID of the table’s current schema.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) current_schema_id: i32,
     <span class="doccomment">/// A list of partition specs, stored as full partition spec objects.
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_specs: HashMap&lt;i32, SchemalessPartitionSpecRef&gt;,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_specs: HashMap&lt;i32, PartitionSpecRef&gt;,
     <span class="doccomment">/// ID of the “current” spec that writers should use by default.
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) default_spec: BoundPartitionSpecRef,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) default_spec: PartitionSpecRef,
+    <span class="doccomment">/// Partition type of the default partition spec.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) default_partition_type: StructType,
     <span class="doccomment">/// An integer; the highest assigned partition field ID across all partition specs for the table.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) last_partition_id: i32,
     <span class="doccomment">///A string to string map of table properties. This is used to control settings that
@@ -2667,22 +2665,26 @@
 
     <span class="doccomment">/// Returns all partition specs.
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>partition_specs_iter(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-    ) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>SchemalessPartitionSpecRef&gt; {
+    </span><span class="kw">pub fn </span>partition_specs_iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="kw-2">&amp;</span>PartitionSpecRef&gt; {
         <span class="self">self</span>.partition_specs.values()
     }
 
     <span class="doccomment">/// Lookup partition spec by id.
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>partition_spec_by_id(<span class="kw-2">&amp;</span><span class="self">self</span>, spec_id: i32) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>SchemalessPartitionSpecRef&gt; {
+    </span><span class="kw">pub fn </span>partition_spec_by_id(<span class="kw-2">&amp;</span><span class="self">self</span>, spec_id: i32) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PartitionSpecRef&gt; {
         <span class="self">self</span>.partition_specs.get(<span class="kw-2">&amp;</span>spec_id)
     }
 
     <span class="doccomment">/// Get default partition spec
     </span><span class="attr">#[inline]
-    </span><span class="kw">pub fn </span>default_partition_spec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>BoundPartitionSpecRef {
+    </span><span class="kw">pub fn </span>default_partition_spec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PartitionSpecRef {
         <span class="kw-2">&amp;</span><span class="self">self</span>.default_spec
+    }
+
+    <span class="doccomment">/// Return the partition type of the default partition spec.
+    </span><span class="attr">#[inline]
+    </span><span class="kw">pub fn </span>default_partition_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>StructType {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.default_partition_type
     }
 
     <span class="attr">#[inline]
@@ -2828,7 +2830,7 @@
         {
             <span class="self">self</span>.partition_specs.insert(
                 <span class="self">self</span>.default_spec.spec_id(),
-                Arc::new(Arc::unwrap_or_clone(<span class="self">self</span>.default_spec.clone()).into_schemaless()),
+                Arc::new(Arc::unwrap_or_clone(<span class="self">self</span>.default_spec.clone())),
             );
         }
 
@@ -3025,7 +3027,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::spec::schema::_serde::{SchemaV1, SchemaV2};
     <span class="kw">use </span><span class="kw">crate</span>::spec::snapshot::_serde::{SnapshotV1, SnapshotV2};
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        BoundPartitionSpec, PartitionField, Schema, SchemaRef, SchemalessPartitionSpec, Snapshot,
+        PartitionField, PartitionSpec, PartitionSpecRef, Schema, SchemaRef, Snapshot,
         SnapshotReference, SnapshotRetention, SortOrder,
     };
     <span class="kw">use crate</span>::{Error, ErrorKind};
@@ -3049,7 +3051,7 @@
         <span class="kw">pub </span>last_column_id: i32,
         <span class="kw">pub </span>schemas: Vec&lt;SchemaV2&gt;,
         <span class="kw">pub </span>current_schema_id: i32,
-        <span class="kw">pub </span>partition_specs: Vec&lt;SchemalessPartitionSpec&gt;,
+        <span class="kw">pub </span>partition_specs: Vec&lt;PartitionSpec&gt;,
         <span class="kw">pub </span>default_spec_id: i32,
         <span class="kw">pub </span>last_partition_id: i32,
         <span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
@@ -3085,7 +3087,7 @@
         </span><span class="kw">pub </span>current_schema_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
         <span class="kw">pub </span>partition_spec: Vec&lt;PartitionField&gt;,
         <span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
-        </span><span class="kw">pub </span>partition_specs: <span class="prelude-ty">Option</span>&lt;Vec&lt;SchemalessPartitionSpec&gt;&gt;,
+        </span><span class="kw">pub </span>partition_specs: <span class="prelude-ty">Option</span>&lt;Vec&lt;PartitionSpec&gt;&gt;,
         <span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
         </span><span class="kw">pub </span>default_spec_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
         <span class="attr">#[serde(skip_serializing_if = <span class="string">"Option::is_none"</span>)]
@@ -3191,17 +3193,12 @@
                     .map(|x| (x.spec_id(), Arc::new(x))),
             );
             <span class="kw">let </span>default_spec_id = value.default_spec_id;
-            <span class="kw">let </span>default_spec = partition_specs
+            <span class="kw">let </span>default_spec: PartitionSpecRef = partition_specs
                 .get(<span class="kw-2">&amp;</span>value.default_spec_id)
-                .map(|schemaless_spec| {
-                    (<span class="kw-2">*</span>schemaless_spec.clone())
-                        .clone()
-                        .bind(current_schema.clone())
-                })
-                .transpose()<span class="question-mark">?
-                </span>.or_else(|| {
+                .map(|spec| (<span class="kw-2">**</span>spec).clone())
+                .or_else(|| {
                     (DEFAULT_PARTITION_SPEC_ID == default_spec_id)
-                        .then(|| BoundPartitionSpec::unpartition_spec(current_schema.clone()))
+                        .then(PartitionSpec::unpartition_spec)
                 })
                 .ok_or_else(|| {
                     Error::new(
@@ -3210,6 +3207,7 @@
                     )
                 })<span class="question-mark">?
                 </span>.into();
+            <span class="kw">let </span>default_partition_type = default_spec.partition_type(current_schema)<span class="question-mark">?</span>;
 
             <span class="kw">let </span><span class="kw-2">mut </span>metadata = TableMetadata {
                 format_version: FormatVersion::V2,
@@ -3221,6 +3219,7 @@
                 current_schema_id: value.current_schema_id,
                 schemas,
                 partition_specs,
+                default_partition_type,
                 default_spec,
                 last_partition_id: value.last_partition_id,
                 properties: value.properties.unwrap_or_default(),
@@ -3316,11 +3315,10 @@
 
             <span class="kw">let </span>partition_specs = <span class="kw">match </span>value.partition_specs {
                 <span class="prelude-val">Some</span>(partition_specs) =&gt; partition_specs,
-                <span class="prelude-val">None </span>=&gt; <span class="macro">vec!</span>[BoundPartitionSpec::builder(current_schema.clone())
+                <span class="prelude-val">None </span>=&gt; <span class="macro">vec!</span>[PartitionSpec::builder(current_schema.clone())
                     .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
                     .add_unbound_fields(value.partition_spec.into_iter().map(|f| f.into_unbound()))<span class="question-mark">?
-                    </span>.build()<span class="question-mark">?
-                    </span>.into_schemaless()],
+                    </span>.build()<span class="question-mark">?</span>],
             }
             .into_iter()
             .map(|x| (x.spec_id(), Arc::new(x)))
@@ -3329,17 +3327,17 @@
             <span class="kw">let </span>default_spec_id = value
                 .default_spec_id
                 .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default());
-            <span class="kw">let </span>default_spec = partition_specs
+            <span class="kw">let </span>default_spec: PartitionSpecRef = partition_specs
                 .get(<span class="kw-2">&amp;</span>default_spec_id)
-                .map(|x| Arc::unwrap_or_clone(x.clone()).bind(current_schema.clone()))
-                .transpose()<span class="question-mark">?
-                </span>.ok_or_else(|| {
+                .map(|x| Arc::unwrap_or_clone(x.clone()))
+                .ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         <span class="macro">format!</span>(<span class="string">"Default partition spec {default_spec_id} not found"</span>),
                     )
                 })<span class="question-mark">?
                 </span>.into();
+            <span class="kw">let </span>default_partition_type = default_spec.partition_type(<span class="kw-2">&amp;</span>current_schema)<span class="question-mark">?</span>;
 
             <span class="kw">let </span><span class="kw-2">mut </span>metadata = TableMetadata {
                 format_version: FormatVersion::V1,
@@ -3350,6 +3348,7 @@
                 last_column_id: value.last_column_id,
                 current_schema_id,
                 default_spec,
+                default_partition_type,
                 last_partition_id: value
                     .last_partition_id
                     .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
@@ -3620,7 +3619,7 @@
     <span class="kw">use super</span>::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     <span class="kw">use </span><span class="kw">crate</span>::spec::table_metadata::TableMetadata;
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        BoundPartitionSpec, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
+        NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot,
         SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Summary,
         Transform, Type, UnboundPartitionField,
     };
@@ -3726,7 +3725,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"ts_day"</span>.to_string(),
@@ -3738,6 +3737,7 @@
             .build()
             .unwrap();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str(<span class="string">"fb072c92-a02b-11e9-ae9c-1bb7bc9eca94"</span>).unwrap(),
@@ -3746,10 +3746,8 @@
             last_column_id: <span class="number">1</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">1</span>, Arc::new(schema))]),
             current_schema_id: <span class="number">1</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(
-                <span class="number">0</span>,
-                partition_spec.clone().into_schemaless().into(),
-            )]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
+            default_partition_type,
             default_spec: partition_spec.into(),
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">0</span>,
@@ -3894,7 +3892,7 @@
             .unwrap();
 
         <span class="kw">let </span>schema = Arc::new(schema);
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_partition_field(<span class="string">"vendor_id"</span>, <span class="string">"vendor_id"</span>, Transform::Identity)
             .unwrap()
@@ -3915,6 +3913,7 @@
             .with_summary(Summary { operation: Operation::Append, additional_properties: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="string">"spark.app.id"</span>.to_string(), <span class="string">"local-1662532784305"</span>.to_string()), (<span class="string">"added-data-files"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-records"</span>.to_string(), <span class="string">"4"</span>.to_string()), (<span class="string">"added-files-size"</span>.to_string(), <span class="string">"6001"</span>.to_string())]) })
             .build();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str(<span class="string">"df838b92-0b32-465d-a44e-d39936e538b7"</span>).unwrap(),
@@ -3923,7 +3922,8 @@
             last_column_id: <span class="number">5</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, schema)]),
             current_schema_id: <span class="number">0</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into_schemaless().into())]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
+            default_partition_type,
             default_spec: Arc::new(partition_spec),
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">0</span>,
@@ -4003,11 +4003,12 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str(<span class="string">"fb072c92-a02b-11e9-ae9c-1bb7bc9eca94"</span>).unwrap(),
@@ -4016,10 +4017,8 @@
             last_column_id: <span class="number">1</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">1</span>, Arc::new(schema))]),
             current_schema_id: <span class="number">1</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(
-                <span class="number">0</span>,
-                partition_spec.clone().into_schemaless().into(),
-            )]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
+            default_partition_type,
             default_spec: partition_spec.into(),
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">0</span>,
@@ -4395,7 +4394,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema2.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema2.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
@@ -4448,6 +4447,7 @@
             })
             .build();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema2).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str(<span class="string">"9c12d441-03fe-4693-9a96-a0705ddf69c1"</span>).unwrap(),
@@ -4456,11 +4456,9 @@
             last_column_id: <span class="number">3</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, Arc::new(schema1)), (<span class="number">1</span>, Arc::new(schema2))]),
             current_schema_id: <span class="number">1</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(
-                <span class="number">0</span>,
-                partition_spec.clone().into_schemaless().into(),
-            )]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
             default_spec: Arc::new(partition_spec),
+            default_partition_type,
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">3</span>,
             sort_orders: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">3</span>, sort_order.into())]),
@@ -4521,7 +4519,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
@@ -4550,6 +4548,7 @@
             .build_unbound()
             .unwrap();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str(<span class="string">"9c12d441-03fe-4693-9a96-a0705ddf69c1"</span>).unwrap(),
@@ -4558,10 +4557,8 @@
             last_column_id: <span class="number">3</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, Arc::new(schema))]),
             current_schema_id: <span class="number">0</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(
-                <span class="number">0</span>,
-                partition_spec.clone().into_schemaless().into(),
-            )]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
+            default_partition_type,
             default_spec: Arc::new(partition_spec),
             last_partition_id: <span class="number">1000</span>,
             default_sort_order_id: <span class="number">3</span>,
@@ -4604,7 +4601,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"x"</span>.to_string(),
@@ -4616,6 +4613,7 @@
             .build()
             .unwrap();
 
+        <span class="kw">let </span>default_partition_type = partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap();
         <span class="kw">let </span>expected = TableMetadata {
             format_version: FormatVersion::V1,
             table_uuid: Uuid::parse_str(<span class="string">"d20125c8-7284-442c-9aea-15fee620737c"</span>).unwrap(),
@@ -4624,11 +4622,9 @@
             last_column_id: <span class="number">3</span>,
             schemas: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, Arc::new(schema))]),
             current_schema_id: <span class="number">0</span>,
-            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(
-                <span class="number">0</span>,
-                partition_spec.clone().into_schemaless().into(),
-            )]),
+            partition_specs: HashMap::from_iter(<span class="macro">vec!</span>[(<span class="number">0</span>, partition_spec.clone().into())]),
             default_spec: Arc::new(partition_spec),
+            default_partition_type,
             last_partition_id: <span class="number">0</span>,
             default_sort_order_id: <span class="number">0</span>,
             <span class="comment">// Sort order is added during deserialization for V2 compatibility
@@ -4741,17 +4737,14 @@
     </span><span class="kw">fn </span>test_default_partition_spec() {
         <span class="kw">let </span>default_spec_id = <span class="number">1234</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>table_meta_data = get_test_table_metadata(<span class="string">"TableMetadataV2Valid.json"</span>);
-        <span class="kw">let </span>partition_spec =
-            BoundPartitionSpec::unpartition_spec(table_meta_data.current_schema().clone());
+        <span class="kw">let </span>partition_spec = PartitionSpec::unpartition_spec();
         table_meta_data.default_spec = partition_spec.clone().into();
         table_meta_data
             .partition_specs
-            .insert(default_spec_id, Arc::new(partition_spec.into_schemaless()));
+            .insert(default_spec_id, Arc::new(partition_spec));
 
         <span class="macro">assert_eq!</span>(
-            (<span class="kw-2">*</span>table_meta_data.default_partition_spec().clone())
-                .clone()
-                .into_schemaless(),
+            (<span class="kw-2">*</span>table_meta_data.default_partition_spec().clone()).clone(),
             (<span class="kw-2">*</span>table_meta_data
                 .partition_spec_by_id(default_spec_id)
                 .unwrap()
@@ -4808,11 +4801,10 @@
             HashMap::from([(
                 <span class="number">0</span>,
                 Arc::new(
-                    BoundPartitionSpec::builder(table_metadata.schemas.get(<span class="kw-2">&amp;</span><span class="number">0</span>).unwrap().clone())
+                    PartitionSpec::builder(table_metadata.schemas.get(<span class="kw-2">&amp;</span><span class="number">0</span>).unwrap().clone())
                         .with_spec_id(<span class="number">0</span>)
                         .build()
                         .unwrap()
-                        .into_schemaless()
                 )
             )])
         );

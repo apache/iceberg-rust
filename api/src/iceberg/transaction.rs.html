@@ -872,10 +872,6 @@
 <a href="#872" id="872">872</a>
 <a href="#873" id="873">873</a>
 <a href="#874" id="874">874</a>
-<a href="#875" id="875">875</a>
-<a href="#876" id="876">876</a>
-<a href="#877" id="877">877</a>
-<a href="#878" id="878">878</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1234,11 +1230,7 @@
             }
             <span class="self">Self</span>::validate_partition_value(
                 data_file.partition(),
-                <span class="self">self</span>.tx
-                    .table
-                    .metadata()
-                    .default_partition_spec()
-                    .partition_type(),
+                <span class="self">self</span>.tx.table.metadata().default_partition_type(),
             )<span class="question-mark">?</span>;
         }
         <span class="self">self</span>.added_data_files.extend(data_files);

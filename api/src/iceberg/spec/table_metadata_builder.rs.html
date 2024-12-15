@@ -2153,7 +2153,6 @@
 <a href="#2153" id="2153">2153</a>
 <a href="#2154" id="2154">2154</a>
 <a href="#2155" id="2155">2155</a>
-<a href="#2156" id="2156">2156</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2177,8 +2176,8 @@
 <span class="kw">use </span>uuid::Uuid;
 
 <span class="kw">use super</span>::{
-    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
+    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, Schema, SchemaRef, Snapshot,
+    SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StructType,
     TableMetadata, UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
     ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
     PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, RESERVED_PROPERTIES,
@@ -2261,9 +2260,10 @@
                     // also unpartitioned.
                     // The `default_spec` value is always replaced at the end of this method by he `add_default_partition_spec`
                     // method.
-                    </span>BoundPartitionSpec::unpartition_spec(fresh_schema.clone()).with_spec_id(-<span class="number">1</span>),
+                    </span>PartitionSpec::unpartition_spec().with_spec_id(-<span class="number">1</span>),
                 ), <span class="comment">// Overwritten immediately by add_default_partition_spec
-                </span>last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
+                </span>default_partition_type: StructType::new(<span class="macro">vec!</span>[]),
+                last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
                 properties: HashMap::new(),
                 current_snapshot_id: <span class="prelude-val">None</span>,
                 snapshots: HashMap::new(),
@@ -2825,7 +2825,7 @@
             .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID);
         <span class="self">self</span>.metadata
             .partition_specs
-            .insert(new_spec_id, Arc::new(spec.into()));
+            .insert(new_spec_id, Arc::new(spec));
         <span class="self">self</span>.changes
             .push(TableUpdate::AddSpec { spec: unbound_spec });
 
@@ -2873,9 +2873,10 @@
             )
                 })<span class="question-mark">?
                 </span>.clone();
-        <span class="kw">let </span>spec =
-            Arc::unwrap_or_clone(schemaless_spec).bind(<span class="self">self</span>.get_current_schema()<span class="question-mark">?</span>.clone())<span class="question-mark">?</span>;
+        <span class="kw">let </span>spec = Arc::unwrap_or_clone(schemaless_spec);
+        <span class="kw">let </span>spec_type = spec.partition_type(<span class="self">self</span>.get_current_schema()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="self">self</span>.metadata.default_spec = Arc::new(spec);
+        <span class="self">self</span>.metadata.default_partition_type = spec_type;
 
         <span class="kw">if </span><span class="self">self</span>.last_added_spec_id == <span class="prelude-val">Some</span>(spec_id) {
             <span class="self">self</span>.changes.push(TableUpdate::SetDefaultSpec {
@@ -3006,6 +3007,8 @@
                 .into_unbound()
                 .bind(schema.clone())<span class="question-mark">?</span>,
         );
+        <span class="self">self</span>.metadata.default_partition_type =
+            <span class="self">self</span>.metadata.default_spec.partition_type(<span class="kw-2">&amp;</span>schema)<span class="question-mark">?</span>;
         SortOrder::builder()
             .with_fields(sort_order.fields)
             .build(<span class="kw-2">&amp;</span>schema)<span class="question-mark">?</span>;
@@ -3134,7 +3137,7 @@
         schema: Schema,
         spec: UnboundPartitionSpec,
         sort_order: SortOrder,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Schema, BoundPartitionSpec, SortOrder)&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Schema, PartitionSpec, SortOrder)&gt; {
         <span class="comment">// Re-assign field ids and schema ids for a new table.
         </span><span class="kw">let </span>previous_id_to_name = schema.field_id_to_name_map().clone();
         <span class="kw">let </span>fresh_schema = schema
@@ -3240,15 +3243,11 @@
     }
 
     <span class="doccomment">/// If a compatible spec already exists, use the same ID. Otherwise, use 1 more than the highest ID.
-    </span><span class="kw">fn </span>reuse_or_create_new_spec_id(<span class="kw-2">&amp;</span><span class="self">self</span>, new_spec: <span class="kw-2">&amp;</span>BoundPartitionSpec) -&gt; i32 {
+    </span><span class="kw">fn </span>reuse_or_create_new_spec_id(<span class="kw-2">&amp;</span><span class="self">self</span>, new_spec: <span class="kw-2">&amp;</span>PartitionSpec) -&gt; i32 {
         <span class="self">self</span>.metadata
             .partition_specs
             .iter()
-            .find_map(|(id, old_spec)| {
-                new_spec
-                    .is_compatible_with_schemaless(old_spec)
-                    .then_some(<span class="kw-2">*</span>id)
-            })
+            .find_map(|(id, old_spec)| new_spec.is_compatible_with(old_spec).then_some(<span class="kw-2">*</span>id))
             .unwrap_or_else(|| {
                 <span class="self">self</span>.get_highest_spec_id()
                     .map(|id| id + <span class="number">1</span>)
@@ -3294,9 +3293,8 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        NestedField, NullOrder, Operation, PrimitiveType, Schema, SchemalessPartitionSpec,
-        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
-        UnboundPartitionField,
+        NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, SnapshotRetention,
+        SortDirection, SortField, StructType, Summary, Transform, Type, UnboundPartitionField,
     };
 
     <span class="kw">const </span>TEST_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"s3://bucket/test/location"</span>;
@@ -3406,7 +3404,7 @@
         <span class="kw">let </span>schema = Schema::builder().build().unwrap();
         <span class="kw">let </span>metadata = TableMetadataBuilder::new(
             schema.clone(),
-            SchemalessPartitionSpec::unpartition_spec(),
+            PartitionSpec::unpartition_spec(),
             SortOrder::unsorted_order(),
             TEST_LOCATION.to_string(),
             FormatVersion::V2,
@@ -3454,7 +3452,7 @@
             ])
             .build()
             .unwrap();
-        <span class="kw">let </span>spec = BoundPartitionSpec::builder(schema.clone())
+        <span class="kw">let </span>spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(<span class="number">20</span>)
             .add_partition_field(<span class="string">"a"</span>, <span class="string">"a"</span>, Transform::Identity)
             .unwrap()
@@ -3496,7 +3494,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>expected_spec = BoundPartitionSpec::builder(expected_schema.clone())
+        <span class="kw">let </span>expected_spec = PartitionSpec::builder(expected_schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .add_partition_field(<span class="string">"a"</span>, <span class="string">"a"</span>, Transform::Identity)
             .unwrap()
@@ -3569,7 +3567,7 @@
             TableUpdate::AddSpec {
                 <span class="comment">// Because this is a new tables, field-ids are assigned
                 // partition_spec() has None set for field-id
-                </span>spec: BoundPartitionSpec::builder(schema())
+                </span>spec: PartitionSpec::builder(schema())
                     .with_spec_id(<span class="number">0</span>)
                     .add_unbound_field(UnboundPartitionField {
                         name: <span class="string">"y"</span>.to_string(),
@@ -3601,7 +3599,7 @@
         <span class="kw">let </span>schema = Schema::builder().build().unwrap();
         <span class="kw">let </span>changes = TableMetadataBuilder::new(
             schema.clone(),
-            SchemalessPartitionSpec::unpartition_spec().into_unbound(),
+            PartitionSpec::unpartition_spec().into_unbound(),
             SortOrder::unsorted_order(),
             TEST_LOCATION.to_string(),
             FormatVersion::V1,
@@ -3624,7 +3622,7 @@
             TableUpdate::AddSpec {
                 <span class="comment">// Because this is a new tables, field-ids are assigned
                 // partition_spec() has None set for field-id
-                </span>spec: BoundPartitionSpec::builder(schema)
+                </span>spec: PartitionSpec::builder(schema)
                     .with_spec_id(<span class="number">0</span>)
                     .build()
                     .unwrap()
@@ -3671,7 +3669,7 @@
 
         <span class="comment">// Spec id should be re-assigned
         </span><span class="kw">let </span>expected_change = added_spec.with_spec_id(<span class="number">1</span>);
-        <span class="kw">let </span>expected_spec = BoundPartitionSpec::builder(schema())
+        <span class="kw">let </span>expected_spec = PartitionSpec::builder(schema())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"y"</span>.to_string(),
@@ -3693,7 +3691,7 @@
         <span class="macro">assert_eq!</span>(build_result.changes.len(), <span class="number">1</span>);
         <span class="macro">assert_eq!</span>(
             build_result.metadata.partition_spec_by_id(<span class="number">1</span>),
-            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>Arc::new(expected_spec.into_schemaless()))
+            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>Arc::new(expected_spec))
         );
         <span class="macro">assert_eq!</span>(build_result.metadata.default_spec.spec_id(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(build_result.metadata.last_partition_id, <span class="number">1001</span>);
@@ -3720,7 +3718,7 @@
             .build()
             .unwrap();
 
-        <span class="kw">let </span>expected_spec = BoundPartitionSpec::builder(schema)
+        <span class="kw">let </span>expected_spec = PartitionSpec::builder(schema)
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(UnboundPartitionField {
                 name: <span class="string">"y_bucket[2]"</span>.to_string(),

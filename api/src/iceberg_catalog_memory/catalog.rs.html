@@ -1965,7 +1965,7 @@
     <span class="kw">use </span>std::iter::FromIterator;
 
     <span class="kw">use </span>iceberg::io::FileIOBuilder;
-    <span class="kw">use </span>iceberg::spec::{BoundPartitionSpec, NestedField, PrimitiveType, Schema, SortOrder, Type};
+    <span class="kw">use </span>iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     <span class="kw">use </span>regex::Regex;
     <span class="kw">use </span>tempfile::TempDir;
 
@@ -2037,7 +2037,7 @@
 
         <span class="macro">assert_eq!</span>(metadata.current_schema().as_ref(), expected_schema);
 
-        <span class="kw">let </span>expected_partition_spec = BoundPartitionSpec::builder((<span class="kw-2">*</span>expected_schema).clone())
+        <span class="kw">let </span>expected_partition_spec = PartitionSpec::builder((<span class="kw-2">*</span>expected_schema).clone())
             .with_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
@@ -2047,7 +2047,7 @@
                 .partition_specs_iter()
                 .map(|p| p.as_ref())
                 .collect_vec(),
-            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>expected_partition_spec.into_schemaless()]
+            <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>expected_partition_spec]
         );
 
         <span class="kw">let </span>expected_sorted_order = SortOrder::builder()

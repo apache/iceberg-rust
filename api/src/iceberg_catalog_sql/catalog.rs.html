@@ -1715,7 +1715,6 @@
 <a href="#1715" id="1715">1715</a>
 <a href="#1716" id="1716">1716</a>
 <a href="#1717" id="1717">1717</a>
-<a href="#1718" id="1718">1718</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2501,7 +2500,7 @@
     <span class="kw">use </span>std::hash::Hash;
 
     <span class="kw">use </span>iceberg::io::FileIOBuilder;
-    <span class="kw">use </span>iceberg::spec::{BoundPartitionSpec, NestedField, PrimitiveType, Schema, SortOrder, Type};
+    <span class="kw">use </span>iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     <span class="kw">use </span>iceberg::table::Table;
     <span class="kw">use </span>iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation, TableIdent};
     <span class="kw">use </span>itertools::Itertools;
@@ -2594,11 +2593,10 @@
 
         <span class="macro">assert_eq!</span>(metadata.current_schema().as_ref(), expected_schema);
 
-        <span class="kw">let </span>expected_partition_spec = BoundPartitionSpec::builder(expected_schema.clone())
+        <span class="kw">let </span>expected_partition_spec = PartitionSpec::builder(expected_schema.clone())
             .with_spec_id(<span class="number">0</span>)
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="macro">assert_eq!</span>(
             metadata

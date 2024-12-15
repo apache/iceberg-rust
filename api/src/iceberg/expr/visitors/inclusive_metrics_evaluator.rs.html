@@ -2156,6 +2156,7 @@
 <a href="#2156" id="2156">2156</a>
 <a href="#2157" id="2157">2157</a>
 <a href="#2158" id="2158">2158</a>
+<a href="#2159" id="2159">2159</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2653,8 +2654,9 @@
         UnaryExpression,
     };
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        BoundPartitionSpec, DataContentType, DataFile, DataFileFormat, Datum, NestedField,
-        PrimitiveType, Schema, Struct, Transform, Type, UnboundPartitionField,
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        UnboundPartitionField,
     };
 
     <span class="kw">const </span>INT_MIN_VALUE: i32 = <span class="number">30</span>;
@@ -2662,10 +2664,10 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_data_file_no_partitions() {
-        <span class="kw">let </span>partition_spec_ref = create_test_partition_spec();
+        <span class="kw">let </span>(_partition_spec_ref, schema_ref) = create_test_partition_spec();
 
         <span class="kw">let </span>partition_filter = Predicate::AlwaysTrue
-            .bind(partition_spec_ref.schema_ref().clone(), <span class="bool-val">false</span>)
+            .bind(schema_ref.clone(), <span class="bool-val">false</span>)
             .unwrap();
 
         <span class="kw">let </span>case_sensitive = <span class="bool-val">false</span>;
@@ -3803,7 +3805,7 @@
         <span class="macro">assert!</span>(result, <span class="string">"Should read: NotIn on no nulls column"</span>);
     }
 
-    <span class="kw">fn </span>create_test_partition_spec() -&gt; Arc&lt;BoundPartitionSpec&gt; {
+    <span class="kw">fn </span>create_test_partition_spec() -&gt; (PartitionSpecRef, SchemaRef) {
         <span class="kw">let </span>table_schema = Schema::builder()
             .with_fields(<span class="macro">vec!</span>[Arc::new(NestedField::optional(
                 <span class="number">1</span>,
@@ -3814,7 +3816,7 @@
             .unwrap();
         <span class="kw">let </span>table_schema_ref = Arc::new(table_schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(table_schema_ref.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(table_schema_ref.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField::builder()
                 .source_id(<span class="number">1</span>)
@@ -3825,7 +3827,7 @@
             .unwrap()
             .build()
             .unwrap();
-        Arc::new(partition_spec)
+        (Arc::new(partition_spec), table_schema_ref)
     }
 
     <span class="kw">fn </span>not_null(reference: <span class="kw-2">&amp;</span>str) -&gt; BoundPredicate {

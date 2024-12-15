@@ -511,13 +511,6 @@
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a>
-<a href="#517" id="517">517</a>
-<a href="#518" id="518">518</a>
-<a href="#519" id="519">519</a>
-<a href="#520" id="520">520</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -541,16 +534,16 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference, Predicate};
-<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PartitionField, SchemalessPartitionSpecRef};
+<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PartitionField, PartitionSpecRef};
 <span class="kw">use </span><span class="kw">crate</span>::Error;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>InclusiveProjection {
-    partition_spec: SchemalessPartitionSpecRef,
+    partition_spec: PartitionSpecRef,
     cached_parts: HashMap&lt;i32, Vec&lt;PartitionField&gt;&gt;,
 }
 
 <span class="kw">impl </span>InclusiveProjection {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(partition_spec: SchemalessPartitionSpecRef) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(partition_spec: PartitionSpecRef) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             partition_spec,
             cached_parts: HashMap::new(),
@@ -755,7 +748,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::inclusive_projection::InclusiveProjection;
     <span class="kw">use </span><span class="kw">crate</span>::expr::{Bind, Predicate, Reference};
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        BoundPartitionSpec, Datum, NestedField, PrimitiveType, Schema, Transform, Type,
+        Datum, NestedField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -787,11 +780,10 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -818,7 +810,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -830,8 +822,7 @@
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -856,7 +847,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
                 source_id: <span class="number">2</span>,
@@ -866,8 +857,7 @@
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -892,7 +882,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
                 source_id: <span class="number">2</span>,
@@ -902,8 +892,7 @@
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -928,7 +917,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_fields(<span class="macro">vec!</span>[UnboundPartitionField {
                 source_id: <span class="number">2</span>,
@@ -938,8 +927,7 @@
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -964,7 +952,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -976,8 +964,7 @@
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
@@ -1005,7 +992,7 @@
         <span class="kw">let </span>schema = build_test_schema();
         <span class="kw">let </span>arc_schema = Arc::new(schema);
 
-        <span class="kw">let </span>partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        <span class="kw">let </span>partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(<span class="number">1</span>)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -1017,8 +1004,7 @@
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         <span class="kw">let </span>arc_partition_spec = Arc::new(partition_spec);
 
