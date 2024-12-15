@@ -1992,7 +1992,7 @@ mod test {
             nan_value_counts: Default::default(),
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2013,7 +2013,7 @@ mod test {
             nan_value_counts: Default::default(),
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2070,7 +2070,7 @@ mod test {
             ]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2096,7 +2096,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("dC"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2123,7 +2123,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("3str3"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
@@ -2150,7 +2150,7 @@ mod test {
             upper_bounds: HashMap::from([(3, Datum::string("イロハニホヘト"))]),
 
             column_sizes: Default::default(),
-            key_metadata: vec![],
+            key_metadata: None,
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,

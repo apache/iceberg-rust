@@ -381,7 +381,7 @@ impl ParquetWriter {
             // # TODO(#417)
             // - nan_value_counts
             // - distinct_counts
-            .key_metadata(metadata.footer_signing_key_metadata.unwrap_or_default())
+            .key_metadata(metadata.footer_signing_key_metadata)
             .split_offsets(
                 metadata
                     .row_groups
