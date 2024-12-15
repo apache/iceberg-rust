@@ -55,9 +55,11 @@ impl PartitionField {
 /// Reference to [`PartitionSpec`].
 pub type PartitionSpecRef = Arc<PartitionSpec>;
 /// Partition spec that defines how to produce a tuple of partition values from a record.
-/// Schemaless partition specs are never constructed manually. They occur when a table is mutated
-/// and partition spec and schemas are updated. While old partition specs are retained, the bound
-/// schema might not be available anymore as part of the table metadata.
+///
+/// A [`PartitionSpec`] is originally obtained by binding an [`UnboundPartitionSpec`] to a schema and is
+/// only guaranteed to be valid for that schema. The main difference between [`PartitionSpec`] and
+/// [`UnboundPartitionSpec`] is that the former has field ids assigned,
+/// while field ids are optional for [`UnboundPartitionSpec`].
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct PartitionSpec {
@@ -83,7 +85,7 @@ impl PartitionSpec {
         self.spec_id
     }
 
-    /// Get a new unpatitioned partition spec
+    /// Get a new unpartitioned partition spec
     pub fn unpartition_spec() -> Self {
         Self {
             spec_id: DEFAULT_PARTITION_SPEC_ID,
@@ -171,6 +173,8 @@ pub struct UnboundPartitionField {
 }
 
 /// Unbound partition spec can be built without a schema and later bound to a schema.
+/// They are used to transport schema information as part of the REST specification.
+/// The main difference to [`PartitionSpec`] is that the field ids are optional.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnboundPartitionSpec {
