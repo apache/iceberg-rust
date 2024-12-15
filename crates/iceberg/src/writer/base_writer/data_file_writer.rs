@@ -110,9 +110,7 @@ mod test {
     use crate::spec::{
         DataContentType, DataFileFormat, Literal, NestedField, PrimitiveType, Schema, Struct, Type,
     };
-    use crate::writer::base_writer::data_file_writer::{
-        DataFileWriterBuilder, DataFileWriterConfig,
-    
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::file_writer::ParquetWriterBuilder;
@@ -144,9 +142,7 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(pw)
-            .build(DataFileWriterConfig::new(None))
-            .await?;
+        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await.unwrap();
 
         let data_files = data_file_writer.close().await.unwrap();
         assert_eq!(data_files.len(), 1);
@@ -175,7 +171,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_partquet_writer_with_partition() -> Result<()> {
+    async fn test_parquet_writer_with_partition() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIOBuilder::new_fs_io().build().unwrap();
         let location_gen =
@@ -196,8 +192,6 @@ mod test {
 
         let partition_value = Struct::from_iter([Some(Literal::int(1))]);
 
-        let config = DataFileWriterConfig::new(Some(partition_value.clone()));
-
         let parquet_writer_builder = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(schema.clone()),
@@ -206,9 +200,10 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(parquet_writer_builder)
-            .build(config)
-            .await?;
+        let mut data_file_writer =
+            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()))
+                .build()
+                .await?;
 
         let arrow_schema = arrow_schema::Schema::new(vec![
             Field::new("id", DataType::Int32, false),
