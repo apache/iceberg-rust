@@ -738,6 +738,32 @@ impl TableMetadataBuilder {
             .set_default_partition_spec(Self::LAST_ADDED)
     }
 
+    /// Remove partition specs by their ids from the table metadata.
+    /// Does nothing if a spec id is not present.
+    ///
+    /// If the default partition spec is removed, it is re-added
+    /// upon build.
+    pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Self {
+        let mut removed_specs = Vec::with_capacity(spec_ids.len());
+
+        self.metadata.partition_specs.retain(|k, _| {
+            if spec_ids.contains(k) {
+                removed_specs.push(*k);
+                false
+            } else {
+                true
+            }
+        });
+
+        if !removed_specs.is_empty() {
+            self.changes.push(TableUpdate::RemovePartitionSpecs {
+                spec_ids: removed_specs,
+            });
+        }
+
+        self
+    }
+
     /// Add a sort order to the table metadata.
     ///
     /// The spec is bound eagerly to the current schema and must be valid for it.
@@ -1544,6 +1570,20 @@ mod tests {
         pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSpec {
             spec: expected_change
         });
+
+        // Remove the spec
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
+            .remove_partition_specs(&[1])
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.partition_specs.len(), 1);
+        assert!(build_result.metadata.partition_spec_by_id(1).is_none());
     }
 
     #[test]
@@ -2152,5 +2192,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Cannot add snapshot with sequence number"));
+    }
+
+    #[test]
+    fn test_default_spec_cannot_be_removed() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let metadata = builder
+            .remove_partition_specs(&[0])
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.default_spec.spec_id(), 0);
+        assert_eq!(metadata.partition_specs.len(), 1);
+        assert!(metadata.partition_spec_by_id(0).is_some());
     }
 }

@@ -446,6 +446,12 @@ pub enum TableUpdate {
         /// Properties to remove
         removals: Vec<String>,
     },
+    /// Remove partition specs
+    #[serde(rename_all = "kebab-case")]
+    RemovePartitionSpecs {
+        /// Partition spec ids to remove.
+        spec_ids: Vec<i32>,
+    },
 }
 
 impl TableUpdate {
@@ -475,6 +481,9 @@ impl TableUpdate {
             TableUpdate::RemoveProperties { removals } => builder.remove_properties(&removals),
             TableUpdate::UpgradeFormatVersion { format_version } => {
                 builder.upgrade_format_version(format_version)
+            }
+            TableUpdate::RemovePartitionSpecs { spec_ids } => {
+                Ok(builder.remove_partition_specs(&spec_ids))
             }
         }
     }
@@ -1834,6 +1843,21 @@ mod tests {
 }        
         "#,
             ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
+        );
+    }
+
+    #[test]
+    fn test_remove_partition_specs_update() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-partition-specs",
+    "spec-ids": [1, 2]
+}        
+        "#,
+            TableUpdate::RemovePartitionSpecs {
+                spec_ids: vec![1, 2],
+            },
         );
     }
 }
