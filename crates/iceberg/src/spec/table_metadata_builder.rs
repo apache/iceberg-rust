@@ -741,10 +741,11 @@ impl TableMetadataBuilder {
     }
 
     /// Remove partition specs by their ids from the table metadata.
-    /// Does nothing if a spec id is not present.
+    /// Does nothing if a spec id is not present. Active partition specs
+    /// should not be removed.
     ///
-    /// If the default partition spec is removed, it is re-added
-    /// upon build.
+    /// # Errors
+    /// - Cannot remove the default partition spec.
     pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Result<Self> {
         if spec_ids.contains(&self.metadata.default_spec.spec_id()) {
             return Err(Error::new(
