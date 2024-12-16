@@ -33,8 +33,9 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef, SnapshotRef, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, DEFAULT_PARTITION_SPEC_ID,
+    PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef, Snapshot, SnapshotRef,
+    SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
+    DEFAULT_PARTITION_SPEC_ID,
 };
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind};
@@ -395,6 +396,33 @@ impl TableMetadata {
         snapshot_id: i64,
     ) -> Option<&PartitionStatisticsFile> {
         self.partition_statistics.get(&snapshot_id)
+    }
+
+    /// Append snapshot to table
+    #[deprecated(
+        since = "0.4.0",
+        note = "please use `TableMetadataBuilder.set_branch_snapshot` instead"
+    )]
+    pub fn append_snapshot(&mut self, snapshot: Snapshot) {
+        self.last_updated_ms = snapshot.timestamp_ms();
+        self.last_sequence_number = snapshot.sequence_number();
+
+        self.refs
+            .entry(MAIN_BRANCH.to_string())
+            .and_modify(|s| {
+                s.snapshot_id = snapshot.snapshot_id();
+            })
+            .or_insert_with(|| {
+                SnapshotReference::new(snapshot.snapshot_id(), SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                })
+            });
+
+        self.snapshot_log.push(snapshot.log());
+        self.snapshots
+            .insert(snapshot.snapshot_id(), Arc::new(snapshot));
     }
 
     /// Normalize this partition spec.
