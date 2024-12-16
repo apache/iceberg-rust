@@ -21,12 +21,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, Schema, SchemaRef, Snapshot,
-    SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef, StructType,
-    TableMetadata, UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
-    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, RESERVED_PROPERTIES,
-    UNPARTITIONED_LAST_ASSIGNED_ID,
+    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
+    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableMetadata, UnboundPartitionSpec,
+    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
+    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
+    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -117,6 +117,8 @@ impl TableMetadataBuilder {
                 metadata_log: vec![],
                 default_sort_order_id: -1, // Overwritten immediately by add_default_sort_order
                 refs: HashMap::default(),
+                statistics: HashMap::new(),
+                partition_statistics: HashMap::new(),
             },
             changes: vec![],
             last_added_schema_id: Some(schema_id),
@@ -521,6 +523,52 @@ impl TableMetadataBuilder {
             });
         }
 
+        self
+    }
+
+    /// Set statistics for a snapshot
+    pub fn set_statistics(mut self, statistics: StatisticsFile) -> Self {
+        self.metadata
+            .statistics
+            .insert(statistics.snapshot_id, statistics.clone());
+        self.changes.push(TableUpdate::SetStatistics {
+            statistics: statistics.clone(),
+        });
+        self
+    }
+
+    /// Remove statistics for a snapshot
+    pub fn remove_statistics(mut self, snapshot_id: i64) -> Self {
+        let previous = self.metadata.statistics.remove(&snapshot_id);
+        if previous.is_some() {
+            self.changes
+                .push(TableUpdate::RemoveStatistics { snapshot_id });
+        }
+        self
+    }
+
+    /// Set partition statistics
+    pub fn set_partition_statistics(
+        mut self,
+        partition_statistics_file: PartitionStatisticsFile,
+    ) -> Self {
+        self.metadata.partition_statistics.insert(
+            partition_statistics_file.snapshot_id,
+            partition_statistics_file.clone(),
+        );
+        self.changes.push(TableUpdate::SetPartitionStatistics {
+            partition_statistics: partition_statistics_file,
+        });
+        self
+    }
+
+    /// Remove partition statistics
+    pub fn remove_partition_statistics(mut self, snapshot_id: i64) -> Self {
+        let previous = self.metadata.partition_statistics.remove(&snapshot_id);
+        if previous.is_some() {
+            self.changes
+                .push(TableUpdate::RemovePartitionStatistics { snapshot_id });
+        }
         self
     }
 
@@ -1168,8 +1216,9 @@ impl From<TableMetadataBuildResult> for TableMetadata {
 mod tests {
     use super::*;
     use crate::spec::{
-        NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, SnapshotRetention,
-        SortDirection, SortField, StructType, Summary, Transform, Type, UnboundPartitionField,
+        BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
+        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
+        UnboundPartitionField,
     };
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
@@ -2203,5 +2252,102 @@ mod tests {
         let builder = builder_without_changes(FormatVersion::V2);
 
         builder.remove_partition_specs(&[0]).unwrap_err();
+    }
+
+    #[test]
+    fn test_statistics() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let statistics = StatisticsFile {
+            snapshot_id: 3055729675574597004,
+            statistics_path: "s3://a/b/stats.puffin".to_string(),
+            file_size_in_bytes: 413,
+            file_footer_size_in_bytes: 42,
+            key_metadata: None,
+            blob_metadata: vec![BlobMetadata {
+                snapshot_id: 3055729675574597004,
+                sequence_number: 1,
+                fields: vec![1],
+                r#type: "ndv".to_string(),
+                properties: HashMap::new(),
+            }],
+        };
+        let build_result = builder.set_statistics(statistics.clone()).build().unwrap();
+
+        assert_eq!(
+            build_result.metadata.statistics,
+            HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
+        );
+        assert_eq!(build_result.changes, vec![TableUpdate::SetStatistics {
+            statistics: statistics.clone()
+        }]);
+
+        // Remove
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.metadata.statistics.len(), 0);
+        assert_eq!(build_result.changes, vec![TableUpdate::RemoveStatistics {
+            snapshot_id: statistics.snapshot_id
+        }]);
+
+        // Remove again yields no changes
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.statistics.len(), 0);
+        assert_eq!(build_result.changes.len(), 0);
+    }
+
+    #[test]
+    fn test_add_partition_statistics() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let statistics = PartitionStatisticsFile {
+            snapshot_id: 3055729675574597004,
+            statistics_path: "s3://a/b/partition-stats.parquet".to_string(),
+            file_size_in_bytes: 43,
+        };
+
+        let build_result = builder
+            .set_partition_statistics(statistics.clone())
+            .build()
+            .unwrap();
+        assert_eq!(
+            build_result.metadata.partition_statistics,
+            HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
+        );
+        assert_eq!(build_result.changes, vec![
+            TableUpdate::SetPartitionStatistics {
+                partition_statistics: statistics.clone()
+            }
+        ]);
+
+        // Remove
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_partition_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.partition_statistics.len(), 0);
+        assert_eq!(build_result.changes, vec![
+            TableUpdate::RemovePartitionStatistics {
+                snapshot_id: statistics.snapshot_id
+            }
+        ]);
+
+        // Remove again yields no changes
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_partition_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.partition_statistics.len(), 0);
+        assert_eq!(build_result.changes.len(), 0);
     }
 }
