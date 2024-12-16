@@ -942,7 +942,7 @@
         </span><span class="kw">let </span><span class="kw-2">mut </span>inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         <span class="kw">let </span>result = inclusive_projection.project(<span class="kw-2">&amp;</span>bound_predicate).unwrap();
 
-        <span class="kw">let </span>expected = <span class="string">"day &lt;= 19722"</span>.to_string();
+        <span class="kw">let </span>expected = <span class="string">"day &lt;= 2023-12-31"</span>.to_string();
 
         <span class="macro">assert_eq!</span>(result.to_string(), expected);
     }

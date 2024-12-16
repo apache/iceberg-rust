@@ -3041,7 +3041,7 @@
 
 <span class="kw">impl </span>TransformFunction <span class="kw">for </span>Day {
     <span class="kw">fn </span>transform(<span class="kw-2">&amp;</span><span class="self">self</span>, input: ArrayRef) -&gt; <span class="prelude-ty">Result</span>&lt;ArrayRef&gt; {
-        <span class="kw">let </span>res: Int32Array = <span class="kw">match </span>input.data_type() {
+        <span class="kw">let </span>res: Date32Array = <span class="kw">match </span>input.data_type() {
             DataType::Timestamp(TimeUnit::Microsecond, <span class="kw">_</span>) =&gt; input
                 .as_any()
                 .downcast_ref::&lt;TimestampMicrosecondArray&gt;()
@@ -3093,7 +3093,7 @@
                 ))
             }
         };
-        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Datum::int(val)))
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Datum::date(val)))
     }
 }
 
@@ -3983,7 +3983,7 @@
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -3991,7 +3991,7 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -3999,7 +3999,7 @@
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4007,12 +4007,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= -1"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1969-12-31"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (-1, 0)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1969-12-31, 1970-01-01)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4025,7 +4025,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (0, -1)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1970-01-01, 1969-12-31)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4057,7 +4057,7 @@
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4065,7 +4065,7 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4073,7 +4073,7 @@
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17502"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-12-02"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4081,12 +4081,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name = 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name = 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4099,7 +4099,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (17501, 17502)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (2017-12-02, 2017-12-01)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4131,7 +4131,7 @@
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= -365"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1969-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4139,7 +4139,7 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= -364"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1969-01-02"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4147,7 +4147,7 @@
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= -365"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1969-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4155,12 +4155,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= -365"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1969-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (-364, -365)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1969-01-01, 1969-01-02)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4173,7 +4173,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (-363, -365, -364)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1969-01-02, 1969-01-01, 1969-01-03)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4205,7 +4205,7 @@
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17500"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2017-11-30"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4213,7 +4213,7 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4221,7 +4221,7 @@
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4229,12 +4229,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name = 17501"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name = 2017-12-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4247,7 +4247,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (17501, 17502)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (2017-12-02, 2017-12-01)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4279,7 +4279,7 @@
                 PredicateOperator::LessThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4287,7 +4287,7 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4295,7 +4295,7 @@
                 PredicateOperator::GreaterThan,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4303,12 +4303,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::timestamp_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name = 0"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name = 1970-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4321,7 +4321,7 @@
                 Datum::timestamp_from_str(value)<span class="question-mark">?</span>,
                 Datum::timestamp_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (1, 0)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1970-01-01, 1970-01-02)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4350,7 +4350,7 @@
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= -3"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1969-12-29"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4358,12 +4358,12 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= -2"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 1969-12-30"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= -1"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1969-12-31"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4371,12 +4371,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= -2"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 1969-12-30"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name = -2"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name = 1969-12-30"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4389,7 +4389,7 @@
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
                 Datum::date_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (-2, -4)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (1969-12-28, 1969-12-30)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4418,7 +4418,7 @@
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::LessThan, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17166"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2016-12-31"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4426,12 +4426,12 @@
                 PredicateOperator::LessThanOrEq,
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 17167"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &lt;= 2017-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::GreaterThan, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17168"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-01-02"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4439,12 +4439,12 @@
                 PredicateOperator::GreaterThanOrEq,
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
             ),
-            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 17167"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name &gt;= 2017-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
             <span class="kw-2">&amp;</span>fixture.binary_predicate(PredicateOperator::Eq, Datum::date_from_str(value)<span class="question-mark">?</span>),
-            <span class="prelude-val">Some</span>(<span class="string">"name = 17167"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name = 2017-01-01"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -4457,7 +4457,7 @@
                 Datum::date_from_str(value)<span class="question-mark">?</span>,
                 Datum::date_from_str(another)<span class="question-mark">?</span>,
             ]),
-            <span class="prelude-val">Some</span>(<span class="string">"name IN (17531, 17167)"</span>),
+            <span class="prelude-val">Some</span>(<span class="string">"name IN (2017-01-01, 2017-12-31)"</span>),
         )<span class="question-mark">?</span>;
 
         fixture.assert_projection(
@@ -5398,7 +5398,7 @@
                 .collect::&lt;Vec&lt;i32&gt;&gt;(),
         ));
         <span class="kw">let </span>res = day.transform(date_array).unwrap();
-        <span class="kw">let </span>res = res.as_any().downcast_ref::&lt;Int32Array&gt;().unwrap();
+        <span class="kw">let </span>res = res.as_any().downcast_ref::&lt;Date32Array&gt;().unwrap();
         <span class="macro">assert_eq!</span>(res.len(), <span class="number">5</span>);
         <span class="macro">assert_eq!</span>(res.value(<span class="number">0</span>), expect_day[<span class="number">0</span>]);
         <span class="macro">assert_eq!</span>(res.value(<span class="number">1</span>), expect_day[<span class="number">1</span>]);
@@ -5437,7 +5437,7 @@
                 .collect::&lt;Vec&lt;i64&gt;&gt;(),
         ));
         <span class="kw">let </span>res = day.transform(date_array).unwrap();
-        <span class="kw">let </span>res = res.as_any().downcast_ref::&lt;Int32Array&gt;().unwrap();
+        <span class="kw">let </span>res = res.as_any().downcast_ref::&lt;Date32Array&gt;().unwrap();
         <span class="macro">assert_eq!</span>(res.len(), <span class="number">5</span>);
         <span class="macro">assert_eq!</span>(res.value(<span class="number">0</span>), expect_day[<span class="number">0</span>]);
         <span class="macro">assert_eq!</span>(res.value(<span class="number">1</span>), expect_day[<span class="number">1</span>]);
@@ -5450,18 +5450,18 @@
     </span><span class="kw">fn </span>test_transform_days_literal() {
         <span class="kw">let </span>day = Box::new(<span class="kw">super</span>::Day) <span class="kw">as </span>BoxedTransformFunction;
         <span class="comment">// Test Date32
-        </span>test_date(<span class="number">18628</span>, <span class="kw-2">&amp;</span>day, Datum::int(<span class="number">18628</span>));
-        test_date(-<span class="number">31</span>, <span class="kw-2">&amp;</span>day, Datum::int(-<span class="number">31</span>));
+        </span>test_date(<span class="number">18628</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">18628</span>));
+        test_date(-<span class="number">31</span>, <span class="kw-2">&amp;</span>day, Datum::date(-<span class="number">31</span>));
 
         <span class="comment">// Test TimestampMicrosecond
-        </span>test_timestamp_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::int(<span class="number">17501</span>));
-        test_timestamp_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::int(-<span class="number">2</span>));
-        test_timestamp_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::int(<span class="number">17501</span>));
+        </span>test_timestamp_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
+        test_timestamp_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::date(-<span class="number">2</span>));
+        test_timestamp_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
 
         <span class="comment">// Test TimestampNanosecond
-        </span>test_timestamp_ns_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::int(<span class="number">17</span>));
-        test_timestamp_ns_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::int(-<span class="number">1</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::int(<span class="number">17501</span>));
+        </span>test_timestamp_ns_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17</span>));
+        test_timestamp_ns_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::date(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
     }
 
     <span class="attr">#[test]
