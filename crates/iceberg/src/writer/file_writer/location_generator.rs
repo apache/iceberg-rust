@@ -132,7 +132,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::spec::{BoundPartitionSpec, FormatVersion, TableMetadata};
+    use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -156,7 +156,6 @@ pub(crate) mod test {
 
     #[test]
     fn test_default_location_generate() {
-        let schema = crate::spec::Schema::builder().build().unwrap();
         let mut table_metadata = TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
@@ -166,7 +165,8 @@ pub(crate) mod test {
             schemas: HashMap::new(),
             current_schema_id: 1,
             partition_specs: HashMap::new(),
-            default_spec: BoundPartitionSpec::unpartition_spec(schema).into(),
+            default_spec: PartitionSpec::unpartition_spec().into(),
+            default_partition_type: StructType::new(vec![]),
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![]),
