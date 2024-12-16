@@ -28,7 +28,7 @@ members = [
 exclude = ["bindings/python"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org/"
 
@@ -62,11 +62,11 @@ either = "1"
 env_logger = "0.11.0"
 fnv = "1"
 futures = "0.3"
-iceberg = { version = "0.3.0", path = "./crates/iceberg" }
-iceberg-catalog-rest = { version = "0.3.0", path = "./crates/catalog/rest" }
-iceberg-catalog-hms = { version = "0.3.0", path = "./crates/catalog/hms" }
-iceberg-catalog-memory = { version = "0.3.0", path = "./crates/catalog/memory" }
-iceberg-datafusion = { version = "0.3.0", path = "./crates/integrations/datafusion" }
+iceberg = { version = "0.4.0", path = "./crates/iceberg" }
+iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
+iceberg-catalog-hms = { version = "0.4.0", path = "./crates/catalog/hms" }
+iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
+iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
 log = "0.4"
 mockito = "1"
