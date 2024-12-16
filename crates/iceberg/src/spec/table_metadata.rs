@@ -371,13 +371,15 @@ impl TableMetadata {
 
     /// Return location of statistics files.
     #[inline]
-    pub fn statistics(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {
+    pub fn statistics_iter(&self) -> impl ExactSizeIterator<Item = &StatisticsFile> {
         self.statistics.values()
     }
 
     /// Return location of partition statistics files.
     #[inline]
-    pub fn partition_statistics(&self) -> impl ExactSizeIterator<Item = &PartitionStatisticsFile> {
+    pub fn partition_statistics_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &PartitionStatisticsFile> {
         self.partition_statistics.values()
     }
 
