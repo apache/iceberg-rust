@@ -20,3 +20,4 @@
 #![deny(missing_docs)]
 
 mod catalog;
+mod utils;

@@ -2,27 +2,35 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use aws_config::BehaviorVersion;
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
 
+use crate::utils::create_sdk_config;
+
+#[derive(Debug)]
+pub struct S3TablesCatalogConfig {
+    table_bucket_arn: String,
+    properties: HashMap<String, String>,
+    endpoint_url: Option<String>,
+}
+
 /// S3Tables catalog implementation.
 #[derive(Debug)]
 pub struct S3TablesCatalog {
-    table_bucket_arn: String,
-    client: aws_sdk_s3tables::Client,
+    config: S3TablesCatalogConfig,
+    s3tables_client: aws_sdk_s3tables::Client,
 }
 
 impl S3TablesCatalog {
-    pub async fn new(table_bucket_arn: String) -> Self {
-        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-        let client = aws_sdk_s3tables::Client::new(&config);
+    pub async fn new(config: S3TablesCatalogConfig) -> Self {
+        let aws_config = create_sdk_config(&config.properties, config.endpoint_url.clone()).await;
+        let s3tables_client = aws_sdk_s3tables::Client::new(&aws_config);
         Self {
-            table_bucket_arn,
-            client,
+            config,
+            s3tables_client,
         }
     }
 }
@@ -34,21 +42,16 @@ impl Catalog for S3TablesCatalog {
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let mut req = self
-            .client
+            .s3tables_client
             .list_namespaces()
-            .table_bucket_arn(self.table_bucket_arn.clone());
+            .table_bucket_arn(self.config.table_bucket_arn.clone());
         if let Some(parent) = parent {
             req = req.prefix(parent.to_url_string());
         }
         let resp = req.send().await.map_err(from_aws_sdk_error)?;
         let mut result = Vec::new();
         for ns in resp.namespaces() {
-            let ns_names = ns.namespace();
-            result.extend(
-                ns_names
-                    .into_iter()
-                    .map(|name| NamespaceIdent::new(name.to_string())),
-            );
+            result.push(NamespaceIdent::from_vec(ns.namespace().to_vec())?);
         }
         Ok(result)
     }
