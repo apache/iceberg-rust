@@ -26,7 +26,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::table_metadata::SnapshotLog;
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::io::FileIO;
 use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
@@ -191,13 +190,6 @@ impl Snapshot {
             table_metadata.format_version(),
             partition_type_provider,
         )
-    }
-
-    pub(crate) fn log(&self) -> SnapshotLog {
-        SnapshotLog {
-            timestamp_ms: self.timestamp_ms,
-            snapshot_id: self.snapshot_id,
-        }
     }
 }
 
