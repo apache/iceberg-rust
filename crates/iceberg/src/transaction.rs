@@ -356,11 +356,7 @@ impl<'a> SnapshotProduceAction<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                self.tx
-                    .table
-                    .metadata()
-                    .default_partition_spec()
-                    .partition_type(),
+                self.tx.table.metadata().default_partition_type(),
             )?;
         }
         self.added_data_files.extend(data_files);
