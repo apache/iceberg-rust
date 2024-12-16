@@ -483,7 +483,7 @@ impl TableUpdate {
                 builder.upgrade_format_version(format_version)
             }
             TableUpdate::RemovePartitionSpecs { spec_ids } => {
-                Ok(builder.remove_partition_specs(&spec_ids))
+                builder.remove_partition_specs(&spec_ids)
             }
         }
     }

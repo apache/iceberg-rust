@@ -745,15 +745,18 @@ impl TableMetadataBuilder {
     ///
     /// If the default partition spec is removed, it is re-added
     /// upon build.
-    pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Self {
-        let mut removed_specs = Vec::with_capacity(spec_ids.len());
+    pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Result<Self> {
+        if spec_ids.contains(&self.metadata.default_spec.spec_id()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot remove default partition spec",
+            ));
+        }
 
-        self.metadata.partition_specs.retain(|k, _| {
-            if spec_ids.contains(k) {
-                removed_specs.push(*k);
-                false
-            } else {
-                true
+        let mut removed_specs = Vec::with_capacity(spec_ids.len());
+        spec_ids.iter().for_each(|id| {
+            if self.metadata.partition_specs.remove(id).is_some() {
+                removed_specs.push(*id);
             }
         });
 
@@ -763,7 +766,7 @@ impl TableMetadataBuilder {
             });
         }
 
-        self
+        Ok(self)
     }
 
     /// Add a sort order to the table metadata.
@@ -1577,6 +1580,7 @@ mod tests {
                 "s3://bucket/test/location/metadata/metadata1.json".to_string(),
             ))
             .remove_partition_specs(&[1])
+            .unwrap()
             .build()
             .unwrap();
 
@@ -2197,14 +2201,6 @@ mod tests {
     fn test_default_spec_cannot_be_removed() {
         let builder = builder_without_changes(FormatVersion::V2);
 
-        let metadata = builder
-            .remove_partition_specs(&[0])
-            .build()
-            .unwrap()
-            .metadata;
-
-        assert_eq!(metadata.default_spec.spec_id(), 0);
-        assert_eq!(metadata.partition_specs.len(), 1);
-        assert!(metadata.partition_spec_by_id(0).is_some());
+        builder.remove_partition_specs(&[0]).unwrap_err();
     }
 }
