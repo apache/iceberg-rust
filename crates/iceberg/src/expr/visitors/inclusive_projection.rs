@@ -21,16 +21,16 @@ use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference, Predicate};
-use crate::spec::{Datum, PartitionField, SchemalessPartitionSpecRef};
+use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::Error;
 
 pub(crate) struct InclusiveProjection {
-    partition_spec: SchemalessPartitionSpecRef,
+    partition_spec: PartitionSpecRef,
     cached_parts: HashMap<i32, Vec<PartitionField>>,
 }
 
 impl InclusiveProjection {
-    pub(crate) fn new(partition_spec: SchemalessPartitionSpecRef) -> Self {
+    pub(crate) fn new(partition_spec: PartitionSpecRef) -> Self {
         Self {
             partition_spec,
             cached_parts: HashMap::new(),
@@ -235,7 +235,7 @@ mod tests {
     use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{
-        BoundPartitionSpec, Datum, NestedField, PrimitiveType, Schema, Transform, Type,
+        Datum, NestedField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -267,11 +267,10 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -298,7 +297,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -310,8 +309,7 @@ mod tests {
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -336,7 +334,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
@@ -346,8 +344,7 @@ mod tests {
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -372,7 +369,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
@@ -382,8 +379,7 @@ mod tests {
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -408,7 +404,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_fields(vec![UnboundPartitionField {
                 source_id: 2,
@@ -418,8 +414,7 @@ mod tests {
             }])
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -444,7 +439,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -456,8 +451,7 @@ mod tests {
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
@@ -485,7 +479,7 @@ mod tests {
         let schema = build_test_schema();
         let arc_schema = Arc::new(schema);
 
-        let partition_spec = BoundPartitionSpec::builder(arc_schema.clone())
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -497,8 +491,7 @@ mod tests {
             )
             .unwrap()
             .build()
-            .unwrap()
-            .into_schemaless();
+            .unwrap();
 
         let arc_partition_spec = Arc::new(partition_spec);
 
