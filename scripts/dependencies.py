@@ -27,8 +27,9 @@ DIRS = [
     "crates/catalog/memory", "crates/catalog/rest",
     "crates/catalog/sql",
 
-    "crates/integrations/datafusion"
-
+    "crates/integrations/datafusion",
+    
+    "bindings/python"
 ]
 
 
