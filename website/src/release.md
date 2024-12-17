@@ -111,7 +111,7 @@ Please note that this version is the exact version of the release, not the relea
 
 ### Update docs
 
-- Update `CHANGELOG.md`, refer to [Generate Release Note](reference/generate_release_note.md) for more information.
+- Update `CHANGELOG.md` by Drafting a new release [note on Github Releases](https://github.com/apache/iceberg-rust/releases/new)
 
 ### Generate dependencies list
 
