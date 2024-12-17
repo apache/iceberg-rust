@@ -367,12 +367,6 @@ pub enum TableUpdate {
     AddSchema {
         /// The schema to add.
         schema: Schema,
-        /// The last column id of the table.
-        #[deprecated(
-            since = "0.3.0",
-            note = "This field is handled internally, and should not be part of the update."
-        )]
-        last_column_id: Option<i32>,
     },
     /// Set table's current schema
     #[serde(rename_all = "kebab-case")]
@@ -1301,7 +1295,6 @@ mod tests {
         "#,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: Some(3),
             },
         );
 
@@ -1340,7 +1333,6 @@ mod tests {
         "#,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: None,
             },
         );
     }

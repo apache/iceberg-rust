@@ -23,8 +23,6 @@
 
 Rust implementation of [Apache Iceberg™](https://iceberg.apache.org/).
 
-Working on [v0.3.0 Release Milestone](https://github.com/apache/iceberg-rust/milestone/2)
-
 ## Components
 
 The Apache Iceberg Rust project is composed of the following components:
