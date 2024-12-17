@@ -43,10 +43,20 @@ use crate::{Error, ErrorKind, Result};
 /// | GCS                | `storage-gcs`     | `gcs`       |
 #[derive(Clone, Debug)]
 pub struct FileIO {
+    builder: FileIOBuilder,
+
     inner: Arc<Storage>,
 }
 
 impl FileIO {
+    /// Convert FileIO into [`FileIOBuilder`] which used to build this FileIO.
+    ///
+    /// This function is useful when you want serialize and deserialize FileIO across
+    /// distributed systems.
+    pub fn into_builder(self) -> FileIOBuilder {
+        self.builder
+    }
+
     /// Try to infer file io scheme from path. See [`FileIO`] for supported schemes.
     ///
     /// - If it's a valid url, for example `s3://bucket/a`, url scheme will be used, and the rest of the url will be ignored.
@@ -134,7 +144,7 @@ impl FileIO {
 }
 
 /// Builder for [`FileIO`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FileIOBuilder {
     /// This is used to infer scheme of operator.
     ///
@@ -165,7 +175,7 @@ impl FileIOBuilder {
     /// Fetch the scheme string.
     ///
     /// The scheme_str will be empty if it's None.
-    pub(crate) fn into_parts(self) -> (String, HashMap<String, String>) {
+    pub fn into_parts(self) -> (String, HashMap<String, String>) {
         (self.scheme_str.unwrap_or_default(), self.props)
     }
 
@@ -186,9 +196,10 @@ impl FileIOBuilder {
     }
 
     /// Builds [`FileIO`].
-    pub fn build(self) -> crate::Result<FileIO> {
-        let storage = Storage::build(self)?;
+    pub fn build(self) -> Result<FileIO> {
+        let storage = Storage::build(self.clone())?;
         Ok(FileIO {
+            builder: self,
             inner: Arc::new(storage),
         })
     }
