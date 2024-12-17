@@ -24,7 +24,6 @@ use datafusion::catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::sql::TableReference;
-use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
 use iceberg::{Error, ErrorKind, Result, TableIdent};
@@ -126,7 +125,11 @@ impl TableProviderFactory for IcebergTableProviderFactory {
             .map_err(to_datafusion_error)?
             .into_table();
 
-        let schema = schema_to_arrow_schema(table.metadata().current_schema())
+        let schema = table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .try_into()
             .map_err(to_datafusion_error)?;
 
         Ok(Arc::new(IcebergTableProvider::new(table, Arc::new(schema))))

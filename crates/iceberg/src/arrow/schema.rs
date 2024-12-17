@@ -208,13 +208,13 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
 }
 
 /// Convert Arrow schema to Iceberg schema.
-pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
+fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
 }
 
 /// Convert Arrow type to iceberg type.
-pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
+fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_type(ty, &mut visitor)
 }
@@ -621,7 +621,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 }
 
 /// Convert iceberg schema to an arrow schema.
-pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<ArrowSchema> {
+fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<ArrowSchema> {
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_schema(schema, &mut converter)? {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
@@ -630,7 +630,7 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
 }
 
 /// Convert iceberg type to an arrow type.
-pub fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
+fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_type(ty, &mut converter)? {
         ArrowSchemaOrFieldOrType::Type(ty) => Ok(ty),
@@ -822,11 +822,35 @@ impl TryFrom<&ArrowSchema> for crate::spec::Schema {
     }
 }
 
+impl TryFrom<ArrowSchema> for crate::spec::Schema {
+    type Error = Error;
+
+    fn try_from(value: ArrowSchema) -> crate::Result<Self> {
+        (&value).try_into()
+    }
+}
+
 impl TryFrom<&crate::spec::Schema> for ArrowSchema {
     type Error = Error;
 
     fn try_from(schema: &crate::spec::Schema) -> crate::Result<Self> {
         schema_to_arrow_schema(schema)
+    }
+}
+
+impl TryFrom<&DataType> for crate::spec::Type {
+    type Error = Error;
+
+    fn try_from(value: &DataType) -> crate::Result<Self> {
+        arrow_type_to_type(value)
+    }
+}
+
+impl TryFrom<&crate::spec::Type> for DataType {
+    type Error = Error;
+
+    fn try_from(value: &crate::spec::Type) -> crate::Result<DataType> {
+        type_to_arrow_type(value)
     }
 }
 

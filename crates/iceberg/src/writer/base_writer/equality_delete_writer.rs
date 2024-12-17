@@ -25,7 +25,6 @@ use itertools::Itertools;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
-use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
@@ -62,7 +61,7 @@ impl EqualityDeleteWriterConfig {
         original_schema: SchemaRef,
         partition_value: Option<Struct>,
     ) -> Result<Self> {
-        let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
+        let original_arrow_schema = Arc::new(original_schema.as_ref().try_into()?);
         let projector = RecordBatchProjector::new(
             original_arrow_schema,
             &equality_ids,
@@ -180,7 +179,6 @@ mod test {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
     use crate::io::{FileIO, FileIOBuilder};
     use crate::spec::{
         DataFile, DataFileFormat, ListType, MapType, NestedField, PrimitiveType, Schema,
@@ -325,7 +323,7 @@ mod test {
             ])
             .build()
             .unwrap();
-        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let arrow_schema: arrow_schema::SchemaRef = Arc::new((&schema).try_into().unwrap());
         let col0 = Arc::new(Int32Array::from_iter_values(vec![1; 1024])) as ArrayRef;
         let col1 = Arc::new(StructArray::new(
             if let DataType::Struct(fields) = arrow_schema.fields.get(1).unwrap().data_type() {
@@ -386,8 +384,11 @@ mod test {
         let equality_ids = vec![0_i32, 8];
         let equality_config =
             EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
-        let delete_schema =
-            arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
+        let delete_schema = equality_config
+            .projected_arrow_schema_ref()
+            .as_ref()
+            .try_into()
+            .unwrap();
         let projector = equality_config.projector.clone();
 
         // prepare writer
@@ -553,7 +554,7 @@ mod test {
         let equality_ids = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
         let config = EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), None).unwrap();
         let delete_arrow_schema = config.projected_arrow_schema_ref().clone();
-        let delete_schema = arrow_schema_to_schema(&delete_arrow_schema).unwrap();
+        let delete_schema = delete_arrow_schema.as_ref().try_into().unwrap();
 
         let pb = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),

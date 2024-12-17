@@ -28,7 +28,6 @@ use arrow_schema::{
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{Literal, PrimitiveLiteral, Schema as IcebergSchema};
 use crate::{Error, ErrorKind, Result};
 
@@ -179,7 +178,7 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
     ) -> Result<BatchTransform> {
-        let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
+        let mapped_unprojected_arrow_schema = Arc::new(snapshot_schema.try_into()?);
         let field_id_to_mapped_schema_map =
             Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
 

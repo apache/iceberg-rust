@@ -27,7 +27,6 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
@@ -64,7 +63,7 @@ impl IcebergTableProvider {
         let ident = TableIdent::new(namespace, name.into());
         let table = client.load_table(&ident).await?;
 
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let schema = Arc::new(table.metadata().current_schema().as_ref().try_into()?);
 
         Ok(IcebergTableProvider {
             table,
@@ -76,7 +75,7 @@ impl IcebergTableProvider {
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let schema = Arc::new(table.metadata().current_schema().as_ref().try_into()?);
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
@@ -100,7 +99,7 @@ impl IcebergTableProvider {
                 )
             })?;
         let schema = snapshot.schema(table.metadata())?;
-        let schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let schema = Arc::new(schema.as_ref().try_into()?);
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),

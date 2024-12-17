@@ -40,8 +40,8 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FI
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use crate::arrow::get_arrow_datum;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
-use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
@@ -333,7 +333,7 @@ impl ArrowReader {
             // Pre-project only the fields that have been selected, possibly avoiding converting
             // some Arrow types that are not yet supported.
             let mut projected_fields: HashMap<FieldRef, i32> = HashMap::new();
-            let projected_arrow_schema = ArrowSchema::new_with_metadata(
+            let iceberg_schema: crate::spec::Schema = ArrowSchema::new_with_metadata(
                 fields.filter_leaves(|_, f| {
                     f.metadata()
                         .get(PARQUET_FIELD_ID_META_KEY)
@@ -344,8 +344,8 @@ impl ArrowReader {
                         })
                 }),
                 arrow_schema.metadata().clone(),
-            );
-            let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
+            )
+            .try_into()?;
 
             fields.filter_leaves(|idx, field| {
                 let Some(field_id) = projected_fields.get(field).cloned() else {
