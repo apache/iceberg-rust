@@ -2020,6 +2020,22 @@
 <a href="#2020" id="2020">2020</a>
 <a href="#2021" id="2021">2021</a>
 <a href="#2022" id="2022">2022</a>
+<a href="#2023" id="2023">2023</a>
+<a href="#2024" id="2024">2024</a>
+<a href="#2025" id="2025">2025</a>
+<a href="#2026" id="2026">2026</a>
+<a href="#2027" id="2027">2027</a>
+<a href="#2028" id="2028">2028</a>
+<a href="#2029" id="2029">2029</a>
+<a href="#2030" id="2030">2030</a>
+<a href="#2031" id="2031">2031</a>
+<a href="#2032" id="2032">2032</a>
+<a href="#2033" id="2033">2033</a>
+<a href="#2034" id="2034">2034</a>
+<a href="#2035" id="2035">2035</a>
+<a href="#2036" id="2036">2036</a>
+<a href="#2037" id="2037">2037</a>
+<a href="#2038" id="2038">2038</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2389,12 +2405,6 @@
     </span>AddSchema {
         <span class="doccomment">/// The schema to add.
         </span>schema: Schema,
-        <span class="doccomment">/// The last column id of the table.
-        </span><span class="attr">#[deprecated(
-            since = <span class="string">"0.3.0"</span>,
-            note = <span class="string">"This field is handled internally, and should not be part of the update."
-        </span>)]
-        </span>last_column_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
     },
     <span class="doccomment">/// Set table's current schema
     </span><span class="attr">#[serde(rename_all = <span class="string">"kebab-case"</span>)]
@@ -2468,6 +2478,12 @@
         <span class="doccomment">/// Properties to remove
         </span>removals: Vec&lt;String&gt;,
     },
+    <span class="doccomment">/// Remove partition specs
+    </span><span class="attr">#[serde(rename_all = <span class="string">"kebab-case"</span>)]
+    </span>RemovePartitionSpecs {
+        <span class="doccomment">/// Partition spec ids to remove.
+        </span>spec_ids: Vec&lt;i32&gt;,
+    },
     <span class="doccomment">/// Set statistics for a snapshot
     </span><span class="attr">#[serde(with = <span class="string">"_serde_set_statistics"</span>)]
     </span>SetStatistics {
@@ -2521,6 +2537,9 @@
             TableUpdate::RemoveProperties { removals } =&gt; builder.remove_properties(<span class="kw-2">&amp;</span>removals),
             TableUpdate::UpgradeFormatVersion { format_version } =&gt; {
                 builder.upgrade_format_version(format_version)
+            }
+            TableUpdate::RemovePartitionSpecs { spec_ids } =&gt; {
+                builder.remove_partition_specs(<span class="kw-2">&amp;</span>spec_ids)
             }
             TableUpdate::SetStatistics { statistics } =&gt; <span class="prelude-val">Ok</span>(builder.set_statistics(statistics)),
             TableUpdate::RemoveStatistics { snapshot_id } =&gt; {
@@ -3323,7 +3342,6 @@
         "#</span>,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: <span class="prelude-val">Some</span>(<span class="number">3</span>),
             },
         );
 
@@ -3362,7 +3380,6 @@
         "#</span>,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: <span class="prelude-val">None</span>,
             },
         );
     }
@@ -3937,6 +3954,21 @@
 }        
         "#</span>,
             ViewUpdate::SetCurrentViewVersion { view_version_id: <span class="number">1 </span>},
+        );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_remove_partition_specs_update() {
+        test_serde_json(
+            <span class="string">r#"
+{
+    "action": "remove-partition-specs",
+    "spec-ids": [1, 2]
+}        
+        "#</span>,
+            TableUpdate::RemovePartitionSpecs {
+                spec_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>],
+            },
         );
     }
 

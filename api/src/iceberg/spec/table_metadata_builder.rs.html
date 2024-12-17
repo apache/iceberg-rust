@@ -2299,6 +2299,49 @@
 <a href="#2299" id="2299">2299</a>
 <a href="#2300" id="2300">2300</a>
 <a href="#2301" id="2301">2301</a>
+<a href="#2302" id="2302">2302</a>
+<a href="#2303" id="2303">2303</a>
+<a href="#2304" id="2304">2304</a>
+<a href="#2305" id="2305">2305</a>
+<a href="#2306" id="2306">2306</a>
+<a href="#2307" id="2307">2307</a>
+<a href="#2308" id="2308">2308</a>
+<a href="#2309" id="2309">2309</a>
+<a href="#2310" id="2310">2310</a>
+<a href="#2311" id="2311">2311</a>
+<a href="#2312" id="2312">2312</a>
+<a href="#2313" id="2313">2313</a>
+<a href="#2314" id="2314">2314</a>
+<a href="#2315" id="2315">2315</a>
+<a href="#2316" id="2316">2316</a>
+<a href="#2317" id="2317">2317</a>
+<a href="#2318" id="2318">2318</a>
+<a href="#2319" id="2319">2319</a>
+<a href="#2320" id="2320">2320</a>
+<a href="#2321" id="2321">2321</a>
+<a href="#2322" id="2322">2322</a>
+<a href="#2323" id="2323">2323</a>
+<a href="#2324" id="2324">2324</a>
+<a href="#2325" id="2325">2325</a>
+<a href="#2326" id="2326">2326</a>
+<a href="#2327" id="2327">2327</a>
+<a href="#2328" id="2328">2328</a>
+<a href="#2329" id="2329">2329</a>
+<a href="#2330" id="2330">2330</a>
+<a href="#2331" id="2331">2331</a>
+<a href="#2332" id="2332">2332</a>
+<a href="#2333" id="2333">2333</a>
+<a href="#2334" id="2334">2334</a>
+<a href="#2335" id="2335">2335</a>
+<a href="#2336" id="2336">2336</a>
+<a href="#2337" id="2337">2337</a>
+<a href="#2338" id="2338">2338</a>
+<a href="#2339" id="2339">2339</a>
+<a href="#2340" id="2340">2340</a>
+<a href="#2341" id="2341">2341</a>
+<a href="#2342" id="2342">2342</a>
+<a href="#2343" id="2343">2343</a>
+<a href="#2344" id="2344">2344</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2886,7 +2929,6 @@
         <span class="kw">if </span>schema_found {
             <span class="kw">if </span><span class="self">self</span>.last_added_schema_id != <span class="prelude-val">Some</span>(new_schema_id) {
                 <span class="self">self</span>.changes.push(TableUpdate::AddSchema {
-                    last_column_id: <span class="prelude-val">Some</span>(<span class="self">self</span>.metadata.last_column_id),
                     schema: schema.clone(),
                 });
                 <span class="self">self</span>.last_added_schema_id = <span class="prelude-val">Some</span>(new_schema_id);
@@ -2910,10 +2952,7 @@
             .schemas
             .insert(new_schema_id, schema.clone().into());
 
-        <span class="self">self</span>.changes.push(TableUpdate::AddSchema {
-            schema,
-            last_column_id: <span class="prelude-val">Some</span>(<span class="self">self</span>.metadata.last_column_id),
-        });
+        <span class="self">self</span>.changes.push(TableUpdate::AddSchema { schema });
 
         <span class="self">self</span>.last_added_schema_id = <span class="prelude-val">Some</span>(new_schema_id);
 
@@ -3087,6 +3126,36 @@
     </span><span class="kw">pub fn </span>add_default_partition_spec(<span class="self">self</span>, unbound_spec: UnboundPartitionSpec) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="self">self</span>.add_partition_spec(unbound_spec)<span class="question-mark">?
             </span>.set_default_partition_spec(<span class="self">Self</span>::LAST_ADDED)
+    }
+
+    <span class="doccomment">/// Remove partition specs by their ids from the table metadata.
+    /// Does nothing if a spec id is not present. Active partition specs
+    /// should not be removed.
+    ///
+    /// # Errors
+    /// - Cannot remove the default partition spec.
+    </span><span class="kw">pub fn </span>remove_partition_specs(<span class="kw-2">mut </span><span class="self">self</span>, spec_ids: <span class="kw-2">&amp;</span>[i32]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">if </span>spec_ids.contains(<span class="kw-2">&amp;</span><span class="self">self</span>.metadata.default_spec.spec_id()) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::DataInvalid,
+                <span class="string">"Cannot remove default partition spec"</span>,
+            ));
+        }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>removed_specs = Vec::with_capacity(spec_ids.len());
+        spec_ids.iter().for_each(|id| {
+            <span class="kw">if </span><span class="self">self</span>.metadata.partition_specs.remove(id).is_some() {
+                removed_specs.push(<span class="kw-2">*</span>id);
+            }
+        });
+
+        <span class="kw">if </span>!removed_specs.is_empty() {
+            <span class="self">self</span>.changes.push(TableUpdate::RemovePartitionSpecs {
+                spec_ids: removed_specs,
+            });
+        }
+
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>)
     }
 
     <span class="doccomment">/// Add a sort order to the table metadata.
@@ -3754,10 +3823,7 @@
             TableUpdate::SetLocation {
                 location: TEST_LOCATION.to_string()
             },
-            TableUpdate::AddSchema {
-                last_column_id: <span class="prelude-val">Some</span>(LAST_ASSIGNED_COLUMN_ID),
-                schema: schema(),
-            },
+            TableUpdate::AddSchema { schema: schema() },
             TableUpdate::SetCurrentSchema { schema_id: -<span class="number">1 </span>},
             TableUpdate::AddSpec {
                 <span class="comment">// Because this is a new tables, field-ids are assigned
@@ -3810,7 +3876,6 @@
                 location: TEST_LOCATION.to_string()
             },
             TableUpdate::AddSchema {
-                last_column_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
                 schema: Schema::builder().build().unwrap(),
             },
             TableUpdate::SetCurrentSchema { schema_id: -<span class="number">1 </span>},
@@ -3893,6 +3958,21 @@
         <span class="macro">pretty_assertions::assert_eq!</span>(build_result.changes[<span class="number">0</span>], TableUpdate::AddSpec {
             spec: expected_change
         });
+
+        <span class="comment">// Remove the spec
+        </span><span class="kw">let </span>build_result = build_result
+            .metadata
+            .into_builder(<span class="prelude-val">Some</span>(
+                <span class="string">"s3://bucket/test/location/metadata/metadata1.json"</span>.to_string(),
+            ))
+            .remove_partition_specs(<span class="kw-2">&amp;</span>[<span class="number">1</span>])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        <span class="macro">assert_eq!</span>(build_result.changes.len(), <span class="number">1</span>);
+        <span class="macro">assert_eq!</span>(build_result.metadata.partition_specs.len(), <span class="number">1</span>);
+        <span class="macro">assert!</span>(build_result.metadata.partition_spec_by_id(<span class="number">1</span>).is_none());
     }
 
     <span class="attr">#[test]
@@ -4052,7 +4132,6 @@
             <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>Arc::new(added_schema.clone()))
         );
         <span class="macro">pretty_assertions::assert_eq!</span>(build_result.changes[<span class="number">0</span>], TableUpdate::AddSchema {
-            last_column_id: <span class="prelude-val">Some</span>(<span class="number">4</span>),
             schema: added_schema
         });
         <span class="macro">assert_eq!</span>(build_result.changes[<span class="number">1</span>], TableUpdate::SetCurrentSchema {
@@ -4501,6 +4580,13 @@
         <span class="macro">assert!</span>(err
             .to_string()
             .contains(<span class="string">"Cannot add snapshot with sequence number"</span>));
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_default_spec_cannot_be_removed() {
+        <span class="kw">let </span>builder = builder_without_changes(FormatVersion::V2);
+
+        builder.remove_partition_specs(<span class="kw-2">&amp;</span>[<span class="number">0</span>]).unwrap_err();
     }
 
     <span class="attr">#[test]
