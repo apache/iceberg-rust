@@ -136,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * docker: The `archive` seems unstable by @Fokko in https://github.com/apache/iceberg-rust/pull/773
 * doc: add RisingWave to users by @xxchan in https://github.com/apache/iceberg-rust/pull/775
 * feat: Expose disable_config_load opendal S3 option by @gruuya in https://github.com/apache/iceberg-rust/pull/782
-* Suport conversion of Arrow Int8 and Int16 to Iceberg Int by @gruuya in https://github.com/apache/iceberg-rust/pull/787
+* Support conversion of Arrow Int8 and Int16 to Iceberg Int by @gruuya in https://github.com/apache/iceberg-rust/pull/787
 * infra: Dismiss stale reviews by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/779
 * fix: return type for year and month transform should be int by @xxchan in https://github.com/apache/iceberg-rust/pull/776
 * feat: Allow for schema evolution by @Fokko in https://github.com/apache/iceberg-rust/pull/786
