@@ -31,5 +31,7 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+iceberg-datafusion = { workspace = true }
+datafusion = "43"
 parquet = { workspace = true }
 tokio = { workspace = true }
