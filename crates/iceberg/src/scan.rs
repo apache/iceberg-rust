@@ -961,7 +961,7 @@ impl FileScanTask {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -990,13 +990,14 @@ mod tests {
     use crate::table::Table;
     use crate::TableIdent;
 
-    struct TableTestFixture {
+    pub struct TableTestFixture {
         table_location: String,
-        table: Table,
+        pub table: Table,
     }
 
     impl TableTestFixture {
-        fn new() -> Self {
+        #[allow(clippy::new_without_default)]
+        pub fn new() -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");
             let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::arrow::ArrowReaderBuilder;
 use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
+use crate::metadata_scan::MetadataScan;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
@@ -198,6 +199,11 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+
+    /// Creates a metadata scan.
+    pub fn metadata_scan(&self) -> MetadataScan {
+        MetadataScan::new(self)
     }
 
     /// Returns the flag indicating whether the `Table` is readonly or not

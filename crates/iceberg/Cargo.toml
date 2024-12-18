@@ -92,3 +92,4 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
+expect-test = { workspace = true }
