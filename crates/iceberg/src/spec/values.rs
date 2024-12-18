@@ -55,6 +55,11 @@ use crate::{ensure_data_valid, Error, ErrorKind};
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
 
+const INT_MAX: i32 = 2147483647;
+const INT_MIN: i32 = -2147483648;
+const LONG_MAX: i64 = 9223372036854775807;
+const LONG_MIN: i64 = -9223372036854775808;
+
 /// Values present in iceberg type
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
@@ -76,6 +81,10 @@ pub enum PrimitiveLiteral {
     Int128(i128),
     /// Stored as 16-byte little-endian
     UInt128(u128),
+    /// When a number is larger than it can hold
+    AboveMax,
+    /// When a number is smaller than it can hold
+    BelowMin,
 }
 
 impl PrimitiveLiteral {
@@ -488,6 +497,12 @@ impl Datum {
                 bytes.truncate(required_bytes as usize);
 
                 ByteBuf::from(bytes)
+            }
+            PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot convert AboveMax or BelowMin to bytes".to_string(),
+                ));
             }
         };
 
@@ -1093,6 +1108,42 @@ impl Datum {
         }
     }
 
+    fn i64_to_i32<T: Into<i64> + PartialOrd<i64>>(val: T) -> Datum {
+        if val > INT_MAX as i64 {
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax)
+        } else if val < INT_MIN as i64 {
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::int(val.into() as i32)
+        }
+    }
+
+    fn i128_to_i32<T: Into<i128> + PartialOrd<i128>>(val: T) -> Datum {
+        if val > INT_MAX as i128 {
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax)
+        } else if val < INT_MIN as i128 {
+            Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::int(val.into() as i32)
+        }
+    }
+
+    fn i128_to_i64<T: Into<i128> + PartialOrd<i128>>(val: T) -> Datum {
+        if val > LONG_MAX as i128 {
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax)
+        } else if val < LONG_MIN as i128 {
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::long(val.into() as i64)
+        }
+    }
+
+    fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
+        return s.as_ref().parse::<i128>().map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
+        });
+    }
+
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
         match target_type {
@@ -1101,6 +1152,36 @@ impl Datum {
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Int) => Ok(Datum::int(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Date) => Ok(Datum::date(*val)),
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
+                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
+                        Ok(Datum::i64_to_i32(*val))
+                    }
+                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
+                        Ok(Datum::timestamp_micros(*val))
+                    }
+                    (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamptz) => {
+                        Ok(Datum::timestamptz_micros(*val))
+                    }
+                    // Let's wait with nano's until this clears up: https://github.com/apache/iceberg/pull/11775
+                    (PrimitiveLiteral::Int128(val), _, PrimitiveType::Long) => {
+                        Ok(Datum::i128_to_i64(*val))
+                    }
+
+                    (PrimitiveLiteral::String(val), _, PrimitiveType::Boolean) => {
+                        Datum::bool_from_str(val)
+                    }
+                    (PrimitiveLiteral::String(val), _, PrimitiveType::Int) => {
+                        Datum::string_to_i128(val).map(Datum::i128_to_i32)
+                    }
+                    (PrimitiveLiteral::String(val), _, PrimitiveType::Long) => {
+                        Datum::string_to_i128(val).map(Datum::i128_to_i64)
+                    }
+                    (PrimitiveLiteral::String(val), _, PrimitiveType::Timestamp) => {
+                        Datum::timestamp_from_str(val)
+                    }
+                    (PrimitiveLiteral::String(val), _, PrimitiveType::Timestamptz) => {
+                        Datum::timestamptz_from_str(val)
+                    }
+
                     // TODO: implement more type conversions
                     (_, self_type, target_type) if self_type == target_type => Ok(self),
                     _ => Err(Error::new(
@@ -2047,6 +2128,7 @@ impl Literal {
                 PrimitiveLiteral::String(any) => Box::new(any),
                 PrimitiveLiteral::UInt128(any) => Box::new(any),
                 PrimitiveLiteral::Int128(any) => Box::new(any),
+                PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => unimplemented!(),
             },
             _ => unimplemented!(),
         }
@@ -2364,6 +2446,12 @@ mod _serde {
                     super::PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     super::PrimitiveLiteral::Int128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
+                    }
+                    super::PrimitiveLiteral::AboveMax | super::PrimitiveLiteral::BelowMin => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            "Can't convert AboveMax or BelowMax",
+                        ));
                     }
                 },
                 Literal::Struct(r#struct) => {
@@ -3601,6 +3689,149 @@ mod tests {
         let result = datum_int.to(&Primitive(PrimitiveType::Date)).unwrap();
 
         let expected = Datum::date(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_int() {
+        let datum = Datum::long(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::int(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_int_above_max() {
+        let datum = Datum::long(INT_MAX as i64 + 1);
+
+        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_int_below_min() {
+        let datum = Datum::long(INT_MIN as i64 - 1);
+
+        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_timestamp() {
+        let datum = Datum::long(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_long_convert_to_timestamptz() {
+        let datum = Datum::long(12345);
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
+
+        let expected = Datum::timestamptz_micros(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_decimal_convert_to_long() {
+        let datum = Datum::decimal(12345).unwrap();
+
+        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
+
+        let expected = Datum::long(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_decimal_convert_to_long_above_max() {
+        let datum = Datum::decimal(LONG_MAX as i128 + 1).unwrap();
+
+        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
+
+        let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_decimal_convert_to_long_below_min() {
+        let datum = Datum::decimal(LONG_MIN as i128 - 1).unwrap();
+
+        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
+
+        let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_string_convert_to_boolean() {
+        let datum = Datum::string("true");
+
+        let result = datum.to(&Primitive(PrimitiveType::Boolean)).unwrap();
+
+        let expected = Datum::bool(true);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_string_convert_to_int() {
+        let datum = Datum::string("12345");
+
+        let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
+
+        let expected = Datum::int(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_string_convert_to_long() {
+        let datum = Datum::string("12345");
+
+        let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
+
+        let expected = Datum::long(12345);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_string_convert_to_timestamp() {
+        let datum = Datum::string("1925-05-20T19:25:00.000");
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
+
+        let expected = Datum::timestamp_micros(-1407990900000000);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_datum_string_convert_to_timestamptz() {
+        let datum = Datum::string("1925-05-20T19:25:00.000 UTC");
+
+        let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
+
+        let expected = Datum::timestamptz_micros(-1407990900000000);
 
         assert_eq!(result, expected);
     }

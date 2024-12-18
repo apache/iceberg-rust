@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
-use crate::spec::{Datum, SchemaRef};
+use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
@@ -400,6 +400,37 @@ impl Bind for Predicate {
             Predicate::Binary(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
                 let bound_literal = bound_expr.literal.to(&bound_expr.term.field().field_type)?;
+
+                match bound_literal.literal() {
+                    PrimitiveLiteral::AboveMax => match &bound_expr.op {
+                        &PredicateOperator::LessThan
+                        | &PredicateOperator::LessThanOrEq
+                        | &PredicateOperator::NotEq => {
+                            return Ok(BoundPredicate::AlwaysTrue);
+                        }
+                        &PredicateOperator::GreaterThan
+                        | &PredicateOperator::GreaterThanOrEq
+                        | &PredicateOperator::Eq => {
+                            return Ok(BoundPredicate::AlwaysFalse);
+                        }
+                        _ => {}
+                    },
+                    PrimitiveLiteral::BelowMin => match &bound_expr.op {
+                        &PredicateOperator::GreaterThan
+                        | &PredicateOperator::GreaterThanOrEq
+                        | &PredicateOperator::NotEq => {
+                            return Ok(BoundPredicate::AlwaysTrue);
+                        }
+                        &PredicateOperator::LessThan
+                        | &PredicateOperator::LessThanOrEq
+                        | &PredicateOperator::Eq => {
+                            return Ok(BoundPredicate::AlwaysFalse);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+
                 Ok(BoundPredicate::Binary(BinaryExpression::new(
                     bound_expr.op,
                     bound_expr.term,
@@ -1083,6 +1114,126 @@ mod tests {
         let expr = Reference::new("bar").equal_to(Datum::int(10));
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "bar = 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_equal_to_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").equal_to(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_equal_to_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").equal_to(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_not_equal_to_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").not_equal_to(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_not_equal_to_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").not_equal_to(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_less_than_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").less_than(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_less_than_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").less_than(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_less_than_or_equal_to_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").less_than_or_equal_to(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_less_than_or_equal_to_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").less_than_or_equal_to(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_great_than_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").greater_than(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_great_than_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").greater_than(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_great_than_or_equal_to_above_max() {
+        let schema = table_schema_simple();
+        // int32 can hold up to 2147483647
+        let expr = Reference::new("bar").greater_than_or_equal_to(Datum::long(2147483648i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_great_than_or_equal_to_below_min() {
+        let schema = table_schema_simple();
+        // int32 can hold up to -2147483647
+        let expr = Reference::new("bar").greater_than_or_equal_to(Datum::long(-2147483649i64));
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
         test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
