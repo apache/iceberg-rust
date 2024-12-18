@@ -48,6 +48,9 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
       - name: Install cargo-sort
         run: make install-cargo-sort
 
@@ -80,6 +83,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -98,6 +104,10 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
