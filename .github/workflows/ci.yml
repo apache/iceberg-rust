@@ -31,6 +31,8 @@ concurrency:
 
 env:
   rust_msrv: "1.77.1"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   check:
@@ -103,6 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
