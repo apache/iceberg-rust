@@ -29,6 +29,10 @@ use crate::table::Table;
 use crate::Result;
 
 /// Table metadata scan.
+///
+/// Used to inspect a table's history, snapshots, and other metadata as a table.
+///
+/// See also <https://iceberg.apache.org/docs/latest/spark-queries/#inspecting-tables>.
 #[derive(Debug)]
 pub struct MetadataScan {
     metadata_ref: TableMetadataRef,
@@ -48,6 +52,10 @@ impl MetadataScan {
     }
 }
 
+/// Table metadata scan.
+///
+/// Use to inspect a table's history, snapshots, and other metadata as a table.
+///
 /// References:
 /// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
@@ -65,15 +73,6 @@ pub struct SnapshotsTable;
 
 impl MetadataTable for SnapshotsTable {
     fn schema() -> Schema {
-        // committed_at: timestamp[ms] not null
-        // snapshot_id: int64 not null
-        // parent_id: int64
-        // operation: string
-        // manifest_list: string not null
-        // summary: map<string, string>
-        //   child 0, entries: struct<key: string not null, value: string> not null
-        //       child 0, key: string not null
-        //       child 1, value: string
         Schema::new(vec![
             Field::new(
                 "committed_at",
@@ -196,8 +195,7 @@ mod tests {
     #[test]
     fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let scan = MetadataScan::new(&table);
-        let record_batch = SnapshotsTable::scan(&scan).unwrap();
+        let record_batch = table.metadata_scan().snapshots();
         check_record_batch(
             record_batch,
             expect![[r#"
