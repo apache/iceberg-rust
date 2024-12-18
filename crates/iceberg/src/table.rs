@@ -201,7 +201,7 @@ impl Table {
         TableScanBuilder::new(self)
     }
 
-    /// Creates a metadata scan.
+    /// Creates a metadata scan. See [`MetadataScan`] for more details.
     pub fn metadata_scan(&self) -> MetadataScan {
         MetadataScan::new(self)
     }
