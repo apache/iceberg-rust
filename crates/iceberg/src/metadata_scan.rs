@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.metadata_scan().snapshots();
+        let record_batch = table.metadata_scan().snapshots().unwrap();
         check_record_batch(
             record_batch,
             expect![[r#"
