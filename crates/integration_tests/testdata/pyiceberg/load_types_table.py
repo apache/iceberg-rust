@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import os
 from datafusion import SessionContext
 from pyiceberg.catalog import load_catalog
 import pyarrow.parquet as pq
@@ -66,8 +67,8 @@ catalog = load_catalog(
         "type": "rest",
         "uri": "http://rest:8181",
         "s3.endpoint": "http://minio:9000",
-        "s3.access-key-id": "admin",
-        "s3.secret-access-key": "password",
+        "s3.access-key-id": os.environ["AWS_ACCESS_KEY_ID"],
+        "s3.secret-access-key": os.environ["AWS_SECRET_ACCESS_KEY"],
     },
 )
 
