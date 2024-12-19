@@ -619,15 +619,22 @@ impl PlanContext {
         manifest_list: Arc<ManifestList>,
         sender: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
-        let filtered_entries = manifest_list
-            .entries()
+        let entries = manifest_list.entries();
+
+        if entries
             .iter()
-            .filter(|manifest_file| manifest_file.content == ManifestContentType::Data);
+            .any(|e| e.content != ManifestContentType::Data)
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Merge-on-read is not yet supported",
+            ));
+        }
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         if self.predicate.is_some() {
-            for manifest_file in filtered_entries {
+            for manifest_file in entries.iter() {
                 let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
@@ -649,7 +656,7 @@ impl PlanContext {
                 }
             }
         } else {
-            for manifest_file in filtered_entries {
+            for manifest_file in entries.iter() {
                 let mfc = self.create_manifest_file_context(manifest_file, None, sender.clone());
                 filtered_mfcs.push(Ok(mfc));
             }

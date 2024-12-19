@@ -17,7 +17,7 @@
 
 //! Integration tests for rest catalog.
 
-use futures::TryStreamExt;
+use iceberg::ErrorKind::FeatureUnsupported;
 use iceberg::{Catalog, TableIdent};
 use iceberg_integration_tests::set_test_fixture;
 
@@ -38,12 +38,17 @@ async fn test_read_table_with_positional_deletes() {
     let scan = table.scan().build().unwrap();
     println!("{:?}", scan);
 
-    let batch_stream = scan.to_arrow().await.unwrap();
-    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
-
-    let num_rows: usize = batches.iter().map(|v| v.num_rows()).sum();
+    assert!(scan
+        .to_arrow()
+        .await
+        .is_err_and(|e| e.kind() == FeatureUnsupported));
 
     // 😱 If we don't support positional deletes, we should fail when we try to read a table that
     // has positional deletes. The table has 12 rows, and 2 are deleted, see provision.py
-    assert_eq!(num_rows, 10);
+
+    // When we get support for it:
+    // let batch_stream = scan.to_arrow().await.unwrap();
+    // let batches: Vec<_> = batch_stream.try_collect().await.is_err();
+    // let num_rows: usize = batches.iter().map(|v| v.num_rows()).sum();
+    // assert_eq!(num_rows, 10);
 }
