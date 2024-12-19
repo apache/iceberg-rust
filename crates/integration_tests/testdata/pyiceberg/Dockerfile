@@ -15,8 +15,8 @@
 
 FROM python:3.9-bullseye
 
-RUN pip install pyiceberg==0.8 pyarrow==18.0 datafusion==43.1.0
+RUN pip install pyiceberg[pyarrow]==0.8 datafusion==43.1.0
 
-COPY load_types_table.py .
+COPY provision.py .
 
-ENTRYPOINT python3 load_types_table.py
+ENTRYPOINT python3 provision.py
