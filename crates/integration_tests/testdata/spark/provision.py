@@ -18,7 +18,13 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_date, date_add, expr
 
-spark = SparkSession.builder.getOrCreate()
+spark = (
+    SparkSession
+        .builder
+        .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.default.parallelism", "1")
+        .getOrCreate()
+)
 
 spark.sql(
     f"""
