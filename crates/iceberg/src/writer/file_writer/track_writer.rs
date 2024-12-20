@@ -24,13 +24,13 @@ use crate::io::FileWrite;
 use crate::Result;
 
 /// `TrackWriter` is used to track the written size.
-pub(crate) struct TrackWriter {
-    inner: Box<dyn FileWrite>,
+pub(crate) struct TrackWriter<W: FileWrite> {
+    inner: W,
     written_size: Arc<AtomicI64>,
 }
 
-impl TrackWriter {
-    pub fn new(writer: Box<dyn FileWrite>, written_size: Arc<AtomicI64>) -> Self {
+impl<W: FileWrite> TrackWriter<W> {
+    pub fn new(writer: W, written_size: Arc<AtomicI64>) -> Self {
         Self {
             inner: writer,
             written_size,
@@ -38,8 +38,7 @@ impl TrackWriter {
     }
 }
 
-#[async_trait::async_trait]
-impl FileWrite for TrackWriter {
+impl<W: FileWrite> FileWrite for TrackWriter<W> {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
         let size = bs.len();
         self.inner.write(bs).await.map(|v| {
