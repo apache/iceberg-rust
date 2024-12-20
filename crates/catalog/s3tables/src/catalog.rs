@@ -523,4 +523,22 @@ mod tests {
             .unwrap();
         println!("{:?}", table);
     }
+
+    #[tokio::test]
+    async fn test_s3tables_create_delete_namespace() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {}", e),
+        };
+
+        let namespace = NamespaceIdent::new("test_s3tables_create_delete_namespace".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+        assert!(catalog.namespace_exists(&namespace).await.unwrap());
+        catalog.drop_namespace(&namespace).await.unwrap();
+        assert!(!catalog.namespace_exists(&namespace).await.unwrap());
+    }
 }
