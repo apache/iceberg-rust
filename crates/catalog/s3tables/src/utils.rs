@@ -57,8 +57,7 @@ pub(crate) async fn create_sdk_config(
 
 /// Create metadata location from `location` and `version`
 pub(crate) fn create_metadata_location(
-    namespace: impl AsRef<str>,
-    table_name: impl AsRef<str>,
+    warehouse_location: impl AsRef<str>,
     version: i32,
 ) -> Result<String> {
     if version < 0 {
@@ -74,9 +73,8 @@ pub(crate) fn create_metadata_location(
     let version = format!("{:0>5}", version);
     let id = Uuid::new_v4();
     let metadata_location = format!(
-        "{}/{}/metadata/{}-{}.metadata.json",
-        namespace.as_ref(),
-        table_name.as_ref(),
+        "{}/metadata/{}-{}.metadata.json",
+        warehouse_location.as_ref(),
         version,
         id
     );
