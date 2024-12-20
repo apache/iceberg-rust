@@ -73,12 +73,6 @@ impl RestCatalogConfig {
     pub(crate) fn get_token_endpoint(&self) -> String {
         if let Some(oauth2_uri) = self.props.get("oauth2-server-uri") {
             oauth2_uri.to_string()
-        } else if let Some(auth_url) = self.props.get("rest.authorization-url") {
-            log::warn!(
-                "'rest.authorization-url' is deprecated and will be removed in version 0.4.0. \
-                 Please use 'oauth2-server-uri' instead."
-            );
-            auth_url.to_string()
         } else {
             [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
         }
@@ -256,9 +250,10 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let catalog_config = RestCatalog::load_config(&self.user_config).await?;
+                let client = HttpClient::new(&self.user_config)?;
+                let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = HttpClient::new(&config)?;
+                let client = client.update_with(&config)?;
 
                 Ok(RestContext { config, client })
             })
@@ -268,9 +263,10 @@ impl RestCatalog {
     /// Load the runtime config from the server by user_config.
     ///
     /// It's required for a rest catalog to update it's config after creation.
-    async fn load_config(user_config: &RestCatalogConfig) -> Result<CatalogConfig> {
-        let client = HttpClient::new(user_config)?;
-
+    async fn load_config(
+        client: &HttpClient,
+        user_config: &RestCatalogConfig,
+    ) -> Result<CatalogConfig> {
         let mut request = client.request(Method::GET, user_config.config_endpoint());
 
         if let Some(warehouse_location) = &user_config.warehouse {
@@ -280,6 +276,7 @@ impl RestCatalog {
         let config = client
             .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
             .await?;
+
         Ok(config)
     }
 
@@ -777,7 +774,7 @@ mod tests {
                 "expires_in": 86400
                 }"#,
             )
-            .expect(2)
+            .expect(1)
             .create_async()
             .await
     }
@@ -831,7 +828,7 @@ mod tests {
                 "expires_in": 86400
                 }"#,
             )
-            .expect(2)
+            .expect(1)
             .create_async()
             .await;
 
@@ -919,36 +916,6 @@ mod tests {
             ),
         ]);
         assert_eq!(headers, expected_headers);
-    }
-
-    #[tokio::test]
-    async fn test_oauth_with_deprecated_auth_url() {
-        let mut server = Server::new_async().await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut auth_server = Server::new_async().await;
-        let auth_server_path = "/some/path";
-        let oauth_mock = create_oauth_mock_with_path(&mut auth_server, auth_server_path).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-        props.insert(
-            "rest.authorization-url".to_string(),
-            format!("{}{}", auth_server.url(), auth_server_path).to_string(),
-        );
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
     #[tokio::test]

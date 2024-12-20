@@ -54,6 +54,7 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
+    /// Create a new http client.
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
             client: Client::new(),
@@ -63,6 +64,32 @@ impl HttpClient {
             credential: cfg.credential(),
             extra_headers: cfg.extra_headers()?,
             extra_oauth_params: cfg.extra_oauth_params(),
+        })
+    }
+
+    /// Update the http client with new configuration.
+    ///
+    /// If cfg carries new value, we will use cfg instead.
+    /// Otherwise, we will keep the old value.
+    pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
+        Ok(HttpClient {
+            client: self.client,
+
+            token: Mutex::new(
+                cfg.token()
+                    .or_else(|| self.token.into_inner().ok().flatten()),
+            ),
+            token_endpoint: (!cfg.get_token_endpoint().is_empty())
+                .then(|| cfg.get_token_endpoint())
+                .unwrap_or(self.token_endpoint),
+            credential: cfg.credential().or(self.credential),
+            extra_headers: (!cfg.extra_headers()?.is_empty())
+                .then(|| cfg.extra_headers())
+                .transpose()?
+                .unwrap_or(self.extra_headers),
+            extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
+                .then(|| cfg.extra_oauth_params())
+                .unwrap_or(self.extra_oauth_params),
         })
     }
 
@@ -134,28 +161,39 @@ impl HttpClient {
             .request(Method::POST, &self.token_endpoint)
             .form(&params)
             .build()?;
+        let auth_url = auth_req.url().clone();
         let auth_resp = self.client.execute(auth_req).await?;
 
         let auth_res: TokenResponse = if auth_resp.status().as_u16() == OK {
-            let text = auth_resp.bytes().await?;
+            let text = auth_resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(auth_url.clone()))?;
             Ok(serde_json::from_slice(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
+                .with_context("operation", "auth")
+                .with_context("url", auth_url.to_string())
                 .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?)
         } else {
             let code = auth_resp.status();
-            let text = auth_resp.bytes().await?;
+            let text = auth_resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(auth_url.clone()))?;
             let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
                 .with_context("code", code.to_string())
+                .with_context("operation", "auth")
+                .with_context("url", auth_url.to_string())
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
             Err(Error::from(e))
@@ -193,28 +231,41 @@ impl HttpClient {
     ) -> Result<R> {
         self.authenticate(&mut request).await?;
 
+        let method = request.method().clone();
+        let url = request.url().clone();
+
         let resp = self.client.execute(request).await?;
 
         if resp.status().as_u16() == SUCCESS_CODE {
-            let text = resp.bytes().await?;
+            let text = resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(url.clone()))?;
             Ok(serde_json::from_slice::<R>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())
                 .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?)
         } else {
             let code = resp.status();
-            let text = resp.bytes().await?;
+            let text = resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(url.clone()))?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
                 .with_context("code", code.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
             Err(e.into())
@@ -227,20 +278,28 @@ impl HttpClient {
     ) -> Result<()> {
         self.authenticate(&mut request).await?;
 
+        let method = request.method().clone();
+        let url = request.url().clone();
+
         let resp = self.client.execute(request).await?;
 
         if resp.status().as_u16() == SUCCESS_CODE {
             Ok(())
         } else {
             let code = resp.status();
-            let text = resp.bytes().await?;
+            let text = resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(url.clone()))?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("json", String::from_utf8_lossy(&text))
                 .with_context("code", code.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())
+                .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;
             Err(e.into())
@@ -255,19 +314,27 @@ impl HttpClient {
     ) -> Result<R> {
         self.authenticate(&mut request).await?;
 
+        let method = request.method().clone();
+        let url = request.url().clone();
+
         let resp = self.client.execute(request).await?;
 
         if let Some(ret) = handler(&resp) {
             Ok(ret)
         } else {
             let code = resp.status();
-            let text = resp.bytes().await?;
+            let text = resp
+                .bytes()
+                .await
+                .map_err(|err| err.with_url(url.clone()))?;
             let e = serde_json::from_slice::<E>(&text).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("code", code.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())
                 .with_context("json", String::from_utf8_lossy(&text))
                 .with_source(e)
             })?;

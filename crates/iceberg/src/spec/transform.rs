@@ -598,14 +598,30 @@ impl Transform {
                     | PredicateOperator::LessThanOrEq
                     | PredicateOperator::In => {
                         if v < 0 {
-                            return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                            // # TODO
+                            // An ugly hack to fix. Refine the increment and decrement logic later.
+                            match self {
+                                Transform::Day => {
+                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)))
+                                }
+                                _ => {
+                                    return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                                }
+                            }
                         };
                     }
                     PredicateOperator::Eq => {
                         if v < 0 {
                             let new_set = FnvHashSet::from_iter(vec![
                                 transformed.to_owned(),
-                                Datum::int(v + 1),
+                                // # TODO
+                                // An ugly hack to fix. Refine the increment and decrement logic later.
+                                {
+                                    match self {
+                                        Transform::Day => Datum::date(v + 1),
+                                        _ => Datum::int(v + 1),
+                                    }
+                                },
                             ]);
                             return Some(AdjustedProjection::Set(new_set));
                         }

@@ -23,8 +23,6 @@
 
 Rust implementation of [Apache Iceberg™](https://iceberg.apache.org/).
 
-Working on [v0.3.0 Release Milestone](https://github.com/apache/iceberg-rust/milestone/2)
-
 ## Components
 
 The Apache Iceberg Rust project is composed of the following components:
@@ -100,7 +98,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 ## Users
 
 - [Databend](https://github.com/datafuselabs/databend/): An open-source cloud data warehouse that serves as a cost-effective alternative to Snowflake.
-- [iceberg-catalog](https://github.com/hansetag/iceberg-catalog): A Rust implementation of the Iceberg REST Catalog specification.
+- [Lakekeeper](https://github.com/lakekeeper/lakekeeper/): An Apache-licensed Iceberg REST Catalog with data access controls.
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 
 ## License

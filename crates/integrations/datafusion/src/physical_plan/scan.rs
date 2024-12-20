@@ -45,8 +45,6 @@ pub(crate) struct IcebergTableScan {
     table: Table,
     /// Snapshot of the table to scan.
     snapshot_id: Option<i64>,
-    /// A reference-counted arrow `Schema`.
-    schema: ArrowSchemaRef,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
@@ -76,7 +74,6 @@ impl IcebergTableScan {
         Self {
             table,
             snapshot_id,
-            schema,
             plan_properties,
             projection,
             predicates,
@@ -134,7 +131,7 @@ impl ExecutionPlan for IcebergTableScan {
         let stream = futures::stream::once(fut).try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            self.schema(),
             stream,
         )))
     }

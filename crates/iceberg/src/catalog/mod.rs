@@ -29,9 +29,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::spec::{
-    FormatVersion, Schema, SchemaId, Snapshot, SnapshotReference, SortOrder, TableMetadata,
-    TableMetadataBuilder, UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations,
-    ViewVersion,
+    FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
+    SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder, UnboundPartitionSpec,
+    ViewFormatVersion, ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -367,12 +367,6 @@ pub enum TableUpdate {
     AddSchema {
         /// The schema to add.
         schema: Schema,
-        /// The last column id of the table.
-        #[deprecated(
-            since = "0.3.0",
-            note = "This field is handled internally, and should not be part of the update."
-        )]
-        last_column_id: Option<i32>,
     },
     /// Set table's current schema
     #[serde(rename_all = "kebab-case")]
@@ -446,6 +440,36 @@ pub enum TableUpdate {
         /// Properties to remove
         removals: Vec<String>,
     },
+    /// Remove partition specs
+    #[serde(rename_all = "kebab-case")]
+    RemovePartitionSpecs {
+        /// Partition spec ids to remove.
+        spec_ids: Vec<i32>,
+    },
+    /// Set statistics for a snapshot
+    #[serde(with = "_serde_set_statistics")]
+    SetStatistics {
+        /// File containing the statistics
+        statistics: StatisticsFile,
+    },
+    /// Remove statistics for a snapshot
+    #[serde(rename_all = "kebab-case")]
+    RemoveStatistics {
+        /// Snapshot id to remove statistics for.
+        snapshot_id: i64,
+    },
+    /// Set partition statistics for a snapshot
+    #[serde(rename_all = "kebab-case")]
+    SetPartitionStatistics {
+        /// File containing the partition statistics
+        partition_statistics: PartitionStatisticsFile,
+    },
+    /// Remove partition statistics for a snapshot
+    #[serde(rename_all = "kebab-case")]
+    RemovePartitionStatistics {
+        /// Snapshot id to remove partition statistics for.
+        snapshot_id: i64,
+    },
 }
 
 impl TableUpdate {
@@ -475,6 +499,19 @@ impl TableUpdate {
             TableUpdate::RemoveProperties { removals } => builder.remove_properties(&removals),
             TableUpdate::UpgradeFormatVersion { format_version } => {
                 builder.upgrade_format_version(format_version)
+            }
+            TableUpdate::RemovePartitionSpecs { spec_ids } => {
+                builder.remove_partition_specs(&spec_ids)
+            }
+            TableUpdate::SetStatistics { statistics } => Ok(builder.set_statistics(statistics)),
+            TableUpdate::RemoveStatistics { snapshot_id } => {
+                Ok(builder.remove_statistics(snapshot_id))
+            }
+            TableUpdate::SetPartitionStatistics {
+                partition_statistics,
+            } => Ok(builder.set_partition_statistics(partition_statistics)),
+            TableUpdate::RemovePartitionStatistics { snapshot_id } => {
+                Ok(builder.remove_partition_statistics(snapshot_id))
             }
         }
     }
@@ -756,6 +793,53 @@ pub enum ViewUpdate {
     },
 }
 
+mod _serde_set_statistics {
+    // The rest spec requires an additional field `snapshot-id`
+    // that is redundant with the `snapshot_id` field in the statistics file.
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::*;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct SetStatistics {
+        snapshot_id: Option<i64>,
+        statistics: StatisticsFile,
+    }
+
+    pub fn serialize<S>(
+        value: &StatisticsFile,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SetStatistics {
+            snapshot_id: Some(value.snapshot_id),
+            statistics: value.clone(),
+        }
+        .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> std::result::Result<StatisticsFile, D::Error>
+    where D: Deserializer<'de> {
+        let SetStatistics {
+            snapshot_id,
+            statistics,
+        } = SetStatistics::deserialize(deserializer)?;
+        if let Some(snapshot_id) = snapshot_id {
+            if snapshot_id != statistics.snapshot_id {
+                return Err(serde::de::Error::custom(format!(
+                    "Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}",
+                    statistics.snapshot_id
+                )));
+            }
+        }
+
+        Ok(statistics)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -767,11 +851,11 @@ mod tests {
 
     use super::ViewUpdate;
     use crate::spec::{
-        FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-        SqlViewRepresentation, Summary, TableMetadata, TableMetadataBuilder, Transform, Type,
-        UnboundPartitionSpec, ViewFormatVersion, ViewRepresentation, ViewRepresentations,
-        ViewVersion, MAIN_BRANCH,
+        BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
+        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
+        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
+        TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
+        ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
     };
     use crate::{NamespaceIdent, TableCreation, TableIdent, TableRequirement, TableUpdate};
 
@@ -1220,7 +1304,6 @@ mod tests {
         "#,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: Some(3),
             },
         );
 
@@ -1259,7 +1342,6 @@ mod tests {
         "#,
             TableUpdate::AddSchema {
                 schema: test_schema.clone(),
-                last_column_id: None,
             },
         );
     }
@@ -1835,5 +1917,122 @@ mod tests {
         "#,
             ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
         );
+    }
+
+    #[test]
+    fn test_remove_partition_specs_update() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-partition-specs",
+    "spec-ids": [1, 2]
+}        
+        "#,
+            TableUpdate::RemovePartitionSpecs {
+                spec_ids: vec![1, 2],
+            },
+        );
+    }
+
+    #[test]
+    fn test_set_statistics_file() {
+        test_serde_json(
+            r#"
+        {
+                "action": "set-statistics",
+                "snapshot-id": 1940541653261589030,
+                "statistics": {
+                        "snapshot-id": 1940541653261589030,
+                        "statistics-path": "s3://bucket/warehouse/stats.puffin",
+                        "file-size-in-bytes": 124,
+                        "file-footer-size-in-bytes": 27,
+                        "blob-metadata": [
+                                {
+                                        "type": "boring-type",
+                                        "snapshot-id": 1940541653261589030,
+                                        "sequence-number": 2,
+                                        "fields": [
+                                                1
+                                        ],
+                                        "properties": {
+                                                "prop-key": "prop-value"
+                                        }
+                                }
+                        ]
+                }
+        } 
+        "#,
+            TableUpdate::SetStatistics {
+                statistics: StatisticsFile {
+                    snapshot_id: 1940541653261589030,
+                    statistics_path: "s3://bucket/warehouse/stats.puffin".to_string(),
+                    file_size_in_bytes: 124,
+                    file_footer_size_in_bytes: 27,
+                    key_metadata: None,
+                    blob_metadata: vec![BlobMetadata {
+                        r#type: "boring-type".to_string(),
+                        snapshot_id: 1940541653261589030,
+                        sequence_number: 2,
+                        fields: vec![1],
+                        properties: vec![("prop-key".to_string(), "prop-value".to_string())]
+                            .into_iter()
+                            .collect(),
+                    }],
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn test_remove_statistics_file() {
+        test_serde_json(
+            r#"
+        {
+                "action": "remove-statistics",
+                "snapshot-id": 1940541653261589030
+        } 
+        "#,
+            TableUpdate::RemoveStatistics {
+                snapshot_id: 1940541653261589030,
+            },
+        );
+    }
+
+    #[test]
+    fn test_set_partition_statistics_file() {
+        test_serde_json(
+            r#"
+            {
+                "action": "set-partition-statistics",
+                "partition-statistics": {
+                    "snapshot-id": 1940541653261589030,
+                    "statistics-path": "s3://bucket/warehouse/stats1.parquet",
+                    "file-size-in-bytes": 43
+                }
+            }
+            "#,
+            TableUpdate::SetPartitionStatistics {
+                partition_statistics: PartitionStatisticsFile {
+                    snapshot_id: 1940541653261589030,
+                    statistics_path: "s3://bucket/warehouse/stats1.parquet".to_string(),
+                    file_size_in_bytes: 43,
+                },
+            },
+        )
+    }
+
+    #[test]
+    fn test_remove_partition_statistics_file() {
+        test_serde_json(
+            r#"
+            {
+                "action": "remove-partition-statistics",
+                "snapshot-id": 1940541653261589030
+            }
+            "#,
+            TableUpdate::RemovePartitionStatistics {
+                snapshot_id: 1940541653261589030,
+            },
+        )
     }
 }

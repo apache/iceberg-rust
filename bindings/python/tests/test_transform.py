@@ -73,7 +73,7 @@ def test_month_transform():
 def test_day_transform():
     arr = pa.array([date(1970, 1, 1), date(2000, 4, 1)])
     result = transform.day(arr)
-    expected = pa.array([0, 11048], type=pa.int32())
+    expected = pa.array([0, 11048], type=pa.date32())
     assert result == expected
 
 

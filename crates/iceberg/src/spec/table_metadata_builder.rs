@@ -21,12 +21,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{
-    BoundPartitionSpec, FormatVersion, MetadataLog, PartitionSpecBuilder, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    TableMetadata, UnboundPartitionSpec, DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH,
-    ONE_MINUTE_MS, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX,
-    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT, RESERVED_PROPERTIES,
-    UNPARTITIONED_LAST_ASSIGNED_ID,
+    FormatVersion, MetadataLog, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
+    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableMetadata, UnboundPartitionSpec,
+    DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, MAIN_BRANCH, ONE_MINUTE_MS,
+    PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX, PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT,
+    RESERVED_PROPERTIES, UNPARTITIONED_LAST_ASSIGNED_ID,
 };
 use crate::error::{Error, ErrorKind, Result};
 use crate::{TableCreation, TableUpdate};
@@ -105,8 +105,9 @@ impl TableMetadataBuilder {
                     // also unpartitioned.
                     // The `default_spec` value is always replaced at the end of this method by he `add_default_partition_spec`
                     // method.
-                    BoundPartitionSpec::unpartition_spec(fresh_schema.clone()).with_spec_id(-1),
+                    PartitionSpec::unpartition_spec().with_spec_id(-1),
                 ), // Overwritten immediately by add_default_partition_spec
+                default_partition_type: StructType::new(vec![]),
                 last_partition_id: UNPARTITIONED_LAST_ASSIGNED_ID,
                 properties: HashMap::new(),
                 current_snapshot_id: None,
@@ -116,6 +117,8 @@ impl TableMetadataBuilder {
                 metadata_log: vec![],
                 default_sort_order_id: -1, // Overwritten immediately by add_default_sort_order
                 refs: HashMap::default(),
+                statistics: HashMap::new(),
+                partition_statistics: HashMap::new(),
             },
             changes: vec![],
             last_added_schema_id: Some(schema_id),
@@ -523,6 +526,52 @@ impl TableMetadataBuilder {
         self
     }
 
+    /// Set statistics for a snapshot
+    pub fn set_statistics(mut self, statistics: StatisticsFile) -> Self {
+        self.metadata
+            .statistics
+            .insert(statistics.snapshot_id, statistics.clone());
+        self.changes.push(TableUpdate::SetStatistics {
+            statistics: statistics.clone(),
+        });
+        self
+    }
+
+    /// Remove statistics for a snapshot
+    pub fn remove_statistics(mut self, snapshot_id: i64) -> Self {
+        let previous = self.metadata.statistics.remove(&snapshot_id);
+        if previous.is_some() {
+            self.changes
+                .push(TableUpdate::RemoveStatistics { snapshot_id });
+        }
+        self
+    }
+
+    /// Set partition statistics
+    pub fn set_partition_statistics(
+        mut self,
+        partition_statistics_file: PartitionStatisticsFile,
+    ) -> Self {
+        self.metadata.partition_statistics.insert(
+            partition_statistics_file.snapshot_id,
+            partition_statistics_file.clone(),
+        );
+        self.changes.push(TableUpdate::SetPartitionStatistics {
+            partition_statistics: partition_statistics_file,
+        });
+        self
+    }
+
+    /// Remove partition statistics
+    pub fn remove_partition_statistics(mut self, snapshot_id: i64) -> Self {
+        let previous = self.metadata.partition_statistics.remove(&snapshot_id);
+        if previous.is_some() {
+            self.changes
+                .push(TableUpdate::RemovePartitionStatistics { snapshot_id });
+        }
+        self
+    }
+
     /// Add a schema to the table metadata.
     ///
     /// The provided `schema.schema_id` may not be used.
@@ -536,7 +585,6 @@ impl TableMetadataBuilder {
         if schema_found {
             if self.last_added_schema_id != Some(new_schema_id) {
                 self.changes.push(TableUpdate::AddSchema {
-                    last_column_id: Some(self.metadata.last_column_id),
                     schema: schema.clone(),
                 });
                 self.last_added_schema_id = Some(new_schema_id);
@@ -560,10 +608,7 @@ impl TableMetadataBuilder {
             .schemas
             .insert(new_schema_id, schema.clone().into());
 
-        self.changes.push(TableUpdate::AddSchema {
-            schema,
-            last_column_id: Some(self.metadata.last_column_id),
-        });
+        self.changes.push(TableUpdate::AddSchema { schema });
 
         self.last_added_schema_id = Some(new_schema_id);
 
@@ -669,7 +714,7 @@ impl TableMetadataBuilder {
             .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID);
         self.metadata
             .partition_specs
-            .insert(new_spec_id, Arc::new(spec.into()));
+            .insert(new_spec_id, Arc::new(spec));
         self.changes
             .push(TableUpdate::AddSpec { spec: unbound_spec });
 
@@ -717,9 +762,10 @@ impl TableMetadataBuilder {
             )
                 })?
                 .clone();
-        let spec =
-            Arc::unwrap_or_clone(schemaless_spec).bind(self.get_current_schema()?.clone())?;
+        let spec = Arc::unwrap_or_clone(schemaless_spec);
+        let spec_type = spec.partition_type(self.get_current_schema()?)?;
         self.metadata.default_spec = Arc::new(spec);
+        self.metadata.default_partition_type = spec_type;
 
         if self.last_added_spec_id == Some(spec_id) {
             self.changes.push(TableUpdate::SetDefaultSpec {
@@ -736,6 +782,36 @@ impl TableMetadataBuilder {
     pub fn add_default_partition_spec(self, unbound_spec: UnboundPartitionSpec) -> Result<Self> {
         self.add_partition_spec(unbound_spec)?
             .set_default_partition_spec(Self::LAST_ADDED)
+    }
+
+    /// Remove partition specs by their ids from the table metadata.
+    /// Does nothing if a spec id is not present. Active partition specs
+    /// should not be removed.
+    ///
+    /// # Errors
+    /// - Cannot remove the default partition spec.
+    pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Result<Self> {
+        if spec_ids.contains(&self.metadata.default_spec.spec_id()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot remove default partition spec",
+            ));
+        }
+
+        let mut removed_specs = Vec::with_capacity(spec_ids.len());
+        spec_ids.iter().for_each(|id| {
+            if self.metadata.partition_specs.remove(id).is_some() {
+                removed_specs.push(*id);
+            }
+        });
+
+        if !removed_specs.is_empty() {
+            self.changes.push(TableUpdate::RemovePartitionSpecs {
+                spec_ids: removed_specs,
+            });
+        }
+
+        Ok(self)
     }
 
     /// Add a sort order to the table metadata.
@@ -850,6 +926,8 @@ impl TableMetadataBuilder {
                 .into_unbound()
                 .bind(schema.clone())?,
         );
+        self.metadata.default_partition_type =
+            self.metadata.default_spec.partition_type(&schema)?;
         SortOrder::builder()
             .with_fields(sort_order.fields)
             .build(&schema)?;
@@ -978,7 +1056,7 @@ impl TableMetadataBuilder {
         schema: Schema,
         spec: UnboundPartitionSpec,
         sort_order: SortOrder,
-    ) -> Result<(Schema, BoundPartitionSpec, SortOrder)> {
+    ) -> Result<(Schema, PartitionSpec, SortOrder)> {
         // Re-assign field ids and schema ids for a new table.
         let previous_id_to_name = schema.field_id_to_name_map().clone();
         let fresh_schema = schema
@@ -1084,15 +1162,11 @@ impl TableMetadataBuilder {
     }
 
     /// If a compatible spec already exists, use the same ID. Otherwise, use 1 more than the highest ID.
-    fn reuse_or_create_new_spec_id(&self, new_spec: &BoundPartitionSpec) -> i32 {
+    fn reuse_or_create_new_spec_id(&self, new_spec: &PartitionSpec) -> i32 {
         self.metadata
             .partition_specs
             .iter()
-            .find_map(|(id, old_spec)| {
-                new_spec
-                    .is_compatible_with_schemaless(old_spec)
-                    .then_some(*id)
-            })
+            .find_map(|(id, old_spec)| new_spec.is_compatible_with(old_spec).then_some(*id))
             .unwrap_or_else(|| {
                 self.get_highest_spec_id()
                     .map(|id| id + 1)
@@ -1138,7 +1212,7 @@ impl From<TableMetadataBuildResult> for TableMetadata {
 mod tests {
     use super::*;
     use crate::spec::{
-        NestedField, NullOrder, Operation, PrimitiveType, Schema, SchemalessPartitionSpec,
+        BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
         UnboundPartitionField,
     };
@@ -1250,7 +1324,7 @@ mod tests {
         let schema = Schema::builder().build().unwrap();
         let metadata = TableMetadataBuilder::new(
             schema.clone(),
-            SchemalessPartitionSpec::unpartition_spec(),
+            PartitionSpec::unpartition_spec(),
             SortOrder::unsorted_order(),
             TEST_LOCATION.to_string(),
             FormatVersion::V2,
@@ -1298,7 +1372,7 @@ mod tests {
             ])
             .build()
             .unwrap();
-        let spec = BoundPartitionSpec::builder(schema.clone())
+        let spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(20)
             .add_partition_field("a", "a", Transform::Identity)
             .unwrap()
@@ -1340,7 +1414,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected_spec = BoundPartitionSpec::builder(expected_schema.clone())
+        let expected_spec = PartitionSpec::builder(expected_schema.clone())
             .with_spec_id(0)
             .add_partition_field("a", "a", Transform::Identity)
             .unwrap()
@@ -1405,15 +1479,12 @@ mod tests {
             TableUpdate::SetLocation {
                 location: TEST_LOCATION.to_string()
             },
-            TableUpdate::AddSchema {
-                last_column_id: Some(LAST_ASSIGNED_COLUMN_ID),
-                schema: schema(),
-            },
+            TableUpdate::AddSchema { schema: schema() },
             TableUpdate::SetCurrentSchema { schema_id: -1 },
             TableUpdate::AddSpec {
                 // Because this is a new tables, field-ids are assigned
                 // partition_spec() has None set for field-id
-                spec: BoundPartitionSpec::builder(schema())
+                spec: PartitionSpec::builder(schema())
                     .with_spec_id(0)
                     .add_unbound_field(UnboundPartitionField {
                         name: "y".to_string(),
@@ -1445,7 +1516,7 @@ mod tests {
         let schema = Schema::builder().build().unwrap();
         let changes = TableMetadataBuilder::new(
             schema.clone(),
-            SchemalessPartitionSpec::unpartition_spec().into_unbound(),
+            PartitionSpec::unpartition_spec().into_unbound(),
             SortOrder::unsorted_order(),
             TEST_LOCATION.to_string(),
             FormatVersion::V1,
@@ -1461,14 +1532,13 @@ mod tests {
                 location: TEST_LOCATION.to_string()
             },
             TableUpdate::AddSchema {
-                last_column_id: Some(0),
                 schema: Schema::builder().build().unwrap(),
             },
             TableUpdate::SetCurrentSchema { schema_id: -1 },
             TableUpdate::AddSpec {
                 // Because this is a new tables, field-ids are assigned
                 // partition_spec() has None set for field-id
-                spec: BoundPartitionSpec::builder(schema)
+                spec: PartitionSpec::builder(schema)
                     .with_spec_id(0)
                     .build()
                     .unwrap()
@@ -1515,7 +1585,7 @@ mod tests {
 
         // Spec id should be re-assigned
         let expected_change = added_spec.with_spec_id(1);
-        let expected_spec = BoundPartitionSpec::builder(schema())
+        let expected_spec = PartitionSpec::builder(schema())
             .with_spec_id(1)
             .add_unbound_field(UnboundPartitionField {
                 name: "y".to_string(),
@@ -1537,13 +1607,28 @@ mod tests {
         assert_eq!(build_result.changes.len(), 1);
         assert_eq!(
             build_result.metadata.partition_spec_by_id(1),
-            Some(&Arc::new(expected_spec.into_schemaless()))
+            Some(&Arc::new(expected_spec))
         );
         assert_eq!(build_result.metadata.default_spec.spec_id(), 0);
         assert_eq!(build_result.metadata.last_partition_id, 1001);
         pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSpec {
             spec: expected_change
         });
+
+        // Remove the spec
+        let build_result = build_result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+            ))
+            .remove_partition_specs(&[1])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.changes.len(), 1);
+        assert_eq!(build_result.metadata.partition_specs.len(), 1);
+        assert!(build_result.metadata.partition_spec_by_id(1).is_none());
     }
 
     #[test]
@@ -1564,7 +1649,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected_spec = BoundPartitionSpec::builder(schema)
+        let expected_spec = PartitionSpec::builder(schema)
             .with_spec_id(1)
             .add_unbound_field(UnboundPartitionField {
                 name: "y_bucket[2]".to_string(),
@@ -1703,7 +1788,6 @@ mod tests {
             Some(&Arc::new(added_schema.clone()))
         );
         pretty_assertions::assert_eq!(build_result.changes[0], TableUpdate::AddSchema {
-            last_column_id: Some(4),
             schema: added_schema
         });
         assert_eq!(build_result.changes[1], TableUpdate::SetCurrentSchema {
@@ -2152,5 +2236,109 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Cannot add snapshot with sequence number"));
+    }
+
+    #[test]
+    fn test_default_spec_cannot_be_removed() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        builder.remove_partition_specs(&[0]).unwrap_err();
+    }
+
+    #[test]
+    fn test_statistics() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let statistics = StatisticsFile {
+            snapshot_id: 3055729675574597004,
+            statistics_path: "s3://a/b/stats.puffin".to_string(),
+            file_size_in_bytes: 413,
+            file_footer_size_in_bytes: 42,
+            key_metadata: None,
+            blob_metadata: vec![BlobMetadata {
+                snapshot_id: 3055729675574597004,
+                sequence_number: 1,
+                fields: vec![1],
+                r#type: "ndv".to_string(),
+                properties: HashMap::new(),
+            }],
+        };
+        let build_result = builder.set_statistics(statistics.clone()).build().unwrap();
+
+        assert_eq!(
+            build_result.metadata.statistics,
+            HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
+        );
+        assert_eq!(build_result.changes, vec![TableUpdate::SetStatistics {
+            statistics: statistics.clone()
+        }]);
+
+        // Remove
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+
+        assert_eq!(build_result.metadata.statistics.len(), 0);
+        assert_eq!(build_result.changes, vec![TableUpdate::RemoveStatistics {
+            snapshot_id: statistics.snapshot_id
+        }]);
+
+        // Remove again yields no changes
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.statistics.len(), 0);
+        assert_eq!(build_result.changes.len(), 0);
+    }
+
+    #[test]
+    fn test_add_partition_statistics() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let statistics = PartitionStatisticsFile {
+            snapshot_id: 3055729675574597004,
+            statistics_path: "s3://a/b/partition-stats.parquet".to_string(),
+            file_size_in_bytes: 43,
+        };
+
+        let build_result = builder
+            .set_partition_statistics(statistics.clone())
+            .build()
+            .unwrap();
+        assert_eq!(
+            build_result.metadata.partition_statistics,
+            HashMap::from_iter(vec![(3055729675574597004, statistics.clone())])
+        );
+        assert_eq!(build_result.changes, vec![
+            TableUpdate::SetPartitionStatistics {
+                partition_statistics: statistics.clone()
+            }
+        ]);
+
+        // Remove
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_partition_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.partition_statistics.len(), 0);
+        assert_eq!(build_result.changes, vec![
+            TableUpdate::RemovePartitionStatistics {
+                snapshot_id: statistics.snapshot_id
+            }
+        ]);
+
+        // Remove again yields no changes
+        let builder = build_result.metadata.into_builder(None);
+        let build_result = builder
+            .remove_partition_statistics(statistics.snapshot_id)
+            .build()
+            .unwrap();
+        assert_eq!(build_result.metadata.partition_statistics.len(), 0);
+        assert_eq!(build_result.changes.len(), 0);
     }
 }

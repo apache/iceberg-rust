@@ -317,7 +317,7 @@ impl<'a> SnapshotProduceAction<'a> {
         if partition_value.fields().len() != partition_type.fields().len() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "Partition value is not compatitable with partition type",
+                "Partition value is not compatible with partition type",
             ));
         }
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
@@ -334,7 +334,7 @@ impl<'a> SnapshotProduceAction<'a> {
             {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Partition value is not compatitable partition type",
+                    "Partition value is not compatible partition type",
                 ));
             }
         }
@@ -356,11 +356,7 @@ impl<'a> SnapshotProduceAction<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                self.tx
-                    .table
-                    .metadata()
-                    .default_partition_spec()
-                    .partition_type(),
+                self.tx.table.metadata().default_partition_type(),
             )?;
         }
         self.added_data_files.extend(data_files);
@@ -784,7 +780,7 @@ mod tests {
         let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
 
-        // check add data file with uncompatitable partition value
+        // check add data file with incompatible partition value
         let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path("test/3.parquet".to_string())
