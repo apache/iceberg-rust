@@ -2,17 +2,19 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_sdk_s3tables::operation::create_table::CreateTableOutput;
+use aws_sdk_s3tables::operation::get_namespace::GetNamespaceOutput;
 use aws_sdk_s3tables::operation::get_table::GetTableOutput;
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use iceberg::io::FileIO;
-use iceberg::spec::TableMetadata;
+use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
 
-use crate::utils::create_sdk_config;
+use crate::utils::{create_metadata_location, create_sdk_config};
 
 #[derive(Debug)]
 pub struct S3TablesCatalogConfig {
@@ -112,7 +114,7 @@ impl Catalog for S3TablesCatalog {
             .get_namespace()
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(namespace.to_url_string());
-        let resp = req.send().await.map_err(from_aws_sdk_error)?;
+        let resp: GetNamespaceOutput = req.send().await.map_err(from_aws_sdk_error)?;
         let properties = HashMap::new();
         Ok(Namespace::with_properties(
             NamespaceIdent::from_vec(resp.namespace().to_vec())?,
@@ -191,7 +193,43 @@ impl Catalog for S3TablesCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        todo!()
+        let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+
+        let metadata = TableMetadataBuilder::from_table_creation(creation)?
+            .build()?
+            .metadata;
+        let metadata_location =
+            create_metadata_location(namespace.to_url_string(), table_ident.name(), 0)?;
+        self.file_io
+            .new_output(&metadata_location)?
+            .write(serde_json::to_vec(&metadata)?.into())
+            .await?;
+
+        self.s3tables_client
+            .create_table()
+            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .namespace(namespace.to_url_string())
+            .name(table_ident.name())
+            .send()
+            .await
+            .map_err(from_aws_sdk_error)?;
+        self.s3tables_client
+            .update_table_metadata_location()
+            .table_bucket_arn(self.config.table_bucket_arn.clone())
+            .namespace(namespace.to_url_string())
+            .name(table_ident.name())
+            .metadata_location(metadata_location.clone())
+            .send()
+            .await
+            .map_err(from_aws_sdk_error)?;
+
+        let table = Table::builder()
+            .identifier(table_ident)
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .file_io(self.file_io.clone())
+            .build()?;
+        Ok(table)
     }
 
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
