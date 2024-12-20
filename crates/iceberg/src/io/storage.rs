@@ -24,7 +24,7 @@ use opendal::services::GcsConfig;
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
 
-use super::FileIOBuilder;
+use super::{FileIOBuilder, FileIOExtension};
 use crate::{Error, ErrorKind};
 
 /// The storage carries all supported storage services in iceberg
@@ -46,7 +46,10 @@ pub(crate) enum Storage {
         config: Arc<S3Config>,
     },
     #[cfg(feature = "storage-gcs")]
-    Gcs { config: Arc<GcsConfig> },
+    Gcs {
+        config: Arc<GcsConfig>,
+    },
+    Extension(Arc<dyn FileIOExtension>),
 }
 
 impl Storage {
@@ -134,6 +137,7 @@ impl Storage {
                     ))
                 }
             }
+            Storage::Extension(_) => todo!(),
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
