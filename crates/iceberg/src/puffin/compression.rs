@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{Error, ErrorKind, Result};
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 /// Data compression formats
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CompressionCodec {
     #[default]
     /// No compression
