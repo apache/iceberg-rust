@@ -980,9 +980,9 @@ mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::scan::FileScanTask;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
-        ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, NestedField, PrimitiveType, Schema, Struct, TableMetadata, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PrimitiveType,
+        Schema, Struct, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::TableIdent;
@@ -1055,20 +1055,16 @@ mod tests {
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
-            let data_file_manifest = ManifestWriter::new(
+            let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 current_snapshot.snapshot_id(),
                 vec![],
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
             )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema(current_schema.clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((**current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
-                    .build(),
-                vec![
+            .build_v2_data();
+            writer
+                .add(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
                         .data_file(
@@ -1084,6 +1080,10 @@ mod tests {
                                 .unwrap(),
                         )
                         .build(),
+                )
+                .unwrap();
+            writer
+                .delete(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Deleted)
                         .snapshot_id(parent_snapshot.snapshot_id())
@@ -1101,6 +1101,10 @@ mod tests {
                                 .unwrap(),
                         )
                         .build(),
+                )
+                .unwrap();
+            writer
+                .existing(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Existing)
                         .snapshot_id(parent_snapshot.snapshot_id())
@@ -1118,10 +1122,9 @@ mod tests {
                                 .unwrap(),
                         )
                         .build(),
-                ],
-            ))
-            .await
-            .unwrap();
+                )
+                .unwrap();
+            let data_file_manifest = writer.to_manifest_file().await.unwrap();
 
             // Write to manifest list
             let mut manifest_list_write = ManifestListWriter::v2(
