@@ -364,9 +364,8 @@ impl TableScan {
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
-        // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose content type is not Data or whose partitions cannot match this
-        // scan's filter
+        // get the [`ManifestFile`]s from the [`ManifestList`], filtering out
+        // partitions cannot match the scan's filter
         let manifest_file_contexts = self
             .plan_context
             .build_manifest_file_contexts(manifest_list, manifest_entry_ctx_tx)?;
@@ -634,7 +633,7 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         if self.predicate.is_some() {
-            for manifest_file in entries.iter() {
+            for manifest_file in entries {
                 let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
 
                 // evaluate the ManifestFile against the partition filter. Skip
@@ -656,7 +655,7 @@ impl PlanContext {
                 }
             }
         } else {
-            for manifest_file in entries.iter() {
+            for manifest_file in entries {
                 let mfc = self.create_manifest_file_context(manifest_file, None, sender.clone());
                 filtered_mfcs.push(Ok(mfc));
             }
