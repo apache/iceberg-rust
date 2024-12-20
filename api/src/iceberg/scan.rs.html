@@ -1873,6 +1873,12 @@
 <a href="#1873" id="1873">1873</a>
 <a href="#1874" id="1874">1874</a>
 <a href="#1875" id="1875">1875</a>
+<a href="#1876" id="1876">1876</a>
+<a href="#1877" id="1877">1877</a>
+<a href="#1878" id="1878">1878</a>
+<a href="#1879" id="1879">1879</a>
+<a href="#1880" id="1880">1880</a>
+<a href="#1881" id="1881">1881</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2239,9 +2245,8 @@
 
         <span class="kw">let </span>manifest_list = <span class="self">self</span>.plan_context.get_manifest_list().<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="comment">// get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
-        // whose content type is not Data or whose partitions cannot match this
-        // scan's filter
+        <span class="comment">// get the [`ManifestFile`]s from the [`ManifestList`], filtering out
+        // partitions cannot match the scan's filter
         </span><span class="kw">let </span>manifest_file_contexts = <span class="self">self
             </span>.plan_context
             .build_manifest_file_contexts(manifest_list, manifest_entry_ctx_tx)<span class="question-mark">?</span>;
@@ -2494,15 +2499,22 @@
         manifest_list: Arc&lt;ManifestList&gt;,
         sender: Sender&lt;ManifestEntryContext&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt;&gt;&gt; {
-        <span class="kw">let </span>filtered_entries = manifest_list
-            .entries()
+        <span class="kw">let </span>entries = manifest_list.entries();
+
+        <span class="kw">if </span>entries
             .iter()
-            .filter(|manifest_file| manifest_file.content == ManifestContentType::Data);
+            .any(|e| e.content != ManifestContentType::Data)
+        {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::FeatureUnsupported,
+                <span class="string">"Merge-on-read is not yet supported"</span>,
+            ));
+        }
 
         <span class="comment">// TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         </span><span class="kw">let </span><span class="kw-2">mut </span>filtered_mfcs = <span class="macro">vec!</span>[];
         <span class="kw">if </span><span class="self">self</span>.predicate.is_some() {
-            <span class="kw">for </span>manifest_file <span class="kw">in </span>filtered_entries {
+            <span class="kw">for </span>manifest_file <span class="kw">in </span>entries {
                 <span class="kw">let </span>partition_bound_predicate = <span class="self">self</span>.get_partition_filter(manifest_file)<span class="question-mark">?</span>;
 
                 <span class="comment">// evaluate the ManifestFile against the partition filter. Skip
@@ -2524,7 +2536,7 @@
                 }
             }
         } <span class="kw">else </span>{
-            <span class="kw">for </span>manifest_file <span class="kw">in </span>filtered_entries {
+            <span class="kw">for </span>manifest_file <span class="kw">in </span>entries {
                 <span class="kw">let </span>mfc = <span class="self">self</span>.create_manifest_file_context(manifest_file, <span class="prelude-val">None</span>, sender.clone());
                 filtered_mfcs.push(<span class="prelude-val">Ok</span>(mfc));
             }
