@@ -524,7 +524,7 @@ mod tests {
         };
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
-        assert!(namespaces.len() > 0);
+        assert!(!namespaces.is_empty());
     }
 
     #[tokio::test]
@@ -539,8 +539,7 @@ mod tests {
             .list_tables(&NamespaceIdent::new("aws_s3_metadata".to_string()))
             .await
             .unwrap();
-        println!("{:?}", tables);
-        assert!(tables.len() > 0);
+        assert!(!tables.is_empty());
     }
 
     #[tokio::test]
