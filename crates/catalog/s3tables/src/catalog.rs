@@ -99,9 +99,6 @@ impl Catalog for S3TablesCatalog {
                 .s3tables_client
                 .list_namespaces()
                 .table_bucket_arn(self.config.table_bucket_arn.clone());
-            if let Some(parent) = parent {
-                req = req.prefix(parent.to_url_string());
-            }
             if let Some(token) = continuation_token {
                 req = req.continuation_token(token);
             }
