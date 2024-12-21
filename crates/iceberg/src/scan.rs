@@ -385,14 +385,14 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
+        // DeleteFileIndexRefReceiver is a watch channel receiver that will
+        // be notified when the DeleteFileIndex is ready.
         let delete_file_idx_and_tx: Option<(
             DeleteFileIndexRefReceiver,
-            Sender<Result<FileScanTaskDeleteFile>>,
+            Sender<Result<DeleteFileContext>>,
         )> = if self.delete_file_processing_enabled {
-            // used to stream delete files into the DeleteFileIndex
             let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
-
-            let delete_file_index_rx = DeleteFileIndex::from_receiver(delete_file_rx);
+            let delete_file_index_rx = DeleteFileIndex::from_del_file_chan(delete_file_rx);
             Some((delete_file_index_rx, delete_file_tx))
         } else {
             None
@@ -565,7 +565,7 @@ impl TableScan {
 
     async fn process_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_delete_file_tx: Sender<Result<FileScanTaskDeleteFile>>,
+        mut delete_file_ctx_tx: Sender<Result<DeleteFileContext>>,
     ) -> Result<()> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
@@ -596,13 +596,9 @@ impl TableScan {
             }
         }
 
-        file_scan_task_delete_file_tx
-            .send(Ok(FileScanTaskDeleteFile {
-                file_path: manifest_entry_context
-                    .manifest_entry
-                    .file_path()
-                    .to_string(),
-                file_type: manifest_entry_context.manifest_entry.content_type(),
+        delete_file_ctx_tx
+            .send(Ok(DeleteFileContext {
+                manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
             }))
             .await?;
@@ -698,9 +694,10 @@ impl ManifestEntryContext {
 
             match del_file_idx_opt.as_ref() {
                 Some(del_file_idx) => match del_file_idx.as_ref() {
-                    Ok(delete_file_idx) => {
-                        delete_file_idx.get_deletes_for_data_file(self.manifest_entry.data_file())
-                    }
+                    Ok(delete_file_idx) => delete_file_idx.get_deletes_for_data_file(
+                        self.manifest_entry.data_file(),
+                        self.manifest_entry.sequence_number(),
+                    ),
                     Err(err) => {
                         return Err(Error::new(ErrorKind::Unexpected, err.message()));
                     }
@@ -1105,6 +1102,12 @@ pub struct FileScanTaskDeleteFile {
 
     /// partition id
     pub partition_spec_id: i32,
+}
+
+#[derive(Debug)]
+pub(crate) struct DeleteFileContext {
+    pub(crate) manifest_entry: ManifestEntryRef,
+    pub(crate) partition_spec_id: i32,
 }
 
 impl FileScanTask {
