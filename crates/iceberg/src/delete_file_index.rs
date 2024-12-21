@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use tokio::sync::watch;
 
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
