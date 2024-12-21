@@ -52,6 +52,18 @@ pub enum Operation {
     Delete,
 }
 
+impl Operation {
+    /// Returns the string representation (lowercase) of the operation.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Operation::Append => "append",
+            Operation::Replace => "replace",
+            Operation::Overwrite => "overwrite",
+            Operation::Delete => "delete",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Summarises the changes in the snapshot.
 pub struct Summary {
