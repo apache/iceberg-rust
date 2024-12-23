@@ -33,6 +33,7 @@ env:
   rust_msrv: "1.77.1"
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
+  SCCACHE_LOG: "debug"
 
 jobs:
   check:
