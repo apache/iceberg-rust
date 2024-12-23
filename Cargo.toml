@@ -43,6 +43,7 @@ apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "53.3.0" }
 arrow-array = { version = "53.4.0" }
+arrow-buffer = { version = "53.4.0" }
 arrow-cast = { version = "53.4.0" }
 arrow-ord = { version = "53.4.0" }
 arrow-schema = { version = "53.4.0" }
