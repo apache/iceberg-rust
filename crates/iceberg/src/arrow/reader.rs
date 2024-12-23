@@ -167,6 +167,14 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
+        // TODO: add support for delete files
+        if !task.deletes.is_empty() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Delete files are not yet supported",
+            ));
+        }
+
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(&task.data_file_path)?;
