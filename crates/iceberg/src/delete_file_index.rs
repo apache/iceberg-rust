@@ -172,7 +172,6 @@ impl PopulatedDeleteFileIndex {
             deletes_queue.extend(deletes.iter());
         }
 
-        let mut results = vec![];
         deletes_queue
             .iter()
             .filter(|&delete| {
@@ -180,15 +179,12 @@ impl PopulatedDeleteFileIndex {
                     .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
                     .unwrap_or_else(|| true)
             })
-            .for_each(|delete| {
-                results.push(FileScanTaskDeleteFile {
-                    file_path: delete.manifest_entry.file_path().to_string(),
-                    file_type: delete.manifest_entry.content_type(),
-                    partition_spec_id: delete.partition_spec_id,
-                })
-            });
-
-        results
+            .map(|delete| FileScanTaskDeleteFile {
+                file_path: delete.manifest_entry.file_path().to_string(),
+                file_type: delete.manifest_entry.content_type(),
+                partition_spec_id: delete.partition_spec_id,
+            })
+            .collect()
     }
 }
 
