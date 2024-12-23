@@ -29,6 +29,12 @@ use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
 
+/// Index of delete files
+#[derive(Clone, Debug)]
+pub(crate) struct DeleteFileIndex {
+    state: Arc<RwLock<DeleteFileIndexState>>,
+}
+
 #[derive(Debug)]
 enum DeleteFileIndexState {
     Populating,
@@ -42,12 +48,6 @@ struct PopulatedDeleteFileIndex {
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
-}
-
-/// Index of delete files
-#[derive(Clone, Debug)]
-pub(crate) struct DeleteFileIndex {
-    state: Arc<RwLock<DeleteFileIndexState>>,
 }
 
 impl DeleteFileIndex {
