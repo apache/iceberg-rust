@@ -684,7 +684,7 @@ impl ManifestEntryContext {
                     self.manifest_entry.data_file(),
                     self.manifest_entry.sequence_number(),
                 )
-                .await
+                .await?
         } else {
             vec![]
         };
@@ -1086,6 +1086,16 @@ pub struct FileScanTaskDeleteFile {
 pub(crate) struct DeleteFileContext {
     pub(crate) manifest_entry: ManifestEntryRef,
     pub(crate) partition_spec_id: i32,
+}
+
+impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
+    fn from(ctx: &DeleteFileContext) -> Self {
+        FileScanTaskDeleteFile {
+            file_path: ctx.manifest_entry.file_path().to_string(),
+            file_type: ctx.manifest_entry.content_type(),
+            partition_spec_id: ctx.partition_spec_id,
+        }
+    }
 }
 
 impl FileScanTask {
