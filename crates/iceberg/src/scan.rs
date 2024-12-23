@@ -27,7 +27,7 @@ use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::arrow::ArrowReaderBuilder;
-use crate::delete_file_index::{DeleteFileIndex, DeleteFileIndexRefReceiver};
+use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
@@ -385,18 +385,12 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        // DeleteFileIndexRefReceiver is a watch channel receiver that will
-        // be notified when the DeleteFileIndex is ready.
-        let delete_file_idx_and_tx: Option<(
-            DeleteFileIndexRefReceiver,
-            Sender<Result<DeleteFileContext>>,
-        )> = if self.delete_file_processing_enabled {
-            let (delete_file_tx, delete_file_rx) = channel(concurrency_limit_manifest_entries);
-            let delete_file_index_rx = DeleteFileIndex::from_del_file_chan(delete_file_rx);
-            Some((delete_file_index_rx, delete_file_tx))
-        } else {
-            None
-        };
+        let delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<DeleteFileContext>)> =
+            if self.delete_file_processing_enabled {
+                Some(DeleteFileIndex::new())
+            } else {
+                None
+            };
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
@@ -565,7 +559,7 @@ impl TableScan {
 
     async fn process_delete_manifest_entry(
         manifest_entry_context: ManifestEntryContext,
-        mut delete_file_ctx_tx: Sender<Result<DeleteFileContext>>,
+        mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
@@ -597,10 +591,10 @@ impl TableScan {
         }
 
         delete_file_ctx_tx
-            .send(Ok(DeleteFileContext {
+            .send(DeleteFileContext {
                 manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
-            }))
+            })
             .await?;
 
         Ok(())
@@ -624,7 +618,7 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: Option<DeleteFileIndexRefReceiver>,
+    delete_file_index: Option<DeleteFileIndex>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -637,7 +631,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
-    delete_file_index: Option<DeleteFileIndexRefReceiver>,
+    delete_file_index: Option<DeleteFileIndex>,
 }
 
 impl ManifestFileContext {
@@ -684,29 +678,13 @@ impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
     async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        // let deletes = self.get_deletes().await?;
-
-        let deletes = if let Some(mut delete_file_index_rx) = self.delete_file_index {
-            let del_file_idx_opt = delete_file_index_rx
-                .wait_for(Option::is_some)
+        let deletes = if let Some(delete_file_index) = self.delete_file_index {
+            delete_file_index
+                .get_deletes_for_data_file(
+                    self.manifest_entry.data_file(),
+                    self.manifest_entry.sequence_number(),
+                )
                 .await
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "DeleteFileIndex recv error"))?;
-
-            match del_file_idx_opt.as_ref() {
-                Some(del_file_idx) => match del_file_idx.as_ref() {
-                    Ok(delete_file_idx) => delete_file_idx.get_deletes_for_data_file(
-                        self.manifest_entry.data_file(),
-                        self.manifest_entry.sequence_number(),
-                    ),
-                    Err(err) => {
-                        return Err(Error::new(ErrorKind::Unexpected, err.message()));
-                    }
-                },
-
-                // the `wait_for(Option::is_some)` above means that we can
-                // never get a `None` here
-                None => unreachable!(),
-            }
         } else {
             vec![]
         };
@@ -764,7 +742,7 @@ impl PlanContext {
         &self,
         manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
-        delete_file_idx_and_tx: Option<(DeleteFileIndexRefReceiver, Sender<ManifestEntryContext>)>,
+        delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
         let manifest_files = manifest_list.entries().iter();
 
@@ -823,7 +801,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
-        delete_file_index: Option<DeleteFileIndexRefReceiver>,
+        delete_file_index: Option<DeleteFileIndex>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =

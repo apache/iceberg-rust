@@ -16,23 +16,27 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::future::Future;
+use std::ops::Deref;
+use std::pin::Pin;
+use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
 
-use futures::channel::mpsc;
-use futures::{StreamExt, TryStreamExt};
-use tokio::sync::watch;
+use futures::channel::mpsc::{channel, Sender};
+use futures::StreamExt;
 
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
-use crate::Result;
 
-type DeleteFileIndexRef = Arc<Result<DeleteFileIndex>>;
-pub(crate) type DeleteFileIndexRefReceiver = watch::Receiver<Option<DeleteFileIndexRef>>;
-
-/// Index of delete files
 #[derive(Debug)]
-pub(crate) struct DeleteFileIndex {
+enum DeleteFileIndexState {
+    Populating,
+    Populated(PopulatedDeleteFileIndex),
+}
+
+#[derive(Debug)]
+struct PopulatedDeleteFileIndex {
     #[allow(dead_code)]
     global_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
@@ -40,24 +44,53 @@ pub(crate) struct DeleteFileIndex {
     pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
 }
 
-impl DeleteFileIndex {
-    pub(crate) fn from_del_file_chan(
-        receiver: mpsc::Receiver<Result<DeleteFileContext>>,
-    ) -> watch::Receiver<Option<DeleteFileIndexRef>> {
-        let (tx, rx) = watch::channel(None);
+/// Index of delete files
+#[derive(Clone, Debug)]
+pub(crate) struct DeleteFileIndex {
+    state: Arc<RwLock<DeleteFileIndexState>>,
+}
 
-        let delete_file_stream = receiver.boxed();
-        spawn(async move {
-            let delete_files = delete_file_stream.try_collect::<Vec<_>>().await;
-            let delete_file_index = delete_files.map(DeleteFileIndex::from_delete_files);
-            let delete_file_index = Arc::new(delete_file_index);
-            tx.send(Some(delete_file_index))
+impl DeleteFileIndex {
+    /// create a new `DeleteFileIndex` along with the sender that populates it with delete files
+    pub(crate) fn new() -> (DeleteFileIndex, Sender<DeleteFileContext>) {
+        // TODO: what should the channel limit be?
+        let (tx, rx) = channel(10);
+        let state = Arc::new(RwLock::new(DeleteFileIndexState::Populating));
+        let delete_file_stream = rx.boxed();
+
+        spawn({
+            let state = state.clone();
+            async move {
+                let delete_files = delete_file_stream.collect::<Vec<_>>().await;
+
+                let populated_delete_file_index = PopulatedDeleteFileIndex::new(delete_files);
+
+                let mut guard = state.write().unwrap();
+                *guard = DeleteFileIndexState::Populated(populated_delete_file_index);
+            }
         });
 
-        rx
+        (DeleteFileIndex { state }, tx)
     }
 
-    fn from_delete_files(files: Vec<DeleteFileContext>) -> Self {
+    /// Gets all the delete files that apply to the specified data file.
+    ///
+    /// Returns a future that resolves to a Vec<FileScanTaskDeleteFile>
+    pub(crate) fn get_deletes_for_data_file<'a>(
+        &self,
+        data_file: &'a DataFile,
+        seq_num: Option<i64>,
+    ) -> DeletesForDataFile<'a> {
+        DeletesForDataFile {
+            state: self.state.clone(),
+            data_file,
+            seq_num,
+        }
+    }
+}
+
+impl PopulatedDeleteFileIndex {
+    fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
         let mut eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
@@ -111,7 +144,7 @@ impl DeleteFileIndex {
             }
         });
 
-        DeleteFileIndex {
+        PopulatedDeleteFileIndex {
             global_deletes: vec![],
             eq_deletes_by_partition,
             pos_deletes_by_partition,
@@ -120,7 +153,7 @@ impl DeleteFileIndex {
     }
 
     /// Determine all the delete files that apply to the provided `DataFile`.
-    pub(crate) fn get_deletes_for_data_file(
+    fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
         seq_num: Option<i64>,
@@ -156,5 +189,29 @@ impl DeleteFileIndex {
             });
 
         results
+    }
+}
+
+/// Future for the `DeleteFileIndex::get_deletes_for_data_file` method
+pub(crate) struct DeletesForDataFile<'a> {
+    state: Arc<RwLock<DeleteFileIndexState>>,
+    data_file: &'a DataFile,
+    seq_num: Option<i64>,
+}
+
+impl Future for DeletesForDataFile<'_> {
+    type Output = Vec<FileScanTaskDeleteFile>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Ok(guard) = self.state.try_read() else {
+            return Poll::Pending;
+        };
+
+        match guard.deref() {
+            DeleteFileIndexState::Populated(idx) => {
+                Poll::Ready(idx.get_deletes_for_data_file(self.data_file, self.seq_num))
+            }
+            _ => Poll::Pending,
+        }
     }
 }
