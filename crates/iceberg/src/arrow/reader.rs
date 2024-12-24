@@ -47,12 +47,8 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::scan::{
-    ArrowRecordBatchStream, FileScanTask, FileScanTaskStream,
-};
-use crate::spec::{
-    Datum, PrimitiveType, Schema,
-};
+use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
+use crate::spec::{Datum, PrimitiveType, Schema};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
