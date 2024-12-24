@@ -1879,6 +1879,11 @@
 <a href="#1879" id="1879">1879</a>
 <a href="#1880" id="1880">1880</a>
 <a href="#1881" id="1881">1881</a>
+<a href="#1882" id="1882">1882</a>
+<a href="#1883" id="1883">1883</a>
+<a href="#1884" id="1884">1884</a>
+<a href="#1885" id="1885">1885</a>
+<a href="#1886" id="1886">1886</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2302,8 +2307,11 @@
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder.build().read(<span class="self">self</span>.plan_files().<span class="kw">await</span><span class="question-mark">?</span>)
-    }
+        arrow_reader_builder
+            .build()
+            .read(<span class="self">self</span>.plan_files().<span class="kw">await</span><span class="question-mark">?</span>)
+            .<span class="kw">await
+    </span>}
 
     <span class="doccomment">/// Returns a reference to the column names of the table scan.
     </span><span class="kw">pub fn </span>column_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[String]&gt; {
@@ -3291,13 +3299,15 @@
         <span class="kw">let </span>batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(plan_task.remove(<span class="number">0</span>))])))
-            .unwrap();
+            .<span class="kw">await
+            </span>.unwrap();
         <span class="kw">let </span>batche1: Vec&lt;<span class="kw">_</span>&gt; = batch_stream.try_collect().<span class="kw">await</span>.unwrap();
 
         <span class="kw">let </span>reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         <span class="kw">let </span>batch_stream = reader
             .read(Box::pin(stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(plan_task.remove(<span class="number">0</span>))])))
-            .unwrap();
+            .<span class="kw">await
+            </span>.unwrap();
         <span class="kw">let </span>batche2: Vec&lt;<span class="kw">_</span>&gt; = batch_stream.try_collect().<span class="kw">await</span>.unwrap();
 
         <span class="macro">assert_eq!</span>(batche1, batche2);

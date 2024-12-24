@@ -1286,28 +1286,6 @@
 <a href="#1286" id="1286">1286</a>
 <a href="#1287" id="1287">1287</a>
 <a href="#1288" id="1288">1288</a>
-<a href="#1289" id="1289">1289</a>
-<a href="#1290" id="1290">1290</a>
-<a href="#1291" id="1291">1291</a>
-<a href="#1292" id="1292">1292</a>
-<a href="#1293" id="1293">1293</a>
-<a href="#1294" id="1294">1294</a>
-<a href="#1295" id="1295">1295</a>
-<a href="#1296" id="1296">1296</a>
-<a href="#1297" id="1297">1297</a>
-<a href="#1298" id="1298">1298</a>
-<a href="#1299" id="1299">1299</a>
-<a href="#1300" id="1300">1300</a>
-<a href="#1301" id="1301">1301</a>
-<a href="#1302" id="1302">1302</a>
-<a href="#1303" id="1303">1303</a>
-<a href="#1304" id="1304">1304</a>
-<a href="#1305" id="1305">1305</a>
-<a href="#1306" id="1306">1306</a>
-<a href="#1307" id="1307">1307</a>
-<a href="#1308" id="1308">1308</a>
-<a href="#1309" id="1309">1309</a>
-<a href="#1310" id="1310">1310</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1341,9 +1319,8 @@
 <span class="kw">use </span>arrow_string::like::starts_with;
 <span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>fnv::FnvHashSet;
-<span class="kw">use </span>futures::channel::mpsc::{channel, Sender};
 <span class="kw">use </span>futures::future::BoxFuture;
-<span class="kw">use </span>futures::{try_join, FutureExt, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+<span class="kw">use </span>futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 <span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
 <span class="kw">use </span>parquet::arrow::async_reader::AsyncFileReader;
 <span class="kw">use </span>parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
@@ -1358,7 +1335,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference};
 <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileMetadata, FileRead};
-<span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
 <span class="kw">use </span><span class="kw">crate</span>::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveType, Schema};
 <span class="kw">use </span><span class="kw">crate</span>::utils::available_parallelism;
@@ -1440,62 +1416,41 @@
 <span class="kw">impl </span>ArrowReader {
     <span class="doccomment">/// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    </span><span class="kw">pub fn </span>read(<span class="self">self</span>, tasks: FileScanTaskStream) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
+    </span><span class="kw">pub async fn </span>read(<span class="self">self</span>, tasks: FileScanTaskStream) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="kw">let </span>file_io = <span class="self">self</span>.file_io.clone();
         <span class="kw">let </span>batch_size = <span class="self">self</span>.batch_size;
         <span class="kw">let </span>concurrency_limit_data_files = <span class="self">self</span>.concurrency_limit_data_files;
         <span class="kw">let </span>row_group_filtering_enabled = <span class="self">self</span>.row_group_filtering_enabled;
         <span class="kw">let </span>row_selection_enabled = <span class="self">self</span>.row_selection_enabled;
 
-        <span class="kw">let </span>(tx, rx) = channel(concurrency_limit_data_files);
-        <span class="kw">let </span><span class="kw-2">mut </span>channel_for_error = tx.clone();
+        <span class="kw">let </span>stream = tasks
+            .map_ok(<span class="kw">move </span>|task| {
+                <span class="kw">let </span>file_io = file_io.clone();
 
-        spawn(<span class="kw">async move </span>{
-            <span class="kw">let </span>result = tasks
-                .map(|task| <span class="prelude-val">Ok</span>((task, file_io.clone(), tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_data_files,
-                    |(file_scan_task, file_io, tx)| <span class="kw">async move </span>{
-                        <span class="kw">match </span>file_scan_task {
-                            <span class="prelude-val">Ok</span>(task) =&gt; {
-                                <span class="kw">let </span>file_path = task.data_file_path.to_string();
-
-                                spawn(<span class="kw">async move </span>{
-                                    <span class="self">Self</span>::process_file_scan_task(
-                                        task,
-                                        batch_size,
-                                        file_io,
-                                        tx,
-                                        row_group_filtering_enabled,
-                                        row_selection_enabled,
-                                    )
-                                    .<span class="kw">await
-                                </span>})
-                                .<span class="kw">await
-                                </span>.map_err(|e| e.with_context(<span class="string">"file_path"</span>, file_path))
-                            }
-                            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err),
-                        }
-                    },
+                <span class="self">Self</span>::process_file_scan_task(
+                    task,
+                    batch_size,
+                    file_io,
+                    row_group_filtering_enabled,
+                    row_selection_enabled,
                 )
-                .<span class="kw">await</span>;
+            })
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, <span class="string">"file scan task generate failed"</span>).with_source(err)
+            })
+            .try_buffer_unordered(concurrency_limit_data_files)
+            .try_flatten_unordered(concurrency_limit_data_files);
 
-            <span class="kw">if let </span><span class="prelude-val">Err</span>(error) = result {
-                <span class="kw">let _ </span>= channel_for_error.send(<span class="prelude-val">Err</span>(error)).<span class="kw">await</span>;
-            }
-        });
-
-        <span class="kw">return </span><span class="prelude-val">Ok</span>(rx.boxed());
+        <span class="prelude-val">Ok</span>(Box::pin(stream) <span class="kw">as </span>ArrowRecordBatchStream)
     }
 
     <span class="kw">async fn </span>process_file_scan_task(
         task: FileScanTask,
         batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         file_io: FileIO,
-        <span class="kw-2">mut </span>tx: Sender&lt;<span class="prelude-ty">Result</span>&lt;RecordBatch&gt;&gt;,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="comment">// Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         </span><span class="kw">let </span>parquet_file = file_io.new_input(<span class="kw-2">&amp;</span>task.data_file_path)<span class="question-mark">?</span>;
@@ -1579,14 +1534,15 @@
 
         <span class="comment">// Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        </span><span class="kw">let </span><span class="kw-2">mut </span>record_batch_stream = record_batch_stream_builder.build()<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>record_batch_stream =
+            record_batch_stream_builder
+                .build()<span class="question-mark">?
+                </span>.map(<span class="kw">move </span>|batch| <span class="kw">match </span>batch {
+                    <span class="prelude-val">Ok</span>(batch) =&gt; record_batch_transformer.process_record_batch(batch),
+                    <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err.into()),
+                });
 
-        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = record_batch_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
-            tx.send(record_batch_transformer.process_record_batch(batch))
-                .<span class="kw">await</span><span class="question-mark">?
-        </span>}
-
-        <span class="prelude-val">Ok</span>(())
+        <span class="prelude-val">Ok</span>(Box::pin(record_batch_stream) <span class="kw">as </span>ArrowRecordBatchStream)
     }
 
     <span class="kw">fn </span>build_field_id_set_and_map(
