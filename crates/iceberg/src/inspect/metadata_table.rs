@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{ManifestsTable, SnapshotsTable};
+use super::{HistoryTable, ManifestsTable, SnapshotsTable};
 use crate::table::Table;
 
 /// Metadata table is used to inspect a table's history, snapshots, and other metadata as a table.
@@ -31,6 +31,11 @@ impl<'a> MetadataTable<'a> {
     /// Creates a new metadata scan.
     pub fn new(table: &'a Table) -> Self {
         Self(table)
+    }
+
+    /// Get the history table.
+    pub fn history(&self) -> HistoryTable {
+        HistoryTable::new(self.0)
     }
 
     /// Get the snapshots table.

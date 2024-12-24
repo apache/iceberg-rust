@@ -17,10 +17,12 @@
 
 //! Metadata table APIs.
 
+mod history;
 mod manifests;
 mod metadata_table;
 mod snapshots;
 
+pub use history::HistoryTable;
 pub use manifests::ManifestsTable;
 pub use metadata_table::*;
 pub use snapshots::SnapshotsTable;
