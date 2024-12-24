@@ -227,11 +227,16 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
+</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
+</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">///
+</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
 </span>    // Create catalog
     let config = RestCatalogConfig::builder()
-        .uri(&quot;http://localhost:8080&quot;.to_string())
+        .uri(&quot;http://localhost:8181&quot;.to_string())
         .build();
 
     let catalog = RestCatalog::new(config);
@@ -276,11 +281,16 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
+</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
+</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">///
+</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
 </span><span class="boring">    // Create catalog
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
@@ -325,11 +335,16 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
+</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
+</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">///
+</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
 </span><span class="boring">    // Create catalog
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
@@ -377,11 +392,16 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to create a table in a REST catalog and get it back.
+</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8080.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">///
+</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
 </span><span class="boring">    // Create catalog
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
@@ -413,11 +433,11 @@ example of how to create a <code>RestCatalog</code>:</p>
 
     println!(&quot;Table created: {:?}&quot;, table.metadata());
 <span class="boring">
-</span><span class="boring">    let table2 = catalog
-</span><span class="boring">        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t2&quot;]).unwrap())
+</span><span class="boring">    let table_created = catalog
+</span><span class="boring">        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap())
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
-</span><span class="boring">    println!(&quot;{:?}&quot;, table2.metadata());
+</span><span class="boring">    println!(&quot;{:?}&quot;, table_created.metadata());
 </span><span class="boring">}</span></code></pre>
 <p>Also, you can load a table directly:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -443,11 +463,16 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to create a table in a REST catalog and get it back.
+</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8080.
+</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">///
+</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
 </span><span class="boring">    // Create catalog
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8080&quot;.to_string())
+</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
 </span><span class="boring">        .build();
 </span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
@@ -479,11 +504,11 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">
 </span><span class="boring">    println!(&quot;Table created: {:?}&quot;, table.metadata());
 </span><span class="boring">
-</span>    let table2 = catalog
-        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t2&quot;]).unwrap())
+</span>    let table_created = catalog
+        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap())
         .await
         .unwrap();
-    println!(&quot;{:?}&quot;, table2.metadata());
+    println!(&quot;{:?}&quot;, table_created.metadata());
 <span class="boring">}</span></code></pre>
 
                     </main>
