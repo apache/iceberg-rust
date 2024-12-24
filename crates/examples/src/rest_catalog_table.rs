@@ -21,11 +21,16 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 
+/// This is a simple example that demonstrates how to create a table in a REST catalog and get it back.
+/// It requires a running instance of the iceberg-rest catalog for the port 8080.
+/// You can find how to run the iceberg-rest catalog in the official documentation.
+///
+/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 #[tokio::main]
 async fn main() {
     // Create catalog
     let config = RestCatalogConfig::builder()
-        .uri("http://localhost:8080".to_string())
+        .uri("http://localhost:8181".to_string())
         .build();
 
     let catalog = RestCatalog::new(config);
@@ -60,10 +65,10 @@ async fn main() {
     // ANCHOR_END: create_table
 
     // ANCHOR: load_table
-    let table2 = catalog
-        .load_table(&TableIdent::from_strs(["default", "t2"]).unwrap())
+    let table_created = catalog
+        .load_table(&TableIdent::from_strs(["default", "t1"]).unwrap())
         .await
         .unwrap();
-    println!("{:?}", table2.metadata());
+    println!("{:?}", table_created.metadata());
     // ANCHOR_END: load_table
 }
