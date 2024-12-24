@@ -54,6 +54,8 @@ pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
     file_io: FileIO,
     location_generator: T,
     file_name_generator: F,
+
+    delete_if_empty: bool,
 }
 
 impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
@@ -65,6 +67,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
         file_io: FileIO,
         location_generator: T,
         file_name_generator: F,
+        delete_if_empty: bool,
     ) -> Self {
         Self {
             props,
@@ -72,6 +75,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
             file_io,
             location_generator,
             file_name_generator,
+            delete_if_empty,
         }
     }
 }
@@ -101,6 +105,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
             written_size,
             current_row_num: 0,
             out_file,
+            delete_if_empty: self.delete_if_empty,
         })
     }
 }
@@ -216,6 +221,7 @@ pub struct ParquetWriter {
     writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
+    delete_if_empty: bool,
 }
 
 /// Used to aggregate min and max value of each column.
@@ -410,6 +416,11 @@ impl FileWriter for ParquetWriter {
         let metadata = self.writer.close().await.map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
         })?;
+
+        if self.delete_if_empty && self.current_row_num == 0 {
+            self.out_file.delete().await?;
+            return Ok(vec![]);
+        }
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
@@ -671,6 +682,7 @@ mod tests {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         )
         .build()
         .await?;
@@ -867,6 +879,7 @@ mod tests {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         )
         .build()
         .await?;
@@ -1057,6 +1070,7 @@ mod tests {
             file_io.clone(),
             loccation_gen,
             file_name_gen,
+            false,
         )
         .build()
         .await?;

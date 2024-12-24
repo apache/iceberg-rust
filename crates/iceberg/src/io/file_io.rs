@@ -334,6 +334,11 @@ impl OutputFile {
         Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
     }
 
+    /// Delete the file if it exists.
+    pub async fn delete(&self) -> crate::Result<()> {
+        Ok(self.op.delete(&self.path[self.relative_path_pos..]).await?)
+    }
+
     /// Converts into [`InputFile`].
     pub fn to_input_file(self) -> InputFile {
         InputFile {

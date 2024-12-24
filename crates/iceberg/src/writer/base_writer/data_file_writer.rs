@@ -140,6 +140,7 @@ mod test {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         );
 
         let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await.unwrap();
@@ -198,6 +199,7 @@ mod test {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         );
 
         let mut data_file_writer =

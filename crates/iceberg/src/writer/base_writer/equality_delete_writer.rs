@@ -397,6 +397,7 @@ mod test {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         );
         let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, equality_config)
             .build()
@@ -561,6 +562,7 @@ mod test {
             file_io.clone(),
             location_gen,
             file_name_gen,
+            false,
         );
         let mut equality_delete_writer = EqualityDeleteFileWriterBuilder::new(pb, config)
             .build()
