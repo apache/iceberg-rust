@@ -349,7 +349,7 @@
             <span class="string">"memory" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Memory),
             <span class="string">"file" </span>| <span class="string">"" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Fs),
             <span class="string">"s3" </span>| <span class="string">"s3a" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::S3),
-            <span class="string">"gcs" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Gcs),
+            <span class="string">"gs" </span>| <span class="string">"gcs" </span>=&gt; <span class="prelude-val">Ok</span>(Scheme::Gcs),
             s =&gt; <span class="prelude-val">Ok</span>(s.parse::&lt;Scheme&gt;()<span class="question-mark">?</span>),
         }
     }
