@@ -171,7 +171,7 @@ impl Storage {
             "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
-            "gs" => Ok(Scheme::Gcs),
+            "gs" | "gcs" => Ok(Scheme::Gcs),
             s => Ok(s.parse::<Scheme>()?),
         }
     }
