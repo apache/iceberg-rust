@@ -26,6 +26,7 @@ use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondTyp
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
+use crate::spec::Snapshot;
 use crate::table::Table;
 use crate::Result;
 
@@ -36,11 +37,11 @@ use crate::Result;
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
 #[derive(Debug)]
-pub struct MetadataTable(Table);
+pub struct MetadataTable<'a>(&'a Table);
 
-impl MetadataTable {
+impl<'a> MetadataTable<'a> {
     /// Creates a new metadata scan.
-    pub(super) fn new(table: Table) -> Self {
+    pub(super) fn new(table: &'a Table) -> Self {
         Self(table)
     }
 
@@ -52,6 +53,11 @@ impl MetadataTable {
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
         ManifestsTable { table: &self.0 }
+    }
+
+    /// Return the metadata log entries of the table.
+    pub fn metadata_log_entries(&self) -> MetadataLogEntriesTable {
+        MetadataLogEntriesTable { table: &self.0 }
     }
 }
 
@@ -255,6 +261,89 @@ impl<'a> ManifestsTable<'a> {
     }
 }
 
+/// Metadata log entries table.
+///
+/// Use to inspect the current and historical metadata files in the table.
+/// Contains every metadata file and the time it was added. For each metadata
+/// file, the table contains information about the latest snapshot at the time.
+pub struct MetadataLogEntriesTable<'a> {
+    table: &'a Table,
+}
+
+impl<'a> MetadataLogEntriesTable<'a> {
+    /// Return the schema of the metadata log entries table.
+    pub fn schema(&self) -> Schema {
+        Schema::new(vec![
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+                false,
+            ),
+            Field::new("file", DataType::Utf8, false),
+            Field::new("latest_snapshot_id", DataType::Int64, true),
+            Field::new("latest_schema_id", DataType::Int32, true),
+            Field::new("latest_sequence_number", DataType::Int64, true),
+        ])
+    }
+
+    /// Scan the metadata log entries table.
+    pub fn scan(&self) -> Result<RecordBatch> {
+        let mut timestamp =
+            PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
+        let mut file = StringBuilder::new();
+        let mut latest_snapshot_id = PrimitiveBuilder::<Int64Type>::new();
+        let mut latest_schema_id = PrimitiveBuilder::<Int32Type>::new();
+        let mut latest_sequence_number = PrimitiveBuilder::<Int64Type>::new();
+
+        let mut append_metadata_log_entry = |timestamp_ms: i64, metadata_file: &str| {
+            timestamp.append_value(timestamp_ms);
+            file.append_value(metadata_file);
+
+            let snapshot = self.snapshot_id_as_of_time(timestamp_ms);
+            latest_snapshot_id.append_option(snapshot.map(|s| s.snapshot_id()));
+            latest_schema_id.append_option(snapshot.and_then(|s| s.schema_id()));
+            latest_sequence_number.append_option(snapshot.map(|s| s.sequence_number()));
+        };
+
+        for metadata_log_entry in self.table.metadata().metadata_log() {
+            append_metadata_log_entry(
+                metadata_log_entry.timestamp_ms,
+                &metadata_log_entry.metadata_file,
+            );
+        }
+
+        // Include the current metadata location and modification time in the table. This matches
+        // the Java implementation. Unlike the Java implementation, a current metadata location is
+        // optional here. In that case, we omit current metadata from the metadata log table.
+        if let Some(current_metadata_location) = &self.table.metadata_location() {
+            append_metadata_log_entry(
+                self.table.metadata().last_updated_ms(),
+                current_metadata_location,
+            );
+        }
+
+        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+            Arc::new(timestamp.finish()),
+            Arc::new(file.finish()),
+            Arc::new(latest_snapshot_id.finish()),
+            Arc::new(latest_schema_id.finish()),
+            Arc::new(latest_sequence_number.finish()),
+        ])?)
+    }
+
+    fn snapshot_id_as_of_time(&self, timestamp_ms_inclusive: i64) -> Option<&Snapshot> {
+        let table_metadata = self.table.metadata();
+        let mut snapshot_id = None;
+        // The table metadata snapshot log is chronological
+        for log_entry in table_metadata.history() {
+            if log_entry.timestamp_ms <= timestamp_ms_inclusive {
+                snapshot_id = Some(log_entry.snapshot_id);
+            }
+        }
+        snapshot_id.and_then(|id| table_metadata.snapshot_by_id(id).map(|s| s.as_ref()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use expect_test::{expect, Expect};
@@ -451,7 +540,7 @@ mod tests {
                 partition_summaries: ListArray
                 [
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                   valid,
                 ]
@@ -480,6 +569,61 @@ mod tests {
                 ]"#]],
             &["path", "length"],
             Some("path"),
+        );
+    }
+
+    #[test]
+    fn test_metadata_log_entries_table() {
+        let table = TableTestFixture::new().table;
+        let record_batch = table
+            .metadata_table()
+            .metadata_log_entries()
+            .scan()
+            .unwrap();
+
+        // Check the current metadata location is included
+        let current_metadata_location = table.metadata_location().unwrap();
+        assert!(record_batch
+            .column_by_name("file")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap()
+            .iter()
+            .any(|location| location.is_some_and(|l| l.eq(current_metadata_location))));
+
+        check_record_batch(
+            record_batch,
+            expect![[r#"
+                Field { name: "timestamp", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "file", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_snapshot_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_schema_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+            expect![[r#"
+                timestamp: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
+                [
+                  1970-01-01T00:25:15.100+00:00,
+                  2020-10-14T01:22:53.590+00:00,
+                ],
+                file: (skipped),
+                latest_snapshot_id: PrimitiveArray<Int64>
+                [
+                  null,
+                  3055729675574597004,
+                ],
+                latest_schema_id: PrimitiveArray<Int32>
+                [
+                  null,
+                  1,
+                ],
+                latest_sequence_number: PrimitiveArray<Int64>
+                [
+                  null,
+                  1,
+                ]"#]],
+            &["file"],
+            Some("timestamp"),
         );
     }
 }
