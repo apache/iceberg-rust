@@ -41,6 +41,17 @@ pub const GCS_CREDENTIALS_JSON: &str = "gcs.credentials-json";
 /// Google Cloud Storage token
 pub const GCS_TOKEN: &str = "gcs.oauth2.token";
 
+/// Option to skip signing requests (e.g. for public buckets/folders).
+pub const GCS_ALLOW_ANONYMOUS: &str = "gcs.allow-anonymous";
+/// Option to skip loading the credential from GCE metadata server (typically used in conjunction with `GCS_ALLOW_ANONYMOUS`).
+pub const GCS_DISABLE_VM_METADATA: &str = "gcs.disable-vm-metadata";
+/// Option to skip loading configuration from config file and the env.
+pub const GCS_DISABLE_CONFIG_LOAD: &str = "gcs.disable-config-load";
+
+fn is_truthy(value: &str) -> bool {
+    ["true", "t", "1", "on"].contains(&value)
+}
+
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
     let mut cfg = GcsConfig::default();
@@ -62,6 +73,22 @@ pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConf
         cfg.disable_vm_metadata = true;
         cfg.disable_config_load = true;
     }
+
+    if let Some(allow_anonymous) = m.remove(GCS_ALLOW_ANONYMOUS) {
+        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
+            cfg.allow_anonymous = true;
+        }
+    }
+    if let Some(disable_ec2_metadata) = m.remove(GCS_DISABLE_VM_METADATA) {
+        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
+            cfg.disable_vm_metadata = true;
+        }
+    };
+    if let Some(disable_config_load) = m.remove(GCS_DISABLE_CONFIG_LOAD) {
+        if is_truthy(disable_config_load.to_lowercase().as_str()) {
+            cfg.disable_config_load = true;
+        }
+    };
 
     Ok(cfg)
 }
