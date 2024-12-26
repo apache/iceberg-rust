@@ -133,7 +133,7 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        let batch = self.projector.project_bacth(batch)?;
+        let batch = self.projector.project_batch(batch)?;
         if let Some(writer) = self.inner_writer.as_mut() {
             writer.write(&batch).await
         } else {
@@ -409,7 +409,7 @@ mod test {
         let data_file = res.into_iter().next().unwrap();
 
         // check
-        let to_write_projected = projector.project_bacth(to_write)?;
+        let to_write_projected = projector.project_batch(to_write)?;
         check_parquet_data_file_with_equality_delete_write(
             &file_io,
             &data_file,
