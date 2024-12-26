@@ -31,4 +31,5 @@ header:
     - '**/DEPENDENCIES.*.tsv'
     # Release distributions
     - 'dist/*'
+    - 'Cargo.lock'
   comment: on-failure
