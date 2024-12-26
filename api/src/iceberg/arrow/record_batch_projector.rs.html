@@ -410,7 +410,7 @@
     }
 
     <span class="doccomment">/// Do projection with record batch
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>project_bacth(<span class="kw-2">&amp;</span><span class="self">self</span>, batch: RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;RecordBatch&gt; {
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>project_batch(<span class="kw-2">&amp;</span><span class="self">self</span>, batch: RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;RecordBatch&gt; {
         RecordBatch::try_new(
             <span class="self">self</span>.projected_schema.clone(),
             <span class="self">self</span>.project_column(batch.columns())<span class="question-mark">?</span>,
@@ -500,7 +500,7 @@
         ])) <span class="kw">as </span>ArrayRef;
         <span class="kw">let </span>batch = RecordBatch::try_new(schema, <span class="macro">vec!</span>[int_array, struct_array]).unwrap();
 
-        <span class="kw">let </span>projected_batch = projector.project_bacth(batch).unwrap();
+        <span class="kw">let </span>projected_batch = projector.project_batch(batch).unwrap();
         <span class="macro">assert_eq!</span>(projected_batch.num_columns(), <span class="number">2</span>);
         <span class="kw">let </span>projected_int_array = projected_batch
             .column(<span class="number">0</span>)

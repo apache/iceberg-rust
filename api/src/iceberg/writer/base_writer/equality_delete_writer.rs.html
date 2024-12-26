@@ -793,7 +793,7 @@
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; IcebergWriter <span class="kw">for </span>EqualityDeleteFileWriter&lt;B&gt; {
     <span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>batch = <span class="self">self</span>.projector.project_bacth(batch)<span class="question-mark">?</span>;
+        <span class="kw">let </span>batch = <span class="self">self</span>.projector.project_batch(batch)<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(writer) = <span class="self">self</span>.inner_writer.as_mut() {
             writer.write(<span class="kw-2">&amp;</span>batch).<span class="kw">await
         </span>} <span class="kw">else </span>{
@@ -1069,7 +1069,7 @@
         <span class="kw">let </span>data_file = res.into_iter().next().unwrap();
 
         <span class="comment">// check
-        </span><span class="kw">let </span>to_write_projected = projector.project_bacth(to_write)<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>to_write_projected = projector.project_batch(to_write)<span class="question-mark">?</span>;
         check_parquet_data_file_with_equality_delete_write(
             <span class="kw-2">&amp;</span>file_io,
             <span class="kw-2">&amp;</span>data_file,
