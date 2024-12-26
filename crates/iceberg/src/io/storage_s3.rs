@@ -22,6 +22,7 @@ use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 use url::Url;
 
+use crate::io::is_truthy;
 use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -65,10 +66,6 @@ pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
-
-fn is_truthy(value: &str) -> bool {
-    ["true", "t", "1", "on"].contains(&value)
-}
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {

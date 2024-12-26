@@ -22,6 +22,7 @@ use opendal::services::GcsConfig;
 use opendal::Operator;
 use url::Url;
 
+use crate::io::is_truthy;
 use crate::{Error, ErrorKind, Result};
 
 // Reference: https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java
@@ -47,10 +48,6 @@ pub const GCS_ALLOW_ANONYMOUS: &str = "gcs.allow-anonymous";
 pub const GCS_DISABLE_VM_METADATA: &str = "gcs.disable-vm-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const GCS_DISABLE_CONFIG_LOAD: &str = "gcs.disable-config-load";
-
-fn is_truthy(value: &str) -> bool {
-    ["true", "t", "1", "on"].contains(&value)
-}
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
