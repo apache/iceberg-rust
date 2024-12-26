@@ -177,9 +177,6 @@
 <a href="#177" id="177">177</a>
 <a href="#178" id="178">178</a>
 <a href="#179" id="179">179</a>
-<a href="#180" id="180">180</a>
-<a href="#181" id="181">181</a>
-<a href="#182" id="182">182</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -204,6 +201,7 @@
 <span class="kw">use </span>opendal::{Configurator, Operator};
 <span class="kw">use </span>url::Url;
 
+<span class="kw">use </span><span class="kw">crate</span>::io::is_truthy;
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
 <span class="doccomment">/// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -247,10 +245,6 @@
 </span><span class="kw">pub const </span>S3_DISABLE_EC2_METADATA: <span class="kw-2">&amp;</span>str = <span class="string">"s3.disable-ec2-metadata"</span>;
 <span class="doccomment">/// Option to skip loading configuration from config file and the env.
 </span><span class="kw">pub const </span>S3_DISABLE_CONFIG_LOAD: <span class="kw-2">&amp;</span>str = <span class="string">"s3.disable-config-load"</span>;
-
-<span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
-    [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value)
-}
 
 <span class="doccomment">/// Parse iceberg props to s3 config.
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_parse(<span class="kw-2">mut </span>m: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;S3Config&gt; {

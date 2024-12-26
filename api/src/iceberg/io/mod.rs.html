@@ -88,6 +88,10 @@
 <a href="#88" id="88">88</a>
 <a href="#89" id="89">89</a>
 <a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -178,4 +182,8 @@
 </span><span class="kw">mod </span>storage_gcs;
 <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
 </span><span class="kw">pub use </span>storage_gcs::<span class="kw-2">*</span>;
+
+<span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
+    [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value.to_lowercase().as_str())
+}
 </code></pre></div></section></main></body></html>
