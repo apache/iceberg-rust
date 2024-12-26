@@ -43,6 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
@@ -98,6 +101,12 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
+
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
