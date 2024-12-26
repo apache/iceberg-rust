@@ -127,12 +127,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
-      - name: Install cargo-msrv
-        run: cargo install cargo-msrv
       - name: Check iceberg
         working-directory: crates/iceberg
         run: cargo msrv --log-target stdout verify
