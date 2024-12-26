@@ -20,12 +20,17 @@ use std::collections::HashMap;
 use iceberg::{Catalog, NamespaceIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 
+/// It a simple example that demonstrates how to create a namespace in a REST catalog.
+/// It requires a running instance of the iceberg-rest catalog for the port 8181.
+/// You can find how to run the iceberg-rest catalog in the official documentation.
+///
+/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
 #[tokio::main]
 async fn main() {
     // ANCHOR: create_catalog
     // Create catalog
     let config = RestCatalogConfig::builder()
-        .uri("http://localhost:8080".to_string())
+        .uri("http://localhost:8181".to_string())
         .build();
 
     let catalog = RestCatalog::new(config);

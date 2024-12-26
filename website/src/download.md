@@ -23,8 +23,8 @@ The official Apache Iceberg-Rust releases are provided as source artifacts.
 
 ## Releases
 
-The latest source release is [0.3.0](https://www.apache.org/dyn/closer.lua/iceberg/iceberg-rust-0.3.0/apache-iceberg-rust-0.3.0-src.tar.gz?action=download) ([asc](https://downloads.apache.org/iceberg/iceberg-rust-0.3.0/apache-iceberg-rust-0.3.0-src.tar.gz.asc),
-[sha512](https://downloads.apache.org/iceberg/iceberg-rust-0.3.0/apache-iceberg-rust-0.3.0-src.tar.gz.sha512)).
+The latest source release is [0.4.0](https://www.apache.org/dyn/closer.lua/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz?action=download) ([asc](https://downloads.apache.org/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz.asc),
+[sha512](https://downloads.apache.org/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz.sha512)).
 
 For older releases, please check the [archive](https://archive.apache.org/dist/iceberg/).
 
