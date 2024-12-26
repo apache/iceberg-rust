@@ -83,6 +83,8 @@ jobs:
         with:
           rust-version: ${{ env.rust_msrv }}
 
+      - name: check rust version
+        run: cargo --version
       - name: Build
         run: make build
 
