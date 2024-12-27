@@ -588,8 +588,8 @@ impl Catalog for SqlCatalog {
             &format!(
                 "DELETE FROM {CATALOG_TABLE_NAME}
                  WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
-                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                   AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                   AND (
                     {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_TABLE_RECORD_TYPE}' 
                     OR {CATALOG_FIELD_RECORD_TYPE} IS NULL
@@ -1712,6 +1712,62 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!("Unexpected => Table {:?} already exists.", &dst_table_ident),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drop_table_throws_error_if_table_not_exist() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let err = catalog
+            .drop_table(&table_ident)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drop_table() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc.clone()).await;
+        let namespace_ident = NamespaceIdent::new("a".into());
+        let table_name = "tbl1";
+        let table_ident = TableIdent::new(namespace_ident.clone(), table_name.into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let location = warehouse_loc.clone();
+        let table_creation = TableCreation::builder()
+            .name(table_name.into())
+            .location(location.clone())
+            .schema(simple_table_schema())
+            .build();
+
+        catalog
+            .create_table(&namespace_ident, table_creation)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert_table_eq(&table, &table_ident, &simple_table_schema());
+
+        catalog.drop_table(&table_ident).await.unwrap();
+        let err = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unexpected => No such table: TableIdent { namespace: NamespaceIdent([\"a\"]), name: \"tbl1\" }"
         );
     }
 }
