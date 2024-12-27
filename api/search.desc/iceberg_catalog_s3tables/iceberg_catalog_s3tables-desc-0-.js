@@ -1,0 +1,1 @@
+searchState.loadedDescShard("iceberg_catalog_s3tables", 0, "Iceberg s3tables catalog implementation.")
