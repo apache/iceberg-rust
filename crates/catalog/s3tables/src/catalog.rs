@@ -34,6 +34,7 @@ use iceberg::{
 
 use crate::utils::{create_metadata_location, create_sdk_config};
 
+/// S3Tables catalog configuration.
 #[derive(Debug)]
 pub struct S3TablesCatalogConfig {
     table_bucket_arn: String,
@@ -50,6 +51,7 @@ pub struct S3TablesCatalog {
 }
 
 impl S3TablesCatalog {
+    /// Creates a new S3Tables catalog.
     pub async fn new(config: S3TablesCatalogConfig) -> Result<Self> {
         let aws_config = create_sdk_config(&config.properties, config.endpoint_url.clone()).await;
         let s3tables_client = aws_sdk_s3tables::Client::new(&aws_config);
