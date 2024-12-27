@@ -37,8 +37,19 @@ use crate::utils::{create_metadata_location, create_sdk_config};
 /// S3Tables catalog configuration.
 #[derive(Debug)]
 pub struct S3TablesCatalogConfig {
+    /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
+    /// that is managed by s3tables. We can't directly access the bucket with path like
+    /// s3://{bucket_name}/{file_path}, all the operations are done with respect of the bucket
+    /// ARN.
     table_bucket_arn: String,
+    /// Properties for the catalog. The available properties are:
+    /// - `profile_name`: The name of the AWS profile to use.
+    /// - `region_name`: The AWS region to use.
+    /// - `aws_access_key_id`: The AWS access key ID to use.
+    /// - `aws_secret_access_key`: The AWS secret access key to use.
+    /// - `aws_session_token`: The AWS session token to use.
     properties: HashMap<String, String>,
+    /// Endpoint URL for the catalog.
     endpoint_url: Option<String>,
 }
 
