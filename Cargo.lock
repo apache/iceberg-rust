@@ -716,6 +716,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-s3tables"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc0cc08edc80d70edb091fad02537a719ed293ef871553ef8df192c92c415e4d"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "http 0.2.12",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2953,6 +2975,22 @@ dependencies = [
  "serde_json",
  "tokio",
  "typed-builder 0.20.0",
+ "uuid",
+]
+
+[[package]]
+name = "iceberg-catalog-s3tables"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3tables",
+ "iceberg",
+ "iceberg_test_utils",
+ "itertools",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
