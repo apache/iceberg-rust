@@ -1678,6 +1678,7 @@
 <a href="#1678" id="1678">1678</a>
 <a href="#1679" id="1679">1679</a>
 <a href="#1680" id="1680">1680</a>
+<a href="#1681" id="1681">1681</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1920,8 +1921,9 @@
     </span><span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>root_namespace_state = <span class="self">self</span>.root_namespace_state.lock().<span class="kw">await</span>;
 
-        root_namespace_state.remove_existing_table(table_ident)
-    }
+        <span class="kw">let </span>metadata_location = root_namespace_state.remove_existing_table(table_ident)<span class="question-mark">?</span>;
+        <span class="self">self</span>.file_io.delete(<span class="kw-2">&amp;</span>metadata_location).<span class="kw">await
+    </span>}
 
     <span class="doccomment">/// Check if a table exists in the catalog.
     </span><span class="kw">async fn </span>table_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
