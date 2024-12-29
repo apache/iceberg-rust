@@ -153,6 +153,17 @@ impl MetadataTable for SnapshotsTable {
 /// Manifests table.
 pub struct ManifestsTable;
 
+impl ManifestsTable {
+    fn partition_summary_fields() -> Vec<Field> {
+        vec![
+            Field::new("contains_null", DataType::Boolean, false),
+            Field::new("contains_nan", DataType::Boolean, true),
+            Field::new("lower_bound", DataType::Utf8, true),
+            Field::new("upper_bound", DataType::Utf8, true),
+        ]
+    }
+}
+
 #[async_trait]
 impl MetadataTable for ManifestsTable {
     fn schema() -> Schema {
@@ -171,13 +182,8 @@ impl MetadataTable for ManifestsTable {
             Field::new(
                 "partition_summaries",
                 DataType::List(Arc::new(Field::new_struct(
-                    "partition_summary",
-                    vec![
-                        Field::new("contains_null", DataType::Boolean, false),
-                        Field::new("contains_nan", DataType::Boolean, true),
-                        Field::new("lower_bound", DataType::Utf8, true),
-                        Field::new("upper_bound", DataType::Utf8, true),
-                    ],
+                    "item",
+                    ManifestsTable::partition_summary_fields(),
                     false,
                 ))),
                 false,
@@ -198,14 +204,14 @@ impl MetadataTable for ManifestsTable {
         let mut existing_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut deleted_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(vec![
-                Field::new("contains_null", DataType::Boolean, false),
-                Field::new("contains_nan", DataType::Boolean, true),
-                Field::new("lower_bound", DataType::Utf8, true),
-                Field::new("upper_bound", DataType::Utf8, true),
-            ]),
+            Fields::from(ManifestsTable::partition_summary_fields()),
             0,
-        ));
+        ))
+        .with_field(Arc::new(Field::new_struct(
+            "item",
+            ManifestsTable::partition_summary_fields(),
+            false,
+        )));
 
         if let Some(snapshot) = scan.metadata_ref.current_snapshot() {
             let manifest_list = snapshot
@@ -415,7 +421,8 @@ mod tests {
                 Field { name: "deleted_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "added_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "existing_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+                Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "partition_summaries", data_type: List(Field { name: "item", data_type: Struct([Field { name: "contains_null", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "contains_nan", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
             expect![[r#"
                 content: PrimitiveArray<Int8>
                 [
@@ -423,7 +430,7 @@ mod tests {
                 ],
                 path: StringArray
                 [
-                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmp8J8I0l/table1/metadata/manifest_bb9125ce-f386-4c12-a99f-64646deff6a7.avro",
+                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmpTrYrv3/table1/metadata/manifest_baae3b52-80ca-4c50-a85e-667753075ea7.avro",
                 ],
                 length: PrimitiveArray<Int64>
                 [
@@ -460,6 +467,36 @@ mod tests {
                 deleted_delete_files_count: PrimitiveArray<Int32>
                 [
                   1,
+                ],
+                partition_summaries: ListArray
+                [
+                  StructArray
+                -- validity: 
+                [
+                  valid,
+                ]
+                [
+                -- child 0: "contains_null" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 1: "contains_nan" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 2: "lower_bound" (Utf8)
+                StringArray
+                [
+                  "100",
+                ]
+                -- child 3: "upper_bound" (Utf8)
+                StringArray
+                [
+                  "300",
+                ]
+                ],
                 ]"#]],
             &[],
             Some("path"),

@@ -1050,7 +1050,7 @@ pub mod tests {
                 .unwrap()
         }
 
-        async fn setup_manifest_files(&mut self) {
+        pub async fn setup_manifest_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let parent_snapshot = current_snapshot
                 .parent_snapshot(self.table.metadata())
