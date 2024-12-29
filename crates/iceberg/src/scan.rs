@@ -974,9 +974,10 @@ pub mod tests {
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use tempfile::TempDir;
     use tera::{Context, Tera};
-    use uuid::Uuid;
 
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
@@ -992,6 +993,7 @@ pub mod tests {
 
     pub struct TableTestFixture {
         table_location: String,
+        rand_seed: u64,
         pub table: Table,
     }
 
@@ -1033,10 +1035,27 @@ pub mod tests {
                 .build()
                 .unwrap();
 
+            let rand_seed = rand::thread_rng().gen_range(1..=100);
             Self {
                 table_location: table_location.to_str().unwrap().to_string(),
+                rand_seed,
                 table,
             }
+        }
+
+        pub fn with_rand_seed(mut self, seed: u64) -> Self {
+            self.rand_seed = seed;
+            self
+        }
+
+        fn rand_uuid(&self) -> String {
+            let mut seeded_rng = StdRng::seed_from_u64(self.rand_seed);
+            let rand_buf = seeded_rng.gen::<[u8; 16]>();
+            let mut builder = uuid::Builder::from_bytes(rand_buf);
+            builder
+                .set_version(uuid::Version::Random)
+                .as_uuid()
+                .to_string()
         }
 
         fn next_manifest_file(&self) -> OutputFile {
@@ -1045,7 +1064,7 @@ pub mod tests {
                 .new_output(format!(
                     "{}/metadata/manifest_{}.avro",
                     self.table_location,
-                    Uuid::new_v4()
+                    self.rand_uuid()
                 ))
                 .unwrap()
         }

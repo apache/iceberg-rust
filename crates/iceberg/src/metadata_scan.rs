@@ -404,10 +404,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_table() {
-        let mut fixture = TableTestFixture::new();
+        let mut fixture = TableTestFixture::new().with_rand_seed(2);
         fixture.setup_manifest_files().await;
 
         let record_batch = fixture.table.metadata_scan().manifests().await.unwrap();
+
         check_record_batch(
             record_batch,
             expect![[r#"
@@ -430,7 +431,7 @@ mod tests {
                 ],
                 path: StringArray
                 [
-                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmpTrYrv3/table1/metadata/manifest_baae3b52-80ca-4c50-a85e-667753075ea7.avro",
+                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmpRre0Gz/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
                 ],
                 length: PrimitiveArray<Int64>
                 [
