@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::spec::TableMetadataRef;
 use crate::table::Table;
@@ -134,6 +134,41 @@ impl MetadataTable for SnapshotsTable {
             Arc::new(manifest_list.finish()),
             Arc::new(summary.finish()),
         ])?)
+    }
+}
+
+/// Manifests table.
+pub struct ManifestsTable;
+
+impl MetadataTable for ManifestsTable {
+    fn schema() -> Schema {
+        Schema::new(vec![
+            Field::new("content", DataType::Int8, false),
+            Field::new("path", DataType::Utf8, false),
+            Field::new("length", DataType::Int64, false),
+            Field::new("partition_spec_id", DataType::Int32, false),
+            Field::new("added_snapshot_id", DataType::Int64, false),
+            Field::new("added_data_files_count", DataType::Int32, false),
+            Field::new("existing_data_files_count", DataType::Int32, false),
+            Field::new("deleted_data_files_count", DataType::Int32, false),
+            Field::new("added_delete_files_count", DataType::Int32, false),
+            Field::new("existing_delete_files_count", DataType::Int32, false),
+            Field::new("deleted_delete_files_count", DataType::Int32, false),
+            Field::new(
+                "partition_summaries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("contains_null", DataType::Boolean, false),
+                    Field::new("contains_nan", DataType::Boolean, true),
+                    Field::new("lower_bound", DataType::Utf8, true),
+                    Field::new("upper_bound", DataType::Utf8, true),
+                ])),
+                false,
+            ),
+        ])
+    }
+
+    fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![])?.into())
     }
 }
 
