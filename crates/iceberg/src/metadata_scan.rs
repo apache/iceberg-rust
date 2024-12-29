@@ -25,8 +25,10 @@ use arrow_array::builder::{
 use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+use async_trait::async_trait;
 
-use crate::spec::{ManifestFile, TableMetadataRef};
+use crate::io::FileIO;
+use crate::spec::TableMetadataRef;
 use crate::table::Table;
 use crate::Result;
 
@@ -38,6 +40,7 @@ use crate::Result;
 #[derive(Debug)]
 pub struct MetadataScan {
     metadata_ref: TableMetadataRef,
+    io: FileIO,
 }
 
 impl MetadataScan {
@@ -45,12 +48,18 @@ impl MetadataScan {
     pub fn new(table: &Table) -> Self {
         Self {
             metadata_ref: table.metadata_ref(),
+            io: table.file_io().clone(),
         }
     }
 
     /// Returns the snapshots of the table.
-    pub fn snapshots(&self) -> Result<RecordBatch> {
-        SnapshotsTable::scan(self)
+    pub async fn snapshots(&self) -> Result<RecordBatch> {
+        SnapshotsTable::scan(self).await
+    }
+
+    /// Returns the manifests of the table.
+    pub async fn manifests(&self) -> Result<RecordBatch> {
+        ManifestsTable::scan(self).await
     }
 }
 
@@ -62,17 +71,19 @@ impl MetadataScan {
 /// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
+#[async_trait]
 pub trait MetadataTable {
     /// Returns the schema of the metadata table.
     fn schema() -> Schema;
 
     /// Scans the metadata table.
-    fn scan(scan: &MetadataScan) -> Result<RecordBatch>;
+    async fn scan(scan: &MetadataScan) -> Result<RecordBatch>;
 }
 
 /// Snapshots table.
 pub struct SnapshotsTable;
 
+#[async_trait]
 impl MetadataTable for SnapshotsTable {
     fn schema() -> Schema {
         Schema::new(vec![
@@ -106,7 +117,7 @@ impl MetadataTable for SnapshotsTable {
         ])
     }
 
-    fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+    async fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
         let mut committed_at =
             PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -142,6 +153,7 @@ impl MetadataTable for SnapshotsTable {
 /// Manifests table.
 pub struct ManifestsTable;
 
+#[async_trait]
 impl MetadataTable for ManifestsTable {
     fn schema() -> Schema {
         Schema::new(vec![
@@ -169,7 +181,7 @@ impl MetadataTable for ManifestsTable {
         ])
     }
 
-    fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+    async fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
         let mut content = PrimitiveBuilder::<Int8Type>::new();
         let mut path = StringBuilder::new();
         let mut length = PrimitiveBuilder::<Int64Type>::new();
@@ -192,11 +204,12 @@ impl MetadataTable for ManifestsTable {
         ));
 
         if let Some(snapshot) = scan.metadata_ref.current_snapshot() {
-            // TODO: load manifest list
-            let manifests = Vec::<ManifestFile>::new();
-            for manifest in manifests {
+            let manifest_list = snapshot
+                .load_manifest_list(&scan.io, &scan.metadata_ref)
+                .await?;
+            for manifest in manifest_list.entries() {
                 content.append_value(manifest.content.clone() as i8);
-                path.append_value(manifest.manifest_path);
+                path.append_value(manifest.manifest_path.clone());
                 length.append_value(manifest.manifest_length);
                 partition_spec_id.append_value(manifest.partition_spec_id);
                 added_snapshot_id.append_value(manifest.added_snapshot_id);
@@ -212,7 +225,7 @@ impl MetadataTable for ManifestsTable {
                 deleted_delete_files_count
                     .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
                 let partition_summaries_builder = partition_summaries.values();
-                for summary in manifest.partitions {
+                for summary in &manifest.partitions {
                     partition_summaries_builder
                         .field_builder::<BooleanBuilder>(0)
                         .unwrap()
@@ -306,10 +319,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_snapshots_table() {
+    #[tokio::test]
+    async fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.metadata_scan().snapshots().unwrap();
+        let record_batch = table.metadata_scan().snapshots().await.unwrap();
         check_record_batch(
             record_batch,
             expect![[r#"
