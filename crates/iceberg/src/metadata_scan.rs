@@ -170,12 +170,16 @@ impl MetadataTable for ManifestsTable {
             Field::new("deleted_delete_files_count", DataType::Int32, false),
             Field::new(
                 "partition_summaries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("contains_null", DataType::Boolean, false),
-                    Field::new("contains_nan", DataType::Boolean, true),
-                    Field::new("lower_bound", DataType::Utf8, true),
-                    Field::new("upper_bound", DataType::Utf8, true),
-                ])),
+                DataType::List(Arc::new(Field::new_struct(
+                    "partition_summary",
+                    vec![
+                        Field::new("contains_null", DataType::Boolean, false),
+                        Field::new("contains_nan", DataType::Boolean, true),
+                        Field::new("lower_bound", DataType::Utf8, true),
+                        Field::new("upper_bound", DataType::Utf8, true),
+                    ],
+                    false,
+                ))),
                 false,
             ),
         ])
@@ -224,6 +228,7 @@ impl MetadataTable for ManifestsTable {
                     .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
                 deleted_delete_files_count
                     .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+
                 let partition_summaries_builder = partition_summaries.values();
                 for summary in &manifest.partitions {
                     partition_summaries_builder
@@ -242,8 +247,9 @@ impl MetadataTable for ManifestsTable {
                         .field_builder::<StringBuilder>(3)
                         .unwrap()
                         .append_option(summary.upper_bound.as_ref().map(|v| v.to_string()));
+                    partition_summaries_builder.append(true);
                 }
-                partition_summaries_builder.append(true);
+                partition_summaries.append(true);
             }
         }
 
@@ -387,6 +393,76 @@ mod tests {
                 ]"#]],
             &["manifest_list"],
             Some("committed_at"),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manifests_table() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let record_batch = fixture.table.metadata_scan().manifests().await.unwrap();
+        check_record_batch(
+            record_batch,
+            expect![[r#"
+                Field { name: "content", data_type: Int8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "length", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "partition_spec_id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "added_snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "added_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "existing_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "deleted_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "added_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "existing_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+            expect![[r#"
+                content: PrimitiveArray<Int8>
+                [
+                  0,
+                ],
+                path: StringArray
+                [
+                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmp8J8I0l/table1/metadata/manifest_bb9125ce-f386-4c12-a99f-64646deff6a7.avro",
+                ],
+                length: PrimitiveArray<Int64>
+                [
+                  3842,
+                ],
+                partition_spec_id: PrimitiveArray<Int32>
+                [
+                  0,
+                ],
+                added_snapshot_id: PrimitiveArray<Int64>
+                [
+                  3055729675574597004,
+                ],
+                added_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ],
+                existing_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ],
+                deleted_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ],
+                added_delete_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ],
+                existing_delete_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ],
+                deleted_delete_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                ]"#]],
+            &[],
+            Some("path"),
         );
     }
 }
