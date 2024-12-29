@@ -278,6 +278,7 @@ impl MetadataTable for ManifestsTable {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::StringArray;
     use expect_test::{expect, Expect};
     use itertools::Itertools;
 
@@ -404,10 +405,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_manifests_table() {
-        let mut fixture = TableTestFixture::new().with_rand_seed(2);
+        let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
+        // the path column is not deterministic, we need to set it to a fixed value to make this expect test possible
         let record_batch = fixture.table.metadata_scan().manifests().await.unwrap();
+        let schema = record_batch.schema();
+        let mut columns = record_batch.columns().to_vec();
+        columns[1] = Arc::new(StringArray::from(vec![
+            "/tmp/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
+        ]));
+        let record_batch = RecordBatch::try_new(schema, columns).unwrap();
 
         check_record_batch(
             record_batch,
@@ -431,7 +439,7 @@ mod tests {
                 ],
                 path: StringArray
                 [
-                  "/var/folders/tz/9f04ptmx4892t1p2bfjbvkdw0000gn/T/.tmpRre0Gz/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
+                  "/tmp/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
                 ],
                 length: PrimitiveArray<Int64>
                 [
