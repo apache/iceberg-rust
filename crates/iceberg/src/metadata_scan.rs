@@ -19,12 +19,14 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
-use arrow_array::types::{Int64Type, TimestampMillisecondType};
+use arrow_array::builder::{
+    BooleanBuilder, ListBuilder, MapBuilder, PrimitiveBuilder, StringBuilder, StructBuilder,
+};
+use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
-use crate::spec::TableMetadataRef;
+use crate::spec::{ManifestFile, TableMetadataRef};
 use crate::table::Table;
 use crate::Result;
 
@@ -168,7 +170,84 @@ impl MetadataTable for ManifestsTable {
     }
 
     fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
-        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![])?.into())
+        let mut content = PrimitiveBuilder::<Int8Type>::new();
+        let mut path = StringBuilder::new();
+        let mut length = PrimitiveBuilder::<Int64Type>::new();
+        let mut partition_spec_id = PrimitiveBuilder::<Int32Type>::new();
+        let mut added_snapshot_id = PrimitiveBuilder::<Int64Type>::new();
+        let mut added_data_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut existing_data_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut deleted_data_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut added_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut existing_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut deleted_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
+        let mut partition_summaries = ListBuilder::new(StructBuilder::from_fields(
+            Fields::from(vec![
+                Field::new("contains_null", DataType::Boolean, false),
+                Field::new("contains_nan", DataType::Boolean, true),
+                Field::new("lower_bound", DataType::Utf8, true),
+                Field::new("upper_bound", DataType::Utf8, true),
+            ]),
+            0,
+        ));
+
+        if let Some(snapshot) = scan.metadata_ref.current_snapshot() {
+            // TODO: load manifest list
+            let manifests = Vec::<ManifestFile>::new();
+            for manifest in manifests {
+                content.append_value(manifest.content.clone() as i8);
+                path.append_value(manifest.manifest_path);
+                length.append_value(manifest.manifest_length);
+                partition_spec_id.append_value(manifest.partition_spec_id);
+                added_snapshot_id.append_value(manifest.added_snapshot_id);
+                added_data_files_count.append_value(manifest.added_files_count.unwrap_or(0) as i32);
+                existing_data_files_count
+                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
+                deleted_data_files_count
+                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+                added_delete_files_count
+                    .append_value(manifest.added_files_count.unwrap_or(0) as i32);
+                existing_delete_files_count
+                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
+                deleted_delete_files_count
+                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+                let partition_summaries_builder = partition_summaries.values();
+                for summary in manifest.partitions {
+                    partition_summaries_builder
+                        .field_builder::<BooleanBuilder>(0)
+                        .unwrap()
+                        .append_value(summary.contains_null);
+                    partition_summaries_builder
+                        .field_builder::<BooleanBuilder>(1)
+                        .unwrap()
+                        .append_option(summary.contains_nan);
+                    partition_summaries_builder
+                        .field_builder::<StringBuilder>(2)
+                        .unwrap()
+                        .append_option(summary.lower_bound.as_ref().map(|v| v.to_string()));
+                    partition_summaries_builder
+                        .field_builder::<StringBuilder>(3)
+                        .unwrap()
+                        .append_option(summary.upper_bound.as_ref().map(|v| v.to_string()));
+                }
+                partition_summaries_builder.append(true);
+            }
+        }
+
+        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![
+            Arc::new(content.finish()),
+            Arc::new(path.finish()),
+            Arc::new(length.finish()),
+            Arc::new(partition_spec_id.finish()),
+            Arc::new(added_snapshot_id.finish()),
+            Arc::new(added_data_files_count.finish()),
+            Arc::new(existing_data_files_count.finish()),
+            Arc::new(deleted_data_files_count.finish()),
+            Arc::new(added_delete_files_count.finish()),
+            Arc::new(existing_delete_files_count.finish()),
+            Arc::new(deleted_delete_files_count.finish()),
+            Arc::new(partition_summaries.finish()),
+        ])?)
     }
 }
 
