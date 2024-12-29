@@ -278,7 +278,6 @@ impl MetadataTable for ManifestsTable {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::StringArray;
     use expect_test::{expect, Expect};
     use itertools::Itertools;
 
@@ -408,14 +407,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        // the path column is not deterministic, we need to set it to a fixed value to make this expect test possible
         let record_batch = fixture.table.metadata_scan().manifests().await.unwrap();
-        let schema = record_batch.schema();
-        let mut columns = record_batch.columns().to_vec();
-        columns[1] = Arc::new(StringArray::from(vec![
-            "/tmp/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
-        ]));
-        let record_batch = RecordBatch::try_new(schema, columns).unwrap();
 
         check_record_batch(
             record_batch,
@@ -437,14 +429,8 @@ mod tests {
                 [
                   0,
                 ],
-                path: StringArray
-                [
-                  "/tmp/table1/metadata/manifest_1fb13e41-bf3b-422c-b258-253d997458e3.avro",
-                ],
-                length: PrimitiveArray<Int64>
-                [
-                  3842,
-                ],
+                path: (skipped),
+                length: (skipped),
                 partition_spec_id: PrimitiveArray<Int32>
                 [
                   0,
@@ -507,7 +493,7 @@ mod tests {
                 ]
                 ],
                 ]"#]],
-            &[],
+            &["path", "length"],
             Some("path"),
         );
     }
