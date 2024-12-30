@@ -32,7 +32,10 @@ use crate::Result;
 ///
 /// Used to inspect a table's history, snapshots, and other metadata as a table.
 ///
-/// See also <https://iceberg.apache.org/docs/latest/spark-queries/#inspecting-tables>.
+/// References:
+/// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
+/// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
+/// - <https://py.iceberg.apache.org/api/#inspecting-tables>
 #[derive(Debug)]
 pub struct MetadataScan {
     metadata_ref: TableMetadataRef,
@@ -46,33 +49,20 @@ impl MetadataScan {
         }
     }
 
-    /// Returns the snapshots of the table.
-    pub fn snapshots(&self) -> Result<RecordBatch> {
-        SnapshotsTable::scan(self)
+    /// Get the snapshots table.
+    pub fn snapshots(&self) -> SnapshotsTable {
+        SnapshotsTable { metadata: self }
     }
 }
 
-/// Table metadata scan.
-///
-/// Use to inspect a table's history, snapshots, and other metadata as a table.
-///
-/// References:
-/// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
-/// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
-/// - <https://py.iceberg.apache.org/api/#inspecting-tables>
-pub trait MetadataTable {
-    /// Returns the schema of the metadata table.
-    fn schema() -> Schema;
-
-    /// Scans the metadata table.
-    fn scan(scan: &MetadataScan) -> Result<RecordBatch>;
+/// Snapshots table.
+pub struct SnapshotsTable<'a> {
+    metadata: &'a MetadataScan,
 }
 
-/// Snapshots table.
-pub struct SnapshotsTable;
-
-impl MetadataTable for SnapshotsTable {
-    fn schema() -> Schema {
+impl<'a> SnapshotsTable<'a> {
+    /// Returns the schema of the snapshots table.
+    pub fn schema(&self) -> Schema {
         Schema::new(vec![
             Field::new(
                 "committed_at",
@@ -104,7 +94,8 @@ impl MetadataTable for SnapshotsTable {
         ])
     }
 
-    fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+    /// Scans the snapshots table.
+    pub fn scan(&self) -> Result<RecordBatch> {
         let mut committed_at =
             PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -113,7 +104,7 @@ impl MetadataTable for SnapshotsTable {
         let mut manifest_list = StringBuilder::new();
         let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        for snapshot in scan.metadata_ref.snapshots() {
+        for snapshot in self.metadata.metadata_ref.snapshots() {
             committed_at.append_value(snapshot.timestamp_ms());
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
@@ -126,14 +117,17 @@ impl MetadataTable for SnapshotsTable {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![
-            Arc::new(committed_at.finish()),
-            Arc::new(snapshot_id.finish()),
-            Arc::new(parent_id.finish()),
-            Arc::new(operation.finish()),
-            Arc::new(manifest_list.finish()),
-            Arc::new(summary.finish()),
-        ])?)
+        Ok(RecordBatch::try_new(
+            Arc::new(self.schema()),
+            vec![
+                Arc::new(committed_at.finish()),
+                Arc::new(snapshot_id.finish()),
+                Arc::new(parent_id.finish()),
+                Arc::new(operation.finish()),
+                Arc::new(manifest_list.finish()),
+                Arc::new(summary.finish()),
+            ],
+        )?)
     }
 }
 
@@ -195,7 +189,7 @@ mod tests {
     #[test]
     fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.metadata_scan().snapshots().unwrap();
+        let record_batch = table.metadata_scan().snapshots().scan().unwrap();
         check_record_batch(
             record_batch,
             expect![[r#"
