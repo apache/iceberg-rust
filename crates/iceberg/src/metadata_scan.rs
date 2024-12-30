@@ -117,17 +117,14 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(
-            Arc::new(self.schema()),
-            vec![
-                Arc::new(committed_at.finish()),
-                Arc::new(snapshot_id.finish()),
-                Arc::new(parent_id.finish()),
-                Arc::new(operation.finish()),
-                Arc::new(manifest_list.finish()),
-                Arc::new(summary.finish()),
-            ],
-        )?)
+        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+            Arc::new(committed_at.finish()),
+            Arc::new(snapshot_id.finish()),
+            Arc::new(parent_id.finish()),
+            Arc::new(operation.finish()),
+            Arc::new(manifest_list.finish()),
+            Arc::new(summary.finish()),
+        ])?)
     }
 }
 
