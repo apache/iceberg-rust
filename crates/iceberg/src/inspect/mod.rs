@@ -17,10 +17,12 @@
 
 //! Metadata table APIs.
 
+mod entries;
 mod manifests;
 mod metadata_table;
 mod snapshots;
 
+pub use entries::EntriesTable;
 pub use manifests::ManifestsTable;
 pub use metadata_table::*;
 pub use snapshots::SnapshotsTable;
