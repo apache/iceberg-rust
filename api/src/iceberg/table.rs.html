@@ -372,6 +372,13 @@
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
 <a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -396,6 +403,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::arrow::ArrowReaderBuilder;
 <span class="kw">use </span><span class="kw">crate</span>::io::object_cache::ObjectCache;
 <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
+<span class="kw">use </span><span class="kw">crate</span>::metadata_scan::MetadataTable;
 <span class="kw">use </span><span class="kw">crate</span>::scan::TableScanBuilder;
 <span class="kw">use </span><span class="kw">crate</span>::spec::{TableMetadata, TableMetadataRef};
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>, TableIdent};
@@ -572,6 +580,12 @@
     <span class="doccomment">/// Creates a table scan.
     </span><span class="kw">pub fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableScanBuilder&lt;<span class="lifetime">'_</span>&gt; {
         TableScanBuilder::new(<span class="self">self</span>)
+    }
+
+    <span class="doccomment">/// Creates a metadata table which provides table-like APIs for inspecting metadata.
+    /// See [`MetadataTable`] for more details.
+    </span><span class="kw">pub fn </span>metadata_table(<span class="self">self</span>) -&gt; MetadataTable {
+        MetadataTable::new(<span class="self">self</span>)
     }
 
     <span class="doccomment">/// Returns the flag indicating whether the `Table` is readonly or not
