@@ -1084,6 +1084,40 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
                                 .key_metadata(None)
+                                .lower_bounds(HashMap::from([
+                                    (1, Datum::long(100)),
+                                    (4, Datum::string("lower")),
+                                    (5, Datum::double(-4.2)),
+                                    (6, Datum::int(-42)),
+                                    (8, Datum::bool(false)),
+                                    (9, Datum::float(-4.2)),
+                                    // decimal values are not supported by schema::get_arrow_datum
+                                    // (10, Datum::decimal(Decimal(123, 2))),
+                                    (11, Datum::date(0)),
+                                    (12, Datum::timestamp_micros(0)),
+                                    (13, Datum::timestamptz_micros(0)),
+                                    // ns timestamps, uuid, fixed, binary are currently not
+                                    // supported in schema::get_arrow_datum
+                                ]))
+                                .upper_bounds(HashMap::from([
+                                    (1, Datum::long(100)),
+                                    (4, Datum::string("upper")),
+                                    (5, Datum::double(4.2)),
+                                    (6, Datum::int(42)),
+                                    (8, Datum::bool(true)),
+                                    (9, Datum::float(4.2)),
+                                    // decimal values are not supported by schema::get_arrow_datum
+                                    // (10, Datum::decimal(Decimal(123, 2))),
+                                    (11, Datum::date(1)),
+                                    (12, Datum::timestamp_micros(1)),
+                                    (13, Datum::timestamptz_micros(1)),
+                                    // ns timestamps, uuid, fixed, binary are currently not
+                                    // supported in schema::get_arrow_datum
+                                ]))
+                                .column_sizes(HashMap::from([(1, 1u64), (2, 1u64)]))
+                                .value_counts(HashMap::from([(1, 2u64), (2, 2u64)]))
+                                .null_value_counts(HashMap::from([(1, 3u64), (2, 3u64)]))
+                                .nan_value_counts(HashMap::from([(1, 4u64), (2, 4u64)]))
                                 .build()
                                 .unwrap(),
                         )
