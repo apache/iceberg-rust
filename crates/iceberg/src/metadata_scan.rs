@@ -24,40 +24,40 @@ use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
-use crate::spec::TableMetadataRef;
+use crate::spec::TableMetadata;
 use crate::table::Table;
 use crate::Result;
 
-/// Table metadata scan.
-///
-/// Used to inspect a table's history, snapshots, and other metadata as a table.
+/// Metadata table is used to inspect a table's history, snapshots, and other metadata as a table.
 ///
 /// References:
 /// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
 #[derive(Debug)]
-pub struct MetadataScan {
-    metadata_ref: TableMetadataRef,
-}
+pub struct MetadataTable(Table);
 
-impl MetadataScan {
+impl MetadataTable {
     /// Creates a new metadata scan.
-    pub fn new(table: &Table) -> Self {
-        Self {
-            metadata_ref: table.metadata_ref(),
-        }
+    pub(super) fn new(table: Table) -> Self {
+        Self(table)
     }
 
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
-        SnapshotsTable { metadata: self }
+        SnapshotsTable {
+            metadata_table: self,
+        }
+    }
+
+    fn metadata(&self) -> &TableMetadata {
+        self.0.metadata()
     }
 }
 
 /// Snapshots table.
 pub struct SnapshotsTable<'a> {
-    metadata: &'a MetadataScan,
+    metadata_table: &'a MetadataTable,
 }
 
 impl<'a> SnapshotsTable<'a> {
@@ -104,7 +104,7 @@ impl<'a> SnapshotsTable<'a> {
         let mut manifest_list = StringBuilder::new();
         let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        for snapshot in self.metadata.metadata_ref.snapshots() {
+        for snapshot in self.metadata_table.metadata().snapshots() {
             committed_at.append_value(snapshot.timestamp_ms());
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
@@ -117,14 +117,17 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
-            Arc::new(committed_at.finish()),
-            Arc::new(snapshot_id.finish()),
-            Arc::new(parent_id.finish()),
-            Arc::new(operation.finish()),
-            Arc::new(manifest_list.finish()),
-            Arc::new(summary.finish()),
-        ])?)
+        Ok(RecordBatch::try_new(
+            Arc::new(self.schema()),
+            vec![
+                Arc::new(committed_at.finish()),
+                Arc::new(snapshot_id.finish()),
+                Arc::new(parent_id.finish()),
+                Arc::new(operation.finish()),
+                Arc::new(manifest_list.finish()),
+                Arc::new(summary.finish()),
+            ],
+        )?)
     }
 }
 
@@ -186,7 +189,7 @@ mod tests {
     #[test]
     fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.metadata_scan().snapshots().scan().unwrap();
+        let record_batch = table.metadata_table().snapshots().scan().unwrap();
         check_record_batch(
             record_batch,
             expect![[r#"
