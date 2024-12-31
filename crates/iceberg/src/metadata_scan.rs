@@ -25,67 +25,53 @@ use arrow_array::builder::{
 use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
-use async_trait::async_trait;
 
-use crate::io::FileIO;
-use crate::spec::TableMetadataRef;
+use crate::spec::TableMetadata;
 use crate::table::Table;
 use crate::Result;
 
-/// Table metadata scan.
-///
-/// Used to inspect a table's history, snapshots, and other metadata as a table.
-///
-/// See also <https://iceberg.apache.org/docs/latest/spark-queries/#inspecting-tables>.
-#[derive(Debug)]
-pub struct MetadataScan {
-    metadata_ref: TableMetadataRef,
-    io: FileIO,
-}
-
-impl MetadataScan {
-    /// Creates a new metadata scan.
-    pub fn new(table: &Table) -> Self {
-        Self {
-            metadata_ref: table.metadata_ref(),
-            io: table.file_io().clone(),
-        }
-    }
-
-    /// Returns the snapshots of the table.
-    pub async fn snapshots(&self) -> Result<RecordBatch> {
-        SnapshotsTable::scan(self).await
-    }
-
-    /// Returns the manifests of the table.
-    pub async fn manifests(&self) -> Result<RecordBatch> {
-        ManifestsTable::scan(self).await
-    }
-}
-
-/// Table metadata scan.
-///
-/// Use to inspect a table's history, snapshots, and other metadata as a table.
+/// Metadata table is used to inspect a table's history, snapshots, and other metadata as a table.
 ///
 /// References:
 /// - <https://github.com/apache/iceberg/blob/ac865e334e143dfd9e33011d8cf710b46d91f1e5/core/src/main/java/org/apache/iceberg/MetadataTableType.java#L23-L39>
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
-#[async_trait]
-pub trait MetadataTable {
-    /// Returns the schema of the metadata table.
-    fn schema() -> Schema;
+#[derive(Debug)]
+pub struct MetadataTable(Table);
 
-    /// Scans the metadata table.
-    async fn scan(scan: &MetadataScan) -> Result<RecordBatch>;
+impl MetadataTable {
+    /// Creates a new metadata scan.
+    pub(super) fn new(table: Table) -> Self {
+        Self(table)
+    }
+
+    /// Get the snapshots table.
+    pub fn snapshots(&self) -> SnapshotsTable {
+        SnapshotsTable {
+            metadata_table: self,
+        }
+    }
+
+    /// Get the manifests table.
+    pub fn manifests(&self) -> ManifestsTable {
+        ManifestsTable {
+            metadata_table: self,
+        }
+    }
+
+    fn metadata(&self) -> &TableMetadata {
+        self.0.metadata()
+    }
 }
 
 /// Snapshots table.
-pub struct SnapshotsTable;
+pub struct SnapshotsTable<'a> {
+    metadata_table: &'a MetadataTable,
+}
 
-#[async_trait]
-impl MetadataTable for SnapshotsTable {
-    fn schema() -> Schema {
+impl<'a> SnapshotsTable<'a> {
+    /// Returns the schema of the snapshots table.
+    pub fn schema(&self) -> Schema {
         Schema::new(vec![
             Field::new(
                 "committed_at",
@@ -117,7 +103,8 @@ impl MetadataTable for SnapshotsTable {
         ])
     }
 
-    async fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+    /// Scans the snapshots table.
+    pub fn scan(&self) -> Result<RecordBatch> {
         let mut committed_at =
             PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -126,7 +113,7 @@ impl MetadataTable for SnapshotsTable {
         let mut manifest_list = StringBuilder::new();
         let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        for snapshot in scan.metadata_ref.snapshots() {
+        for snapshot in self.metadata_table.metadata().snapshots() {
             committed_at.append_value(snapshot.timestamp_ms());
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
@@ -139,7 +126,7 @@ impl MetadataTable for SnapshotsTable {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![
+        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
@@ -151,10 +138,12 @@ impl MetadataTable for SnapshotsTable {
 }
 
 /// Manifests table.
-pub struct ManifestsTable;
+pub struct ManifestsTable<'a> {
+    metadata_table: &'a MetadataTable,
+}
 
-impl ManifestsTable {
-    fn partition_summary_fields() -> Vec<Field> {
+impl<'a> ManifestsTable<'a> {
+    fn partition_summary_fields(&self) -> Vec<Field> {
         vec![
             Field::new("contains_null", DataType::Boolean, false),
             Field::new("contains_nan", DataType::Boolean, true),
@@ -162,11 +151,8 @@ impl ManifestsTable {
             Field::new("upper_bound", DataType::Utf8, true),
         ]
     }
-}
 
-#[async_trait]
-impl MetadataTable for ManifestsTable {
-    fn schema() -> Schema {
+    fn schema(&self) -> Schema {
         Schema::new(vec![
             Field::new("content", DataType::Int8, false),
             Field::new("path", DataType::Utf8, false),
@@ -183,7 +169,7 @@ impl MetadataTable for ManifestsTable {
                 "partition_summaries",
                 DataType::List(Arc::new(Field::new_struct(
                     "item",
-                    ManifestsTable::partition_summary_fields(),
+                    self.partition_summary_fields(),
                     false,
                 ))),
                 false,
@@ -191,7 +177,8 @@ impl MetadataTable for ManifestsTable {
         ])
     }
 
-    async fn scan(scan: &MetadataScan) -> Result<RecordBatch> {
+    /// Scans the manifests table.
+    pub async fn scan(&self) -> Result<RecordBatch> {
         let mut content = PrimitiveBuilder::<Int8Type>::new();
         let mut path = StringBuilder::new();
         let mut length = PrimitiveBuilder::<Int64Type>::new();
@@ -204,18 +191,21 @@ impl MetadataTable for ManifestsTable {
         let mut existing_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut deleted_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(ManifestsTable::partition_summary_fields()),
+            Fields::from(self.partition_summary_fields()),
             0,
         ))
         .with_field(Arc::new(Field::new_struct(
             "item",
-            ManifestsTable::partition_summary_fields(),
+            self.partition_summary_fields(),
             false,
         )));
 
-        if let Some(snapshot) = scan.metadata_ref.current_snapshot() {
+        if let Some(snapshot) = self.metadata_table.metadata().current_snapshot() {
             let manifest_list = snapshot
-                .load_manifest_list(&scan.io, &scan.metadata_ref)
+                .load_manifest_list(
+                    &self.metadata_table.0.file_io(),
+                    &self.metadata_table.0.metadata_ref(),
+                )
                 .await?;
             for manifest in manifest_list.entries() {
                 content.append_value(manifest.content.clone() as i8);
@@ -259,7 +249,7 @@ impl MetadataTable for ManifestsTable {
             }
         }
 
-        Ok(RecordBatch::try_new(Arc::new(Self::schema()), vec![
+        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
             Arc::new(content.finish()),
             Arc::new(path.finish()),
             Arc::new(length.finish()),
@@ -331,10 +321,10 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn test_snapshots_table() {
+    #[test]
+    fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.metadata_scan().snapshots().await.unwrap();
+        let record_batch = table.metadata_table().snapshots().scan().unwrap();
         check_record_batch(
             record_batch,
             expect![[r#"
@@ -407,7 +397,13 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let record_batch = fixture.table.metadata_scan().manifests().await.unwrap();
+        let record_batch = fixture
+            .table
+            .metadata_table()
+            .manifests()
+            .scan()
+            .await
+            .unwrap();
 
         check_record_batch(
             record_batch,
