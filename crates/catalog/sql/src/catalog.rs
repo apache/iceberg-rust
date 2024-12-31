@@ -23,8 +23,7 @@ use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, Error, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{install_default_drivers, AnyPoolOptions, AnyQueryResult, AnyRow};
 use sqlx::{Any, AnyPool, Row, Transaction};
