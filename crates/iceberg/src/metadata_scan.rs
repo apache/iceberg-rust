@@ -203,7 +203,7 @@ impl<'a> ManifestsTable<'a> {
         if let Some(snapshot) = self.metadata_table.metadata().current_snapshot() {
             let manifest_list = snapshot
                 .load_manifest_list(
-                    &self.metadata_table.0.file_io(),
+                    self.metadata_table.0.file_io(),
                     &self.metadata_table.0.metadata_ref(),
                 )
                 .await?;
