@@ -26,7 +26,6 @@ use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondTyp
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
-use crate::spec::TableMetadata;
 use crate::table::Table;
 use crate::Result;
 
@@ -47,26 +46,18 @@ impl MetadataTable {
 
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
-        SnapshotsTable {
-            metadata_table: self,
-        }
+        SnapshotsTable { table: &self.0 }
     }
 
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
-        ManifestsTable {
-            metadata_table: self,
-        }
-    }
-
-    fn metadata(&self) -> &TableMetadata {
-        self.0.metadata()
+        ManifestsTable { table: &self.0 }
     }
 }
 
 /// Snapshots table.
 pub struct SnapshotsTable<'a> {
-    metadata_table: &'a MetadataTable,
+    table: &'a Table,
 }
 
 impl<'a> SnapshotsTable<'a> {
@@ -113,7 +104,7 @@ impl<'a> SnapshotsTable<'a> {
         let mut manifest_list = StringBuilder::new();
         let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        for snapshot in self.metadata_table.metadata().snapshots() {
+        for snapshot in self.table.metadata().snapshots() {
             committed_at.append_value(snapshot.timestamp_ms());
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
@@ -139,7 +130,7 @@ impl<'a> SnapshotsTable<'a> {
 
 /// Manifests table.
 pub struct ManifestsTable<'a> {
-    metadata_table: &'a MetadataTable,
+    table: &'a Table,
 }
 
 impl<'a> ManifestsTable<'a> {
@@ -201,12 +192,9 @@ impl<'a> ManifestsTable<'a> {
             false,
         )));
 
-        if let Some(snapshot) = self.metadata_table.metadata().current_snapshot() {
+        if let Some(snapshot) = self.table.metadata().current_snapshot() {
             let manifest_list = snapshot
-                .load_manifest_list(
-                    self.metadata_table.0.file_io(),
-                    &self.metadata_table.0.metadata_ref(),
-                )
+                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
             for manifest in manifest_list.entries() {
                 content.append_value(manifest.content as i8);
