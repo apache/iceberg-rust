@@ -152,7 +152,8 @@ impl<'a> ManifestsTable<'a> {
         ]
     }
 
-    fn schema(&self) -> Schema {
+    /// Returns the schema of the manifests table.
+    pub fn schema(&self) -> Schema {
         Schema::new(vec![
             Field::new("content", DataType::Int8, false),
             Field::new("path", DataType::Utf8, false),
