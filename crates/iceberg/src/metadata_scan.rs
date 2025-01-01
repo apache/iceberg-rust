@@ -209,7 +209,7 @@ impl<'a> ManifestsTable<'a> {
                 )
                 .await?;
             for manifest in manifest_list.entries() {
-                content.append_value(manifest.content.clone() as i8);
+                content.append_value(manifest.content as i8);
                 path.append_value(manifest.manifest_path.clone());
                 length.append_value(manifest.manifest_length);
                 partition_spec_id.append_value(manifest.partition_spec_id);
