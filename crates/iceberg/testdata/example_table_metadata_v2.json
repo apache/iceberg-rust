@@ -28,9 +28,7 @@
         {"id": 13, "name": "timestamptz", "required": true, "type": "timestamptz"},
         {"id": 14, "name": "timestampns", "required": true, "type": "timestampns"},
         {"id": 15, "name": "timestamptzns", "required": true, "type": "timestamptzns"},
-        {"id": 16, "name": "uuid", "required": true, "type": "uuid"},
-        {"id": 17, "name": "fixed", "required": true, "type": "fixed[4]"},
-        {"id": 18, "name": "binary", "required": true, "type": "binary"}
+        {"id": 16, "name": "binary", "required": true, "type": "binary"}
       ]
     }
   ],
