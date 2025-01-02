@@ -47,17 +47,17 @@ impl<'a> MetadataTable<'a> {
 
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
-        SnapshotsTable { table: &self.0 }
+        SnapshotsTable { table: self.0 }
     }
 
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
-        ManifestsTable { table: &self.0 }
+        ManifestsTable { table: self.0 }
     }
 
     /// Return the metadata log entries of the table.
     pub fn metadata_log_entries(&self) -> MetadataLogEntriesTable {
-        MetadataLogEntriesTable { table: &self.0 }
+        MetadataLogEntriesTable { table: self.0 }
     }
 }
 
