@@ -45,6 +45,11 @@ impl<'a> MetadataTable<'a> {
         Self(table)
     }
 
+    /// Return the metadata log entries of the table.
+    pub fn metadata_log_entries(&self) -> MetadataLogEntriesTable {
+        MetadataLogEntriesTable { table: self.0 }
+    }
+
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
         SnapshotsTable { table: self.0 }
@@ -53,11 +58,6 @@ impl<'a> MetadataTable<'a> {
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
         ManifestsTable { table: self.0 }
-    }
-
-    /// Return the metadata log entries of the table.
-    pub fn metadata_log_entries(&self) -> MetadataLogEntriesTable {
-        MetadataLogEntriesTable { table: self.0 }
     }
 }
 
@@ -400,6 +400,61 @@ mod tests {
     }
 
     #[test]
+    fn test_metadata_log_entries_table() {
+        let table = TableTestFixture::new().table;
+        let record_batch = table
+            .metadata_table()
+            .metadata_log_entries()
+            .scan()
+            .unwrap();
+
+        // Check the current metadata location is included
+        let current_metadata_location = table.metadata_location().unwrap();
+        assert!(record_batch
+            .column_by_name("file")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap()
+            .iter()
+            .any(|location| location.is_some_and(|l| l.eq(current_metadata_location))));
+
+        check_record_batch(
+            record_batch,
+            expect![[r#"
+                Field { name: "timestamp", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "file", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_snapshot_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_schema_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+                Field { name: "latest_sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+            expect![[r#"
+                timestamp: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
+                [
+                  1970-01-01T00:25:15.100+00:00,
+                  2020-10-14T01:22:53.590+00:00,
+                ],
+                file: (skipped),
+                latest_snapshot_id: PrimitiveArray<Int64>
+                [
+                  null,
+                  3055729675574597004,
+                ],
+                latest_schema_id: PrimitiveArray<Int32>
+                [
+                  null,
+                  1,
+                ],
+                latest_sequence_number: PrimitiveArray<Int64>
+                [
+                  null,
+                  1,
+                ]"#]],
+            &["file"],
+            Some("timestamp"),
+        );
+    }
+
+    #[test]
     fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
         let record_batch = table.metadata_table().snapshots().scan().unwrap();
@@ -540,7 +595,7 @@ mod tests {
                 partition_summaries: ListArray
                 [
                   StructArray
-                -- validity:
+                -- validity: 
                 [
                   valid,
                 ]
@@ -569,61 +624,6 @@ mod tests {
                 ]"#]],
             &["path", "length"],
             Some("path"),
-        );
-    }
-
-    #[test]
-    fn test_metadata_log_entries_table() {
-        let table = TableTestFixture::new().table;
-        let record_batch = table
-            .metadata_table()
-            .metadata_log_entries()
-            .scan()
-            .unwrap();
-
-        // Check the current metadata location is included
-        let current_metadata_location = table.metadata_location().unwrap();
-        assert!(record_batch
-            .column_by_name("file")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow_array::StringArray>()
-            .unwrap()
-            .iter()
-            .any(|location| location.is_some_and(|l| l.eq(current_metadata_location))));
-
-        check_record_batch(
-            record_batch,
-            expect![[r#"
-                Field { name: "timestamp", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "file", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "latest_snapshot_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "latest_schema_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "latest_sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
-            expect![[r#"
-                timestamp: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
-                [
-                  1970-01-01T00:25:15.100+00:00,
-                  2020-10-14T01:22:53.590+00:00,
-                ],
-                file: (skipped),
-                latest_snapshot_id: PrimitiveArray<Int64>
-                [
-                  null,
-                  3055729675574597004,
-                ],
-                latest_schema_id: PrimitiveArray<Int32>
-                [
-                  null,
-                  1,
-                ],
-                latest_sequence_number: PrimitiveArray<Int64>
-                [
-                  null,
-                  1,
-                ]"#]],
-            &["file"],
-            Some("timestamp"),
         );
     }
 }
