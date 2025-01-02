@@ -2138,7 +2138,7 @@
 }
 
 <span class="doccomment">/// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-</span><span class="attr">#[derive(Debug, PartialEq, Clone, Eq)]
+</span><span class="attr">#[derive(Debug, PartialEq, Clone, Copy, Eq)]
 </span><span class="kw">pub enum </span>ManifestContentType {
     <span class="doccomment">/// The manifest content is data.
     </span>Data = <span class="number">0</span>,

@@ -2937,7 +2937,7 @@
                 .unwrap()
         }
 
-        <span class="kw">async fn </span>setup_manifest_files(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="kw">pub async fn </span>setup_manifest_files(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
             <span class="kw">let </span>current_snapshot = <span class="self">self</span>.table.metadata().current_snapshot().unwrap();
             <span class="kw">let </span>parent_snapshot = current_snapshot
                 .parent_snapshot(<span class="self">self</span>.table.metadata())

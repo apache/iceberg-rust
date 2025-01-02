@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["MetadataTable","SnapshotsTable"]};
+window.SIDEBAR_ITEMS = {"struct":["ManifestsTable","MetadataTable","SnapshotsTable"]};
