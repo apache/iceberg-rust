@@ -21,27 +21,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    make_builder, ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-    Int8Builder, LargeBinaryBuilder, ListBuilder, MapBuilder, PrimitiveBuilder, StringBuilder,
-    StructBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder,
-    TimestampNanosecondBuilder,
+    BinaryBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
+    MapBuilder, PrimitiveBuilder, StringBuilder, StructBuilder,
 };
-use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, Int8Type,
-    Time64MicrosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, UInt64Type,
-};
-use arrow_array::{ArrayRef, ArrowPrimitiveType, Datum as ArrowDatum, RecordBatch, StructArray};
+use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondType, UInt64Type};
+use arrow_array::{ArrayRef, ArrowPrimitiveType, RecordBatch, StructArray};
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 use itertools::Itertools;
-use ordered_float::OrderedFloat;
 
+use crate::arrow::builder::AnyArrayBuilder;
 use crate::arrow::{get_arrow_datum, schema_to_arrow_schema, type_to_arrow_type};
 use crate::spec::{
-    DataFile, Datum, Literal, ManifestFile, PartitionField, PartitionSpec, PrimitiveLiteral,
-    SchemaRef, Struct, TableMetadata,
+    DataFile, Datum, ManifestFile, PartitionField, PartitionSpec, SchemaRef, Struct, TableMetadata,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -580,7 +571,7 @@ impl<'a> DataFileStructBuilder<'a> {
 
 struct PartitionValuesStructBuilder {
     combined_fields: Fields,
-    partition_builders: Vec<Box<dyn ArrayBuilder>>,
+    partition_builders: Vec<AnyArrayBuilder>,
 }
 
 impl PartitionValuesStructBuilder {
@@ -589,7 +580,7 @@ impl PartitionValuesStructBuilder {
         Self {
             partition_builders: combined_fields
                 .iter()
-                .map(|field| make_builder(field.data_type(), 0))
+                .map(|field| AnyArrayBuilder::new(field.data_type()))
                 .collect_vec(),
             combined_fields,
         }
@@ -630,13 +621,10 @@ impl PartitionValuesStructBuilder {
     ) -> Result<()> {
         for (field, value) in partition_fields.iter().zip_eq(partition_values.iter()) {
             let index = self.find_field(&field.name)?;
-            let data_type = self.combined_fields[index].data_type();
 
             match value {
-                Some(literal) => {
-                    self.partition_builders[index].append_literal(data_type, literal)?
-                }
-                None => self.partition_builders[index].append_null(data_type)?,
+                Some(literal) => self.partition_builders[index].append_literal(literal)?,
+                None => self.partition_builders[index].append_null()?,
             }
         }
         Ok(())
@@ -745,8 +733,8 @@ struct PerColumnReadableMetricsBuilder {
     value_count: PrimitiveBuilder<UInt64Type>,
     null_value_count: PrimitiveBuilder<UInt64Type>,
     nan_value_count: PrimitiveBuilder<UInt64Type>,
-    lower_bound: Box<dyn ArrayBuilder>,
-    upper_bound: Box<dyn ArrayBuilder>,
+    lower_bound: AnyArrayBuilder,
+    upper_bound: AnyArrayBuilder,
 }
 
 impl PerColumnReadableMetricsBuilder {
@@ -770,8 +758,8 @@ impl PerColumnReadableMetricsBuilder {
             value_count: PrimitiveBuilder::new(),
             null_value_count: PrimitiveBuilder::new(),
             nan_value_count: PrimitiveBuilder::new(),
-            lower_bound: make_builder(data_type, 0),
-            upper_bound: make_builder(data_type, 0),
+            lower_bound: AnyArrayBuilder::new(data_type),
+            upper_bound: AnyArrayBuilder::new(data_type),
         }
     }
 
@@ -788,13 +776,13 @@ impl PerColumnReadableMetricsBuilder {
             Some(datum) => self
                 .lower_bound
                 .append_datum(get_arrow_datum(datum)?.as_ref())?,
-            None => self.lower_bound.append_null(&self.data_type)?,
+            None => self.lower_bound.append_null()?,
         }
         match data_file.upper_bounds().get(&self.field_id) {
             Some(datum) => self
                 .upper_bound
                 .append_datum(get_arrow_datum(datum)?.as_ref())?,
-            None => self.upper_bound.append_null(&self.data_type)?,
+            None => self.upper_bound.append_null()?,
         }
         Ok(())
     }
@@ -838,167 +826,6 @@ fn column_id_to_value_type(value_type: DataType) -> DataType {
     )
 }
 
-/// Helper trait to extend [ArrayBuilder] with methods that cast on a provided [DataType].
-/// This allows reuse of large pattern matching statements where we're dealing with, potentially,
-/// any primitive type (as when building structs of partition values or upper and lower bounds).
-trait AnyPrimitiveArrayBuilderExt {
-    /// Append an [[arrow_array::Datum]] value.
-    fn append_datum(&mut self, value: &dyn ArrowDatum) -> Result<()>;
-    /// Append a literal with the provided [DataType]. We're not solely relying on the literal to
-    /// infer the type because [Literal] values do not specify the expected type of builder. E.g.,
-    /// a [PrimitiveLiteral::Long] may go into an array builder for longs but also for timestamps.
-    fn append_literal(&mut self, data_type: &DataType, value: &Literal) -> Result<()>;
-    /// Append a null value for the provided [DataType].
-    fn append_null(&mut self, data_type: &DataType) -> Result<()>;
-    /// Cast this builder to a specific type or return [Error].
-    fn downcast_mut<T: ArrayBuilder>(&mut self) -> Result<&mut T>;
-}
-
-impl AnyPrimitiveArrayBuilderExt for dyn ArrayBuilder {
-    fn append_datum(&mut self, value: &dyn ArrowDatum) -> Result<()> {
-        let (array, is_scalar) = value.get();
-        assert!(is_scalar, "Can only append scalar datum");
-
-        match array.data_type() {
-            DataType::Boolean => self
-                .downcast_mut::<BooleanBuilder>()?
-                .append_value(array.as_boolean().value(0)),
-            DataType::Int32 => self
-                .downcast_mut::<Int32Builder>()?
-                .append_value(array.as_primitive::<Int32Type>().value(0)),
-            DataType::Int64 => self
-                .downcast_mut::<Int64Builder>()?
-                .append_value(array.as_primitive::<Int64Type>().value(0)),
-            DataType::Float32 => self
-                .downcast_mut::<Float32Builder>()?
-                .append_value(array.as_primitive::<Float32Type>().value(0)),
-            DataType::Float64 => self
-                .downcast_mut::<Float64Builder>()?
-                .append_value(array.as_primitive::<Float64Type>().value(0)),
-            DataType::Decimal128(_, _) => self
-                .downcast_mut::<Decimal128Builder>()?
-                .append_value(array.as_primitive::<Decimal128Type>().value(0)),
-            DataType::Date32 => self
-                .downcast_mut::<Date32Builder>()?
-                .append_value(array.as_primitive::<Date32Type>().value(0)),
-            DataType::Time64(TimeUnit::Microsecond) => self
-                .downcast_mut::<Time64MicrosecondBuilder>()?
-                .append_value(array.as_primitive::<Time64MicrosecondType>().value(0)),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => self
-                .downcast_mut::<TimestampMicrosecondBuilder>()?
-                .append_value(array.as_primitive::<TimestampMicrosecondType>().value(0)),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => self
-                .downcast_mut::<TimestampNanosecondBuilder>()?
-                .append_value(array.as_primitive::<TimestampNanosecondType>().value(0)),
-            DataType::Utf8 => self
-                .downcast_mut::<StringBuilder>()?
-                .append_value(array.as_string::<i32>().value(0)),
-            DataType::FixedSizeBinary(_) => self
-                .downcast_mut::<BinaryBuilder>()?
-                .append_value(array.as_fixed_size_binary().value(0)),
-            DataType::LargeBinary => self
-                .downcast_mut::<LargeBinaryBuilder>()?
-                .append_value(array.as_binary::<i64>().value(0)),
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Cannot append data type: {:?}", array.data_type(),),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn append_literal(&mut self, data_type: &DataType, value: &Literal) -> Result<()> {
-        let Some(primitive) = value.as_primitive_literal() else {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Expected primitive type",
-            ));
-        };
-
-        match (data_type, primitive.clone()) {
-            (DataType::Boolean, PrimitiveLiteral::Boolean(value)) => {
-                self.downcast_mut::<BooleanBuilder>()?.append_value(value)
-            }
-            (DataType::Int32, PrimitiveLiteral::Int(value)) => {
-                self.downcast_mut::<Int32Builder>()?.append_value(value)
-            }
-            (DataType::Int64, PrimitiveLiteral::Long(value)) => {
-                self.downcast_mut::<Int64Builder>()?.append_value(value)
-            }
-            (DataType::Float32, PrimitiveLiteral::Float(OrderedFloat(value))) => {
-                self.downcast_mut::<Float32Builder>()?.append_value(value)
-            }
-            (DataType::Float64, PrimitiveLiteral::Double(OrderedFloat(value))) => {
-                self.downcast_mut::<Float64Builder>()?.append_value(value)
-            }
-            (DataType::Utf8, PrimitiveLiteral::String(value)) => {
-                self.downcast_mut::<StringBuilder>()?.append_value(value)
-            }
-            (DataType::FixedSizeBinary(_), PrimitiveLiteral::Binary(value)) => self
-                .downcast_mut::<FixedSizeBinaryBuilder>()?
-                .append_value(value)?,
-            (DataType::LargeBinary, PrimitiveLiteral::Binary(value)) => self
-                .downcast_mut::<LargeBinaryBuilder>()?
-                .append_value(value),
-            (_, _) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "Builder of type {:?} does not accept literal {:?}",
-                        data_type, primitive
-                    ),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn append_null(&mut self, data_type: &DataType) -> Result<()> {
-        match data_type {
-            DataType::Boolean => self.downcast_mut::<BooleanBuilder>()?.append_null(),
-            DataType::Int32 => self.downcast_mut::<Int32Builder>()?.append_null(),
-            DataType::Int64 => self.downcast_mut::<Int64Builder>()?.append_null(),
-            DataType::Float32 => self.downcast_mut::<Float32Builder>()?.append_null(),
-            DataType::Float64 => self.downcast_mut::<Float64Builder>()?.append_null(),
-            DataType::Decimal128(_, _) => self.downcast_mut::<Decimal128Builder>()?.append_null(),
-            DataType::Date32 => self.downcast_mut::<Date32Builder>()?.append_null(),
-            DataType::Time64(TimeUnit::Microsecond) => self
-                .downcast_mut::<Time64MicrosecondBuilder>()?
-                .append_null(),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => self
-                .downcast_mut::<TimestampMicrosecondBuilder>()?
-                .append_null(),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => self
-                .downcast_mut::<TimestampNanosecondBuilder>()?
-                .append_null(),
-            DataType::Utf8 => self.downcast_mut::<StringBuilder>()?.append_null(),
-            DataType::FixedSizeBinary(_) => {
-                self.downcast_mut::<FixedSizeBinaryBuilder>()?.append_null()
-            }
-            DataType::LargeBinary => self.downcast_mut::<LargeBinaryBuilder>()?.append_null(),
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Cannot append null values for data type: {:?}", data_type),
-                ))
-            }
-        }
-        Ok(())
-    }
-
-    fn downcast_mut<T: ArrayBuilder>(&mut self) -> Result<&mut T> {
-        self.as_any_mut().downcast_mut::<T>().ok_or_else(|| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "Failed to cast builder to expected type",
-            )
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::Array;
@@ -1016,12 +843,14 @@ mod tests {
     ///   or use rust-analyzer (see [video](https://github.com/rust-analyzer/expect-test)).
     ///   Check the doc of [`expect_test`] for more details.
     /// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
+    /// - `ignore_check_struct_fields`: Same as `ignore_check_columns` but for (top-level) struct fields.
     /// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
     fn check_record_batch(
         record_batch: RecordBatch,
         expected_schema: Expect,
         expected_data: Expect,
         ignore_check_columns: &[&str],
+        ignore_check_struct_fields: &[&str],
         sort_column: Option<&str>,
     ) {
         let mut columns = record_batch.columns().to_vec();
@@ -1048,20 +877,15 @@ mod tests {
                     let struct_array = column.as_any().downcast_ref::<StructArray>().unwrap();
                     let filtered: Vec<(FieldRef, ArrayRef)> = fields
                         .iter()
-                        .cloned()
-                        .zip_eq(struct_array.columns().iter().cloned())
-                        .filter(|(field, _)| !ignore_check_columns.contains(&field.name().as_str()))
+                        .zip_eq(struct_array.columns().iter())
+                        .filter(|(f, _)| !ignore_check_struct_fields.contains(&f.name().as_str()))
+                        .map(|(f, c)| (f.clone(), c.clone()))
                         .collect_vec();
-                    let filtered_type = DataType::Struct(
-                        filtered
-                            .iter()
-                            .map(|(f, _)| f)
-                            .cloned()
-                            .collect_vec()
-                            .into(),
+                    let filtered_struct_type: DataType = DataType::Struct(
+                        filtered.iter().map(|(f, _)| f.clone()).collect_vec().into(),
                     );
                     (
-                        Field::new(field.name(), filtered_type, field.is_nullable()).into(),
+                        Field::new(field.name(), filtered_struct_type, field.is_nullable()).into(),
                         Arc::new(StructArray::from(filtered)) as ArrayRef,
                     )
                 }
@@ -1103,6 +927,7 @@ mod tests {
                 | 2019-04-12T20:29:15.770Z | 3055729675574597004 | 3051729675574597004 | append    | {}      |
                 +--------------------------+---------------------+---------------------+-----------+---------+"#]],
             &["manifest_list"],
+            &[],
             Some("committed_at"),
         );
     }
@@ -1132,6 +957,7 @@ mod tests {
                 | 2      | 3051729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 200}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                             | {x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                   |
                 | 0      | 3051729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 300}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                             | {x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                   |
                 +--------+---------------------+-----------------+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+"#]],
+            &[],
             &["file_path"],
             None,
         );
@@ -1172,6 +998,7 @@ mod tests {
                 | 0       | 0                 | 3055729675574597004 | 1                      | 1                         | 1                        | 1                        | 1                           | 1                          | [{contains_null: false, contains_nan: false, lower_bound: 100, upper_bound: 300}] |
                 +---------+-------------------+---------------------+------------------------+---------------------------+--------------------------+--------------------------+-----------------------------+----------------------------+-----------------------------------------------------------------------------------+"#]],
             &["path", "length"],
+            &[],
             Some("path"),
         );
     }
