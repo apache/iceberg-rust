@@ -29,8 +29,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
+use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use parquet::data_type::ByteArray;
 use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
@@ -681,30 +681,6 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
     }
 }
 
-fn extend_to_i128_big_endian(array: ByteArray) -> Result<[u8; 16]> {
-    if array.len() > 16 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "fail to extend array with len > 16 to array with 16",
-        ));
-    }
-
-    // Check the sign bit: if the first byte's MSB is 1, it's negative
-    let is_negative = array.data().first().map_or(false, |&b| b & 0x80 != 0);
-
-    // Create a buffer of 16 bytes filled with the sign extension value
-    let mut extended = if is_negative {
-        [0xFF; 16] // Fill with 0xFF for negative numbers
-    } else {
-        [0x00; 16] // Fill with 0x00 for positive numbers
-    };
-
-    let start = 16 - array.len();
-    extended[start..].copy_from_slice(array.data());
-
-    Ok(extended)
-}
-
 macro_rules! get_parquet_stat_as_datum {
     ($limit_type:tt) => {
         paste::paste! {
@@ -764,9 +740,15 @@ macro_rules! get_parquet_stat_as_datum {
                     let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
                         return Ok(None);
                     };
+                    let unscaled_value = BigInt::from_signed_bytes_be(bytes);
                     Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_be_bytes(extend_to_i128_big_endian(bytes.into())?)),
+                        PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Can't convert bytes to i128: {:?}", bytes),
+                            )
+                        })?),
                     ))
                 }
                 (
