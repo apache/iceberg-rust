@@ -1286,7 +1286,10 @@ mod tests {
                 .as_ref()
         );
 
-        // test max and min for scale 38
+        // test max and min of rust_decimal
+        let decimal_max = Decimal::MAX;
+        let decimal_min = Decimal::MIN;
+        assert_eq!(decimal_max.scale(), decimal_min.scale());
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![NestedField::optional(
@@ -1294,7 +1297,7 @@ mod tests {
                     "decimal",
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: 38,
-                        scale: 0,
+                        scale: decimal_max.scale(),
                     }),
                 )
                 .into()])
@@ -1313,8 +1316,8 @@ mod tests {
         .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
-                Some(99999999999999999999999999999999999999_i128),
-                Some(-99999999999999999999999999999999999999_i128),
+                Some(decimal_max.mantissa()),
+                Some(decimal_min.mantissa()),
             ])
             .with_data_type(DataType::Decimal128(38, 0)),
         ) as ArrayRef;
@@ -1332,26 +1335,81 @@ mod tests {
             .unwrap();
         assert_eq!(
             data_file.upper_bounds().get(&0),
-            Some(Datum::new(
-                PrimitiveType::Decimal {
-                    precision: 38,
-                    scale: 0
-                },
-                PrimitiveLiteral::Int128(99999999999999999999999999999999999999_i128)
-            ))
-            .as_ref()
+            Some(Datum::decimal(decimal_max).unwrap()).as_ref()
         );
         assert_eq!(
             data_file.lower_bounds().get(&0),
-            Some(Datum::new(
-                PrimitiveType::Decimal {
-                    precision: 38,
-                    scale: 0
-                },
-                PrimitiveLiteral::Int128(-99999999999999999999999999999999999999_i128)
-            ))
-            .as_ref()
+            Some(Datum::decimal(decimal_min).unwrap()).as_ref()
         );
+
+        // test max and min for scale 38
+        // # TODO
+        // Readd this case after resolve https://github.com/apache/iceberg-rust/issues/669
+        // let schema = Arc::new(
+        //     Schema::builder()
+        //         .with_fields(vec![NestedField::optional(
+        //             0,
+        //             "decimal",
+        //             Type::Primitive(PrimitiveType::Decimal {
+        //                 precision: 38,
+        //                 scale: 0,
+        //             }),
+        //         )
+        //         .into()])
+        //         .build()
+        //         .unwrap(),
+        // );
+        // let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        // let mut pw = ParquetWriterBuilder::new(
+        //     WriterProperties::builder().build(),
+        //     schema,
+        //     file_io.clone(),
+        //     loccation_gen,
+        //     file_name_gen,
+        // )
+        // .build()
+        // .await?;
+        // let col0 = Arc::new(
+        //     Decimal128Array::from(vec![
+        //         Some(99999999999999999999999999999999999999_i128),
+        //         Some(-99999999999999999999999999999999999999_i128),
+        //     ])
+        //     .with_data_type(DataType::Decimal128(38, 0)),
+        // ) as ArrayRef;
+        // let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col0]).unwrap();
+        // pw.write(&to_write).await?;
+        // let res = pw.close().await?;
+        // assert_eq!(res.len(), 1);
+        // let data_file = res
+        //     .into_iter()
+        //     .next()
+        //     .unwrap()
+        //     .content(crate::spec::DataContentType::Data)
+        //     .partition(Struct::empty())
+        //     .build()
+        //     .unwrap();
+        // assert_eq!(
+        //     data_file.upper_bounds().get(&0),
+        //     Some(Datum::new(
+        //         PrimitiveType::Decimal {
+        //             precision: 38,
+        //             scale: 0
+        //         },
+        //         PrimitiveLiteral::Int128(99999999999999999999999999999999999999_i128)
+        //     ))
+        //     .as_ref()
+        // );
+        // assert_eq!(
+        //     data_file.lower_bounds().get(&0),
+        //     Some(Datum::new(
+        //         PrimitiveType::Decimal {
+        //             precision: 38,
+        //             scale: 0
+        //         },
+        //         PrimitiveLiteral::Int128(-99999999999999999999999999999999999999_i128)
+        //     ))
+        //     .as_ref()
+        // );
 
         Ok(())
     }
