@@ -1237,7 +1237,7 @@ pub fn write_data_files_to_avro<W: Write>(
 }
 
 /// Parse data files from avro bytes.
-pub fn parse_data_file_from_avro<R: Read>(
+pub fn read_data_files_from_avro<R: Read>(
     reader: &mut R,
     schema: &Schema,
     partition_type: &StructType,
@@ -2456,7 +2456,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual_data_file = parse_data_file_from_avro(
+        let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
             &schema,
             &StructType::new(vec![]),
