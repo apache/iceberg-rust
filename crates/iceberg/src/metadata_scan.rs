@@ -144,6 +144,9 @@ impl<'a> SnapshotsTable<'a> {
 /// Entries table containing the manifest file's entries.
 ///
 /// The table has one row for each manifest file entry in the current snapshot's manifest list file.
+/// For reference, see the Java implementation of [`ManifestEntry`][1].
+///
+/// [1]: https://github.com/apache/iceberg/blob/apache-iceberg-1.7.1/core/src/main/java/org/apache/iceberg/ManifestEntry.java
 pub struct EntriesTable<'a> {
     table: &'a Table,
 }
@@ -151,8 +154,6 @@ pub struct EntriesTable<'a> {
 impl<'a> EntriesTable<'a> {
     /// Get the schema for the manifest entries table.
     pub fn schema(&self) -> Schema {
-        // https://github.com/apache/iceberg-python/blob/0e5086ceb77351bc0b6ec3a592f5eda70a0afe46/pyiceberg/table/inspect.py#L92
-        // https://github.com/apache/iceberg/blob/8a70fe0ff5f241aec8856f8091c77fdce35ad256/core/src/main/java/org/apache/iceberg/BaseEntriesTable.java#L46-L57
         Schema::new(vec![
             Field::new("status", DataType::Int32, false),
             Field::new("snapshot_id", DataType::Int64, true),
@@ -345,14 +346,21 @@ impl<'a> ManifestsTable<'a> {
     }
 }
 
+/// Builds the struct describing data files listed in a table manifest.
+///
+/// For reference, see the Java implementation of [`DataFile`][1].
+///
+/// [1]: https://github.com/apache/iceberg/blob/apache-iceberg-1.7.1/api/src/main/java/org/apache/iceberg/DataFile.java
 struct DataFileStructBuilder<'a> {
-    // Need to keep table metadata to retrieve partition specs based on partition spec ids
+    // Reference to table metadata to retrieve partition specs based on partition spec ids
     table_metadata: &'a TableMetadata,
     // Below are the field builders of the "data_file" struct
     content: Int8Builder,
     file_path: StringBuilder,
     file_format: StringBuilder,
     partition: PartitionValuesStructBuilder,
+    // The count types in the Java and PyIceberg implementation i64 however the values coming from
+    // the deserialized data files are u64. We agree with the latter to avoid unsafe casting.
     record_count: PrimitiveBuilder<UInt64Type>,
     file_size_in_bytes: PrimitiveBuilder<UInt64Type>,
     column_sizes: MapBuilder<Int32Builder, PrimitiveBuilder<UInt64Type>>,
@@ -406,32 +414,32 @@ impl<'a> DataFileStructBuilder<'a> {
             Field::new("file_size_in_bytes", DataType::UInt64, false),
             Field::new(
                 "column_sizes",
-                column_id_to_value_type(DataType::UInt64),
+                Self::column_id_to_value_type(DataType::UInt64),
                 true,
             ),
             Field::new(
                 "value_counts",
-                column_id_to_value_type(DataType::UInt64),
+                Self::column_id_to_value_type(DataType::UInt64),
                 true,
             ),
             Field::new(
                 "null_value_counts",
-                column_id_to_value_type(DataType::UInt64),
+                Self::column_id_to_value_type(DataType::UInt64),
                 true,
             ),
             Field::new(
                 "nan_value_counts",
-                column_id_to_value_type(DataType::UInt64),
+                Self::column_id_to_value_type(DataType::UInt64),
                 true,
             ),
             Field::new(
                 "lower_bounds",
-                column_id_to_value_type(DataType::Binary),
+                Self::column_id_to_value_type(DataType::Binary),
                 true,
             ),
             Field::new(
                 "upper_bounds",
-                column_id_to_value_type(DataType::Binary),
+                Self::column_id_to_value_type(DataType::Binary),
                 true,
             ),
             Field::new("key_metadata", DataType::Binary, true),
@@ -448,6 +456,25 @@ impl<'a> DataFileStructBuilder<'a> {
             Field::new("sort_order_id", DataType::Int32, true),
         ]
         .into()
+    }
+
+    /// Construct a new struct type that maps from column ids (i32) to the provided value type.
+    /// Keys, values, and the whole struct are non-nullable.
+    fn column_id_to_value_type(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("keys", DataType::Int32, false),
+                        Field::new("values", value_type, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        )
     }
 
     fn append(&mut self, manifest_file: &ManifestFile, data_file: &DataFile) -> Result<()> {
@@ -569,24 +596,26 @@ impl<'a> DataFileStructBuilder<'a> {
     }
 }
 
+/// Build a [StructArray] with partition columns as fields and partition values as rows.
 struct PartitionValuesStructBuilder {
-    combined_fields: Fields,
-    partition_builders: Vec<AnyArrayBuilder>,
+    fields: Fields,
+    builders: Vec<AnyArrayBuilder>,
 }
 
 impl PartitionValuesStructBuilder {
+    /// Construct a new builder from the combined partition columns of the table metadata.
     fn new(table_metadata: &TableMetadata) -> Self {
         let combined_fields = Self::combined_partition_fields(table_metadata);
         Self {
-            partition_builders: combined_fields
+            builders: combined_fields
                 .iter()
                 .map(|field| AnyArrayBuilder::new(field.data_type()))
                 .collect_vec(),
-            combined_fields,
+            fields: combined_fields,
         }
     }
 
-    /// Build the combined partition spec unioning past and current partition specs
+    /// Build the combined partition spec union-ing past and current partition specs
     fn combined_partition_fields(table_metadata: &TableMetadata) -> Fields {
         let combined_fields: HashMap<i32, &PartitionField> = table_metadata
             .partition_specs_iter()
@@ -623,8 +652,8 @@ impl PartitionValuesStructBuilder {
             let index = self.find_field(&field.name)?;
 
             match value {
-                Some(literal) => self.partition_builders[index].append_literal(literal)?,
-                None => self.partition_builders[index].append_null()?,
+                Some(literal) => self.builders[index].append_literal(literal)?,
+                None => self.builders[index].append_null()?,
             }
         }
         Ok(())
@@ -632,12 +661,12 @@ impl PartitionValuesStructBuilder {
 
     fn finish(&mut self) -> StructArray {
         let arrays: Vec<ArrayRef> = self
-            .partition_builders
+            .builders
             .iter_mut()
             .map::<ArrayRef, _>(|builder| Arc::new(builder.finish()))
             .collect();
         StructArray::from(
-            self.combined_fields
+            self.fields
                 .iter()
                 .cloned()
                 .zip_eq(arrays)
@@ -646,7 +675,7 @@ impl PartitionValuesStructBuilder {
     }
 
     fn find_field(&self, name: &str) -> Result<usize> {
-        match self.combined_fields.find(name) {
+        match self.fields.find(name) {
             Some((index, _)) => Ok(index),
             None => Err(Error::new(
                 ErrorKind::Unexpected,
@@ -807,25 +836,6 @@ impl PerColumnReadableMetricsBuilder {
     }
 }
 
-/// Construct a new struct type that maps from column ids (i32) to the provided value type.
-/// Keys, values, and the whole struct are non-nullable.
-fn column_id_to_value_type(value_type: DataType) -> DataType {
-    DataType::Map(
-        Arc::new(Field::new(
-            "entries",
-            DataType::Struct(
-                vec![
-                    Field::new("keys", DataType::Int32, false),
-                    Field::new("values", value_type, true),
-                ]
-                .into(),
-            ),
-            false,
-        )),
-        false,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::Array;
@@ -868,10 +878,10 @@ mod tests {
             .schema()
             .fields
             .iter()
-            .cloned()
             .zip_eq(columns)
+            // Filter ignored columns
             .filter(|(field, _)| !ignore_check_columns.contains(&field.name().as_str()))
-            // Filter columns nested within structs as well
+            // For struct fields, filter ignored struct fields
             .map(|(field, column)| match field.data_type() {
                 DataType::Struct(fields) => {
                     let struct_array = column.as_any().downcast_ref::<StructArray>().unwrap();
@@ -889,7 +899,7 @@ mod tests {
                         Arc::new(StructArray::from(filtered)) as ArrayRef,
                     )
                 }
-                _ => (field, column),
+                _ => (field.clone(), column),
             })
             .unzip();
 
