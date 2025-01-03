@@ -29,6 +29,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
+use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
@@ -739,9 +740,15 @@ macro_rules! get_parquet_stat_as_datum {
                     let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
                         return Ok(None);
                     };
+                    let unscaled_value = BigInt::from_signed_bytes_be(bytes);
                     Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                        PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Can't convert bytes to i128: {:?}", bytes),
+                            )
+                        })?),
                     ))
                 }
                 (
