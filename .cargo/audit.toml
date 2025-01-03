@@ -21,10 +21,6 @@ ignore = [
   # Marvin Attack: potential key recovery through timing sidechannels
   # Issues: https://github.com/apache/iceberg-rust/issues/221
   "RUSTSEC-2023-0071",
-  # `instant` is unmaintained
-  #
-  # Introduced by datafusion, will be fixed in datafusion 44.
-  "RUSTSEC-2024-0384",
   # `derivative` is unmaintained; consider using an alternative
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
