@@ -49,7 +49,7 @@ jobs:
       - name: Install taplo-cli
         uses: taiki-e/install-action@v2
         with:
-          tool: taplo-cli@0.9.0
+          tool: taplo-cli@0.9.3
       - name: Check toml format
         run: make check-toml
 
