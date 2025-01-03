@@ -16,26 +16,28 @@
 # under the License.
 
 [package]
-name = "iceberg-datafusion"
+name = "iceberg-catalog-s3tables"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 rust-version = { workspace = true }
 
 categories = ["database"]
-description = "Apache Iceberg DataFusion Integration"
+description = "Apache Iceberg Rust S3Tables Catalog"
 repository = { workspace = true }
 license = { workspace = true }
-keywords = ["iceberg", "integrations", "datafusion"]
+keywords = ["iceberg", "sql", "catalog"]
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-datafusion = { version = "44" }
-futures = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3tables = "1.2.0"
 iceberg = { workspace = true }
-tokio = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-iceberg-catalog-memory = { workspace = true }
-tempfile = { workspace = true }
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+itertools = { workspace = true }
+tokio = { workspace = true }

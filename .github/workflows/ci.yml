@@ -92,6 +92,9 @@ jobs:
         with:
           rust-version: ${{ env.rust_msrv }}
 
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+  
       - name: Build
         run: make build
 
@@ -105,6 +108,10 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
@@ -117,6 +124,9 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
