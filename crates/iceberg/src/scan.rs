@@ -1002,7 +1002,13 @@ pub mod tests {
             let table_location = tmp_dir.path().join("table1");
             let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
             let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
+            // This is a past metadata location in the metadata log
             let table_metadata1_location = table_location.join("metadata/v1.json");
+            // This is the actual location of current metadata
+            let template_json_location = format!(
+                "{}/testdata/example_table_metadata_v2.json",
+                env!("CARGO_MANIFEST_DIR")
+            );
 
             let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
                 .unwrap()
@@ -1010,11 +1016,7 @@ pub mod tests {
                 .unwrap();
 
             let table_metadata = {
-                let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
+                let template_json_str = fs::read_to_string(&template_json_location).unwrap();
                 let mut context = Context::new();
                 context.insert("table_location", &table_location);
                 context.insert("manifest_list_1_location", &manifest_list1_location);
@@ -1029,7 +1031,7 @@ pub mod tests {
                 .metadata(table_metadata)
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .metadata_location(template_json_location)
                 .build()
                 .unwrap();
 
