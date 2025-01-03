@@ -26,6 +26,7 @@ use arrow_array::types::{Int32Type, Int64Type, Int8Type, TimestampMillisecondTyp
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
+use crate::spec::{ListType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
 use crate::Result;
 
@@ -143,9 +144,9 @@ impl<'a> ManifestsTable<'a> {
         ]
     }
 
-    /// Returns the schema of the manifests table.
-    pub fn schema(&self) -> Schema {
-        Schema::new(vec![
+    /// Returns the fields of the manifests table.
+    fn fields(&self) -> Vec<Field> {
+        vec![
             Field::new("content", DataType::Int8, false),
             Field::new("path", DataType::Utf8, false),
             Field::new("length", DataType::Int64, false),
@@ -166,7 +167,107 @@ impl<'a> ManifestsTable<'a> {
                 ))),
                 false,
             ),
-        ])
+        ]
+    }
+
+    /// Returns the iceberg schema of the manifests table.
+    pub fn schema(&self) -> crate::spec::Schema {
+        let fields = vec![
+            NestedField::new(14, "content", Type::Primitive(PrimitiveType::Int), false),
+            NestedField::new(1, "path", Type::Primitive(PrimitiveType::String), false),
+            NestedField::new(2, "length", Type::Primitive(PrimitiveType::Long), false),
+            NestedField::new(
+                3,
+                "partition_spec_id",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                4,
+                "added_snapshot_id",
+                Type::Primitive(PrimitiveType::Long),
+                false,
+            ),
+            NestedField::new(
+                5,
+                "added_data_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                6,
+                "existing_data_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                7,
+                "deleted_data_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                15,
+                "added_delete_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                16,
+                "existing_delete_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                17,
+                "deleted_delete_files_count",
+                Type::Primitive(PrimitiveType::Int),
+                false,
+            ),
+            NestedField::new(
+                8,
+                "partition_summaries",
+                Type::List(ListType {
+                    element_field: Arc::new(NestedField::new(
+                        0,
+                        "item",
+                        Type::Struct(StructType::new(vec![
+                            Arc::new(NestedField::new(
+                                10,
+                                "contains_null",
+                                Type::Primitive(PrimitiveType::Boolean),
+                                true,
+                            )),
+                            Arc::new(NestedField::new(
+                                11,
+                                "contains_nan",
+                                Type::Primitive(PrimitiveType::Boolean),
+                                false,
+                            )),
+                            Arc::new(NestedField::new(
+                                12,
+                                "lower_bound",
+                                Type::Primitive(PrimitiveType::String),
+                                false,
+                            )),
+                            Arc::new(NestedField::new(
+                                13,
+                                "upper_bound",
+                                Type::Primitive(PrimitiveType::String),
+                                false,
+                            )),
+                        ])),
+                        false,
+                    )),
+                }),
+                false,
+            ),
+        ];
+
+        crate::spec::Schema::builder()
+            .with_fields(fields.into_iter().map(|f| f.into()))
+            .build()
+            .unwrap()
     }
 
     /// Scans the manifests table.
@@ -238,7 +339,8 @@ impl<'a> ManifestsTable<'a> {
             }
         }
 
-        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+        let schema = Schema::new(self.fields());
+        Ok(RecordBatch::try_new(Arc::new(schema), vec![
             Arc::new(content.finish()),
             Arc::new(path.finish()),
             Arc::new(length.finish()),
