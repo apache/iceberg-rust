@@ -99,7 +99,7 @@ impl<'a> SnapshotsTable<'a> {
     }
 
     /// Scans the snapshots table.
-    pub fn scan(&self) -> Result<ArrowRecordBatchStream> {
+    pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let arrow_schema = Arc::new(self.schema());
         let table_metadata = self.table.metadata_ref();
 
@@ -184,7 +184,7 @@ impl<'a> ManifestsTable<'a> {
     }
 
     /// Scans the manifests table.
-    pub fn scan(&self) -> Result<ArrowRecordBatchStream> {
+    pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let arrow_schema = Arc::new(self.schema());
         let table_metadata = self.table.metadata_ref();
         let file_io = self.table.file_io().clone();
@@ -349,7 +349,9 @@ mod tests {
     #[tokio::test]
     async fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let batch_stream = table.metadata_table().snapshots().scan().unwrap();
+
+        let batch_stream = table.metadata_table().snapshots().scan().await.unwrap();
+
         check_record_batches(
             batch_stream,
             expect![[r#"
@@ -422,7 +424,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let batch_stream = fixture.table.metadata_table().manifests().scan().unwrap();
+        let batch_stream = fixture.table.metadata_table().manifests().scan().await.unwrap();
 
         check_record_batches(
             batch_stream,
