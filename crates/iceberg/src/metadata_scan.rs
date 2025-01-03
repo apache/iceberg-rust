@@ -140,7 +140,7 @@ impl<'a> SnapshotsTable<'a> {
     }
 }
 
-/// Entries table containing the manifest file's entries.
+/// Entries table containing the entries of the current snapshot's manifest files.
 ///
 /// The table has one row for each manifest file entry in the current snapshot's manifest list file.
 /// For reference, see the Java implementation of [`ManifestEntry`][1].
