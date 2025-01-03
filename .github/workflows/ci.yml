@@ -74,7 +74,7 @@ jobs:
         with:
           tool: cargo-machete
       - name: Cargo Machete
-        run: make cargo-machete
+        run: cargo machete
 
   build:
     runs-on: ${{ matrix.os }}
