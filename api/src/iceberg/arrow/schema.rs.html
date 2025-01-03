@@ -1511,6 +1511,13 @@
 <a href="#1511" id="1511">1511</a>
 <a href="#1512" id="1512">1512</a>
 <a href="#1513" id="1513">1513</a>
+<a href="#1514" id="1514">1514</a>
+<a href="#1515" id="1515">1515</a>
+<a href="#1516" id="1516">1516</a>
+<a href="#1517" id="1517">1517</a>
+<a href="#1518" id="1518">1518</a>
+<a href="#1519" id="1519">1519</a>
+<a href="#1520" id="1520">1520</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1542,6 +1549,7 @@
 };
 <span class="kw">use </span>arrow_schema::{DataType, Field, Fields, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
 <span class="kw">use </span>bitvec::macros::internal::funty::Fundamental;
+<span class="kw">use </span>num_bigint::BigInt;
 <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 <span class="kw">use </span>parquet::file::statistics::Statistics;
 <span class="kw">use </span>rust_decimal::prelude::ToPrimitive;
@@ -2252,9 +2260,15 @@
                     <span class="kw">let </span><span class="prelude-val">Some</span>(bytes) = stats.[&lt;<span class="macro-nonterminal">$limit_type </span>_bytes_opt&gt;]() <span class="kw">else </span>{
                         <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
                     };
+                    <span class="kw">let </span>unscaled_value = BigInt::from_signed_bytes_be(bytes);
                     <span class="prelude-val">Some</span>(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()<span class="question-mark">?</span>)),
+                        PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                <span class="macro">format!</span>(<span class="string">"Can't convert bytes to i128: {:?}"</span>, bytes),
+                            )
+                        })<span class="question-mark">?</span>),
                     ))
                 }
                 (
