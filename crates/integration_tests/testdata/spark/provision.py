@@ -119,3 +119,25 @@ spark.sql("CREATE OR REPLACE TABLE rest.default.test_promote_column (foo int) US
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (19)")
 spark.sql("ALTER TABLE rest.default.test_promote_column ALTER COLUMN foo TYPE bigint")
 spark.sql("INSERT INTO rest.default.test_promote_column VALUES (25)")
+
+#  Create a table with various types
+spark.sql("""
+CREATE OR REPLACE TABLE rest.default.types_test USING ICEBERG AS 
+SELECT
+    CAST(s % 2 = 1 AS BOOLEAN) AS cboolean,
+    CAST(s % 256 - 128 AS TINYINT) AS ctinyint,
+    CAST(s AS SMALLINT) AS csmallint,
+    CAST(s AS INT) AS cint,
+    CAST(s AS BIGINT) AS cbigint,
+    CAST(s AS FLOAT) AS cfloat,
+    CAST(s AS DOUBLE) AS cdouble,
+    CAST(s / 100.0 AS DECIMAL(8, 2)) AS cdecimal,
+    CAST(DATE('1970-01-01') + s AS DATE) AS cdate,
+    CAST(from_unixtime(s) AS TIMESTAMP_NTZ) AS ctimestamp_ntz,
+    CAST(from_unixtime(s) AS TIMESTAMP) AS ctimestamp,
+    CAST(s AS STRING) AS cstring,
+    CAST(s AS BINARY) AS cbinary
+FROM (
+    SELECT EXPLODE(SEQUENCE(0, 1000)) AS s
+);
+""")
