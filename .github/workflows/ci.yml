@@ -67,7 +67,7 @@ jobs:
         with:
           tool: cargo-sort@1.0.9
       - name: Cargo sort
-        run: make cargo-sort
+        run: cargo sort -c -w
 
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
