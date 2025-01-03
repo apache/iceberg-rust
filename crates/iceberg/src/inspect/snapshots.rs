@@ -20,8 +20,11 @@ use std::sync::Arc;
 use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use futures::StreamExt;
 
+use crate::scan::ArrowRecordBatchStream;
+use crate::spec::TableMetadata;
 use crate::table::Table;
 use crate::Result;
 
@@ -70,7 +73,17 @@ impl<'a> SnapshotsTable<'a> {
     }
 
     /// Scans the snapshots table.
-    pub fn scan(&self) -> Result<RecordBatch> {
+    pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
+        let arrow_schema = Arc::new(self.schema());
+        let table_metadata = self.table.metadata_ref();
+
+        Ok(
+            futures::stream::once(async move { Self::build_batch(arrow_schema, &table_metadata) })
+                .boxed(),
+        )
+    }
+
+    fn build_batch(arrow_schema: SchemaRef, table_metadata: &TableMetadata) -> Result<RecordBatch> {
         let mut committed_at =
             PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -79,7 +92,7 @@ impl<'a> SnapshotsTable<'a> {
         let mut manifest_list = StringBuilder::new();
         let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        for snapshot in self.table.metadata().snapshots() {
+        for snapshot in table_metadata.snapshots() {
             committed_at.append_value(snapshot.timestamp_ms());
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
@@ -92,7 +105,7 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+        Ok(RecordBatch::try_new(arrow_schema, vec![
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
@@ -107,15 +120,17 @@ impl<'a> SnapshotsTable<'a> {
 mod tests {
     use expect_test::expect;
 
-    use crate::inspect::metadata_table::tests::check_record_batch;
+    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
 
-    #[test]
-    fn test_snapshots_table() {
+    #[tokio::test]
+    async fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.inspect().snapshots().scan().unwrap();
-        check_record_batch(
-            record_batch,
+
+        let batch_stream = table.inspect().snapshots().scan().await.unwrap();
+
+        check_record_batches(
+            batch_stream,
             expect![[r#"
                 Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -178,6 +193,6 @@ mod tests {
                 ]"#]],
             &["manifest_list"],
             Some("committed_at"),
-        );
+        ).await;
     }
 }

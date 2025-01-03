@@ -25,30 +25,32 @@ use crate::table::Table;
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
 #[derive(Debug)]
-pub struct MetadataTable(Table);
+pub struct MetadataTable<'a>(&'a Table);
 
-impl MetadataTable {
+impl<'a> MetadataTable<'a> {
     /// Creates a new metadata scan.
-    pub fn new(table: Table) -> Self {
+    pub fn new(table: &'a Table) -> Self {
         Self(table)
     }
 
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
-        SnapshotsTable::new(&self.0)
+        SnapshotsTable::new(self.0)
     }
 
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
-        ManifestsTable::new(&self.0)
+        ManifestsTable::new(self.0)
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use arrow_array::RecordBatch;
     use expect_test::Expect;
+    use futures::TryStreamExt;
     use itertools::Itertools;
+
+    use crate::scan::ArrowRecordBatchStream;
 
     /// Snapshot testing to check the resulting record batch.
     ///
@@ -58,13 +60,21 @@ pub mod tests {
     ///   Check the doc of [`expect_test`] for more details.
     /// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
     /// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
-    pub fn check_record_batch(
-        record_batch: RecordBatch,
+    pub async fn check_record_batches(
+        batch_stream: ArrowRecordBatchStream,
         expected_schema: Expect,
         expected_data: Expect,
         ignore_check_columns: &[&str],
         sort_column: Option<&str>,
     ) {
+        let record_batches = batch_stream.try_collect::<Vec<_>>().await.unwrap();
+        assert!(!record_batches.is_empty(), "Empty record batches");
+
+        // Combine record batches using the first batch's schema
+        let first_batch = record_batches.first().unwrap();
+        let record_batch =
+            arrow_select::concat::concat_batches(&first_batch.schema(), &record_batches).unwrap();
+
         let mut columns = record_batch.columns().to_vec();
         if let Some(sort_column) = sort_column {
             let column = record_batch.column_by_name(sort_column).unwrap();
