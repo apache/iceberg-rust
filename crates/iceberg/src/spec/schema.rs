@@ -228,6 +228,11 @@ impl SchemaBuilder {
         results
     }
 
+    /// According to [the spec](https://iceberg.apache.org/spec/#identifier-fields), the identifier fields
+    /// must meet the following requirements:
+    /// - Float, double, and optional fields cannot be used as identifier fields.
+    /// - Identifier fields may be nested in structs but cannot be nested within maps or lists.
+    /// - A nested field cannot be used as an identifier field if it is nested in an optional struct, to avoid null values in identifiers.
     fn validate_identifier_ids(
         r#struct: &StructType,
         id_to_field: &HashMap<i32, NestedFieldRef>,
@@ -563,6 +568,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         type T = ();
 
         fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<()> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
             self.parents.push(field.id);
             Ok(())
         }
@@ -573,6 +581,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
             self.parents.push(field.id);
             Ok(())
         }
@@ -583,6 +594,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn before_map_key(&mut self, field: &NestedFieldRef) -> Result<()> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
             self.parents.push(field.id);
             Ok(())
         }
@@ -593,6 +607,9 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
             self.parents.push(field.id);
             Ok(())
         }
@@ -606,10 +623,7 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
             Ok(())
         }
 
-        fn field(&mut self, field: &NestedFieldRef, _value: Self::T) -> Result<Self::T> {
-            if let Some(parent) = self.parents.last().copied() {
-                self.result.insert(field.id, parent);
-            }
+        fn field(&mut self, _field: &NestedFieldRef, _value: Self::T) -> Result<Self::T> {
             Ok(())
         }
 
@@ -1261,7 +1275,7 @@ mod tests {
     use crate::spec::schema::Schema;
     use crate::spec::schema::_serde::{SchemaEnum, SchemaV1, SchemaV2};
     use crate::spec::values::Map as MapValue;
-    use crate::spec::{prune_columns, Datum, Literal};
+    use crate::spec::{index_parents, prune_columns, Datum, Literal};
 
     fn check_schema_serde(json: &str, expected_type: Schema, _expected_enum: SchemaEnum) {
         let desered_type: Schema = serde_json::from_str(json).unwrap();
@@ -2626,5 +2640,144 @@ table {
 
         assert_eq!(schema, reassigned_schema);
         assert_eq!(schema.highest_field_id(), 0);
+    }
+
+    #[test]
+    fn test_index_parent() {
+        let schema = table_schema_nested();
+        let result = index_parents(&schema.r#struct).unwrap();
+        assert_eq!(result.get(&5).unwrap(), &4);
+        assert_eq!(result.get(&7).unwrap(), &6);
+        assert_eq!(result.get(&8).unwrap(), &6);
+        assert_eq!(result.get(&9).unwrap(), &8);
+        assert_eq!(result.get(&10).unwrap(), &8);
+        assert_eq!(result.get(&12).unwrap(), &11);
+        assert_eq!(result.get(&13).unwrap(), &12);
+        assert_eq!(result.get(&14).unwrap(), &12);
+        assert_eq!(result.get(&16).unwrap(), &15);
+        assert_eq!(result.get(&17).unwrap(), &15);
+    }
+
+    #[test]
+    fn test_identifier_field_ids() {
+        // field in map
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![NestedField::required(
+                1,
+                "Map",
+                Type::Map(MapType::new(
+                    NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::map_value_element(
+                        3,
+                        Type::Primitive(PrimitiveType::Boolean),
+                        true,
+                    )
+                    .into(),
+                )),
+            )
+            .into()])
+            .build()
+            .is_err());
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![3])
+            .with_fields(vec![NestedField::required(
+                1,
+                "Map",
+                Type::Map(MapType::new(
+                    NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::map_value_element(
+                        3,
+                        Type::Primitive(PrimitiveType::Boolean),
+                        true,
+                    )
+                    .into(),
+                )),
+            )
+            .into()])
+            .build()
+            .is_err());
+
+        // field in list
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![NestedField::required(
+                1,
+                "List",
+                Type::List(ListType::new(
+                    NestedField::list_element(2, Type::Primitive(PrimitiveType::String), true)
+                        .into(),
+                )),
+            )
+            .into()])
+            .build()
+            .is_err());
+
+        // field in optional struct
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![NestedField::optional(
+                1,
+                "Struct",
+                Type::Struct(StructType::new(vec![
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "age", Type::Primitive(PrimitiveType::Int)).into(),
+                ])),
+            )
+            .into()])
+            .build()
+            .is_err());
+
+        // float and double
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![1])
+            .with_fields(vec![NestedField::required(
+                1,
+                "Float",
+                Type::Primitive(PrimitiveType::Float),
+            )
+            .into()])
+            .build()
+            .is_err());
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![1])
+            .with_fields(vec![NestedField::required(
+                1,
+                "Double",
+                Type::Primitive(PrimitiveType::Double),
+            )
+            .into()])
+            .build()
+            .is_err());
+
+        // optional field
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![1])
+            .with_fields(vec![NestedField::required(
+                1,
+                "Required",
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into()])
+            .build()
+            .is_ok());
+        assert!(Schema::builder()
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![1])
+            .with_fields(vec![NestedField::optional(
+                1,
+                "Optional",
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into()])
+            .build()
+            .is_err());
     }
 }
