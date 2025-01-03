@@ -360,7 +360,7 @@ impl OutputFile {
     pub async fn write_exclusive(&self, bs: Bytes) -> crate::Result<()> {
         self.op
             .write_with(&self.path[self.relative_path_pos..], bs)
-            .if_none_match("*")
+            .if_not_exists(true)
             .await?;
         Ok(())
     }
