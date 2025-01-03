@@ -40,22 +40,22 @@ use crate::Result;
 /// - <https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql>
 /// - <https://py.iceberg.apache.org/api/#inspecting-tables>
 #[derive(Debug)]
-pub struct MetadataTable(Table);
+pub struct MetadataTable<'a>(&'a Table);
 
-impl MetadataTable {
+impl<'a> MetadataTable<'a> {
     /// Creates a new metadata scan.
-    pub(super) fn new(table: Table) -> Self {
+    pub(super) fn new(table: &'a Table) -> Self {
         Self(table)
     }
 
     /// Get the snapshots table.
     pub fn snapshots(&self) -> SnapshotsTable {
-        SnapshotsTable { table: &self.0 }
+        SnapshotsTable { table: self.0 }
     }
 
     /// Get the manifests table.
     pub fn manifests(&self) -> ManifestsTable {
-        ManifestsTable { table: &self.0 }
+        ManifestsTable { table: self.0 }
     }
 }
 
