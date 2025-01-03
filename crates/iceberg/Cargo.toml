@@ -85,6 +85,7 @@ uuid = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+arrow-cast = { workspace = true, features = ["prettyprint"] }
 ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
