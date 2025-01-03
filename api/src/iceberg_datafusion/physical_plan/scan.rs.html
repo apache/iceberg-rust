@@ -226,10 +226,9 @@
 <span class="kw">use </span>datafusion::error::Result <span class="kw">as </span>DFResult;
 <span class="kw">use </span>datafusion::execution::{SendableRecordBatchStream, TaskContext};
 <span class="kw">use </span>datafusion::physical_expr::EquivalenceProperties;
+<span class="kw">use </span>datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 <span class="kw">use </span>datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-<span class="kw">use </span>datafusion::physical_plan::{
-    DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
-};
+<span class="kw">use </span>datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
 <span class="kw">use </span>datafusion::prelude::Expr;
 <span class="kw">use </span>futures::{Stream, TryStreamExt};
 <span class="kw">use </span>iceberg::expr::Predicate;
@@ -289,7 +288,8 @@
         </span>PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(<span class="number">1</span>),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
