@@ -2221,6 +2221,8 @@ mod timestamptz {
 }
 
 mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -2816,22 +2818,24 @@ mod _serde {
                     optional: _,
                 }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<Option<Literal>> = required
-                            .into_iter()
-                            .map(|(field_name, value)| {
-                                let field = struct_ty
-                                    .field_by_name(field_name.as_str())
-                                    .ok_or_else(|| {
-                                        invalid_err_with_reason(
-                                            "record",
-                                            &format!("field {} is not exist", &field_name),
-                                        )
-                                    })?;
-                                let value = value.try_into(&field.field_type)?;
-                                Ok(value)
+                        let mut value_map: HashMap<String, RawLiteralEnum> =
+                            required.into_iter().collect();
+                        let values = struct_ty
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                if let Some(raw_value) = value_map.remove(&f.name) {
+                                    let value = raw_value.try_into(&f.field_type)?;
+                                    Ok(value)
+                                } else {
+                                    Err(invalid_err_with_reason(
+                                        "record",
+                                        &format!("field {} is not exist", &f.name),
+                                    ))
+                                }
                             })
-                            .collect::<Result<_, Error>>()?;
-                        Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
+                            .collect::<Result<Vec<_>, Error>>()?;
+                        Ok(Some(Literal::Struct(super::Struct::from_iter(values))))
                     }
                     Type::Map(map_ty) => {
                         if *map_ty.key_field.field_type != Type::Primitive(PrimitiveType::String) {
@@ -3834,5 +3838,30 @@ mod tests {
         let expected = Datum::timestamptz_micros(-1407990900000000);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_record_ser_de() {
+        let expected_literal = Literal::Struct(Struct::from_iter(vec![
+            Some(Literal::Primitive(PrimitiveLiteral::Int(1))),
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                "bar".to_string(),
+            ))),
+            None,
+            Some(Literal::Primitive(PrimitiveLiteral::Int(1000))),
+        ]));
+        let fields = Type::Struct(StructType::new(vec![
+            NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(3, "name", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(4, "address", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(5, "extra", Type::Primitive(PrimitiveType::Int)).into(),
+        ]));
+
+        let raw_literal = RawLiteral::try_from(expected_literal.clone(), &fields).unwrap();
+        let serialized = serde_json::to_string(&raw_literal).unwrap();
+        let deserialized: RawLiteral = serde_json::from_str(&serialized).unwrap();
+        let deserialized_literal = deserialized.try_into(&fields).unwrap().unwrap();
+
+        assert_eq!(expected_literal, deserialized_literal);
     }
 }
