@@ -83,3 +83,19 @@ services:
     links:
       - rest:rest
       - minio:minio
+
+  pyiceberg:
+    build: pyiceberg/
+    networks:
+      rest_bridge:
+    depends_on:
+      - rest
+      - minio
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - PYICEBERG_DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE=true
+    links:
+      - rest:rest
+      - minio:minio
