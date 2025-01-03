@@ -34,6 +34,6 @@
    
     ```
     {
-        "registry-mirrors": ["https://registry.docker.ir", "https://docker.iranserver.com"]
+        "registry-mirrors": ["<mirror_addr>"]
     }
    ```
