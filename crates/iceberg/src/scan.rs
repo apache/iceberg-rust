@@ -421,7 +421,10 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder.build().read(self.plan_files().await?)
+        arrow_reader_builder
+            .build()
+            .read(self.plan_files().await?)
+            .await
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -958,7 +961,7 @@ impl FileScanTask {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -987,13 +990,14 @@ mod tests {
     use crate::table::Table;
     use crate::TableIdent;
 
-    struct TableTestFixture {
+    pub struct TableTestFixture {
         table_location: String,
-        table: Table,
+        pub table: Table,
     }
 
     impl TableTestFixture {
-        fn new() -> Self {
+        #[allow(clippy::new_without_default)]
+        pub fn new() -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");
             let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
@@ -1046,7 +1050,7 @@ mod tests {
                 .unwrap()
         }
 
-        async fn setup_manifest_files(&mut self) {
+        pub async fn setup_manifest_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let parent_snapshot = current_snapshot
                 .parent_snapshot(self.table.metadata())
@@ -1410,12 +1414,14 @@ mod tests {
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
+            .await
             .unwrap();
         let batche1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
+            .await
             .unwrap();
         let batche2: Vec<_> = batch_stream.try_collect().await.unwrap();
 

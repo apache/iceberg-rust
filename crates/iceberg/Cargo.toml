@@ -86,6 +86,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+expect-test = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }
