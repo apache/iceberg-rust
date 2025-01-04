@@ -72,7 +72,7 @@ pub(crate) const METRIC_BLOB_0_SEQUENCE_NUMBER: i64 = 1;
 pub(crate) fn zstd_compressed_metric_blob_0_metadata() -> BlobMetadata {
     BlobMetadata {
         r#type: METRIC_BLOB_0_TYPE.to_string(),
-        input_fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
+        fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
         snapshot_id: METRIC_BLOB_0_SNAPSHOT_ID,
         sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
         offset: 4,
@@ -85,7 +85,7 @@ pub(crate) fn zstd_compressed_metric_blob_0_metadata() -> BlobMetadata {
 pub(crate) fn uncompressed_metric_blob_0_metadata() -> BlobMetadata {
     BlobMetadata {
         r#type: METRIC_BLOB_0_TYPE.to_string(),
-        input_fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
+        fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
         snapshot_id: METRIC_BLOB_0_SNAPSHOT_ID,
         sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
         offset: 4,
@@ -103,7 +103,7 @@ pub(crate) const METRIC_BLOB_1_SEQUENCE_NUMBER: i64 = 1;
 pub(crate) fn uncompressed_metric_blob_1_metadata() -> BlobMetadata {
     BlobMetadata {
         r#type: METRIC_BLOB_1_TYPE.to_string(),
-        input_fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
+        fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
         snapshot_id: METRIC_BLOB_1_SNAPSHOT_ID,
         sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
         offset: 13,
@@ -116,7 +116,7 @@ pub(crate) fn uncompressed_metric_blob_1_metadata() -> BlobMetadata {
 pub(crate) fn zstd_compressed_metric_blob_1_metadata() -> BlobMetadata {
     BlobMetadata {
         r#type: METRIC_BLOB_1_TYPE.to_string(),
-        input_fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
+        fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
         snapshot_id: METRIC_BLOB_1_SNAPSHOT_ID,
         sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
         offset: 26,

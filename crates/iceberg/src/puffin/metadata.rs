@@ -37,8 +37,7 @@ pub(crate) struct BlobMetadata {
     /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
     pub(crate) r#type: String,
     /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
-    #[serde(rename = "fields")]
-    pub(crate) input_fields: Vec<i32>,
+    pub(crate) fields: Vec<i32>,
     /// ID of the Iceberg table's snapshot the blob was computed from
     pub(crate) snapshot_id: i64,
     /// Sequence number of the Iceberg table's snapshot the blob was computed from
@@ -658,7 +657,7 @@ mod tests {
                 blobs: vec![
                     BlobMetadata {
                         r#type: "type-a".to_string(),
-                        input_fields: vec![1],
+                        fields: vec![1],
                         snapshot_id: 14,
                         sequence_number: 3,
                         offset: 4,
@@ -668,7 +667,7 @@ mod tests {
                     },
                     BlobMetadata {
                         r#type: "type-bbb".to_string(),
-                        input_fields: vec![2, 3, 4],
+                        fields: vec![2, 3, 4],
                         snapshot_id: 77,
                         sequence_number: 4,
                         offset: 21474836470000,
@@ -711,7 +710,7 @@ mod tests {
             FileMetadata {
                 blobs: vec![BlobMetadata {
                     r#type: "type-a".to_string(),
-                    input_fields: vec![1],
+                    fields: vec![1],
                     snapshot_id: 14,
                     sequence_number: 3,
                     offset: 4,
