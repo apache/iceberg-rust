@@ -15,7 +15,7 @@
 
 FROM python:3.9-bullseye
 
-RUN pip install pyiceberg[pyarrow]==0.8 datafusion==43.1.0
+RUN pip install pyiceberg[pyarrow]==0.8
 
 COPY provision.py .
 

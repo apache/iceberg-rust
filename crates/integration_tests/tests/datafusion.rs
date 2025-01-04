@@ -81,9 +81,9 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "7".to_string(),
             )])),
-            Field::new("cdecimal", DataType::Decimal128(8, 2), true).with_metadata(HashMap::from(
-                [(PARQUET_FIELD_ID_META_KEY.to_string(), "8".to_string(),)]
-            )),
+            Field::new("cdecimal128", DataType::Decimal128(8, 2), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "8".to_string(),)])
+            ),
             Field::new("cdate32", DataType::Date32, true).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "9".to_string(),
@@ -125,19 +125,19 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
         .collect()
         .await?;
     let expected = [
-        "+----------+-------+--------+--------+--------+----------+----------+----------+------------+----------------------------+-----------------------------+-------+---------+",
-        "| cboolean | cint8 | cint16 | cint32 | cint64 | cfloat32 | cfloat64 | cdecimal | cdate32    | ctimestamp                 | ctimestamptz                | cutf8 | cbinary |",
-        "+----------+-------+--------+--------+--------+----------+----------+----------+------------+----------------------------+-----------------------------+-------+---------+",
-        "| false    | -128  | 0      | 0      | 0      | 0.0      | 0.0      | 0.00     | 1970-01-01 | 1970-01-01T00:00:00        | 1970-01-01T00:00:00Z        | 0     | 30      |",
-        "| true     | -127  | 1      | 1      | 1      | 1.0      | 1.0      | 0.01     | 1970-01-02 | 1970-01-01T00:00:00.000001 | 1970-01-01T00:00:00.000001Z | 1     | 31      |",
-        "| false    | -126  | 2      | 2      | 2      | 2.0      | 2.0      | 0.02     | 1970-01-03 | 1970-01-01T00:00:00.000002 | 1970-01-01T00:00:00.000002Z | 2     | 32      |",
-        "+----------+-------+--------+--------+--------+----------+----------+----------+------------+----------------------------+-----------------------------+-------+---------+",
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
+        "| cboolean | cint8 | cint16 | cint32 | cint64 | cfloat32 | cfloat64 | cdecimal128 | cdate32    | ctimestamp          | ctimestamptz         | cutf8 | cbinary |",
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
+        "| false    | -128  | 0      | 0      | 0      | 0.0      | 0.0      | 0.00        | 1970-01-01 | 1970-01-01T00:00:00 | 1970-01-01T00:00:00Z | 0     | 30      |",
+        "| true     | -127  | 1      | 1      | 1      | 1.0      | 1.0      | 0.01        | 1970-01-02 | 1970-01-01T00:00:01 | 1970-01-01T00:00:01Z | 1     | 31      |",
+        "| false    | -126  | 2      | 2      | 2      | 2.0      | 2.0      | 0.02        | 1970-01-03 | 1970-01-01T00:00:02 | 1970-01-01T00:00:02Z | 2     | 32      |",
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
     ];
     assert_batches_eq!(expected, &batches);
 
     // TODO: this isn't OK, and should be fixed with https://github.com/apache/iceberg-rust/issues/813
     let err = ctx
-        .sql("SELECT cdecimal FROM types_table WHERE cint16 <= 2")
+        .sql("SELECT cdecimal128 FROM types_table WHERE cint16 <= 2")
         .await?
         .collect()
         .await

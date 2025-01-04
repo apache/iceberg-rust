@@ -16,46 +16,53 @@
 # under the License.
 
 import os
-from datafusion import SessionContext
 from pyiceberg.catalog import load_catalog
 import pyarrow.parquet as pq
+import pyarrow as pa
+from datetime import datetime, timedelta
 
 # Generate a table with various types in memory and dump to a Parquet file
-ctx = SessionContext()
-ctx.sql("""
-CREATE TABLE types_test (
-    cboolean BOOLEAN,
-    cint8 TINYINT,
-    cint16 SMALLINT,
-    cint32 INT,
-    cint64 BIGINT,
-    cfloat32 REAL,
-    cfloat64 DOUBLE PRECISION,
-    cdecimal DECIMAL(8, 2),
-    cdate32 DATE,
-    ctimestamp TIMESTAMP,
-    ctimestamptz TIMESTAMPTZ,
-    cutf8 TEXT,
-    cbinary BYTEA
-) AS SELECT
-    s % 2 = 1 as cboolean,
-    (s % 256 - 128) as cint8,
-    s as cint16,
-    s as cint32,
-    s as cint64,
-    s as cfloat32,
-    s as cfloat64,
-    s::NUMERIC / 100 as cnumeric,
-    s as cdate,
-    s * 1000 as ctimestamp,
-    s * 1000 as ctimestampz,
-    s::TEXT as cutf8,
-    s::TEXT cbinary
-FROM unnest(generate_series(0, 1000)) AS q(s);
-""")
-a = ctx.sql("COPY types_test TO 'types_test.parquet'")
-# File loading fails in the container without this line???
-print(f"Created a Parquet file with {a} rows")
+rows = 1001
+columns = [
+    pa.array([(i % 2 == 1) for i in range(rows)]),
+    pa.array([(i % 256 - 128) for i in range(rows)]),
+    pa.array([i for i in range(rows)]),
+    pa.array([i for i in range(rows)]),
+    pa.array([i for i in range(rows)]),
+    pa.array([float(i) for i in range(rows)]),
+    pa.array([float(i) for i in range(rows)]),
+    pa.array([round(i / 100, 2) for i in range(rows)]),
+    pa.array([(datetime(1970, 1, 1) + timedelta(days=i)).date() for i in range(rows)]),
+    pa.array([(datetime(1970, 1, 1) + timedelta(seconds=i)) for i in range(rows)]),
+    pa.array([(datetime(1970, 1, 1) + timedelta(seconds=i)) for i in range(rows)]),
+    pa.array([str(i) for i in range(rows)]),
+    pa.array([str(i).encode("utf-8") for i in range(rows)]),
+]
+schema = pa.schema([
+    ('cboolean', pa.bool_()),
+    ('cint8', pa.int8()),
+    ('cint16', pa.int16()),
+    ('cint32', pa.int32()),
+    ('cint64', pa.int64()),
+    ('cfloat32', pa.float32()),
+    ('cfloat64', pa.float64()),
+    ('cdecimal128', pa.decimal128(8, 2)),
+    ('cdate32', pa.date32()),
+    ('ctimestamp', pa.timestamp('us')),
+    ('ctimestamptz', pa.timestamp('us', tz='UTC')),
+    ('cutf8', pa.utf8()),
+    ('cbinary', pa.binary()),
+])
+
+# Convert to a PyArrow table
+table = pa.Table.from_arrays(columns, schema=schema)
+
+# Write to a Parquet file
+pq.write_table(table, "types_test.parquet")
+
+# Output the result
+print(f"Created a Parquet file with {rows} rows and schema {table.schema}.")
+
 
 # Load the Parquet file
 parquet_file = pq.read_table("./types_test.parquet")
