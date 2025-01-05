@@ -59,6 +59,7 @@ bitvec = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
+expect-test = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
@@ -80,6 +81,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 thrift = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["sync"] }
 typed-builder = { workspace = true }
@@ -89,7 +91,6 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
-expect-test = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }

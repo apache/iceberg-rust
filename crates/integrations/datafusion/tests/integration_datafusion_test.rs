@@ -25,8 +25,10 @@ use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use expect_test::expect;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
+use iceberg::test_utils::check_record_batches;
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
 use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_datafusion::IcebergCatalogProvider;
@@ -153,10 +155,16 @@ async fn test_provider_list_table_names() -> Result<()> {
     let provider = ctx.catalog("catalog").unwrap();
     let schema = provider.schema("test_provider_list_table_names").unwrap();
 
-    let expected = vec!["my_table"];
     let result = schema.table_names();
 
-    assert_eq!(result, expected);
+    expect![[r#"
+        [
+            "my_table",
+            "my_table$snapshots",
+            "my_table$manifests",
+        ]
+    "#]]
+    .assert_debug_eq(&result);
 
     Ok(())
 }
@@ -293,5 +301,131 @@ async fn test_table_predict_pushdown() -> Result<()> {
     // the first row is logical_plan, the second row is physical_plan
     let expected = "predicate:[(foo > 1) OR (bar IS NULL)]";
     assert!(s.value(1).trim().contains(expected));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_metadata_table() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog();
+    let namespace = NamespaceIdent::new("ns".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+    let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+    let snapshots = ctx
+        .sql("select * from catalog.ns.t1$snapshots")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    check_record_batches(
+        snapshots,
+        expect![[r#"
+        Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+        Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+        Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
+        Field { name: "operation", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+        Field { name: "manifest_list", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
+        Field { name: "summary", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+        expect![[r#"
+        committed_at: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
+        [
+        ],
+        snapshot_id: PrimitiveArray<Int64>
+        [
+        ],
+        parent_id: PrimitiveArray<Int64>
+        [
+        ],
+        operation: StringArray
+        [
+        ],
+        manifest_list: StringArray
+        [
+        ],
+        summary: MapArray
+        [
+        ]"#]],
+        &[],
+        None,
+    );
+
+    let manifests = ctx
+        .sql("select * from catalog.ns.t1$manifests")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    check_record_batches(
+        manifests,
+        expect![[r#"
+            Field { name: "content", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "14"} },
+            Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+            Field { name: "length", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+            Field { name: "partition_spec_id", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
+            Field { name: "added_snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
+            Field { name: "added_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
+            Field { name: "existing_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} },
+            Field { name: "deleted_data_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} },
+            Field { name: "added_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "15"} },
+            Field { name: "existing_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "16"} },
+            Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "17"} },
+            Field { name: "partition_summaries", data_type: List(Field { name: "item", data_type: Struct([Field { name: "contains_null", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }, Field { name: "contains_nan", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "11"} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "12"} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "13"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }"#]],
+        expect![[r#"
+            content: PrimitiveArray<Int32>
+            [
+            ],
+            path: StringArray
+            [
+            ],
+            length: PrimitiveArray<Int64>
+            [
+            ],
+            partition_spec_id: PrimitiveArray<Int32>
+            [
+            ],
+            added_snapshot_id: PrimitiveArray<Int64>
+            [
+            ],
+            added_data_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            existing_data_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            deleted_data_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            added_delete_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            existing_delete_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            deleted_delete_files_count: PrimitiveArray<Int32>
+            [
+            ],
+            partition_summaries: ListArray
+            [
+            ]"#]],
+        &[],
+        None,
+    );
+
     Ok(())
 }
