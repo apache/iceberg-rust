@@ -17,7 +17,6 @@
 
 import os
 from pyiceberg.catalog import load_catalog
-import pyarrow.parquet as pq
 import pyarrow as pa
 from datetime import datetime, timedelta
 
@@ -57,16 +56,6 @@ schema = pa.schema([
 # Convert to a PyArrow table
 table = pa.Table.from_arrays(columns, schema=schema)
 
-# Write to a Parquet file
-pq.write_table(table, "types_test.parquet")
-
-# Output the result
-print(f"Created a Parquet file with {rows} rows and schema {table.schema}.")
-
-
-# Load the Parquet file
-parquet_file = pq.read_table("./types_test.parquet")
-
 # Connect to the REST catalog
 catalog = load_catalog(
     "rest",
@@ -82,6 +71,6 @@ catalog = load_catalog(
 # Create a corresponding Iceberg table and append the file to it
 iceberg_table = catalog.create_table_if_not_exists(
     identifier=f"default.types_test",
-    schema=parquet_file.schema,
+    schema=schema,
 )
-iceberg_table.append(df=parquet_file)
+iceberg_table.append(table)
