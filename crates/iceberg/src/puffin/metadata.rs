@@ -18,7 +18,6 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{FileRead, InputFile};
@@ -56,44 +55,36 @@ pub(crate) struct BlobMetadata {
     pub(crate) properties: HashMap<String, String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Flag {
-    FooterPayloadCompressed,
+    FooterPayloadCompressed = 0,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-pub(crate) struct ByteNumber(pub u8);
-
-#[derive(PartialEq, Eq, Hash)]
-pub(crate) struct BitNumber(pub u8);
-
-static FLAGS_BY_BYTE_AND_BIT: Lazy<HashMap<(ByteNumber, BitNumber), Flag>> = Lazy::new(|| {
-    let mut m = HashMap::new();
-    m.insert(
-        (
-            Flag::FooterPayloadCompressed.byte_number(),
-            Flag::FooterPayloadCompressed.bit_number(),
-        ),
-        Flag::FooterPayloadCompressed,
-    );
-    m
-});
-
 impl Flag {
-    pub(crate) fn byte_number(&self) -> ByteNumber {
-        match self {
-            Flag::FooterPayloadCompressed => ByteNumber(0),
-        }
+    pub(crate) fn byte_idx(self) -> u8 {
+        (self as u8) / 8
     }
 
-    pub(crate) fn bit_number(&self) -> BitNumber {
-        match self {
-            Flag::FooterPayloadCompressed => BitNumber(0),
-        }
+    pub(crate) fn bit_idx(self) -> u8 {
+        (self as u8) % 8
     }
 
-    fn from(byte_and_bit: &(ByteNumber, BitNumber)) -> Option<Flag> {
-        FLAGS_BY_BYTE_AND_BIT.get(byte_and_bit).cloned()
+    fn matches(self, byte_idx: &u8, bit_idx: &u8) -> bool {
+        &self.byte_idx() == byte_idx && &self.bit_idx() == bit_idx
+    }
+
+    fn from(byte_idx: &u8, bit_idx: &u8) -> Result<Flag> {
+        if Flag::FooterPayloadCompressed.matches(byte_idx, bit_idx) {
+            Ok(Flag::FooterPayloadCompressed)
+        } else {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Unknown flag byte {} and bit {} combination",
+                    byte_idx, bit_idx
+                ),
+            ))
+        }
     }
 }
 
@@ -178,35 +169,25 @@ impl FileMetadata {
 
     fn decode_flags(footer_bytes: &[u8]) -> Result<HashSet<Flag>> {
         let mut flags = HashSet::new();
-        for byte_number in 0..FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH {
+
+        for byte_idx in 0..FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH {
             let byte_offset = footer_bytes.len()
                 - usize::from(FileMetadata::MAGIC_LENGTH)
                 - usize::from(FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH)
-                + usize::from(byte_number);
+                + usize::from(byte_idx);
 
-            let mut flag_byte = *footer_bytes.get(byte_offset).ok_or_else(|| {
+            let flag_byte = *footer_bytes.get(byte_offset).ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "Index range is out of bounds.")
             })?;
-            let mut bit_number = 0;
-            while flag_byte != 0 {
-                if flag_byte & 0x1 != 0 {
-                    match Flag::from(&(ByteNumber(byte_number), BitNumber(bit_number))) {
-                        Some(flag) => flags.insert(flag),
-                        None => {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Unknown flag byte {} and bit {} combination",
-                                    byte_number, bit_number
-                                ),
-                            ))
-                        }
-                    };
+
+            for bit_idx in 0..8 {
+                if ((flag_byte >> bit_idx) & 1) != 0 {
+                    let flag = Flag::from(&byte_idx, &bit_idx)?;
+                    flags.insert(flag);
                 }
-                flag_byte >>= 1;
-                bit_number += 1;
             }
         }
+
         Ok(flags)
     }
 
