@@ -16,7 +16,6 @@
 // under the License.
 
 pub mod table_provider_factory;
-
 use std::any::Any;
 use std::sync::Arc;
 
@@ -32,6 +31,7 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::{compute_statistics, to_datafusion_error};
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
@@ -130,10 +130,14 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let statistics = compute_statistics(&self.table, self.snapshot_id)
+            .await
+            .map_err(to_datafusion_error)?;
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
+            statistics,
             projection,
             filters,
         )))

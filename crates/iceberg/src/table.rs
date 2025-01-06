@@ -24,7 +24,7 @@ use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::metadata_scan::MetadataTable;
 use crate::scan::TableScanBuilder;
-use crate::spec::{TableMetadata, TableMetadataRef};
+use crate::spec::{SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -199,6 +199,29 @@ impl Table {
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
+    }
+
+    /// Get the specified or latest snapshot for this table
+    pub fn snapshot(&self, snapshot_id: Option<i64>) -> Result<SnapshotRef> {
+        Ok(match snapshot_id {
+            Some(snapshot_id) => self
+                .metadata()
+                .snapshot_by_id(snapshot_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Snapshot with id {} not found", snapshot_id),
+                    )
+                })?
+                .clone(),
+            None => self
+                .metadata()
+                .current_snapshot()
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::Unexpected, "Can't scan table without snapshots")
+                })?
+                .clone(),
+        })
     }
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.

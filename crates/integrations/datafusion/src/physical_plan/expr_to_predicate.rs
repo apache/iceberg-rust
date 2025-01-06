@@ -20,7 +20,7 @@ use std::vec;
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
-use iceberg::spec::Datum;
+use iceberg::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 // A datafusion expression could be an Iceberg predicate, column, or literal.
 enum TransformedResult {
@@ -195,16 +195,40 @@ const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 /// Convert a scalar value to an iceberg datum.
 fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
     match value {
+        ScalarValue::Boolean(Some(v)) => Some(Datum::bool(*v)),
         ScalarValue::Int8(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int16(Some(v)) => Some(Datum::int(*v as i32)),
         ScalarValue::Int32(Some(v)) => Some(Datum::int(*v)),
         ScalarValue::Int64(Some(v)) => Some(Datum::long(*v)),
-        ScalarValue::Float32(Some(v)) => Some(Datum::double(*v as f64)),
+        ScalarValue::Float32(Some(v)) => Some(Datum::float(*v)),
         ScalarValue::Float64(Some(v)) => Some(Datum::double(*v)),
-        ScalarValue::Utf8(Some(v)) => Some(Datum::string(v.clone())),
-        ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
+        ScalarValue::Utf8(Some(v))
+        | ScalarValue::Utf8View(Some(v))
+        | ScalarValue::LargeUtf8(Some(v)) => Some(Datum::string(v.clone())),
         ScalarValue::Date32(Some(v)) => Some(Datum::date(*v)),
         ScalarValue::Date64(Some(v)) => Some(Datum::date((*v / MILLIS_PER_DAY) as i32)),
+        _ => None,
+    }
+}
+
+/// Convert an iceberg datum to a datafusion scalar value.
+pub fn datum_to_scalar_value(datum: &Datum) -> Option<ScalarValue> {
+    match (datum.data_type(), datum.literal()) {
+        (PrimitiveType::Binary, PrimitiveLiteral::Boolean(v)) => {
+            Some(ScalarValue::Boolean(Some(*v)))
+        }
+        (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(ScalarValue::Int32(Some(*v))),
+        (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(ScalarValue::Int64(Some(*v))),
+        (PrimitiveType::Float, PrimitiveLiteral::Float(v)) => {
+            Some(ScalarValue::Float32(Some(v.into_inner())))
+        }
+        (PrimitiveType::Double, PrimitiveLiteral::Double(v)) => {
+            Some(ScalarValue::Float64(Some(v.into_inner())))
+        }
+        (PrimitiveType::String, PrimitiveLiteral::String(v)) => {
+            Some(ScalarValue::Utf8View(Some(v.clone())))
+        }
+        (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(ScalarValue::Date32(Some(*v))),
         _ => None,
     }
 }

@@ -22,6 +22,7 @@ use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::common::Statistics;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -44,6 +45,8 @@ pub(crate) struct IcebergTableScan {
     table: Table,
     /// Snapshot of the table to scan.
     snapshot_id: Option<i64>,
+    /// Statistics for the table; row count, and null count/min-max values per column.
+    statistics: Statistics,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
@@ -59,6 +62,7 @@ impl IcebergTableScan {
         table: Table,
         snapshot_id: Option<i64>,
         schema: ArrowSchemaRef,
+        statistics: Statistics,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
     ) -> Self {
@@ -73,6 +77,7 @@ impl IcebergTableScan {
         Self {
             table,
             snapshot_id,
+            statistics,
             plan_properties,
             projection,
             predicates,
@@ -134,6 +139,10 @@ impl ExecutionPlan for IcebergTableScan {
             self.schema(),
             stream,
         )))
+    }
+
+    fn statistics(&self) -> DFResult<Statistics> {
+        Ok(self.statistics.clone())
     }
 }
 

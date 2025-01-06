@@ -3093,9 +3093,11 @@ version = "0.4.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "datafusion",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "iceberg-datafusion",
  "iceberg_test_utils",
  "parquet",
  "tokio",

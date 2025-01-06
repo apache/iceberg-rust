@@ -188,27 +188,7 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
-            Some(snapshot_id) => self
-                .table
-                .metadata()
-                .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Snapshot with id {} not found", snapshot_id),
-                    )
-                })?
-                .clone(),
-            None => self
-                .table
-                .metadata()
-                .current_snapshot()
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::Unexpected, "Can't scan table without snapshots")
-                })?
-                .clone(),
-        };
+        let snapshot = self.table.snapshot(self.snapshot_id)?;
 
         let schema = snapshot.schema(self.table.metadata())?;
 
