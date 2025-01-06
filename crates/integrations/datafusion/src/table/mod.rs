@@ -22,6 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::Statistics;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
@@ -30,8 +31,8 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
+use crate::compute_statistics;
 use crate::physical_plan::scan::IcebergTableScan;
-use crate::{compute_statistics, to_datafusion_error};
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
@@ -132,7 +133,7 @@ impl TableProvider for IcebergTableProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         let statistics = compute_statistics(&self.table, self.snapshot_id)
             .await
-            .map_err(to_datafusion_error)?;
+            .unwrap_or(Statistics::new_unknown(self.schema.as_ref()));
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
             self.snapshot_id,
