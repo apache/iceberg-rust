@@ -21,8 +21,7 @@ use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use async_stream::try_stream;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 
 use crate::scan::ArrowRecordBatchStream;
 use crate::table::Table;
@@ -74,41 +73,37 @@ impl<'a> SnapshotsTable<'a> {
 
     /// Scans the snapshots table.
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
-        let arrow_schema = Arc::new(self.schema());
-        let table_metadata = self.table.metadata_ref();
+        let mut committed_at =
+            PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
+        let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
+        let mut parent_id = PrimitiveBuilder::<Int64Type>::new();
+        let mut operation = StringBuilder::new();
+        let mut manifest_list = StringBuilder::new();
+        let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
 
-        Ok(try_stream! {
-            let mut committed_at =
-                PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
-            let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
-            let mut parent_id = PrimitiveBuilder::<Int64Type>::new();
-            let mut operation = StringBuilder::new();
-            let mut manifest_list = StringBuilder::new();
-            let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
-
-            for snapshot in table_metadata.snapshots() {
-                committed_at.append_value(snapshot.timestamp_ms());
-                snapshot_id.append_value(snapshot.snapshot_id());
-                parent_id.append_option(snapshot.parent_snapshot_id());
-                manifest_list.append_value(snapshot.manifest_list());
-                operation.append_value(snapshot.summary().operation.as_str());
-                for (key, value) in &snapshot.summary().additional_properties {
-                    summary.keys().append_value(key);
-                    summary.values().append_value(value);
-                }
-                summary.append(true)?;
+        for snapshot in self.table.metadata().snapshots() {
+            committed_at.append_value(snapshot.timestamp_ms());
+            snapshot_id.append_value(snapshot.snapshot_id());
+            parent_id.append_option(snapshot.parent_snapshot_id());
+            manifest_list.append_value(snapshot.manifest_list());
+            operation.append_value(snapshot.summary().operation.as_str());
+            for (key, value) in &snapshot.summary().additional_properties {
+                summary.keys().append_value(key);
+                summary.values().append_value(value);
             }
-
-            yield RecordBatch::try_new(arrow_schema, vec![
-                Arc::new(committed_at.finish()),
-                Arc::new(snapshot_id.finish()),
-                Arc::new(parent_id.finish()),
-                Arc::new(operation.finish()),
-                Arc::new(manifest_list.finish()),
-                Arc::new(summary.finish()),
-            ])?;
+            summary.append(true)?;
         }
-        .boxed())
+
+        let batch = RecordBatch::try_new(Arc::new(self.schema()), vec![
+            Arc::new(committed_at.finish()),
+            Arc::new(snapshot_id.finish()),
+            Arc::new(parent_id.finish()),
+            Arc::new(operation.finish()),
+            Arc::new(manifest_list.finish()),
+            Arc::new(summary.finish()),
+        ])?;
+
+        Ok(stream::iter(vec![Ok(batch)]).boxed())
     }
 }
 
