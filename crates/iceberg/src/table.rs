@@ -203,7 +203,7 @@ impl Table {
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.
     /// See [`MetadataTable`] for more details.
-    pub fn metadata_table(self) -> MetadataTable {
+    pub fn inspect(self) -> MetadataTable {
         MetadataTable::new(self)
     }
 
