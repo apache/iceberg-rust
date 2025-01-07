@@ -296,7 +296,7 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_snapshots_table() {
         <span class="kw">let </span>table = TableTestFixture::new().table;
-        <span class="kw">let </span>record_batch = table.metadata_table().snapshots().scan().unwrap();
+        <span class="kw">let </span>record_batch = table.inspect().snapshots().scan().unwrap();
         check_record_batch(
             record_batch,
             <span class="macro">expect!</span>[[<span class="string">r#"
