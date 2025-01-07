@@ -171,13 +171,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let record_batch = fixture
-            .table
-            .metadata_table()
-            .manifests()
-            .scan()
-            .await
-            .unwrap();
+        let record_batch = fixture.table.inspect().manifests().scan().await.unwrap();
 
         check_record_batch(
             record_batch,
