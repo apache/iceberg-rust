@@ -33,3 +33,4 @@ iceberg-catalog-rest = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 parquet = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
