@@ -73,7 +73,7 @@ mod avro;
 pub mod io;
 pub mod spec;
 
-pub mod metadata_scan;
+pub mod inspect;
 pub mod scan;
 
 pub mod expr;
