@@ -21,6 +21,7 @@ use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use async_stream::try_stream;
 use futures::StreamExt;
 
 use crate::scan::ArrowRecordBatchStream;
@@ -76,7 +77,7 @@ impl<'a> SnapshotsTable<'a> {
         let arrow_schema = Arc::new(self.schema());
         let table_metadata = self.table.metadata_ref();
 
-        Ok(futures::stream::once(async move {
+        Ok(try_stream! {
             let mut committed_at =
                 PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
             let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -98,15 +99,15 @@ impl<'a> SnapshotsTable<'a> {
                 summary.append(true)?;
             }
 
-            Ok(RecordBatch::try_new(arrow_schema, vec![
+            yield RecordBatch::try_new(arrow_schema, vec![
                 Arc::new(committed_at.finish()),
                 Arc::new(snapshot_id.finish()),
                 Arc::new(parent_id.finish()),
                 Arc::new(operation.finish()),
                 Arc::new(manifest_list.finish()),
                 Arc::new(summary.finish()),
-            ])?)
-        })
+            ])?;
+        }
         .boxed())
     }
 }
