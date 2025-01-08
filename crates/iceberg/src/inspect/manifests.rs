@@ -23,7 +23,9 @@ use arrow_array::builder::{
 use arrow_array::types::{Int32Type, Int64Type, Int8Type};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Fields, Schema};
+use futures::{stream, StreamExt};
 
+use crate::scan::ArrowRecordBatchStream;
 use crate::table::Table;
 use crate::Result;
 
@@ -38,7 +40,7 @@ impl<'a> ManifestsTable<'a> {
         Self { table }
     }
 
-    fn partition_summary_fields(&self) -> Vec<Field> {
+    fn partition_summary_fields() -> Vec<Field> {
         vec![
             Field::new("contains_null", DataType::Boolean, false),
             Field::new("contains_nan", DataType::Boolean, true),
@@ -65,7 +67,7 @@ impl<'a> ManifestsTable<'a> {
                 "partition_summaries",
                 DataType::List(Arc::new(Field::new_struct(
                     "item",
-                    self.partition_summary_fields(),
+                    Self::partition_summary_fields(),
                     false,
                 ))),
                 false,
@@ -74,7 +76,7 @@ impl<'a> ManifestsTable<'a> {
     }
 
     /// Scans the manifests table.
-    pub async fn scan(&self) -> Result<RecordBatch> {
+    pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let mut content = PrimitiveBuilder::<Int8Type>::new();
         let mut path = StringBuilder::new();
         let mut length = PrimitiveBuilder::<Int64Type>::new();
@@ -87,12 +89,12 @@ impl<'a> ManifestsTable<'a> {
         let mut existing_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut deleted_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(self.partition_summary_fields()),
+            Fields::from(Self::partition_summary_fields()),
             0,
         ))
         .with_field(Arc::new(Field::new_struct(
             "item",
-            self.partition_summary_fields(),
+            Self::partition_summary_fields(),
             false,
         )));
 
@@ -142,7 +144,7 @@ impl<'a> ManifestsTable<'a> {
             }
         }
 
-        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+        let batch = RecordBatch::try_new(Arc::new(self.schema()), vec![
             Arc::new(content.finish()),
             Arc::new(path.finish()),
             Arc::new(length.finish()),
@@ -155,7 +157,9 @@ impl<'a> ManifestsTable<'a> {
             Arc::new(existing_delete_files_count.finish()),
             Arc::new(deleted_delete_files_count.finish()),
             Arc::new(partition_summaries.finish()),
-        ])?)
+        ])?;
+
+        Ok(stream::iter(vec![Ok(batch)]).boxed())
     }
 }
 
@@ -163,7 +167,7 @@ impl<'a> ManifestsTable<'a> {
 mod tests {
     use expect_test::expect;
 
-    use crate::inspect::metadata_table::tests::check_record_batch;
+    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
 
     #[tokio::test]
@@ -171,10 +175,10 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let record_batch = fixture.table.inspect().manifests().scan().await.unwrap();
+        let batch_stream = fixture.table.inspect().manifests().scan().await.unwrap();
 
-        check_record_batch(
-            record_batch,
+        check_record_batches(
+            batch_stream,
             expect![[r#"
                 Field { name: "content", data_type: Int8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -259,6 +263,6 @@ mod tests {
                 ]"#]],
             &["path", "length"],
             Some("path"),
-        );
+        ).await;
     }
 }

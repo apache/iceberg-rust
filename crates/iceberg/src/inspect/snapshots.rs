@@ -21,7 +21,9 @@ use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use futures::{stream, StreamExt};
 
+use crate::scan::ArrowRecordBatchStream;
 use crate::table::Table;
 use crate::Result;
 
@@ -70,7 +72,7 @@ impl<'a> SnapshotsTable<'a> {
     }
 
     /// Scans the snapshots table.
-    pub fn scan(&self) -> Result<RecordBatch> {
+    pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let mut committed_at =
             PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
@@ -92,14 +94,16 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        Ok(RecordBatch::try_new(Arc::new(self.schema()), vec![
+        let batch = RecordBatch::try_new(Arc::new(self.schema()), vec![
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
             Arc::new(operation.finish()),
             Arc::new(manifest_list.finish()),
             Arc::new(summary.finish()),
-        ])?)
+        ])?;
+
+        Ok(stream::iter(vec![Ok(batch)]).boxed())
     }
 }
 
@@ -107,15 +111,17 @@ impl<'a> SnapshotsTable<'a> {
 mod tests {
     use expect_test::expect;
 
-    use crate::inspect::metadata_table::tests::check_record_batch;
+    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
 
-    #[test]
-    fn test_snapshots_table() {
+    #[tokio::test]
+    async fn test_snapshots_table() {
         let table = TableTestFixture::new().table;
-        let record_batch = table.inspect().snapshots().scan().unwrap();
-        check_record_batch(
-            record_batch,
+
+        let batch_stream = table.inspect().snapshots().scan().await.unwrap();
+
+        check_record_batches(
+            batch_stream,
             expect![[r#"
                 Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -178,6 +184,6 @@ mod tests {
                 ]"#]],
             &["manifest_list"],
             Some("committed_at"),
-        );
+        ).await;
     }
 }
