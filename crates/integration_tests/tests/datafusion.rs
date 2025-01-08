@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::catalog::TableProvider;
 use datafusion::common::stats::Precision;
 use datafusion::common::{ColumnStatistics, ScalarValue, Statistics};
 use iceberg::{Catalog, Result, TableIdent};
-use iceberg_datafusion::compute_statistics;
+use iceberg_datafusion::IcebergTableProvider;
 use iceberg_integration_tests::set_test_fixture;
 
 #[tokio::test]
@@ -35,32 +36,37 @@ async fn test_statistics() -> Result<()> {
         .await
         .unwrap();
 
-    let stats = compute_statistics(&table, None).await?;
+    let stats = IcebergTableProvider::try_new_from_table(table)
+        .await?
+        .statistics();
 
-    assert_eq!(stats, Statistics {
-        num_rows: Precision::Inexact(12),
-        total_byte_size: Precision::Absent,
-        column_statistics: vec![
-            ColumnStatistics {
-                null_count: Precision::Inexact(0),
-                max_value: Precision::Inexact(ScalarValue::Date32(Some(19428))),
-                min_value: Precision::Inexact(ScalarValue::Date32(Some(19417))),
-                distinct_count: Precision::Absent,
-            },
-            ColumnStatistics {
-                null_count: Precision::Inexact(0),
-                max_value: Precision::Inexact(ScalarValue::Int32(Some(12))),
-                min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
-                distinct_count: Precision::Absent,
-            },
-            ColumnStatistics {
-                null_count: Precision::Inexact(0),
-                max_value: Precision::Inexact(ScalarValue::Utf8View(Some("l".to_string()))),
-                min_value: Precision::Inexact(ScalarValue::Utf8View(Some("a".to_string()))),
-                distinct_count: Precision::Absent,
-            },
-        ],
-    });
+    assert_eq!(
+        stats,
+        Some(Statistics {
+            num_rows: Precision::Inexact(12),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Date32(Some(19428))),
+                    min_value: Precision::Inexact(ScalarValue::Date32(Some(19417))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(12))),
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Utf8View(Some("l".to_string()))),
+                    min_value: Precision::Inexact(ScalarValue::Utf8View(Some("a".to_string()))),
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        })
+    );
 
     Ok(())
 }

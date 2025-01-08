@@ -42,16 +42,21 @@ pub struct IcebergTableProvider {
     table: Table,
     /// Table snapshot id that will be queried via this provider.
     snapshot_id: Option<i64>,
+    /// Statistics for the table; row count and null count/min-max values per column.
+    /// If not present defaults to `None`.
+    statistics: Option<Statistics>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
 }
 
 impl IcebergTableProvider {
-    pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
+    pub(crate) async fn new(table: Table, schema: ArrowSchemaRef) -> Self {
+        let statistics = compute_statistics(&table, None).await.ok();
         IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -67,10 +72,12 @@ impl IcebergTableProvider {
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
+        let statistics = compute_statistics(&table, None).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics,
         })
     }
 
@@ -78,10 +85,12 @@ impl IcebergTableProvider {
     /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let statistics = compute_statistics(&table, None).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics,
         })
     }
 
@@ -102,10 +111,12 @@ impl IcebergTableProvider {
             })?;
         let schema = snapshot.schema(table.metadata())?;
         let schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let statistics = compute_statistics(&table, Some(snapshot_id)).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            statistics,
         })
     }
 }
@@ -131,17 +142,20 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        let statistics = compute_statistics(&self.table, self.snapshot_id)
-            .await
-            .unwrap_or(Statistics::new_unknown(self.schema.as_ref()));
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
-            statistics,
+            self.statistics
+                .clone()
+                .unwrap_or(Statistics::new_unknown(self.schema.as_ref())),
             projection,
             filters,
         )))
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.statistics.clone()
     }
 
     fn supports_filters_pushdown(

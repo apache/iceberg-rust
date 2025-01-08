@@ -45,7 +45,8 @@ pub(crate) struct IcebergTableScan {
     table: Table,
     /// Snapshot of the table to scan.
     snapshot_id: Option<i64>,
-    /// Statistics for the table; row count, and null count/min-max values per column.
+    /// Statistics for the scan; row count and null count/min-max values per column.
+    /// If not present defaults to empty (absent) statistics.
     statistics: Statistics,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
