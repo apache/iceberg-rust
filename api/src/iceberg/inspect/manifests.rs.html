@@ -262,6 +262,10 @@
 <a href="#262" id="262">262</a>
 <a href="#263" id="263">263</a>
 <a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -287,7 +291,9 @@
 <span class="kw">use </span>arrow_array::types::{Int32Type, Int64Type, Int8Type};
 <span class="kw">use </span>arrow_array::RecordBatch;
 <span class="kw">use </span>arrow_schema::{DataType, Field, Fields, Schema};
+<span class="kw">use </span>futures::{stream, StreamExt};
 
+<span class="kw">use </span><span class="kw">crate</span>::scan::ArrowRecordBatchStream;
 <span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
@@ -302,7 +308,7 @@
         <span class="self">Self </span>{ table }
     }
 
-    <span class="kw">fn </span>partition_summary_fields(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Field&gt; {
+    <span class="kw">fn </span>partition_summary_fields() -&gt; Vec&lt;Field&gt; {
         <span class="macro">vec!</span>[
             Field::new(<span class="string">"contains_null"</span>, DataType::Boolean, <span class="bool-val">false</span>),
             Field::new(<span class="string">"contains_nan"</span>, DataType::Boolean, <span class="bool-val">true</span>),
@@ -329,7 +335,7 @@
                 <span class="string">"partition_summaries"</span>,
                 DataType::List(Arc::new(Field::new_struct(
                     <span class="string">"item"</span>,
-                    <span class="self">self</span>.partition_summary_fields(),
+                    <span class="self">Self</span>::partition_summary_fields(),
                     <span class="bool-val">false</span>,
                 ))),
                 <span class="bool-val">false</span>,
@@ -338,7 +344,7 @@
     }
 
     <span class="doccomment">/// Scans the manifests table.
-    </span><span class="kw">pub async fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;RecordBatch&gt; {
+    </span><span class="kw">pub async fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>content = PrimitiveBuilder::&lt;Int8Type&gt;::new();
         <span class="kw">let </span><span class="kw-2">mut </span>path = StringBuilder::new();
         <span class="kw">let </span><span class="kw-2">mut </span>length = PrimitiveBuilder::&lt;Int64Type&gt;::new();
@@ -351,12 +357,12 @@
         <span class="kw">let </span><span class="kw-2">mut </span>existing_delete_files_count = PrimitiveBuilder::&lt;Int32Type&gt;::new();
         <span class="kw">let </span><span class="kw-2">mut </span>deleted_delete_files_count = PrimitiveBuilder::&lt;Int32Type&gt;::new();
         <span class="kw">let </span><span class="kw-2">mut </span>partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(<span class="self">self</span>.partition_summary_fields()),
+            Fields::from(<span class="self">Self</span>::partition_summary_fields()),
             <span class="number">0</span>,
         ))
         .with_field(Arc::new(Field::new_struct(
             <span class="string">"item"</span>,
-            <span class="self">self</span>.partition_summary_fields(),
+            <span class="self">Self</span>::partition_summary_fields(),
             <span class="bool-val">false</span>,
         )));
 
@@ -406,7 +412,7 @@
             }
         }
 
-        <span class="prelude-val">Ok</span>(RecordBatch::try_new(Arc::new(<span class="self">self</span>.schema()), <span class="macro">vec!</span>[
+        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(<span class="self">self</span>.schema()), <span class="macro">vec!</span>[
             Arc::new(content.finish()),
             Arc::new(path.finish()),
             Arc::new(length.finish()),
@@ -419,7 +425,9 @@
             Arc::new(existing_delete_files_count.finish()),
             Arc::new(deleted_delete_files_count.finish()),
             Arc::new(partition_summaries.finish()),
-        ])<span class="question-mark">?</span>)
+        ])<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(batch)]).boxed())
     }
 }
 
@@ -427,7 +435,7 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>expect_test::expect;
 
-    <span class="kw">use </span><span class="kw">crate</span>::inspect::metadata_table::tests::check_record_batch;
+    <span class="kw">use </span><span class="kw">crate</span>::inspect::metadata_table::tests::check_record_batches;
     <span class="kw">use </span><span class="kw">crate</span>::scan::tests::TableTestFixture;
 
     <span class="attr">#[tokio::test]
@@ -435,10 +443,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>fixture = TableTestFixture::new();
         fixture.setup_manifest_files().<span class="kw">await</span>;
 
-        <span class="kw">let </span>record_batch = fixture.table.inspect().manifests().scan().<span class="kw">await</span>.unwrap();
+        <span class="kw">let </span>batch_stream = fixture.table.inspect().manifests().scan().<span class="kw">await</span>.unwrap();
 
-        check_record_batch(
-            record_batch,
+        check_record_batches(
+            batch_stream,
             <span class="macro">expect!</span>[[<span class="string">r#"
                 Field { name: "content", data_type: Int8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -523,7 +531,7 @@
                 ]"#</span>]],
             <span class="kw-2">&amp;</span>[<span class="string">"path"</span>, <span class="string">"length"</span>],
             <span class="prelude-val">Some</span>(<span class="string">"path"</span>),
-        );
+        ).<span class="kw">await</span>;
     }
 }
 </code></pre></div></section></main></body></html>

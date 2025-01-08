@@ -97,6 +97,16 @@
 <a href="#97" id="97">97</a>
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -124,30 +134,32 @@
 /// - &lt;https://iceberg.apache.org/docs/latest/spark-queries/#querying-with-sql&gt;
 /// - &lt;https://py.iceberg.apache.org/api/#inspecting-tables&gt;
 </span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>MetadataTable(Table);
+</span><span class="kw">pub struct </span>MetadataTable&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table);
 
-<span class="kw">impl </span>MetadataTable {
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; MetadataTable&lt;<span class="lifetime">'a</span>&gt; {
     <span class="doccomment">/// Creates a new metadata scan.
-    </span><span class="kw">pub fn </span>new(table: Table) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table) -&gt; <span class="self">Self </span>{
         <span class="self">Self</span>(table)
     }
 
     <span class="doccomment">/// Get the snapshots table.
     </span><span class="kw">pub fn </span>snapshots(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SnapshotsTable {
-        SnapshotsTable::new(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>)
+        SnapshotsTable::new(<span class="self">self</span>.<span class="number">0</span>)
     }
 
     <span class="doccomment">/// Get the manifests table.
     </span><span class="kw">pub fn </span>manifests(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ManifestsTable {
-        ManifestsTable::new(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>)
+        ManifestsTable::new(<span class="self">self</span>.<span class="number">0</span>)
     }
 }
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">pub mod </span>tests {
-    <span class="kw">use </span>arrow_array::RecordBatch;
     <span class="kw">use </span>expect_test::Expect;
+    <span class="kw">use </span>futures::TryStreamExt;
     <span class="kw">use </span>itertools::Itertools;
+
+    <span class="kw">use </span><span class="kw">crate</span>::scan::ArrowRecordBatchStream;
 
     <span class="doccomment">/// Snapshot testing to check the resulting record batch.
     ///
@@ -157,13 +169,21 @@
     ///   Check the doc of [`expect_test`] for more details.
     /// - `ignore_check_columns`: Some columns are not stable, so we can skip them.
     /// - `sort_column`: The order of the data might be non-deterministic, so we can sort it by a column.
-    </span><span class="kw">pub fn </span>check_record_batch(
-        record_batch: RecordBatch,
+    </span><span class="kw">pub async fn </span>check_record_batches(
+        batch_stream: ArrowRecordBatchStream,
         expected_schema: Expect,
         expected_data: Expect,
         ignore_check_columns: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str],
         sort_column: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;,
     ) {
+        <span class="kw">let </span>record_batches = batch_stream.try_collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().<span class="kw">await</span>.unwrap();
+        <span class="macro">assert!</span>(!record_batches.is_empty(), <span class="string">"Empty record batches"</span>);
+
+        <span class="comment">// Combine record batches using the first batch's schema
+        </span><span class="kw">let </span>first_batch = record_batches.first().unwrap();
+        <span class="kw">let </span>record_batch =
+            arrow_select::concat::concat_batches(<span class="kw-2">&amp;</span>first_batch.schema(), <span class="kw-2">&amp;</span>record_batches).unwrap();
+
         <span class="kw">let </span><span class="kw-2">mut </span>columns = record_batch.columns().to_vec();
         <span class="kw">if let </span><span class="prelude-val">Some</span>(sort_column) = sort_column {
             <span class="kw">let </span>column = record_batch.column_by_name(sort_column).unwrap();

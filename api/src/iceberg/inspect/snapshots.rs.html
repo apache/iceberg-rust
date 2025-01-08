@@ -181,6 +181,12 @@
 <a href="#181" id="181">181</a>
 <a href="#182" id="182">182</a>
 <a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -204,7 +210,9 @@
 <span class="kw">use </span>arrow_array::types::{Int64Type, TimestampMillisecondType};
 <span class="kw">use </span>arrow_array::RecordBatch;
 <span class="kw">use </span>arrow_schema::{DataType, Field, Schema, TimeUnit};
+<span class="kw">use </span>futures::{stream, StreamExt};
 
+<span class="kw">use </span><span class="kw">crate</span>::scan::ArrowRecordBatchStream;
 <span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
@@ -253,7 +261,7 @@
     }
 
     <span class="doccomment">/// Scans the snapshots table.
-    </span><span class="kw">pub fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;RecordBatch&gt; {
+    </span><span class="kw">pub async fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>committed_at =
             PrimitiveBuilder::&lt;TimestampMillisecondType&gt;::new().with_timezone(<span class="string">"+00:00"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>snapshot_id = PrimitiveBuilder::&lt;Int64Type&gt;::new();
@@ -275,14 +283,16 @@
             summary.append(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
         }
 
-        <span class="prelude-val">Ok</span>(RecordBatch::try_new(Arc::new(<span class="self">self</span>.schema()), <span class="macro">vec!</span>[
+        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(<span class="self">self</span>.schema()), <span class="macro">vec!</span>[
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
             Arc::new(operation.finish()),
             Arc::new(manifest_list.finish()),
             Arc::new(summary.finish()),
-        ])<span class="question-mark">?</span>)
+        ])<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(stream::iter(<span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(batch)]).boxed())
     }
 }
 
@@ -290,15 +300,17 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>expect_test::expect;
 
-    <span class="kw">use </span><span class="kw">crate</span>::inspect::metadata_table::tests::check_record_batch;
+    <span class="kw">use </span><span class="kw">crate</span>::inspect::metadata_table::tests::check_record_batches;
     <span class="kw">use </span><span class="kw">crate</span>::scan::tests::TableTestFixture;
 
-    <span class="attr">#[test]
-    </span><span class="kw">fn </span>test_snapshots_table() {
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_snapshots_table() {
         <span class="kw">let </span>table = TableTestFixture::new().table;
-        <span class="kw">let </span>record_batch = table.inspect().snapshots().scan().unwrap();
-        check_record_batch(
-            record_batch,
+
+        <span class="kw">let </span>batch_stream = table.inspect().snapshots().scan().<span class="kw">await</span>.unwrap();
+
+        check_record_batches(
+            batch_stream,
             <span class="macro">expect!</span>[[<span class="string">r#"
                 Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -361,7 +373,7 @@
                 ]"#</span>]],
             <span class="kw-2">&amp;</span>[<span class="string">"manifest_list"</span>],
             <span class="prelude-val">Some</span>(<span class="string">"committed_at"</span>),
-        );
+        ).<span class="kw">await</span>;
     }
 }
 </code></pre></div></section></main></body></html>
