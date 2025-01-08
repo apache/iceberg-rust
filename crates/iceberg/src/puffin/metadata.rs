@@ -69,11 +69,11 @@ impl Flag {
         (self as u8) % 8
     }
 
-    fn matches(self, byte_idx: &u8, bit_idx: &u8) -> bool {
-        &self.byte_idx() == byte_idx && &self.bit_idx() == bit_idx
+    fn matches(self, byte_idx: u8, bit_idx: u8) -> bool {
+        self.byte_idx() == byte_idx && self.bit_idx() == bit_idx
     }
 
-    fn from(byte_idx: &u8, bit_idx: &u8) -> Result<Flag> {
+    fn from(byte_idx: u8, bit_idx: u8) -> Result<Flag> {
         if Flag::FooterPayloadCompressed.matches(byte_idx, bit_idx) {
             Ok(Flag::FooterPayloadCompressed)
         } else {
@@ -182,7 +182,7 @@ impl FileMetadata {
 
             for bit_idx in 0..8 {
                 if ((flag_byte >> bit_idx) & 1) != 0 {
-                    let flag = Flag::from(&byte_idx, &bit_idx)?;
+                    let flag = Flag::from(byte_idx, bit_idx)?;
                     flags.insert(flag);
                 }
             }
