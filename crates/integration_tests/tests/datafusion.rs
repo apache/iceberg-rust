@@ -38,7 +38,7 @@ async fn test_statistics() -> Result<()> {
     let stats = compute_statistics(&table, None).await?;
 
     assert_eq!(stats, Statistics {
-        num_rows: Precision::Inexact(14),
+        num_rows: Precision::Inexact(12),
         total_byte_size: Precision::Absent,
         column_statistics: vec![
             ColumnStatistics {

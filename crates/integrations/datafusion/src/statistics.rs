@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use datafusion::common::stats::Precision;
 use datafusion::common::{ColumnStatistics, Statistics};
-use iceberg::spec::ManifestStatus;
+use iceberg::spec::{DataContentType, ManifestStatus};
 use iceberg::table::Table;
 use iceberg::Result;
 
@@ -43,38 +43,41 @@ pub async fn compute_statistics(table: &Table, snapshot_id: Option<i64>) -> Resu
     for manifest_file in manifest_list.entries() {
         let manifest = manifest_file.load_manifest(file_io).await?;
         manifest.entries().iter().for_each(|manifest_entry| {
+            // Gather stats only for non-deleted data files
             if manifest_entry.status() != ManifestStatus::Deleted {
                 let data_file = manifest_entry.data_file();
-                num_rows += data_file.record_count();
-                data_file.lower_bounds().iter().for_each(|(col_id, min)| {
-                    lower_bounds
-                        .entry(*col_id)
-                        .and_modify(|col_min| {
-                            if min < col_min {
-                                *col_min = min.clone()
-                            }
-                        })
-                        .or_insert(min.clone());
-                });
-                data_file.upper_bounds().iter().for_each(|(col_id, max)| {
-                    upper_bounds
-                        .entry(*col_id)
-                        .and_modify(|col_max| {
-                            if max > col_max {
-                                *col_max = max.clone()
-                            }
-                        })
-                        .or_insert(max.clone());
-                });
-                data_file
-                    .null_value_counts()
-                    .iter()
-                    .for_each(|(col_id, null_count)| {
-                        null_counts
+                if data_file.content_type() == DataContentType::Data {
+                    num_rows += data_file.record_count();
+                    data_file.lower_bounds().iter().for_each(|(col_id, min)| {
+                        lower_bounds
                             .entry(*col_id)
-                            .and_modify(|col_null_count| *col_null_count += *null_count)
-                            .or_insert(*null_count);
+                            .and_modify(|col_min| {
+                                if min < col_min {
+                                    *col_min = min.clone()
+                                }
+                            })
+                            .or_insert(min.clone());
                     });
+                    data_file.upper_bounds().iter().for_each(|(col_id, max)| {
+                        upper_bounds
+                            .entry(*col_id)
+                            .and_modify(|col_max| {
+                                if max > col_max {
+                                    *col_max = max.clone()
+                                }
+                            })
+                            .or_insert(max.clone());
+                    });
+                    data_file
+                        .null_value_counts()
+                        .iter()
+                        .for_each(|(col_id, null_count)| {
+                            null_counts
+                                .entry(*col_id)
+                                .and_modify(|col_null_count| *col_null_count += *null_count)
+                                .or_insert(*null_count);
+                        });
+                }
             }
         })
     }
