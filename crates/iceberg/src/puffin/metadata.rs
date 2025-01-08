@@ -44,7 +44,7 @@ pub(crate) struct BlobMetadata {
     /// The offset in the file where the blob contents start
     pub(crate) offset: u64,
     /// The length of the blob stored in the file (after compression, if compressed)
-    pub(crate) length: usize,
+    pub(crate) length: u64,
     /// The compression codec used to compress the data
     #[serde(skip_serializing_if = "CompressionCodec::is_none")]
     #[serde(default)]
