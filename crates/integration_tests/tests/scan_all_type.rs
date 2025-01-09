@@ -28,7 +28,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Fields};
 use futures::TryStreamExt;
-use iceberg::arrow::{MAP_KEY_VALUE_FIELD_NAME, UTC_TIME_ZONE};
+use iceberg::arrow::{DEFAULT_MAP_FIELD_NAME, UTC_TIME_ZONE};
 use iceberg::spec::{
     ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, LIST_FILED_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
@@ -286,7 +286,7 @@ async fn test_scan_all_type() {
             StructArray::new(new_struct_fields.clone(), arrays, nulls)
         };
         let field = Arc::new(Field::new(
-            MAP_KEY_VALUE_FIELD_NAME,
+            DEFAULT_MAP_FIELD_NAME,
             DataType::Struct(new_struct_fields),
             false,
         ));
