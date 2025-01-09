@@ -50,13 +50,12 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
-    pub(crate) async fn new(table: Table, schema: ArrowSchemaRef) -> Self {
-        let statistics = compute_statistics(&table, None).await.ok();
+    pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
         IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
-            statistics,
+            statistics: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -72,12 +71,11 @@ impl IcebergTableProvider {
 
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
-        let statistics = compute_statistics(&table, None).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
-            statistics,
+            statistics: None,
         })
     }
 
@@ -85,12 +83,11 @@ impl IcebergTableProvider {
     /// using the given table. Can be used to create a table provider from an existing table regardless of the catalog implementation.
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
-        let statistics = compute_statistics(&table, None).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
-            statistics,
+            statistics: None,
         })
     }
 
@@ -111,13 +108,22 @@ impl IcebergTableProvider {
             })?;
         let schema = snapshot.schema(table.metadata())?;
         let schema = Arc::new(schema_to_arrow_schema(&schema)?);
-        let statistics = compute_statistics(&table, Some(snapshot_id)).await.ok();
         Ok(IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
-            statistics,
+            statistics: None,
         })
+    }
+
+    // Try to compute the underlying table statistics directly from the manifest/data files
+    pub async fn with_computed_statistics(mut self) -> Self {
+        let statistics = compute_statistics(&self.table, self.snapshot_id)
+            .await
+            .inspect_err(|err| log::warn!("Failed computing table statistics: {err}"))
+            .ok();
+        self.statistics = statistics;
+        self
     }
 }
 

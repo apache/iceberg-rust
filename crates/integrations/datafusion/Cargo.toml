@@ -34,6 +34,7 @@ async-trait = { workspace = true }
 datafusion = { version = "44" }
 futures = { workspace = true }
 iceberg = { workspace = true }
+log = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]

@@ -129,9 +129,7 @@ impl TableProviderFactory for IcebergTableProviderFactory {
         let schema = schema_to_arrow_schema(table.metadata().current_schema())
             .map_err(to_datafusion_error)?;
 
-        Ok(Arc::new(
-            IcebergTableProvider::new(table, Arc::new(schema)).await,
-        ))
+        Ok(Arc::new(IcebergTableProvider::new(table, Arc::new(schema))))
     }
 }
 

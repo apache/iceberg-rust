@@ -38,6 +38,8 @@ async fn test_statistics() -> Result<()> {
 
     let stats = IcebergTableProvider::try_new_from_table(table)
         .await?
+        .with_computed_statistics()
+        .await
         .statistics();
 
     assert_eq!(
