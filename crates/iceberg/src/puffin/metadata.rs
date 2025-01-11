@@ -145,8 +145,8 @@ impl FileMetadata {
         file_read: &dyn FileRead,
         input_file_length: u64,
     ) -> Result<u32> {
-        let start = input_file_length - u64::from(FileMetadata::FOOTER_STRUCT_LENGTH);
-        let end = start + u64::from(FileMetadata::FOOTER_STRUCT_PAYLOAD_LENGTH_LENGTH);
+        let start = input_file_length - FileMetadata::FOOTER_STRUCT_LENGTH as u64;
+        let end = start + FileMetadata::FOOTER_STRUCT_PAYLOAD_LENGTH_LENGTH as u64;
         let footer_payload_length_bytes = file_read.read(start..end).await?;
         let mut buf = [0; 4];
         buf.copy_from_slice(&footer_payload_length_bytes);
@@ -159,9 +159,9 @@ impl FileMetadata {
         input_file_length: u64,
         footer_payload_length: u32,
     ) -> Result<Bytes> {
-        let footer_length = u64::from(footer_payload_length)
-            + u64::from(FileMetadata::FOOTER_STRUCT_LENGTH)
-            + u64::from(FileMetadata::MAGIC_LENGTH);
+        let footer_length = footer_payload_length as u64
+            + FileMetadata::FOOTER_STRUCT_LENGTH as u64
+            + FileMetadata::MAGIC_LENGTH as u64;
         let start = input_file_length - footer_length;
         let end = input_file_length;
         file_read.read(start..end).await
@@ -172,9 +172,9 @@ impl FileMetadata {
 
         for byte_idx in 0..FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH {
             let byte_offset = footer_bytes.len()
-                - usize::from(FileMetadata::MAGIC_LENGTH)
-                - usize::from(FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH)
-                + usize::from(byte_idx);
+                - FileMetadata::MAGIC_LENGTH as usize
+                - FileMetadata::FOOTER_STRUCT_FLAGS_LENGTH as usize
+                + byte_idx as usize;
 
             let flag_byte = *footer_bytes.get(byte_offset).ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "Index range is out of bounds.")
@@ -202,9 +202,9 @@ impl FileMetadata {
             CompressionCodec::None
         };
 
-        let start_offset = usize::from(FileMetadata::MAGIC_LENGTH);
+        let start_offset = FileMetadata::MAGIC_LENGTH as usize;
         let end_offset =
-            usize::from(FileMetadata::MAGIC_LENGTH) + usize::try_from(footer_payload_length)?;
+            FileMetadata::MAGIC_LENGTH as usize + usize::try_from(footer_payload_length)?;
         let footer_payload_bytes = footer_bytes
             .get(start_offset..end_offset)
             .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Index range is out of bounds."))?;
@@ -237,7 +237,7 @@ impl FileMetadata {
             FileMetadata::read_footer_bytes(&file_read, input_file_length, footer_payload_length)
                 .await?;
 
-        let magic_length = usize::from(FileMetadata::MAGIC_LENGTH);
+        let magic_length = FileMetadata::MAGIC_LENGTH as usize;
         // check first four bytes of footer
         FileMetadata::check_magic(&footer_bytes[..magic_length])?;
         // check last four bytes of footer
