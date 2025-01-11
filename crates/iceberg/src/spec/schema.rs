@@ -398,6 +398,28 @@ impl Schema {
     pub(crate) fn field_id_to_name_map(&self) -> &HashMap<i32, String> {
         &self.id_to_name
     }
+
+    /// id to parent
+    pub fn id_to_parent(&self) -> HashMap<i32, String> {
+        let mut id_to_parent = HashMap::new();
+        let root_name = String::from("<root>");
+        Self::build_id_to_parent(self.as_struct(), &root_name, &mut id_to_parent);
+        id_to_parent
+    }
+
+    /// Helper function to recursively build the ID-to-parent mapping.
+    fn build_id_to_parent(
+        struct_type: &StructType,
+        parent_name: &str,
+        id_to_parent: &mut HashMap<i32, String>,
+    ) {
+        for field in struct_type.fields() {
+            id_to_parent.insert(field.id, parent_name.to_string());
+            if let Type::Struct(ref nested_struct) = *field.field_type {
+                Self::build_id_to_parent(nested_struct, &field.name, id_to_parent);
+            }
+        }
+    }
 }
 
 impl Display for Schema {

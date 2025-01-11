@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::io::OutputFile;
+use crate::spec::update::UpdateSchema;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, Manifest, ManifestEntry, ManifestFile,
     ManifestListWriter, ManifestMetadata, ManifestWriter, NullOrder, Operation, Snapshot,
@@ -41,7 +42,8 @@ const META_ROOT_PATH: &str = "metadata";
 
 /// Table transaction.
 pub struct Transaction<'a> {
-    table: &'a Table,
+    /// Table of the transaction
+    pub table: &'a Table,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -55,8 +57,12 @@ impl<'a> Transaction<'a> {
             requirements: vec![],
         }
     }
-
-    fn append_updates(&mut self, updates: Vec<TableUpdate>) -> Result<()> {
+    /// get table
+    pub fn get_table(&self) -> &'a Table {
+        self.table
+    }
+    /// append updates
+    pub fn append_updates(&mut self, updates: Vec<TableUpdate>) -> Result<()> {
         for update in &updates {
             for up in &self.updates {
                 if discriminant(up) == discriminant(update) {
@@ -144,6 +150,11 @@ impl<'a> Transaction<'a> {
             key_metadata,
             HashMap::new(),
         )
+    }
+
+    /// update schema for a table
+    pub fn update_schema(self) -> Result<UpdateSchema<'a>> {
+        Ok(UpdateSchema::new(self, true, true, None))
     }
 
     /// Creates replace sort order action.
@@ -610,8 +621,8 @@ mod tests {
 
     use crate::io::FileIOBuilder;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Struct,
-        TableMetadata,
+        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, PrimitiveType,
+        Struct, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::transaction::{Transaction, MAIN_BRANCH};
@@ -870,5 +881,95 @@ mod tests {
             tx.is_err(),
             "Should not allow to do same kinds update in same transaction"
         );
+    }
+
+    #[test]
+    fn test_update_schema_add_column() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .unwrap()
+            .add_column(
+                vec!["new_col".to_string()],
+                Type::Primitive(PrimitiveType::String),
+                "This is a new column",
+                true,
+            )
+            .unwrap()
+            .apply()
+            .unwrap();
+        println!("{:?}", tx.updates[0]);
+        assert!(matches!(
+            tx.updates[0],
+            TableUpdate::AddSchema { ref schema } if schema.field_by_name("new_col").is_some()
+        ));
+    }
+
+    #[test]
+    fn test_update_schema_delete_column() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .unwrap()
+            .delete_column(vec!["z".to_string()])
+            .unwrap()
+            .apply()
+            .unwrap();
+
+        assert!(matches!(
+            tx.updates[0],
+            TableUpdate::AddSchema { ref schema } if schema.field_by_name("z").is_none()
+        ));
+    }
+
+    #[test]
+    fn test_update_schema_rename_column() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .unwrap()
+            .rename_column(vec!["x".to_string()], "new_x".to_string())
+            .unwrap()
+            .apply()
+            .unwrap();
+
+        assert!(matches!(
+            tx.updates[0],
+            TableUpdate::AddSchema { ref schema } if schema.field_by_name("new_x").is_some()
+                && schema.field_by_name("x").is_none()
+        ));
+    }
+
+    #[test]
+    fn test_update_schema_add_delete_update_column() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .unwrap()
+            .add_column(
+                vec!["new_col".to_string()],
+                Type::Primitive(PrimitiveType::Double),
+                "Newly added column",
+                false,
+            )
+            .unwrap()
+            .delete_column(vec!["z".to_string()])
+            .unwrap()
+            .apply()
+            .unwrap();
+
+        assert!(matches!(
+            tx.updates[0],
+            TableUpdate::AddSchema { ref schema } if schema.field_by_name("new_col").is_some()
+                && schema.field_by_name("z").is_none()
+        ));
     }
 }
