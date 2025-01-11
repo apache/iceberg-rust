@@ -27,7 +27,7 @@ use super::{
 use crate::transaction::Transaction;
 use crate::{Error, TableUpdate};
 
-/// intermedate struct for updating schema
+/// intermediate struct for updating schema
 pub struct UpdateSchema<'a> {
     adds: HashMap<i32, Vec<NestedField>>,
     deletes: HashSet<i32>,
