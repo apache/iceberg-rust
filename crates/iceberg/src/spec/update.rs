@@ -225,7 +225,7 @@ impl<'a> UpdateSchema<'a> {
                 ));
             }
 
-            // TODO: support update with compatiable data type
+            // TODO: support update with compatible data type
             if !self.allow_incompatible_changes && *field.field_type != *new_field_type {
                 return Err(Error::new(
                     crate::ErrorKind::DataInvalid,
