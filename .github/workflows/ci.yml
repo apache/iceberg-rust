@@ -43,6 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
@@ -89,8 +92,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ env.rust_msrv }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -109,6 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -122,8 +126,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ env.rust_msrv }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -136,3 +138,34 @@ jobs:
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
+
+  # reference: https://github.com/xxchan/arrow-rs/blob/xxchan/vulnerable-hedgehog/.github/workflows/rust.yml#L114-L145
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
+      - name: Check iceberg
+        working-directory: crates/iceberg
+        run: cargo msrv --log-target stdout verify
+      - name: Check catalog/glue
+        working-directory: crates/catalog/glue
+        run: cargo msrv --log-target stdout verify
+      - name: Check catalog/hms
+        working-directory: crates/catalog/hms
+        run: cargo msrv --log-target stdout verify
+      - name: Check catalog/memory
+        working-directory: crates/catalog/memory
+        run: cargo msrv --log-target stdout verify
+      - name: Check catalog/rest
+        working-directory: crates/catalog/rest
+        run: cargo msrv --log-target stdout verify
+      - name: Check catalog/sql
+        working-directory: crates/catalog/sql
+        run: cargo msrv --log-target stdout verify
