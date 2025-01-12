@@ -1557,7 +1557,7 @@ mod tests {
         1,
         2
     ]
-}  
+}
         "#;
 
         let update = TableUpdate::RemoveSnapshots {

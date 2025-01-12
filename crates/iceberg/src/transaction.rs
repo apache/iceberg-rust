@@ -130,6 +130,14 @@ impl<'a> Transaction<'a> {
         snapshot_id
     }
 
+    /// Remove snapshots from table.
+    pub fn remove_snapshots(&mut self, snapshot_ids: Vec<i64>) -> Result<Self> {
+        self.append_updates(vec![TableUpdate::RemoveSnapshots {
+            snapshot_ids: snapshot_ids,
+        }])?;
+        Ok(self)
+    }
+
     /// Creates a fast append action.
     pub fn fast_append(
         self,
