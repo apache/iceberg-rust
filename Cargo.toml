@@ -51,7 +51,7 @@ arrow-string = { version = "53" }
 async-stream = "0.3.5"
 async-trait = "0.1"
 async-std = "1.12"
-aws-config = "1.1.8"
+aws-config = "1.5.13"
 aws-sdk-glue = "1.76"
 bimap = "0.6"
 bitvec = "1.0.1"
