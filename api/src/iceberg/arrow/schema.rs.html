@@ -1518,6 +1518,10 @@
 <a href="#1518" id="1518">1518</a>
 <a href="#1519" id="1519">1519</a>
 <a href="#1520" id="1520">1520</a>
+<a href="#1521" id="1521">1521</a>
+<a href="#1522" id="1522">1522</a>
+<a href="#1523" id="1523">1523</a>
+<a href="#1524" id="1524">1524</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1640,8 +1644,10 @@
                 DataType::Boolean
                     | DataType::Utf8
                     | DataType::LargeUtf8
+                    | DataType::Utf8View
                     | DataType::Binary
                     | DataType::LargeBinary
+                    | DataType::BinaryView
                     | DataType::FixedSizeBinary(<span class="kw">_</span>)
             ) =&gt;
         {
@@ -1923,7 +1929,9 @@
             {
                 <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
-            DataType::Binary | DataType::LargeBinary =&gt; <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Binary)),
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView =&gt; {
+                <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Binary))
+            }
             DataType::FixedSizeBinary(width) =&gt; {
                 <span class="prelude-val">Ok</span>(Type::Primitive(PrimitiveType::Fixed(<span class="kw-2">*</span>width <span class="kw">as </span>u64)))
             }
