@@ -810,7 +810,16 @@ impl Catalog for SqlCatalog {
             Some(identifier.name()),
         ];
 
-        self.execute(&update, args, None).await?;
+        let update_result = self.execute(&update, args, None).await?;
+        if update_result.rows_affected() != 1 {
+            return Err(Error::new(
+                iceberg::ErrorKind::Unexpected,
+                format!(
+                    "Failed to update Table {:?} from  Catalog {:?}",
+                    identifier, &self.name,
+                ),
+            ));
+        }
 
         Ok(Table::builder()
             .file_io(self.fileio.clone())
