@@ -37,6 +37,7 @@ use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
 use iceberg_integration_tests::set_test_fixture;
 use parquet::file::properties::WriterProperties;
+use url::Url;
 
 #[tokio::test]
 async fn test_append_partition_data_file() {
@@ -50,12 +51,13 @@ async fn test_append_partition_data_file() {
         ]),
     );
 
+    println!("Creating namespace");
     fixture
         .rest_catalog
         .create_namespace(ns.name(), ns.properties().clone())
         .await
         .unwrap();
-
+    println!("done creating namespace");
     let schema = Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
@@ -162,6 +164,55 @@ async fn test_append_partition_data_file() {
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
+
+    // Now, let's verify that the partition directory (e.g. "id=100/") exists in MinIO.
+    // We can parse the S3 location from the table metadata, which is typically something like:
+    //     "s3://my-test-bucket/iceberg/rust/t1"
+    let table_location = table.metadata().location().to_string();
+    let table_url = Url::parse(&table_location).expect("failed to parse table location as URL");
+    // Add debug prints for partition info
+    println!("Table location: {}", table.metadata().location());
+    println!("Data file location: {:?}", data_file_valid);
+    // The bucket is the "host" part (my-test-bucket), the rest is the prefix
+    let bucket = table_url
+        .host_str()
+        .expect("no bucket found in table location");
+    // The .path() starts with '/', so strip leading slash
+    let mut prefix = table_url.path().trim_start_matches('/').to_string();
+    prefix.push_str("/data/id=");  // Look in data/id=<value> directory
+    prefix.push_str(&first_partition_id_value.to_string());
+    prefix.push_str("/");
+
+    println!(
+        "Looking for objects in bucket '{}' with prefix '{}'",
+        bucket, prefix
+    );
+
+    let list_resp = fixture
+        .s3_client
+        .list_objects_v2()
+        .bucket(bucket)
+        .prefix(&prefix)
+        .send()
+        .await
+        .expect("failed to list objects from MinIO");
+
+    // Ensure we have some objects under that prefix
+    let objects = list_resp.contents();
+    assert!(
+        !objects.is_empty(),
+        "No objects found under prefix {} - partition layout may not be correct.",
+        prefix
+    );
+
+    println!("Found objects under partition prefix '{}':", prefix);
+    for obj in objects {
+        println!(
+            "  -> key={}, size={:?}",
+            obj.key().as_deref().unwrap_or_default(),
+            obj.size()
+        );
+    }
 
     test_schema_incompatible_partition_type(
         parquet_writer_builder.clone(),
