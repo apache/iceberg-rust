@@ -29,6 +29,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
+use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
@@ -119,8 +120,10 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                 DataType::Boolean
                     | DataType::Utf8
                     | DataType::LargeUtf8
+                    | DataType::Utf8View
                     | DataType::Binary
                     | DataType::LargeBinary
+                    | DataType::BinaryView
                     | DataType::FixedSizeBinary(_)
             ) =>
         {
@@ -402,7 +405,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             {
                 Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
-            DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                Ok(Type::Primitive(PrimitiveType::Binary))
+            }
             DataType::FixedSizeBinary(width) => {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
@@ -739,9 +744,15 @@ macro_rules! get_parquet_stat_as_datum {
                     let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
                         return Ok(None);
                     };
+                    let unscaled_value = BigInt::from_signed_bytes_be(bytes);
                     Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                        PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Can't convert bytes to i128: {:?}", bytes),
+                            )
+                        })?),
                     ))
                 }
                 (

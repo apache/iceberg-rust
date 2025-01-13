@@ -31,7 +31,7 @@ keywords = ["iceberg", "integrations", "datafusion"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-datafusion = { version = "43" }
+datafusion = { version = "44" }
 futures = { workspace = true }
 iceberg = { workspace = true }
 tokio = { workspace = true }
