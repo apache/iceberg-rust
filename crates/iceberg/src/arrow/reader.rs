@@ -384,7 +384,7 @@ impl ArrowReader {
             });
 
             if column_map.len() != leaf_field_ids.len() {
-                let miss_field = leaf_field_ids
+                let missing_fields = leaf_field_ids
                     .iter()
                     .filter(|field_id| !column_map.contains_key(field_id))
                     .collect::<Vec<_>>();
@@ -397,7 +397,7 @@ impl ArrowReader {
                 )
                 .with_context("column_map", format! {"{:?}", column_map})
                 .with_context("field_ids", format! {"{:?}", leaf_field_ids})
-                .with_context("miss_field", format! {"{:?}", miss_field}));
+                .with_context("missing_fields", format! {"{:?}", missing_fields}));
             }
 
             let mut indices = vec![];

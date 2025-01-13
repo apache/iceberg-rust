@@ -30,7 +30,7 @@ use arrow_schema::{DataType, Field, Fields};
 use futures::TryStreamExt;
 use iceberg::arrow::{DEFAULT_MAP_FIELD_NAME, UTC_TIME_ZONE};
 use iceberg::spec::{
-    ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, LIST_FILED_NAME,
+    ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, LIST_FIELD_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use iceberg::transaction::Transaction;
@@ -240,7 +240,7 @@ async fn test_scan_all_type() {
     ]);
     let col16 = {
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(Arc::new(
-            Field::new(LIST_FILED_NAME, DataType::Int32, false).with_metadata(HashMap::from([(
+            Field::new(LIST_FIELD_NAME, DataType::Int32, false).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 20.to_string(),
             )])),
