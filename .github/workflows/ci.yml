@@ -145,11 +145,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
+      - name: Setup Nightly Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Generate minimal versions lockfile
+        run: cargo generate-lockfile -Z minimal-versions
+      - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
         run: |
-          cargo +nightly generate-lockfile -Z minimal-versions
           cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables
