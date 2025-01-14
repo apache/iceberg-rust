@@ -118,6 +118,9 @@
 <a href="#118" id="118">118</a>
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -135,10 +138,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
+</span><span class="kw">use </span>serde::{Deserialize, Serialize};
 
-<span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
-</span><span class="doccomment">/// Data compression formats
+<span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
+
+<span class="doccomment">/// Data compression formats
+</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = <span class="string">"lowercase"</span>)]
 </span><span class="kw">pub enum </span>CompressionCodec {
     <span class="attr">#[default]
     </span><span class="doccomment">/// No compression
