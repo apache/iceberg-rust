@@ -148,7 +148,7 @@ jobs:
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Generate minimal versions lockfile
-        run: cargo generate-lockfile -Z minimal-versions
+        run: cargo generate-lockfile -Z direct-minimal-versions
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
