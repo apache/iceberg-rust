@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use crate::io::FileIO;

@@ -43,6 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
@@ -89,8 +92,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ env.rust_msrv }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -109,6 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -122,8 +126,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ env.rust_msrv }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -136,3 +138,24 @@ jobs:
 
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
+
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Nightly Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Generate minimal versions lockfile
+        run: |
+          cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
+          # Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build.
+          # So we update these transitive dependencies here.
+          cargo update tap faststr metainfo linkedbytes
+      - name: Setup MSRV Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.rust_msrv }}
+      - name: Check MSRV
+        run: |
+          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables
