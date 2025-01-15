@@ -57,7 +57,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use </span>std::num::NonZero;
+</span><span class="kw">use </span>std::num::NonZeroUsize;
 
 <span class="comment">// Use a default value of 1 as the safest option.
 // See https://doc.rust-lang.org/std/thread/fn.available_parallelism.html#limitations
@@ -73,13 +73,13 @@
 /// are circumstances where the level of available
 /// parallelism can change during the lifetime of an executing
 /// process, but this should not be called in a hot loop.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>available_parallelism() -&gt; NonZero&lt;usize&gt; {
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>available_parallelism() -&gt; NonZeroUsize {
     std::thread::available_parallelism().unwrap_or_else(|_err| {
         <span class="comment">// Failed to get the level of parallelism.
         // TODO: log/trace when this fallback occurs.
 
         // Using a default value.
-        </span>NonZero::new(DEFAULT_PARALLELISM).unwrap()
+        </span>NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
     })
 }
 </code></pre></div></section></main></body></html>

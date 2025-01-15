@@ -407,6 +407,7 @@
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
 <a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -424,7 +425,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use </span>std::sync::Arc;
+</span><span class="kw">use </span>std::mem::size_of_val;
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <span class="kw">use </span><span class="kw">crate</span>::spec::{
