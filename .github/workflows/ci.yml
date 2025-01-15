@@ -139,7 +139,6 @@ jobs:
       - name: Doc Test
         run: cargo test --no-fail-fast --doc --all-features --workspace
 
-  # reference: https://github.com/xxchan/arrow-rs/blob/xxchan/vulnerable-hedgehog/.github/workflows/rust.yml#L114-L145
   msrv:
     name: Verify MSRV
     runs-on: ubuntu-latest
