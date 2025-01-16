@@ -22,34 +22,38 @@ use itertools::Itertools;
 
 use crate::spec::{DataContentType, DataFile, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
-use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::output_file_generator::OutputFileGenerator;
+use crate::writer::{CurrentFileStatus, IcebergWriter, SinglePartitionWriterBuilder};
 use crate::Result;
 
 /// Builder for `DataFileWriter`.
 #[derive(Clone, Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
-    partition_value: Option<Struct>,
+    outfile_genenerator: OutputFileGenerator,
 }
 
 impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     /// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B, partition_value: Option<Struct>) -> Self {
+    pub fn new(inner: B, outfile_genenerator: OutputFileGenerator) -> Self {
         Self {
             inner,
-            partition_value,
+            outfile_genenerator,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
+impl<B: FileWriterBuilder> SinglePartitionWriterBuilder for DataFileWriterBuilder<B> {
     type R = DataFileWriter<B>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, partition: Option<Struct>) -> Result<Self::R> {
+        let output_file = self
+            .outfile_genenerator
+            .create_output_file(&partition)?;
         Ok(DataFileWriter {
-            inner_writer: Some(self.inner.clone().build().await?),
-            partition_value: self.partition_value.unwrap_or(Struct::empty()),
+            inner_writer: Some(self.inner.clone().build(output_file).await?),
+            partition_value: partition.unwrap_or(Struct::empty()),
         })
     }
 }
@@ -114,7 +118,7 @@ mod test {
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::file_writer::ParquetWriterBuilder;
-    use crate::writer::{IcebergWriter, IcebergWriterBuilder, RecordBatch};
+    use crate::writer::{IcebergWriter, SinglePartitionWriterBuilder, RecordBatch};
     use crate::Result;
 
     #[tokio::test]

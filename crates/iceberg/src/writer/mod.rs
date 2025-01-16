@@ -45,12 +45,14 @@
 //! let data_files = data_file_writer.flush().await.unwrap();
 //! ```
 
+pub mod function_writer;
 pub mod base_writer;
 pub mod file_writer;
+pub mod output_file_generator;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFile;
+use crate::spec::{DataFile, Struct};
 use crate::Result;
 
 type DefaultInput = RecordBatch;
@@ -63,8 +65,19 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
 {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
-    /// Build the iceberg writer.
+    /// Build the iceberg writer with single partition.
     async fn build(self) -> Result<Self::R>;
+}
+
+/// The builder for iceberg writer for single partition.
+#[async_trait::async_trait]
+pub trait SinglePartitionWriterBuilder<I = DefaultInput, O = DefaultOutput>:
+    Send + Clone + 'static
+{
+    /// The associated writer type.
+    type R: IcebergWriter<I, O>;
+    /// Build the iceberg writer with single partition.
+    async fn build(self, partition: Option<Struct>) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.

@@ -28,7 +28,8 @@ use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
 use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::writer::output_file_generator::OutputFileGenerator;
+use crate::writer::{IcebergWriter, SinglePartitionWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
@@ -36,12 +37,21 @@ use crate::{Error, ErrorKind, Result};
 pub struct EqualityDeleteFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     config: EqualityDeleteWriterConfig,
+    outfile_genenerator: OutputFileGenerator,
 }
 
 impl<B: FileWriterBuilder> EqualityDeleteFileWriterBuilder<B> {
     /// Create a new `EqualityDeleteFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B, config: EqualityDeleteWriterConfig) -> Self {
-        Self { inner, config }
+    pub fn new(
+        inner: B,
+        config: EqualityDeleteWriterConfig,
+        outfile_genenerator: OutputFileGenerator,
+    ) -> Self {
+        Self {
+            inner,
+            config,
+            outfile_genenerator,
+        }
     }
 }
 
@@ -52,16 +62,11 @@ pub struct EqualityDeleteWriterConfig {
     equality_ids: Vec<i32>,
     // Projector used to project the data chunk into specific fields.
     projector: RecordBatchProjector,
-    partition_value: Struct,
 }
 
 impl EqualityDeleteWriterConfig {
     /// Create a new `DataFileWriterConfig` with equality ids.
-    pub fn new(
-        equality_ids: Vec<i32>,
-        original_schema: SchemaRef,
-        partition_value: Option<Struct>,
-    ) -> Result<Self> {
+    pub fn new(equality_ids: Vec<i32>, original_schema: SchemaRef) -> Result<Self> {
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
             original_arrow_schema,
@@ -97,7 +102,6 @@ impl EqualityDeleteWriterConfig {
         Ok(Self {
             equality_ids,
             projector,
-            partition_value: partition_value.unwrap_or(Struct::empty()),
         })
     }
 
@@ -108,15 +112,18 @@ impl EqualityDeleteWriterConfig {
 }
 
 #[async_trait::async_trait]
-impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
+impl<B: FileWriterBuilder> SinglePartitionWriterBuilder for EqualityDeleteFileWriterBuilder<B> {
     type R = EqualityDeleteFileWriter<B>;
 
-    async fn build(self) -> Result<Self::R> {
+    async fn build(self, partition: Option<Struct>) -> Result<Self::R> {
+        let output_file = self
+            .outfile_genenerator
+            .create_output_file(&partition)?;
         Ok(EqualityDeleteFileWriter {
-            inner_writer: Some(self.inner.clone().build().await?),
+            inner_writer: Some(self.inner.clone().build(output_file).await?),
             projector: self.config.projector,
             equality_ids: self.config.equality_ids,
-            partition_value: self.config.partition_value,
+            partition_value: partition.unwrap_or(Struct::empty()),
         })
     }
 }
@@ -192,7 +199,7 @@ mod test {
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
     use crate::writer::file_writer::ParquetWriterBuilder;
-    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+    use crate::writer::{IcebergWriter, SinglePartitionWriterBuilder};
 
     async fn check_parquet_data_file_with_equality_delete_write(
         file_io: &FileIO,
@@ -385,7 +392,7 @@ mod test {
 
         let equality_ids = vec![0_i32, 8];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema)).unwrap();
         let delete_schema =
             arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
         let projector = equality_config.projector.clone();
