@@ -95,7 +95,7 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
-  
+
       - name: Build
         run: make build
 
@@ -158,4 +158,4 @@ jobs:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
         run: |
-          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables
+          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables --exclude iceberg-integration-tests
