@@ -393,7 +393,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let mut writer = {
             let builder = ManifestWriterBuilder::new(
                 self.new_manifest_output()?,
-                self.snapshot_id,
+                Some(self.snapshot_id),
                 self.key_metadata.clone(),
                 self.tx.table.metadata().current_schema().clone(),
                 self.tx

@@ -1061,7 +1061,7 @@ pub mod tests {
             // Write data files
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
-                current_snapshot.snapshot_id(),
+                Some(current_snapshot.snapshot_id()),
                 vec![],
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),

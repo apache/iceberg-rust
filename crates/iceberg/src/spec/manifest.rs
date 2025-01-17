@@ -41,6 +41,9 @@ use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
 
+/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
+pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
+
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Manifest {
@@ -117,7 +120,7 @@ impl Manifest {
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {
     output: OutputFile,
-    snapshot_id: i64,
+    snapshot_id: Option<i64>,
     key_metadata: Vec<u8>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
@@ -127,7 +130,7 @@ impl ManifestWriterBuilder {
     /// Create a new builder.
     pub fn new(
         output: OutputFile,
-        snapshot_id: i64,
+        snapshot_id: Option<i64>,
         key_metadata: Vec<u8>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
@@ -182,7 +185,7 @@ impl ManifestWriterBuilder {
 pub struct ManifestWriter {
     output: OutputFile,
 
-    snapshot_id: i64,
+    snapshot_id: Option<i64>,
 
     added_files: u32,
     added_rows: u64,
@@ -266,7 +269,7 @@ impl ManifestWriter {
     /// Create a new manifest writer.
     pub(crate) fn new(
         output: OutputFile,
-        snapshot_id: i64,
+        snapshot_id: Option<i64>,
         key_metadata: Vec<u8>,
         metadata: ManifestMetadata,
     ) -> Self {
@@ -340,11 +343,11 @@ impl ManifestWriter {
         self.check_data_file(&entry.data_file)?;
         if entry.sequence_number().is_some_and(|n| n >= 0) {
             entry.status = ManifestStatus::Added;
-            entry.snapshot_id = Some(self.snapshot_id);
+            entry.snapshot_id = self.snapshot_id;
             entry.file_sequence_number = None;
         } else {
             entry.status = ManifestStatus::Added;
-            entry.snapshot_id = Some(self.snapshot_id);
+            entry.snapshot_id = self.snapshot_id;
             entry.sequence_number = None;
             entry.file_sequence_number = None;
         };
@@ -359,7 +362,7 @@ impl ManifestWriter {
         self.check_data_file(&data_file)?;
         let entry = ManifestEntry {
             status: ManifestStatus::Added,
-            snapshot_id: Some(self.snapshot_id),
+            snapshot_id: self.snapshot_id,
             sequence_number: (sequence_number >= 0).then_some(sequence_number),
             file_sequence_number: None,
             data_file,
@@ -378,7 +381,7 @@ impl ManifestWriter {
     pub(crate) fn delete(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Deleted;
-        entry.snapshot_id = Some(self.snapshot_id);
+        entry.snapshot_id = self.snapshot_id;
         self.add_entry(entry)?;
         Ok(())
     }
@@ -395,7 +398,7 @@ impl ManifestWriter {
         self.check_data_file(&data_file)?;
         let entry = ManifestEntry {
             status: ManifestStatus::Deleted,
-            snapshot_id: Some(self.snapshot_id),
+            snapshot_id: self.snapshot_id,
             sequence_number: Some(sequence_number),
             file_sequence_number: Some(file_sequence_number),
             data_file,
@@ -547,7 +550,7 @@ impl ManifestWriter {
             // real sequence number in `ManifestListWriter`.
             sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
             min_sequence_number: self.min_seq_num.unwrap_or(UNASSIGNED_SEQUENCE_NUMBER),
-            added_snapshot_id: self.snapshot_id,
+            added_snapshot_id: self.snapshot_id.unwrap_or(UNASSIGNED_SNAPSHOT_ID),
             added_files_count: Some(self.added_files),
             existing_files_count: Some(self.existing_files),
             deleted_files_count: Some(self.deleted_files),
@@ -1948,7 +1951,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            1,
+            Some(1),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2128,7 +2131,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            2,
+            Some(2),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2220,7 +2223,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            3,
+            Some(3),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2324,7 +2327,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            2,
+            Some(2),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2426,7 +2429,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            2,
+            Some(2),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2680,7 +2683,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            1,
+            Some(1),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
@@ -2819,7 +2822,7 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
-            3,
+            Some(3),
             vec![],
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
