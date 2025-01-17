@@ -22,3 +22,7 @@
 #![allow(dead_code)]
 
 mod compression;
+mod metadata;
+
+#[cfg(test)]
+mod test_utils;

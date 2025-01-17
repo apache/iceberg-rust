@@ -284,7 +284,7 @@ impl NamespaceState {
     }
 
     // Removes the given table or returns an error if doesn't exist
-    pub(crate) fn remove_existing_table(&mut self, table_ident: &TableIdent) -> Result<()> {
+    pub(crate) fn remove_existing_table(&mut self, table_ident: &TableIdent) -> Result<String> {
         let namespace = self.get_mut_namespace(table_ident.namespace())?;
 
         match namespace
@@ -292,7 +292,7 @@ impl NamespaceState {
             .remove(table_ident.name())
         {
             None => no_such_table_err(table_ident),
-            Some(_) => Ok(()),
+            Some(metadata_location) => Ok(metadata_location),
         }
     }
 }

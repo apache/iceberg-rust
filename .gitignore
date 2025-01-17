@@ -16,7 +16,6 @@
 # under the License.
 
 target
-Cargo.lock
 .idea
 .vscode
 **/.DS_Store

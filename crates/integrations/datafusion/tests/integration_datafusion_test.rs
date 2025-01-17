@@ -22,8 +22,9 @@ use std::sync::Arc;
 use std::vec;
 
 use datafusion::arrow::array::{Array, StringArray};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
+use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use iceberg::io::FileIOBuilder;
 use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 use iceberg::{Catalog, NamespaceIdent, Result, TableCreation};
@@ -83,7 +84,7 @@ fn get_table_creation(
 }
 
 #[tokio::test]
-async fn test_provider_get_table_schema() -> Result<()> {
+async fn test_provider_plan_stream_schema() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog();
     let namespace = NamespaceIdent::new("test_provider_get_table_schema".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
@@ -110,6 +111,26 @@ async fn test_provider_get_table_schema() -> Result<()> {
         assert_eq!(field.data_type(), exp.1);
         assert!(!field.is_nullable())
     }
+
+    let df = ctx
+        .sql("select foo2 from catalog.test_provider_get_table_schema.my_table")
+        .await
+        .unwrap();
+
+    let task_ctx = Arc::new(df.task_ctx());
+    let plan = df.create_physical_plan().await.unwrap();
+    let stream = plan.execute(1, task_ctx).unwrap();
+
+    // Ensure both the plan and the stream conform to the same schema
+    assert_eq!(plan.schema(), stream.schema());
+    assert_eq!(
+        stream.schema().as_ref(),
+        &ArrowSchema::new(vec![Field::new("foo2", DataType::Utf8, false)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )]))]),
+    );
 
     Ok(())
 }

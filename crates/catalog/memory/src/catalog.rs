@@ -240,7 +240,8 @@ impl Catalog for MemoryCatalog {
     async fn drop_table(&self, table_ident: &TableIdent) -> Result<()> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        root_namespace_state.remove_existing_table(table_ident)
+        let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
+        self.file_io.delete(&metadata_location).await
     }
 
     /// Check if a table exists in the catalog.

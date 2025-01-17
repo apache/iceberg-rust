@@ -160,6 +160,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Prep 0.4.0 release by @sungwy in https://github.com/apache/iceberg-rust/pull/809
 * feat: Add RemovePartitionSpecs table update by @c-thiel in https://github.com/apache/iceberg-rust/pull/804
 * feat: Store file io props to allow re-build it by @Xuanwo in https://github.com/apache/iceberg-rust/pull/802
+* chore: chmod +x on `verify.py` script by @sungwy in https://github.com/apache/iceberg-rust/pull/817
+* fix: Reading a table with positional deletes should fail by @Fokko in https://github.com/apache/iceberg-rust/pull/826
 
 ## [v0.3.0] - 2024-08-14
 

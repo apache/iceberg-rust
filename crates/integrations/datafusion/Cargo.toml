@@ -20,7 +20,10 @@ name = "iceberg-datafusion"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-rust-version = { workspace = true }
+# kept the same as DataFusion's MSRV
+# https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
+# https://github.com/apache/datafusion/blob/main/Cargo.toml#L68
+rust-version = "1.80.1"
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"
@@ -31,7 +34,7 @@ keywords = ["iceberg", "integrations", "datafusion"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-datafusion = { version = "43" }
+datafusion = { version = "44" }
 futures = { workspace = true }
 iceberg = { workspace = true }
 tokio = { workspace = true }
