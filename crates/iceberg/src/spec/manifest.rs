@@ -34,15 +34,12 @@ use self::_const_schema::{manifest_schema_v1, manifest_schema_v2};
 use super::{
     Datum, FieldSummary, FormatVersion, ManifestContentType, ManifestFile, PartitionSpec,
     PrimitiveLiteral, PrimitiveType, Schema, SchemaId, SchemaRef, Struct, StructType,
-    INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER,
+    INITIAL_SEQUENCE_NUMBER, UNASSIGNED_SEQUENCE_NUMBER, UNASSIGNED_SNAPSHOT_ID,
 };
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::PartitionField;
 use crate::{Error, ErrorKind};
-
-/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
-pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// A manifest contains metadata and a list of entries.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -339,7 +336,7 @@ impl ManifestWriter {
     /// - Set the snapshot id to the current snapshot id
     /// - Set the sequence number to `None` if it is invalid(smaller than 0)
     /// - Set the file sequence number to `None`
-    pub(crate) fn add(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    pub(crate) fn add_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         if entry.sequence_number().is_some_and(|n| n >= 0) {
             entry.status = ManifestStatus::Added;
@@ -351,11 +348,11 @@ impl ManifestWriter {
             entry.sequence_number = None;
             entry.file_sequence_number = None;
         };
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
-    /// Add an added entry for a file with a specific sequence number. The entry's snapshot ID will be this manifest's snapshot ID. The entry's data sequence
+    /// Add file as an added entry with a specific sequence number. The entry's snapshot ID will be this manifest's snapshot ID. The entry's data sequence
     /// number will be the provided data sequence number. The entry's file sequence number will be
     /// assigned at commit.
     pub fn add_file(&mut self, data_file: DataFile, sequence_number: i64) -> Result<()> {
@@ -367,7 +364,7 @@ impl ManifestWriter {
             file_sequence_number: None,
             data_file,
         };
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
@@ -378,32 +375,32 @@ impl ManifestWriter {
     /// # TODO
     /// Remove this allow later
     #[allow(dead_code)]
-    pub(crate) fn delete(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    pub(crate) fn add_delete_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Deleted;
         entry.snapshot_id = self.snapshot_id;
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
-    /// Add a delete manifest entry. The entry's snapshot ID will be this manifest's snapshot ID.
+    /// Add a file as delete manifest entry. The entry's snapshot ID will be this manifest's snapshot ID.
     /// However, the original data and file sequence numbers of the file must be preserved when
     /// the file is marked as deleted.
-    pub fn delete_file(
+    pub fn add_delete_file(
         &mut self,
         data_file: DataFile,
         sequence_number: i64,
-        file_sequence_number: i64,
+        file_sequence_number: Option<i64>,
     ) -> Result<()> {
         self.check_data_file(&data_file)?;
         let entry = ManifestEntry {
             status: ManifestStatus::Deleted,
             snapshot_id: self.snapshot_id,
             sequence_number: Some(sequence_number),
-            file_sequence_number: Some(file_sequence_number),
+            file_sequence_number,
             data_file,
         };
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
@@ -413,35 +410,35 @@ impl ManifestWriter {
     /// # TODO
     /// Remove this allow later
     #[allow(dead_code)]
-    pub(crate) fn existing(&mut self, mut entry: ManifestEntry) -> Result<()> {
+    pub(crate) fn add_existing_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Existing;
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
-    /// Add an existing manifest entry. The original data and file sequence numbers, snapshot ID,
+    /// Add an file as existing manifest entry. The original data and file sequence numbers, snapshot ID,
     /// which were assigned at commit, must be preserved when adding an existing entry.
-    pub fn existing_file(
+    pub fn add_existing_file(
         &mut self,
         data_file: DataFile,
         snapshot_id: i64,
         sequence_number: i64,
-        file_sequence_number: i64,
+        file_sequence_number: Option<i64>,
     ) -> Result<()> {
         self.check_data_file(&data_file)?;
         let entry = ManifestEntry {
             status: ManifestStatus::Existing,
             snapshot_id: Some(snapshot_id),
             sequence_number: Some(sequence_number),
-            file_sequence_number: Some(file_sequence_number),
+            file_sequence_number,
             data_file,
         };
-        self.add_entry(entry)?;
+        self.add_entry_inner(entry)?;
         Ok(())
     }
 
-    fn add_entry(&mut self, entry: ManifestEntry) -> Result<()> {
+    fn add_entry_inner(&mut self, entry: ManifestEntry) -> Result<()> {
         // Check if the entry has sequence number
         if (entry.status == ManifestStatus::Deleted || entry.status == ManifestStatus::Existing)
             && (entry.sequence_number.is_none() || entry.file_sequence_number.is_none())
@@ -477,7 +474,7 @@ impl ManifestWriter {
     }
 
     /// Write manifest file and return it.
-    pub async fn to_manifest_file(mut self) -> Result<ManifestFile> {
+    pub async fn write_manifest_file(mut self) -> Result<ManifestFile> {
         // Create the avro writer
         let partition_type = self
             .metadata
@@ -1958,9 +1955,9 @@ mod tests {
         )
         .build_v2_data();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        writer.to_manifest_file().await.unwrap();
+        writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
         let actual_manifest =
@@ -2138,9 +2135,9 @@ mod tests {
         )
         .build_v2_data();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        let manifest_file = writer.to_manifest_file().await.unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
         assert_eq!(manifest_file.sequence_number, UNASSIGNED_SEQUENCE_NUMBER);
         assert_eq!(
             manifest_file.min_sequence_number,
@@ -2230,9 +2227,9 @@ mod tests {
         )
         .build_v1();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        writer.to_manifest_file().await.unwrap();
+        writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
         let actual_manifest =
@@ -2334,9 +2331,9 @@ mod tests {
         )
         .build_v1();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        let manifest_file = writer.to_manifest_file().await.unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
         assert_eq!(manifest_file.partitions.len(), 1);
         assert_eq!(
             manifest_file.partitions[0].lower_bound,
@@ -2436,9 +2433,9 @@ mod tests {
         )
         .build_v2_data();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        writer.to_manifest_file().await.unwrap();
+        writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
         let actual_manifest =
@@ -2690,9 +2687,9 @@ mod tests {
         )
         .build_v2_data();
         for entry in &entries {
-            writer.add(entry.clone()).unwrap();
+            writer.add_entry(entry.clone()).unwrap();
         }
-        let res = writer.to_manifest_file().await.unwrap();
+        let res = writer.write_manifest_file().await.unwrap();
 
         assert!(res.partitions.len() == 3);
         assert!(res.partitions[0].lower_bound == Some(Datum::int(1111)));
@@ -2828,10 +2825,10 @@ mod tests {
             metadata.partition_spec.clone(),
         )
         .build_v2_data();
-        writer.add(entries[0].clone()).unwrap();
-        writer.delete(entries[1].clone()).unwrap();
-        writer.existing(entries[2].clone()).unwrap();
-        writer.to_manifest_file().await.unwrap();
+        writer.add_entry(entries[0].clone()).unwrap();
+        writer.add_delete_entry(entries[1].clone()).unwrap();
+        writer.add_existing_entry(entries[2].clone()).unwrap();
+        writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
         let actual_manifest =

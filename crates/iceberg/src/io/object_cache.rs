@@ -272,7 +272,7 @@ mod tests {
             )
             .build_v2_data();
             writer
-                .add(
+                .add_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
                         .data_file(
@@ -289,7 +289,7 @@ mod tests {
                         .build(),
                 )
                 .unwrap();
-            let data_file_manifest = writer.to_manifest_file().await.unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
             let mut manifest_list_write = ManifestListWriter::v2(

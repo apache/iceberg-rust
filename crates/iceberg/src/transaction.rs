@@ -410,9 +410,9 @@ impl<'a> SnapshotProduceAction<'a> {
             }
         };
         for entry in manifest_entries {
-            writer.add(entry)?;
+            writer.add_entry(entry)?;
         }
-        writer.to_manifest_file().await
+        writer.write_manifest_file().await
     }
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(

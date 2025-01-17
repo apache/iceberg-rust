@@ -1068,7 +1068,7 @@ pub mod tests {
             )
             .build_v2_data();
             writer
-                .add(
+                .add_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
                         .data_file(
@@ -1087,7 +1087,7 @@ pub mod tests {
                 )
                 .unwrap();
             writer
-                .delete(
+                .add_delete_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Deleted)
                         .snapshot_id(parent_snapshot.snapshot_id())
@@ -1108,7 +1108,7 @@ pub mod tests {
                 )
                 .unwrap();
             writer
-                .existing(
+                .add_existing_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Existing)
                         .snapshot_id(parent_snapshot.snapshot_id())
@@ -1128,7 +1128,7 @@ pub mod tests {
                         .build(),
                 )
                 .unwrap();
-            let data_file_manifest = writer.to_manifest_file().await.unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
             let mut manifest_list_write = ManifestListWriter::v2(
