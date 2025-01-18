@@ -158,4 +158,5 @@ jobs:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
         run: |
-          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables
+          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion 
+            --exclude iceberg-catalog-s3tables --exclude iceberg-sqllogictest

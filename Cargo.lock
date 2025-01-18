@@ -3195,6 +3195,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-sqllogictest"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-schema",
+ "async-trait",
+ "bigdecimal",
+ "datafusion",
+ "datafusion-common",
+ "half",
+ "itertools",
+ "rust_decimal",
+ "sqllogictest",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "iceberg_test_utils"
 version = "0.4.0"
 dependencies = [
@@ -5597,27 +5618,6 @@ checksum = "7bba3a93db0cc4f7bdece8bb09e77e2e785c20bfebf79eb8340ed80708048790"
 dependencies = [
  "nom",
  "unicode_categories",
-]
-
-[[package]]
-name = "sqllogictest"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-schema",
- "async-trait",
- "bigdecimal",
- "datafusion",
- "datafusion-common",
- "half",
- "itertools",
- "rust_decimal",
- "sqllogictest 0.22.0",
- "tokio",
- "toml",
 ]
 
 [[package]]

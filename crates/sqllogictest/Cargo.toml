@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "sqllogictest"
+name = "iceberg-sqllogictest"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
