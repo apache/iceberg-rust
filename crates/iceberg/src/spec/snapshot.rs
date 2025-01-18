@@ -34,6 +34,8 @@ use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
+/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
+pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
