@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This lib contains codes copied from
-// [Apache Datafusion](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest)
+mod datafusion;
+pub mod output;
 
-mod display;
-mod engine;
-#[allow(dead_code)]
-mod error;
+use std::path::Path;
+
+use toml::Table as TomlTable;
+
+use crate::error::Result;
+
+#[async_trait::async_trait]
+pub trait Engine {
+    async fn new(config: TomlTable) -> Result<Self>;
+    async fn run_slt_file(&self, path: &Path) -> Result<()>;
+}

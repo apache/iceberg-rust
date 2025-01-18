@@ -26,3 +26,19 @@ rust-version = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-schema = { workspace = true }
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
+datafusion = { workspace = true, default-features = true }
+datafusion-common = { workspace = true, default-features = true }
+half = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
+iceberg-datafusion = { workspace = true }
+itertools = { workspace = true }
+rust_decimal = { workspace = true }
+sqllogictest = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
