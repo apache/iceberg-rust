@@ -46,7 +46,7 @@ impl Engine for DataFusionEngine {
 
     async fn run_slt_file(&self, path: &Path) -> Result<()> {
         let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read slt file {path}"))
+            .with_context(|| format!("Failed to read slt file {:?}", path))
             .map_err(|e| anyhow!(e))?;
         let mut db = DataFusionDB::new(&self.config).await?;
 

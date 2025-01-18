@@ -25,7 +25,7 @@ use toml::Table as TomlTable;
 use crate::error::Result;
 
 #[async_trait::async_trait]
-pub trait Engine {
+pub trait Engine: Sized {
     async fn new(config: TomlTable) -> Result<Self>;
     async fn run_slt_file(&self, path: &Path) -> Result<()>;
 }

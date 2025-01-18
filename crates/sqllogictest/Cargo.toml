@@ -35,8 +35,6 @@ bigdecimal = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 half = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
-iceberg-datafusion = { workspace = true }
 itertools = { workspace = true }
 rust_decimal = { workspace = true }
 sqllogictest = { workspace = true }
