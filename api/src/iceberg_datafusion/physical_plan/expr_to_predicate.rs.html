@@ -393,6 +393,17 @@
 <a href="#393" id="393">393</a>
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -514,6 +525,7 @@
                 <span class="kw">_ </span>=&gt; TransformedResult::NotTransformed,
             }
         }
+        Expr::Cast(c) =&gt; to_iceberg_predicate(<span class="kw-2">&amp;</span>c.expr),
         <span class="kw">_ </span>=&gt; TransformedResult::NotTransformed,
     }
 }
@@ -606,7 +618,7 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-    <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema};
+    <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     <span class="kw">use </span>datafusion::common::DFSchema;
     <span class="kw">use </span>datafusion::logical_expr::utils::split_conjunction;
     <span class="kw">use </span>datafusion::prelude::{Expr, SessionContext};
@@ -619,6 +631,7 @@
         <span class="kw">let </span>arrow_schema = Schema::new(<span class="macro">vec!</span>[
             Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">true</span>),
             Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">true</span>),
+            Field::new(<span class="string">"ts"</span>, DataType::Timestamp(TimeUnit::Second, <span class="prelude-val">None</span>), <span class="bool-val">true</span>),
         ]);
         DFSchema::try_from_qualified_schema(<span class="string">"my_table"</span>, <span class="kw-2">&amp;</span>arrow_schema).unwrap()
     }
@@ -785,6 +798,15 @@
         <span class="kw">let </span>sql = <span class="string">"(foo &gt; 1 or length(bar) = 1 ) and foo &lt; 0 "</span>;
         <span class="kw">let </span>predicate = convert_to_iceberg_predicate(sql).unwrap();
         <span class="kw">let </span>expected_predicate = Reference::new(<span class="string">"foo"</span>).less_than(Datum::long(<span class="number">0</span>));
+        <span class="macro">assert_eq!</span>(predicate, expected_predicate);
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_predicate_conversion_with_cast() {
+        <span class="kw">let </span>sql = <span class="string">"ts &gt;= timestamp '2023-01-05T00:00:00'"</span>;
+        <span class="kw">let </span>predicate = convert_to_iceberg_predicate(sql).unwrap();
+        <span class="kw">let </span>expected_predicate =
+            Reference::new(<span class="string">"ts"</span>).greater_than_or_equal_to(Datum::string(<span class="string">"2023-01-05T00:00:00"</span>));
         <span class="macro">assert_eq!</span>(predicate, expected_predicate);
     }
 }

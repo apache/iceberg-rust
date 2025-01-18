@@ -3836,6 +3836,9 @@
 <a href="#3836" id="3836">3836</a>
 <a href="#3837" id="3837">3837</a>
 <a href="#3838" id="3838">3838</a>
+<a href="#3839" id="3839">3839</a>
+<a href="#3840" id="3840">3840</a>
+<a href="#3841" id="3841">3841</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -7406,6 +7409,9 @@
     </span><span class="kw">fn </span>test_parse_timestamp() {
         <span class="kw">let </span>value = Datum::timestamp_from_str(<span class="string">"2021-08-01T01:09:00.0899"</span>).unwrap();
         <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{value}"</span>), <span class="string">"2021-08-01 01:09:00.089900"</span>);
+
+        <span class="kw">let </span>value = Datum::timestamp_from_str(<span class="string">"2023-01-06T00:00:00"</span>).unwrap();
+        <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{value}"</span>), <span class="string">"2023-01-06 00:00:00"</span>);
 
         <span class="kw">let </span>value = Datum::timestamp_from_str(<span class="string">"2021-08-01T01:09:00.0899+0800"</span>);
         <span class="macro">assert!</span>(value.is_err(), <span class="string">"Parse timestamp with timezone should fail!"</span>);
