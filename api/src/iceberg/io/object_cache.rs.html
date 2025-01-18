@@ -403,11 +403,6 @@
 <a href="#403" id="403">403</a>
 <a href="#404" id="404">404</a>
 <a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -602,9 +597,8 @@
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, OutputFile};
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
-        ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, Struct, TableMetadata,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     <span class="kw">use </span><span class="kw">crate</span>::table::Table;
     <span class="kw">use </span><span class="kw">crate</span>::TableIdent;
@@ -674,37 +668,33 @@
             <span class="kw">let </span>current_partition_spec = <span class="self">self</span>.table.metadata().default_partition_spec();
 
             <span class="comment">// Write data files
-            </span><span class="kw">let </span>data_file_manifest = ManifestWriter::new(
+            </span><span class="kw">let </span><span class="kw-2">mut </span>writer = ManifestWriterBuilder::new(
                 <span class="self">self</span>.next_manifest_file(),
-                current_snapshot.snapshot_id(),
+                <span class="prelude-val">Some</span>(current_snapshot.snapshot_id()),
                 <span class="macro">vec!</span>[],
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
             )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema(current_schema.clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((<span class="kw-2">**</span>current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
-                    .build(),
-                <span class="macro">vec!</span>[ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFileBuilder::default()
-                            .content(DataContentType::Data)
-                            .file_path(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(<span class="number">100</span>)
-                            .record_count(<span class="number">1</span>)
-                            .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">100</span>))]))
-                            .key_metadata(<span class="prelude-val">None</span>)
-                            .build()
-                            .unwrap(),
-                    )
-                    .build()],
-            ))
-            .<span class="kw">await
-            </span>.unwrap();
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .content(DataContentType::Data)
+                                .file_path(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(<span class="number">100</span>)
+                                .record_count(<span class="number">1</span>)
+                                .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">100</span>))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            <span class="kw">let </span>data_file_manifest = writer.write_manifest_file().<span class="kw">await</span>.unwrap();
 
             <span class="comment">// Write to manifest list
             </span><span class="kw">let </span><span class="kw-2">mut </span>manifest_list_write = ManifestListWriter::v2(
