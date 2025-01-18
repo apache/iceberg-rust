@@ -33,7 +33,7 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 datafusion = { version = "44.0.0", default-features = true }
-datafusion-common = {version = "44.0.0", default-features = true }
+datafusion-common = { version = "44.0.0", default-features = true }
 half = { workspace = true }
 itertools = { workspace = true }
 rust_decimal = { workspace = true }
