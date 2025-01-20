@@ -110,6 +110,16 @@ impl FileIO {
         Ok(op.exists(relative_path).await?)
     }
 
+    /// List the path and all nested dirs and files recursively.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    pub async fn list(&self, path: impl AsRef<str>) -> Result<Vec<opendal::Entry>> {
+        let (op, relative_path) = self.inner.create_operator(&path)?;
+        Ok(op.list(relative_path).await?)
+    }
+
     /// Creates input file.
     ///
     /// # Arguments
