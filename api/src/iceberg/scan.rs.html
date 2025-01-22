@@ -1878,16 +1878,6 @@
 <a href="#1878" id="1878">1878</a>
 <a href="#1879" id="1879">1879</a>
 <a href="#1880" id="1880">1880</a>
-<a href="#1881" id="1881">1881</a>
-<a href="#1882" id="1882">1882</a>
-<a href="#1883" id="1883">1883</a>
-<a href="#1884" id="1884">1884</a>
-<a href="#1885" id="1885">1885</a>
-<a href="#1886" id="1886">1886</a>
-<a href="#1887" id="1887">1887</a>
-<a href="#1888" id="1888">1888</a>
-<a href="#1889" id="1889">1889</a>
-<a href="#1890" id="1890">1890</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2138,7 +2128,7 @@
                 )
             })<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>field = schema
+            schema
                 .as_struct()
                 .field_by_id(field_id)
                 .ok_or_else(|| {
@@ -2150,16 +2140,6 @@
                         ),
                     )
                 })<span class="question-mark">?</span>;
-
-            <span class="kw">if </span>!field.field_type.is_primitive() {
-                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    <span class="macro">format!</span>(
-                        <span class="string">"Column {} is not a primitive type. Schema: {}"</span>,
-                        column_name, schema
-                    ),
-                ));
-            }
 
             field_ids.push(field_id);
         }

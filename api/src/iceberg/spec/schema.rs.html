@@ -2813,7 +2813,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::error::Result;
 <span class="kw">use </span><span class="kw">crate</span>::expr::accessor::StructAccessor;
 <span class="kw">use </span><span class="kw">crate</span>::spec::datatypes::{
-    ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
+    ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FIELD_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 <span class="kw">use crate</span>::{ensure_data_valid, Error, ErrorKind};
@@ -3557,7 +3557,7 @@
     }
 
     <span class="kw">fn </span>list(<span class="kw-2">&amp;mut </span><span class="self">self</span>, list: <span class="kw-2">&amp;</span>ListType, _value: <span class="self">Self</span>::T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::T&gt; {
-        <span class="self">self</span>.add_field(LIST_FILED_NAME, list.element_field.id)
+        <span class="self">self</span>.add_field(LIST_FIELD_NAME, list.element_field.id)
     }
 
     <span class="kw">fn </span>map(<span class="kw-2">&amp;mut </span><span class="self">self</span>, map: <span class="kw-2">&amp;</span>MapType, _key_value: <span class="self">Self</span>::T, _value: <span class="self">Self</span>::T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::T&gt; {

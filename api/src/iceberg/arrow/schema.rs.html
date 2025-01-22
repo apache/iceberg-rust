@@ -1522,6 +1522,8 @@
 <a href="#1522" id="1522">1522</a>
 <a href="#1523" id="1523">1523</a>
 <a href="#1524" id="1524">1524</a>
+<a href="#1525" id="1525">1525</a>
+<a href="#1526" id="1526">1526</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1567,7 +1569,9 @@
 <span class="kw">use crate</span>::{Error, ErrorKind};
 
 <span class="doccomment">/// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>DEFAULT_MAP_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"key_value"</span>;
+</span><span class="kw">pub const </span>DEFAULT_MAP_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"key_value"</span>;
+<span class="doccomment">/// UTC time zone for Arrow timestamp type.
+</span><span class="kw">pub const </span>UTC_TIME_ZONE: <span class="kw-2">&amp;</span>str = <span class="string">"+00:00"</span>;
 
 <span class="doccomment">/// A post order arrow schema visitor.
 ///
@@ -2122,14 +2126,14 @@
             )),
             <span class="kw">crate</span>::spec::PrimitiveType::Timestamptz =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
                 <span class="comment">// Timestampz always stored as UTC
-                </span>DataType::Timestamp(TimeUnit::Microsecond, <span class="prelude-val">Some</span>(<span class="string">"+00:00"</span>.into())),
+                </span>DataType::Timestamp(TimeUnit::Microsecond, <span class="prelude-val">Some</span>(UTC_TIME_ZONE.into())),
             )),
             <span class="kw">crate</span>::spec::PrimitiveType::TimestampNs =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
                 DataType::Timestamp(TimeUnit::Nanosecond, <span class="prelude-val">None</span>),
             )),
             <span class="kw">crate</span>::spec::PrimitiveType::TimestamptzNs =&gt; <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(
                 <span class="comment">// Store timestamptz_ns as UTC
-                </span>DataType::Timestamp(TimeUnit::Nanosecond, <span class="prelude-val">Some</span>(<span class="string">"+00:00"</span>.into())),
+                </span>DataType::Timestamp(TimeUnit::Nanosecond, <span class="prelude-val">Some</span>(UTC_TIME_ZONE.into())),
             )),
             <span class="kw">crate</span>::spec::PrimitiveType::String =&gt; {
                 <span class="prelude-val">Ok</span>(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))

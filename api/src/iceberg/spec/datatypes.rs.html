@@ -1225,6 +1225,8 @@
 <a href="#1225" id="1225">1225</a>
 <a href="#1226" id="1226">1226</a>
 <a href="#1227" id="1227">1227</a>
+<a href="#1228" id="1228">1228</a>
+<a href="#1229" id="1229">1229</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1263,9 +1265,11 @@
 <span class="kw">use </span><span class="kw">crate</span>::spec::PrimitiveLiteral;
 
 <span class="doccomment">/// Field name for list type.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>LIST_FILED_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"element"</span>;
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MAP_KEY_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"key"</span>;
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MAP_VALUE_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"value"</span>;
+</span><span class="kw">pub const </span>LIST_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"element"</span>;
+<span class="doccomment">/// Field name for map type's key.
+</span><span class="kw">pub const </span>MAP_KEY_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"key"</span>;
+<span class="doccomment">/// Field name for map type's value.
+</span><span class="kw">pub const </span>MAP_VALUE_FIELD_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"value"</span>;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MAX_DECIMAL_BYTES: u32 = <span class="number">24</span>;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MAX_DECIMAL_PRECISION: u32 = <span class="number">38</span>;
@@ -1860,9 +1864,9 @@
     <span class="doccomment">/// Construct list type's element field.
     </span><span class="kw">pub fn </span>list_element(id: i32, field_type: Type, required: bool) -&gt; <span class="self">Self </span>{
         <span class="kw">if </span>required {
-            <span class="self">Self</span>::required(id, LIST_FILED_NAME, field_type)
+            <span class="self">Self</span>::required(id, LIST_FIELD_NAME, field_type)
         } <span class="kw">else </span>{
-            <span class="self">Self</span>::optional(id, LIST_FILED_NAME, field_type)
+            <span class="self">Self</span>::optional(id, LIST_FIELD_NAME, field_type)
         }
     }
 

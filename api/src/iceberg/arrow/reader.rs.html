@@ -1286,6 +1286,45 @@
 <a href="#1286" id="1286">1286</a>
 <a href="#1287" id="1287">1287</a>
 <a href="#1288" id="1288">1288</a>
+<a href="#1289" id="1289">1289</a>
+<a href="#1290" id="1290">1290</a>
+<a href="#1291" id="1291">1291</a>
+<a href="#1292" id="1292">1292</a>
+<a href="#1293" id="1293">1293</a>
+<a href="#1294" id="1294">1294</a>
+<a href="#1295" id="1295">1295</a>
+<a href="#1296" id="1296">1296</a>
+<a href="#1297" id="1297">1297</a>
+<a href="#1298" id="1298">1298</a>
+<a href="#1299" id="1299">1299</a>
+<a href="#1300" id="1300">1300</a>
+<a href="#1301" id="1301">1301</a>
+<a href="#1302" id="1302">1302</a>
+<a href="#1303" id="1303">1303</a>
+<a href="#1304" id="1304">1304</a>
+<a href="#1305" id="1305">1305</a>
+<a href="#1306" id="1306">1306</a>
+<a href="#1307" id="1307">1307</a>
+<a href="#1308" id="1308">1308</a>
+<a href="#1309" id="1309">1309</a>
+<a href="#1310" id="1310">1310</a>
+<a href="#1311" id="1311">1311</a>
+<a href="#1312" id="1312">1312</a>
+<a href="#1313" id="1313">1313</a>
+<a href="#1314" id="1314">1314</a>
+<a href="#1315" id="1315">1315</a>
+<a href="#1316" id="1316">1316</a>
+<a href="#1317" id="1317">1317</a>
+<a href="#1318" id="1318">1318</a>
+<a href="#1319" id="1319">1319</a>
+<a href="#1320" id="1320">1320</a>
+<a href="#1321" id="1321">1321</a>
+<a href="#1322" id="1322">1322</a>
+<a href="#1323" id="1323">1323</a>
+<a href="#1324" id="1324">1324</a>
+<a href="#1325" id="1325">1325</a>
+<a href="#1326" id="1326">1326</a>
+<a href="#1327" id="1327">1327</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1336,7 +1375,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference};
 <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileMetadata, FileRead};
 <span class="kw">use </span><span class="kw">crate</span>::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveType, Schema};
+<span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 <span class="kw">use </span><span class="kw">crate</span>::utils::available_parallelism;
 <span class="kw">use crate</span>::{Error, ErrorKind};
 
@@ -1561,6 +1600,28 @@
         <span class="prelude-val">Ok</span>((iceberg_field_ids, field_id_map))
     }
 
+    <span class="doccomment">/// Insert the leaf field id into the field_ids using for projection.
+    /// For nested type, it will recursively insert the leaf field id.
+    </span><span class="kw">fn </span>include_leaf_field_id(field: <span class="kw-2">&amp;</span>NestedField, field_ids: <span class="kw-2">&amp;mut </span>Vec&lt;i32&gt;) {
+        <span class="kw">match </span>field.field_type.as_ref() {
+            Type::Primitive(<span class="kw">_</span>) =&gt; {
+                field_ids.push(field.id);
+            }
+            Type::Struct(struct_type) =&gt; {
+                <span class="kw">for </span>nested_field <span class="kw">in </span>struct_type.fields() {
+                    <span class="self">Self</span>::include_leaf_field_id(nested_field, field_ids);
+                }
+            }
+            Type::List(list_type) =&gt; {
+                <span class="self">Self</span>::include_leaf_field_id(<span class="kw-2">&amp;</span>list_type.element_field, field_ids);
+            }
+            Type::Map(map_type) =&gt; {
+                <span class="self">Self</span>::include_leaf_field_id(<span class="kw-2">&amp;</span>map_type.key_field, field_ids);
+                <span class="self">Self</span>::include_leaf_field_id(<span class="kw-2">&amp;</span>map_type.value_field, field_ids);
+            }
+        }
+    }
+
     <span class="kw">fn </span>get_arrow_projection_mask(
         field_ids: <span class="kw-2">&amp;</span>[i32],
         iceberg_schema_of_task: <span class="kw-2">&amp;</span>Schema,
@@ -1585,11 +1646,21 @@
                         scale: requested_scale,
                     }),
                 ) <span class="kw">if </span>requested_precision &gt;= file_precision &amp;&amp; file_scale == requested_scale =&gt; <span class="bool-val">true</span>,
+                <span class="comment">// Uuid will be store as Fixed(16) in parquet file, so the read back type will be Fixed(16).
+                </span>(<span class="prelude-val">Some</span>(PrimitiveType::Fixed(<span class="number">16</span>)), <span class="prelude-val">Some</span>(PrimitiveType::Uuid)) =&gt; <span class="bool-val">true</span>,
                 <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
             }
         }
 
-        <span class="kw">if </span>field_ids.is_empty() {
+        <span class="kw">let </span><span class="kw-2">mut </span>leaf_field_ids = <span class="macro">vec!</span>[];
+        <span class="kw">for </span>field_id <span class="kw">in </span>field_ids {
+            <span class="kw">let </span>field = iceberg_schema_of_task.field_by_id(<span class="kw-2">*</span>field_id);
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(field) = field {
+                <span class="self">Self</span>::include_leaf_field_id(field, <span class="kw-2">&amp;mut </span>leaf_field_ids);
+            }
+        }
+
+        <span class="kw">if </span>leaf_field_ids.is_empty() {
             <span class="prelude-val">Ok</span>(ProjectionMask::all())
         } <span class="kw">else </span>{
             <span class="comment">// Build the map between field id and column index in Parquet schema.
@@ -1606,7 +1677,7 @@
                         .and_then(|field_id| i32::from_str(field_id).ok())
                         .map_or(<span class="bool-val">false</span>, |field_id| {
                             projected_fields.insert((<span class="kw-2">*</span>f).clone(), field_id);
-                            field_ids.contains(<span class="kw-2">&amp;</span>field_id)
+                            leaf_field_ids.contains(<span class="kw-2">&amp;</span>field_id)
                         })
                 }),
                 arrow_schema.metadata().clone(),
@@ -1639,19 +1710,26 @@
                 <span class="bool-val">true
             </span>});
 
-            <span class="kw">if </span>column_map.len() != field_ids.len() {
+            <span class="kw">if </span>column_map.len() != leaf_field_ids.len() {
+                <span class="kw">let </span>missing_fields = leaf_field_ids
+                    .iter()
+                    .filter(|field_id| !column_map.contains_key(field_id))
+                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
                     <span class="macro">format!</span>(
                         <span class="string">"Parquet schema {} and Iceberg schema {} do not match."</span>,
                         iceberg_schema, iceberg_schema_of_task
                     ),
-                ));
+                )
+                .with_context(<span class="string">"column_map"</span>, <span class="macro">format!</span> {<span class="string">"{:?}"</span>, column_map})
+                .with_context(<span class="string">"field_ids"</span>, <span class="macro">format!</span> {<span class="string">"{:?}"</span>, leaf_field_ids})
+                .with_context(<span class="string">"missing_fields"</span>, <span class="macro">format!</span> {<span class="string">"{:?}"</span>, missing_fields}));
             }
 
             <span class="kw">let </span><span class="kw-2">mut </span>indices = <span class="macro">vec!</span>[];
-            <span class="kw">for </span>field_id <span class="kw">in </span>field_ids {
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(col_idx) = column_map.get(field_id) {
+            <span class="kw">for </span>field_id <span class="kw">in </span>leaf_field_ids {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(col_idx) = column_map.get(<span class="kw-2">&amp;</span>field_id) {
                     indices.push(<span class="kw-2">*</span>col_idx);
                 } <span class="kw">else </span>{
                     <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
