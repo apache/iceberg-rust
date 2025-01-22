@@ -3099,6 +3099,7 @@ dependencies = [
  "iceberg_test_utils",
  "parquet",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

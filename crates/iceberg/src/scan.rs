@@ -248,7 +248,7 @@ impl<'a> TableScanBuilder<'a> {
                 )
             })?;
 
-            let field = schema
+            schema
                 .as_struct()
                 .field_by_id(field_id)
                 .ok_or_else(|| {
@@ -260,16 +260,6 @@ impl<'a> TableScanBuilder<'a> {
                         ),
                     )
                 })?;
-
-            if !field.field_type.is_primitive() {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "Column {} is not a primitive type. Schema: {}",
-                        column_name, schema
-                    ),
-                ));
-            }
 
             field_ids.push(field_id);
         }

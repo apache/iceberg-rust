@@ -36,9 +36,11 @@ use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 use crate::spec::PrimitiveLiteral;
 
 /// Field name for list type.
-pub(crate) const LIST_FILED_NAME: &str = "element";
-pub(crate) const MAP_KEY_FIELD_NAME: &str = "key";
-pub(crate) const MAP_VALUE_FIELD_NAME: &str = "value";
+pub const LIST_FIELD_NAME: &str = "element";
+/// Field name for map type's key.
+pub const MAP_KEY_FIELD_NAME: &str = "key";
+/// Field name for map type's value.
+pub const MAP_VALUE_FIELD_NAME: &str = "value";
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
@@ -633,9 +635,9 @@ impl NestedField {
     /// Construct list type's element field.
     pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
         if required {
-            Self::required(id, LIST_FILED_NAME, field_type)
+            Self::required(id, LIST_FIELD_NAME, field_type)
         } else {
-            Self::optional(id, LIST_FILED_NAME, field_type)
+            Self::optional(id, LIST_FIELD_NAME, field_type)
         }
     }
 

@@ -30,7 +30,7 @@ use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
-    ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FILED_NAME,
+    ListType, MapType, NestedFieldRef, PrimitiveType, StructType, Type, LIST_FIELD_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
 };
 use crate::{ensure_data_valid, Error, ErrorKind};
@@ -774,7 +774,7 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn list(&mut self, list: &ListType, _value: Self::T) -> Result<Self::T> {
-        self.add_field(LIST_FILED_NAME, list.element_field.id)
+        self.add_field(LIST_FIELD_NAME, list.element_field.id)
     }
 
     fn map(&mut self, map: &MapType, _key_value: Self::T, _value: Self::T) -> Result<Self::T> {
