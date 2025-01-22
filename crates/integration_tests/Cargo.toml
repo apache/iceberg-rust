@@ -33,3 +33,7 @@ iceberg-catalog-rest = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 parquet = { workspace = true }
 tokio = { workspace = true }
+aws-sdk-s3 = "1.68.0" 
+url = "2.4.0"
+
+
