@@ -343,8 +343,8 @@ impl ViewMetadataBuilder {
                     .map(|id| id + 1)
                     // ToDo Discuss: In Java this uses `new_view_version.version_id()` instead.
                     // I believe 0 is more appropriate here, as the first version should always be 0.
-                    // The TableMetadataBuilder also uses 0 for partition specs, and other `reuse_or_create_*` functions
-                    // and consistent behaviour between the two builders is desirable.
+                    // The TableMetadataBuilder also uses 0 for partition specs (and other `reuse_or_create_*` functions).
+                    // Consistent behaviour between the two builders is desirable.
                     .unwrap_or(INITIAL_VIEW_VERSION_ID)
             })
     }
