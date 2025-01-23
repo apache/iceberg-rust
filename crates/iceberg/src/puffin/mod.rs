@@ -21,8 +21,10 @@
 // Temporarily allowing this while crate is under active development
 #![allow(dead_code)]
 
+mod blob;
 mod compression;
 mod metadata;
+mod reader;
 
 #[cfg(test)]
 mod test_utils;
