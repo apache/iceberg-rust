@@ -195,7 +195,7 @@ pub struct ManifestWriter {
 
     key_metadata: Vec<u8>,
 
-    manifset_entries: Vec<ManifestEntry>,
+    manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
 }
@@ -281,7 +281,7 @@ impl ManifestWriter {
             deleted_rows: 0,
             min_seq_num: None,
             key_metadata,
-            manifset_entries: Vec::new(),
+            manifest_entries: Vec::new(),
             metadata,
         }
     }
@@ -295,7 +295,7 @@ impl ManifestWriter {
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
             .collect();
-        for partition in self.manifset_entries.iter().map(|e| &e.data_file.partition) {
+        for partition in self.manifest_entries.iter().map(|e| &e.data_file.partition) {
             for (literal, stat) in partition.iter().zip_eq(field_stats.iter_mut()) {
                 let primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
                 stat.update(primitive_literal)?;
@@ -469,7 +469,7 @@ impl ManifestWriter {
                 self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
             }
         }
-        self.manifset_entries.push(entry);
+        self.manifest_entries.push(entry);
         Ok(())
     }
 
@@ -519,7 +519,7 @@ impl ManifestWriter {
 
         let partition_summary = self.construct_partition_summaries(&partition_type)?;
         // Write manifest entries
-        for entry in std::mem::take(&mut self.manifset_entries) {
+        for entry in std::mem::take(&mut self.manifest_entries) {
             let value = match self.metadata.format_version {
                 FormatVersion::V1 => {
                     to_value(_serde::ManifestEntryV1::try_from(entry, &partition_type)?)?
