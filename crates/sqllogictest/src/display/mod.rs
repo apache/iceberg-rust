@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This lib contains codes copied from
-// [Apache Datafusion](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest)
-
-mod display;
-#[allow(dead_code)]
-mod engine;
-#[allow(dead_code)]
-mod error;
+// Code in this module is copied from [Apache Datafusion](https://github.com/apache/datafusion)
+pub mod conversion;
+pub mod normalize;
