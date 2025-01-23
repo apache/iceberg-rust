@@ -831,7 +831,7 @@ impl TableMetadataBuilder {
         if sort_order_found {
             if self.last_added_order_id != Some(new_order_id) {
                 self.changes.push(TableUpdate::AddSortOrder {
-                    sort_order: sort_order.clone(),
+                    sort_order: sort_order.clone().with_order_id(new_order_id),
                 });
                 self.last_added_order_id = Some(new_order_id);
             }
