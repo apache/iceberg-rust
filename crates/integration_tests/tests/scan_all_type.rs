@@ -204,7 +204,7 @@ async fn test_scan_all_type() {
         .into_iter(),
     )
     .unwrap();
-    assert!(col12.data_type() == &DataType::FixedSizeBinary(10));
+    assert_eq!(col12.data_type(), &DataType::FixedSizeBinary(10));
     let col13 = FixedSizeBinaryArray::try_from_iter(
         vec![
             Uuid::new_v4().as_bytes().to_vec(),

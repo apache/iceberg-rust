@@ -2691,21 +2691,21 @@ mod tests {
         }
         let res = writer.write_manifest_file().await.unwrap();
 
-        assert!(res.partitions.len() == 3);
-        assert!(res.partitions[0].lower_bound == Some(Datum::int(1111)));
-        assert!(res.partitions[0].upper_bound == Some(Datum::int(2021)));
+        assert_eq!(res.partitions.len(), 3);
+        assert_eq!(res.partitions[0].lower_bound, Some(Datum::int(1111)));
+        assert_eq!(res.partitions[0].upper_bound, Some(Datum::int(2021)));
         assert!(!res.partitions[0].contains_null);
-        assert!(res.partitions[0].contains_nan == Some(false));
+        assert_eq!(res.partitions[0].contains_nan, Some(false));
 
-        assert!(res.partitions[1].lower_bound == Some(Datum::float(1.0)));
-        assert!(res.partitions[1].upper_bound == Some(Datum::float(15.5)));
+        assert_eq!(res.partitions[1].lower_bound, Some(Datum::float(1.0)));
+        assert_eq!(res.partitions[1].upper_bound, Some(Datum::float(15.5)));
         assert!(res.partitions[1].contains_null);
-        assert!(res.partitions[1].contains_nan == Some(true));
+        assert_eq!(res.partitions[1].contains_nan, Some(true));
 
-        assert!(res.partitions[2].lower_bound == Some(Datum::double(1.0)));
-        assert!(res.partitions[2].upper_bound == Some(Datum::double(25.5)));
+        assert_eq!(res.partitions[2].lower_bound, Some(Datum::double(1.0)));
+        assert_eq!(res.partitions[2].upper_bound, Some(Datum::double(25.5)));
         assert!(!res.partitions[2].contains_null);
-        assert!(res.partitions[2].contains_nan == Some(false));
+        assert_eq!(res.partitions[2].contains_nan, Some(false));
     }
 
     #[tokio::test]
