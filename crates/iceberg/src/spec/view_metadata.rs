@@ -193,26 +193,6 @@ impl ViewMetadata {
     }
 }
 
-// /// Manipulating view metadata.
-// pub struct ViewMetadataBuilder(ViewMetadata);
-// ToDo: Remove
-// impl ViewMetadataBuilder {
-//     /// Creates a new view metadata builder from the given view metadata.
-//     pub fn new(origin: ViewMetadata) -> Self {
-//         Self(origin)
-//     }
-//     /// Changes uuid of view metadata.
-//     pub fn assign_uuid(mut self, uuid: Uuid) -> Result<Self> {
-//         self.0.view_uuid = uuid;
-//         Ok(self)
-//     }
-
-//     /// Returns the new view metadata after changes.
-//     pub fn build(self) -> Result<ViewMetadata> {
-//         Ok(self.0)
-//     }
-// }
-
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 /// A log of when each snapshot was made.
