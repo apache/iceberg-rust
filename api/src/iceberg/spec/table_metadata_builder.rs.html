@@ -3175,7 +3175,7 @@
         <span class="kw">if </span>sort_order_found {
             <span class="kw">if </span><span class="self">self</span>.last_added_order_id != <span class="prelude-val">Some</span>(new_order_id) {
                 <span class="self">self</span>.changes.push(TableUpdate::AddSortOrder {
-                    sort_order: sort_order.clone(),
+                    sort_order: sort_order.clone().with_order_id(new_order_id),
                 });
                 <span class="self">self</span>.last_added_order_id = <span class="prelude-val">Some</span>(new_order_id);
             }
