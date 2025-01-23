@@ -216,7 +216,7 @@ async fn test_scan_all_type() {
         .into_iter(),
     )
     .unwrap();
-    assert!(col13.data_type() == &DataType::FixedSizeBinary(16));
+    assert_eq!(col13.data_type(), &DataType::FixedSizeBinary(16));
     let col14 = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]).with_timezone(UTC_TIME_ZONE);
     let col15 = StructArray::from(vec![
         (
