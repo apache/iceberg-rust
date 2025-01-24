@@ -481,7 +481,7 @@
             RecordBatchProjector::new(schema.clone(), <span class="kw-2">&amp;</span>[<span class="number">1</span>, <span class="number">3</span>], field_id_fetch_func, |<span class="kw">_</span>| <span class="bool-val">true</span>)
                 .unwrap();
 
-        <span class="macro">assert!</span>(projector.field_indices.len() == <span class="number">2</span>);
+        <span class="macro">assert_eq!</span>(projector.field_indices.len(), <span class="number">2</span>);
         <span class="macro">assert_eq!</span>(projector.field_indices[<span class="number">0</span>], <span class="macro">vec!</span>[<span class="number">0</span>]);
         <span class="macro">assert_eq!</span>(projector.field_indices[<span class="number">1</span>], <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>]);
 

@@ -5599,21 +5599,21 @@
         }
         <span class="kw">let </span>res = writer.write_manifest_file().<span class="kw">await</span>.unwrap();
 
-        <span class="macro">assert!</span>(res.partitions.len() == <span class="number">3</span>);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::int(<span class="number">1111</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::int(<span class="number">2021</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions.len(), <span class="number">3</span>);
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::int(<span class="number">1111</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::int(<span class="number">2021</span>)));
         <span class="macro">assert!</span>(!res.partitions[<span class="number">0</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
 
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::float(<span class="number">1.0</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::float(<span class="number">15.5</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::float(<span class="number">1.0</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::float(<span class="number">15.5</span>)));
         <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">true</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">true</span>));
 
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::double(<span class="number">1.0</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::double(<span class="number">25.5</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::double(<span class="number">1.0</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::double(<span class="number">25.5</span>)));
         <span class="macro">assert!</span>(!res.partitions[<span class="number">2</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
     }
 
     <span class="attr">#[tokio::test]

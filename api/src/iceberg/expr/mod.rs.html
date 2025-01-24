@@ -190,6 +190,18 @@
 <a href="#190" id="190">190</a>
 <a href="#191" id="191">191</a>
 <a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -316,13 +328,25 @@
     ///
     /// ```rust
     /// use iceberg::expr::PredicateOperator;
-    /// assert!(PredicateOperator::IsNull.negate() == PredicateOperator::NotNull);
-    /// assert!(PredicateOperator::IsNan.negate() == PredicateOperator::NotNan);
-    /// assert!(PredicateOperator::LessThan.negate() == PredicateOperator::GreaterThanOrEq);
-    /// assert!(PredicateOperator::GreaterThan.negate() == PredicateOperator::LessThanOrEq);
-    /// assert!(PredicateOperator::Eq.negate() == PredicateOperator::NotEq);
-    /// assert!(PredicateOperator::In.negate() == PredicateOperator::NotIn);
-    /// assert!(PredicateOperator::StartsWith.negate() == PredicateOperator::NotStartsWith);
+    /// assert_eq!(
+    ///     PredicateOperator::IsNull.negate(),
+    ///     PredicateOperator::NotNull
+    /// );
+    /// assert_eq!(PredicateOperator::IsNan.negate(), PredicateOperator::NotNan);
+    /// assert_eq!(
+    ///     PredicateOperator::LessThan.negate(),
+    ///     PredicateOperator::GreaterThanOrEq
+    /// );
+    /// assert_eq!(
+    ///     PredicateOperator::GreaterThan.negate(),
+    ///     PredicateOperator::LessThanOrEq
+    /// );
+    /// assert_eq!(PredicateOperator::Eq.negate(), PredicateOperator::NotEq);
+    /// assert_eq!(PredicateOperator::In.negate(), PredicateOperator::NotIn);
+    /// assert_eq!(
+    ///     PredicateOperator::StartsWith.negate(),
+    ///     PredicateOperator::NotStartsWith
+    /// );
     /// ```
     </span><span class="kw">pub fn </span>negate(<span class="self">self</span>) -&gt; PredicateOperator {
         <span class="kw">match </span><span class="self">self </span>{
