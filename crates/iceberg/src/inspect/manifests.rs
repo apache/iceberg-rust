@@ -143,61 +143,6 @@ impl<'a> ManifestsTable<'a> {
             .unwrap()
     }
 
-    fn partition_summary_builder(&self) -> Result<GenericListBuilder<i32, StructBuilder>> {
-        let schema = schema_to_arrow_schema(&self.schema())?;
-        let partition_summary_fields = if let DataType::List(list_type) =
-            schema.field_with_name("partition_summaries")?.data_type()
-        {
-            if let DataType::Struct(fields) = list_type.data_type() {
-                fields.to_vec()
-            } else {
-                unreachable!()
-            }
-        } else {
-            unreachable!()
-        };
-
-        let partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(partition_summary_fields.clone()),
-            0,
-        ))
-        .with_field(Arc::new(
-            Field::new_struct("item", partition_summary_fields, false).with_metadata(
-                HashMap::from([("PARQUET:field_id".to_string(), "9".to_string())]),
-            ),
-        ));
-
-        Ok(partition_summaries)
-    }
-
-    fn append_partition_summary(
-        &self,
-        builder: &mut GenericListBuilder<i32, StructBuilder>,
-        partitions: &[FieldSummary],
-    ) {
-        let partition_summaries_builder = builder.values();
-        for summary in partitions {
-            partition_summaries_builder
-                .field_builder::<BooleanBuilder>(0)
-                .unwrap()
-                .append_value(summary.contains_null);
-            partition_summaries_builder
-                .field_builder::<BooleanBuilder>(1)
-                .unwrap()
-                .append_option(summary.contains_nan);
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(2)
-                .unwrap()
-                .append_option(summary.lower_bound.as_ref().map(|v| v.to_string()));
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(3)
-                .unwrap()
-                .append_option(summary.upper_bound.as_ref().map(|v| v.to_string()));
-            partition_summaries_builder.append(true);
-        }
-        builder.append(true);
-    }
-
     /// Scans the manifests table.
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let schema = schema_to_arrow_schema(&self.schema())?;
@@ -236,7 +181,7 @@ impl<'a> ManifestsTable<'a> {
                     .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
                 deleted_delete_files_count
                     .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
-                self.append_partition_summary(&mut partition_summaries, &manifest.partitions);
+                self.append_partition_summaries(&mut partition_summaries, &manifest.partitions);
             }
         }
 
@@ -255,6 +200,58 @@ impl<'a> ManifestsTable<'a> {
             Arc::new(partition_summaries.finish()),
         ])?;
         Ok(stream::iter(vec![Ok(batch)]).boxed())
+    }
+
+    fn partition_summary_builder(&self) -> Result<GenericListBuilder<i32, StructBuilder>> {
+        let schema = schema_to_arrow_schema(&self.schema())?;
+        let partition_summary_fields =
+            match schema.field_with_name("partition_summaries")?.data_type() {
+                DataType::List(list_type) => match list_type.data_type() {
+                    DataType::Struct(fields) => fields.to_vec(),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+
+        let partition_summaries = ListBuilder::new(StructBuilder::from_fields(
+            Fields::from(partition_summary_fields.clone()),
+            0,
+        ))
+        .with_field(Arc::new(
+            Field::new_struct("item", partition_summary_fields, false).with_metadata(
+                HashMap::from([("PARQUET:field_id".to_string(), "9".to_string())]),
+            ),
+        ));
+
+        Ok(partition_summaries)
+    }
+
+    fn append_partition_summaries(
+        &self,
+        builder: &mut GenericListBuilder<i32, StructBuilder>,
+        partitions: &[FieldSummary],
+    ) {
+        let partition_summaries_builder = builder.values();
+        for summary in partitions {
+            partition_summaries_builder
+                .field_builder::<BooleanBuilder>(0)
+                .unwrap()
+                .append_value(summary.contains_null);
+            partition_summaries_builder
+                .field_builder::<BooleanBuilder>(1)
+                .unwrap()
+                .append_option(summary.contains_nan);
+            partition_summaries_builder
+                .field_builder::<StringBuilder>(2)
+                .unwrap()
+                .append_option(summary.lower_bound.as_ref().map(|v| v.to_string()));
+            partition_summaries_builder
+                .field_builder::<StringBuilder>(3)
+                .unwrap()
+                .append_option(summary.upper_bound.as_ref().map(|v| v.to_string()));
+            partition_summaries_builder.append(true);
+        }
+        builder.append(true);
     }
 }
 
