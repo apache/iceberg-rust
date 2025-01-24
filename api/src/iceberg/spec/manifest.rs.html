@@ -3103,7 +3103,7 @@
 
     key_metadata: Vec&lt;u8&gt;,
 
-    manifset_entries: Vec&lt;ManifestEntry&gt;,
+    manifest_entries: Vec&lt;ManifestEntry&gt;,
 
     metadata: ManifestMetadata,
 }
@@ -3189,7 +3189,7 @@
             deleted_rows: <span class="number">0</span>,
             min_seq_num: <span class="prelude-val">None</span>,
             key_metadata,
-            manifset_entries: Vec::new(),
+            manifest_entries: Vec::new(),
             metadata,
         }
     }
@@ -3203,7 +3203,7 @@
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
             .collect();
-        <span class="kw">for </span>partition <span class="kw">in </span><span class="self">self</span>.manifset_entries.iter().map(|e| <span class="kw-2">&amp;</span>e.data_file.partition) {
+        <span class="kw">for </span>partition <span class="kw">in </span><span class="self">self</span>.manifest_entries.iter().map(|e| <span class="kw-2">&amp;</span>e.data_file.partition) {
             <span class="kw">for </span>(literal, stat) <span class="kw">in </span>partition.iter().zip_eq(field_stats.iter_mut()) {
                 <span class="kw">let </span>primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
                 stat.update(primitive_literal)<span class="question-mark">?</span>;
@@ -3377,7 +3377,7 @@
                 <span class="self">self</span>.min_seq_num = <span class="prelude-val">Some</span>(<span class="self">self</span>.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
             }
         }
-        <span class="self">self</span>.manifset_entries.push(entry);
+        <span class="self">self</span>.manifest_entries.push(entry);
         <span class="prelude-val">Ok</span>(())
     }
 
@@ -3427,7 +3427,7 @@
 
         <span class="kw">let </span>partition_summary = <span class="self">self</span>.construct_partition_summaries(<span class="kw-2">&amp;</span>partition_type)<span class="question-mark">?</span>;
         <span class="comment">// Write manifest entries
-        </span><span class="kw">for </span>entry <span class="kw">in </span>std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.manifset_entries) {
+        </span><span class="kw">for </span>entry <span class="kw">in </span>std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.manifest_entries) {
             <span class="kw">let </span>value = <span class="kw">match </span><span class="self">self</span>.metadata.format_version {
                 FormatVersion::V1 =&gt; {
                     to_value(_serde::ManifestEntryV1::try_from(entry, <span class="kw-2">&amp;</span>partition_type)<span class="question-mark">?</span>)<span class="question-mark">?
