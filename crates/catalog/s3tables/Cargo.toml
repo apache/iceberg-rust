@@ -20,7 +20,7 @@ name = "iceberg-catalog-s3tables"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.81.0"
 
 categories = ["database"]
 description = "Apache Iceberg Rust S3Tables Catalog"
@@ -32,7 +32,7 @@ keywords = ["iceberg", "sql", "catalog"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-s3tables = "1.2.0"
+aws-sdk-s3tables = "1.4.0"
 iceberg = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

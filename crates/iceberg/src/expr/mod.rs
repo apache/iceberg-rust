@@ -124,13 +124,25 @@ impl PredicateOperator {
     ///
     /// ```rust
     /// use iceberg::expr::PredicateOperator;
-    /// assert!(PredicateOperator::IsNull.negate() == PredicateOperator::NotNull);
-    /// assert!(PredicateOperator::IsNan.negate() == PredicateOperator::NotNan);
-    /// assert!(PredicateOperator::LessThan.negate() == PredicateOperator::GreaterThanOrEq);
-    /// assert!(PredicateOperator::GreaterThan.negate() == PredicateOperator::LessThanOrEq);
-    /// assert!(PredicateOperator::Eq.negate() == PredicateOperator::NotEq);
-    /// assert!(PredicateOperator::In.negate() == PredicateOperator::NotIn);
-    /// assert!(PredicateOperator::StartsWith.negate() == PredicateOperator::NotStartsWith);
+    /// assert_eq!(
+    ///     PredicateOperator::IsNull.negate(),
+    ///     PredicateOperator::NotNull
+    /// );
+    /// assert_eq!(PredicateOperator::IsNan.negate(), PredicateOperator::NotNan);
+    /// assert_eq!(
+    ///     PredicateOperator::LessThan.negate(),
+    ///     PredicateOperator::GreaterThanOrEq
+    /// );
+    /// assert_eq!(
+    ///     PredicateOperator::GreaterThan.negate(),
+    ///     PredicateOperator::LessThanOrEq
+    /// );
+    /// assert_eq!(PredicateOperator::Eq.negate(), PredicateOperator::NotEq);
+    /// assert_eq!(PredicateOperator::In.negate(), PredicateOperator::NotIn);
+    /// assert_eq!(
+    ///     PredicateOperator::StartsWith.negate(),
+    ///     PredicateOperator::NotStartsWith
+    /// );
     /// ```
     pub fn negate(self) -> PredicateOperator {
         match self {

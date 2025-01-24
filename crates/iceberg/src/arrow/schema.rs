@@ -43,7 +43,9 @@ use crate::spec::{
 use crate::{Error, ErrorKind};
 
 /// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
-pub(crate) const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+/// UTC time zone for Arrow timestamp type.
+pub const UTC_TIME_ZONE: &str = "+00:00";
 
 /// A post order arrow schema visitor.
 ///
@@ -120,8 +122,10 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                 DataType::Boolean
                     | DataType::Utf8
                     | DataType::LargeUtf8
+                    | DataType::Utf8View
                     | DataType::Binary
                     | DataType::LargeBinary
+                    | DataType::BinaryView
                     | DataType::FixedSizeBinary(_)
             ) =>
         {
@@ -403,7 +407,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             {
                 Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
-            DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                Ok(Type::Primitive(PrimitiveType::Binary))
+            }
             DataType::FixedSizeBinary(width) => {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
@@ -594,14 +600,14 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             )),
             crate::spec::PrimitiveType::Timestamptz => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Timestampz always stored as UTC
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(UTC_TIME_ZONE.into())),
             )),
             crate::spec::PrimitiveType::TimestampNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             crate::spec::PrimitiveType::TimestamptzNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Store timestamptz_ns as UTC
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(UTC_TIME_ZONE.into())),
             )),
             crate::spec::PrimitiveType::String => {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))

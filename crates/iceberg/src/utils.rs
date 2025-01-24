@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::num::NonZero;
+use std::num::NonZeroUsize;
 
 // Use a default value of 1 as the safest option.
 // See https://doc.rust-lang.org/std/thread/fn.available_parallelism.html#limitations
@@ -31,12 +31,12 @@ const DEFAULT_PARALLELISM: usize = 1;
 /// are circumstances where the level of available
 /// parallelism can change during the lifetime of an executing
 /// process, but this should not be called in a hot loop.
-pub(crate) fn available_parallelism() -> NonZero<usize> {
+pub(crate) fn available_parallelism() -> NonZeroUsize {
     std::thread::available_parallelism().unwrap_or_else(|_err| {
         // Failed to get the level of parallelism.
         // TODO: log/trace when this fallback occurs.
 
         // Using a default value.
-        NonZero::new(DEFAULT_PARALLELISM).unwrap()
+        NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
     })
 }

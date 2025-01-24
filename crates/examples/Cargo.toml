@@ -27,7 +27,7 @@ rust-version = { workspace = true }
 [dependencies]
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 
 [[example]]
 name = "rest-catalog-namespace"
