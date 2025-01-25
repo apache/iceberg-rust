@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use tokio::sync::OnceCell;
+
 use crate::io::{FileRead, InputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
@@ -23,7 +25,7 @@ use crate::Result;
 /// Puffin reader
 pub(crate) struct PuffinReader {
     input_file: InputFile,
-    file_metadata: Option<FileMetadata>,
+    file_metadata: OnceCell<FileMetadata>,
 }
 
 impl PuffinReader {
@@ -31,18 +33,15 @@ impl PuffinReader {
     pub(crate) fn new(input_file: InputFile) -> Self {
         Self {
             input_file,
-            file_metadata: None,
+            file_metadata: OnceCell::new(),
         }
     }
 
     /// Returns file metadata
-    pub(crate) async fn file_metadata(&mut self) -> Result<&FileMetadata> {
-        if let Some(ref file_metadata) = self.file_metadata {
-            Ok(file_metadata)
-        } else {
-            let file_metadata = FileMetadata::read(&self.input_file).await?;
-            Ok(self.file_metadata.insert(file_metadata))
-        }
+    pub(crate) async fn file_metadata(&self) -> Result<&FileMetadata> {
+        self.file_metadata
+            .get_or_try_init(|| FileMetadata::read(&self.input_file))
+            .await
     }
 
     /// Returns blob
@@ -77,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn test_puffin_reader_uncompressed_metric_data() {
         let input_file = java_uncompressed_metric_input_file();
-        let mut puffin_reader = PuffinReader::new(input_file);
+        let puffin_reader = PuffinReader::new(input_file);
 
         let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, uncompressed_metric_file_metadata());
@@ -102,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn test_puffin_reader_zstd_compressed_metric_data() {
         let input_file = java_zstd_compressed_metric_input_file();
-        let mut puffin_reader = PuffinReader::new(input_file);
+        let puffin_reader = PuffinReader::new(input_file);
 
         let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata());
