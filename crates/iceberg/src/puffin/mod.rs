@@ -24,6 +24,7 @@
 mod blob;
 mod compression;
 mod metadata;
+#[cfg(feature = "tokio")]
 mod reader;
 
 #[cfg(test)]
