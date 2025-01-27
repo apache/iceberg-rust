@@ -53,6 +53,8 @@ async-trait = "0.1.85"
 async-std = "1.12"
 aws-config = "1"
 aws-sdk-glue = "1.39"
+aws-sigv4 = { version = "1.2.7", features = ["sign-http"] }
+aws-credential-types = "1.2.1"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.6"
@@ -85,6 +87,7 @@ port_scanner = "0.1.5"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
+reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rust_decimal = "1.31"
 serde = { version = "1.0.204", features = ["rc"] }
 serde_bytes = "0.11.15"

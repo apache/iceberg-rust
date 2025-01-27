@@ -2949,6 +2949,7 @@ dependencies = [
  "pretty_assertions",
  "rand",
  "reqwest",
+ "reqwest-middleware",
  "rust_decimal",
  "serde",
  "serde_bytes",
@@ -3024,7 +3025,11 @@ dependencies = [
 name = "iceberg-catalog-rest"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
  "chrono",
  "ctor",
  "http 1.2.0",
@@ -3035,6 +3040,7 @@ dependencies = [
  "mockito",
  "port_scanner",
  "reqwest",
+ "reqwest-middleware",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4791,6 +4797,21 @@ dependencies = [
  "web-sys",
  "webpki-roots",
  "windows-registry",
+]
+
+[[package]]
+name = "reqwest-middleware"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1ccd3b55e711f91a9885a2fa6fbbb2e39db1776420b062efc058c6410f7e5e3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http 1.2.0",
+ "reqwest",
+ "serde",
+ "thiserror 1.0.69",
+ "tower-service",
 ]
 
 [[package]]
