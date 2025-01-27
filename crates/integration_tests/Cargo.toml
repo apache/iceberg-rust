@@ -27,7 +27,7 @@ rust-version = { workspace = true }
 [dependencies]
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
-datafusion = "44"
+datafusion = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
@@ -35,3 +35,4 @@ iceberg-datafusion = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 parquet = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }

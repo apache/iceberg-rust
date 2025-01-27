@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Puffin implementation.
+//! Metadata table APIs.
 
-#![deny(missing_docs)]
-// Temporarily allowing this while crate is under active development
-#![allow(dead_code)]
+mod manifests;
+mod metadata_table;
+mod snapshots;
 
-mod compression;
-mod metadata;
-
-#[cfg(test)]
-mod test_utils;
+pub use manifests::ManifestsTable;
+pub use metadata_table::*;
+pub use snapshots::SnapshotsTable;
