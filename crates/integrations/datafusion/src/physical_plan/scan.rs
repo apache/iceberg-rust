@@ -22,10 +22,11 @@ use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use datafusion::common::Statistics;
+use datafusion::common::{Statistics, ToDFSchema};
 use datafusion::error::Result as DFResult;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::physical_expr::{create_physical_expr, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
@@ -33,9 +34,10 @@ use datafusion::prelude::Expr;
 use futures::{Stream, TryStreamExt};
 use iceberg::expr::Predicate;
 use iceberg::table::Table;
+use log::warn;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
-use crate::to_datafusion_error;
+use crate::{apply_bounds, to_datafusion_error};
 
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
 /// necessary details and computed properties required for execution planning.
@@ -63,7 +65,7 @@ impl IcebergTableScan {
         table: Table,
         snapshot_id: Option<i64>,
         schema: ArrowSchemaRef,
-        statistics: Statistics,
+        statistics: Option<Statistics>,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
     ) -> Self {
@@ -71,6 +73,26 @@ impl IcebergTableScan {
             None => schema.clone(),
             Some(projection) => Arc::new(schema.project(projection).unwrap()),
         };
+
+        let statistics = statistics
+            .map(|stats| {
+                let stats = match projection {
+                    None => stats,
+                    Some(projection) => stats.project(Some(projection)),
+                };
+                Self::bound_statistics(stats.clone(), filters, output_schema.clone())
+            })
+            .transpose()
+            .inspect_err(|err| {
+                warn!(
+                    "Failed to bound input statistics, defaulting to none: {:?}",
+                    err
+                )
+            })
+            .ok()
+            .flatten()
+            .unwrap_or(Statistics::new_unknown(output_schema.as_ref()));
+
         let plan_properties = Self::compute_properties(output_schema.clone());
         let projection = get_column_names(schema.clone(), projection);
         let predicates = convert_filters_to_predicate(filters);
@@ -96,6 +118,23 @@ impl IcebergTableScan {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+    }
+
+    /// Estimate the effective bounded statistics corresponding to the provided filter expressions
+    fn bound_statistics(
+        input_stats: Statistics,
+        filters: &[Expr],
+        schema: ArrowSchemaRef,
+    ) -> DFResult<Statistics> {
+        Ok(if let Some(filters) = conjunction(filters.to_vec()) {
+            let schema = schema.clone();
+            let df_schema = schema.clone().to_dfschema()?;
+            let predicate = create_physical_expr(&filters, &df_schema, &Default::default())?;
+
+            apply_bounds(input_stats, &predicate, schema)?
+        } else {
+            input_stats
+        })
     }
 }
 

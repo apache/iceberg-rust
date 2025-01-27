@@ -16,9 +16,13 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::stats::Precision;
 use datafusion::common::{ColumnStatistics, Statistics};
+use datafusion::error::Result as DFResult;
+use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use iceberg::spec::{DataContentType, ManifestStatus};
 use iceberg::table::Table;
 use iceberg::Result;
@@ -111,5 +115,60 @@ pub async fn compute_statistics(table: &Table, snapshot_id: Option<i64>) -> Resu
         num_rows: Precision::Inexact(num_rows as usize),
         total_byte_size: Precision::Absent,
         column_statistics: col_stats,
+    })
+}
+
+// Apply bounds to the provided input statistics.
+//
+// Adapted from `FilterExec::statistics_helper` in DataFusion.
+pub fn apply_bounds(
+    input_stats: Statistics,
+    predicate: &Arc<dyn PhysicalExpr>,
+    schema: SchemaRef,
+) -> DFResult<Statistics> {
+    let num_rows = input_stats.num_rows;
+    let total_byte_size = input_stats.total_byte_size;
+    let input_analysis_ctx =
+        AnalysisContext::try_from_statistics(&schema, &input_stats.column_statistics)?;
+
+    let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
+
+    // Estimate (inexact) selectivity of predicate
+    let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+    let num_rows = num_rows.with_estimated_selectivity(selectivity);
+    let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
+
+    let column_statistics = analysis_ctx
+        .boundaries
+        .into_iter()
+        .enumerate()
+        .map(
+            |(
+                idx,
+                ExprBoundaries {
+                    interval,
+                    distinct_count,
+                    ..
+                },
+            )| {
+                let (lower, upper) = interval.into_bounds();
+                let (min_value, max_value) = if lower.eq(&upper) {
+                    (Precision::Exact(lower), Precision::Exact(upper))
+                } else {
+                    (Precision::Inexact(lower), Precision::Inexact(upper))
+                };
+                ColumnStatistics {
+                    null_count: input_stats.column_statistics[idx].null_count.to_inexact(),
+                    max_value,
+                    min_value,
+                    distinct_count: distinct_count.to_inexact(),
+                }
+            },
+        )
+        .collect();
+    Ok(Statistics {
+        num_rows,
+        total_byte_size,
+        column_statistics,
     })
 }

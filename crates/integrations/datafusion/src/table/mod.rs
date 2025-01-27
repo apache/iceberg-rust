@@ -152,9 +152,7 @@ impl TableProvider for IcebergTableProvider {
             self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
-            self.statistics
-                .clone()
-                .unwrap_or(Statistics::new_unknown(self.schema.as_ref())),
+            self.statistics.clone(),
             projection,
             filters,
         )))
