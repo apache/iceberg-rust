@@ -41,20 +41,20 @@ rust-version = "1.77.1"
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
-arrow-arith = { version = "53" }
-arrow-array = { version = "53" }
-arrow-cast = { version = "53" }
-arrow-ord = { version = "53" }
-arrow-schema = { version = "53" }
-arrow-select = { version = "53" }
-arrow-string = { version = "53" }
+arrow-arith = { version = "53.4.0" }
+arrow-array = { version = "53.4.0" }
+arrow-cast = { version = "53.4.0" }
+arrow-ord = { version = "53.4.0" }
+arrow-schema = { version = "53.4.0" }
+arrow-select = { version = "53.4.0" }
+arrow-string = { version = "53.4.0" }
 async-stream = "0.3.5"
-async-trait = "0.1"
+async-trait = "0.1.85"
 async-std = "1.12"
 aws-config = "1"
 aws-sdk-glue = "1.39"
-aws-sigv4 = { version = "1.2", features = ["sign-http"] }
-aws-credential-types = "1.2"
+aws-sigv4 = { version = "1.2.7", features = ["sign-http"] }
+aws-credential-types = "1.2.1"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.6"
