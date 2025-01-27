@@ -175,7 +175,7 @@ mod tests {
         let resp = client.get(&catalog_uri).send().await;
         assert!(resp.is_err());
         match resp.unwrap_err() {
-            reqwest_middleware::Error::Middleware(e) => {}
+            reqwest_middleware::Error::Middleware(_e) => {}
             _ => panic!("Unexpected error"),
         }
     }
