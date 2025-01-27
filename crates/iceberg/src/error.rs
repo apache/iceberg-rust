@@ -314,6 +314,12 @@ define_from_err!(
 );
 
 define_from_err!(
+    reqwest_middleware::Error,
+    ErrorKind::Unexpected,
+    "Failed to execute http request"
+);
+
+define_from_err!(
     serde_json::Error,
     ErrorKind::DataInvalid,
     "Failed to parse json string"

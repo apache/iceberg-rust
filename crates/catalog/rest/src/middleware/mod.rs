@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg REST API implementation.
+//! Middleware that is applied on requests to the Rest Catalog API.
 
-#![deny(missing_docs)]
-
-mod catalog;
-mod client;
-mod middleware;
-mod types;
-
-pub use catalog::*;
+#[cfg(feature = "sigv4")]
+pub(crate) mod sigv4;

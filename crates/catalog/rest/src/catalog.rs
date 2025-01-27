@@ -58,6 +58,11 @@ pub struct RestCatalogConfig {
 }
 
 impl RestCatalogConfig {
+    /// Returns the base URL for the REST catalog API
+    pub fn base_url(&self) -> String {
+        [&self.uri, PATH_V1].join("/")
+    }
+
     fn url_prefixed(&self, parts: &[&str]) -> String {
         [&self.uri, PATH_V1]
             .into_iter()
@@ -212,6 +217,23 @@ impl RestCatalogConfig {
 
         self.props = props;
         self
+    }
+}
+
+#[cfg(feature = "sigv4")]
+impl RestCatalogConfig {
+    pub(crate) fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get("rest.sigv4-enabled")
+            .map_or(false, |v| v == "true")
+    }
+
+    pub(crate) fn signing_region(&self) -> Option<String> {
+        self.props.get("rest.signing-region").cloned()
+    }
+
+    pub(crate) fn signing_name(&self) -> Option<String> {
+        self.props.get("rest.signing-name").cloned()
     }
 }
 
