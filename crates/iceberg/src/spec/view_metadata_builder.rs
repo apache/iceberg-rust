@@ -510,7 +510,7 @@ impl ViewMetadataBuilder {
 
         if self.metadata.versions.len() > num_versions_to_keep {
             // version ids are assigned sequentially. keep the latest versions by ID.
-            let versions_to_keep = self
+            let mut versions_to_keep = self
                 .metadata
                 .versions
                 .keys()
@@ -519,6 +519,17 @@ impl ViewMetadataBuilder {
                 .rev()
                 .take(num_versions_to_keep)
                 .collect::<HashSet<_>>();
+
+            // always retain current version
+            if !versions_to_keep.contains(&self.metadata.current_version_id) {
+                // Remove the lowest ID
+                if num_versions_to_keep > num_added_versions {
+                    let lowest_id = versions_to_keep.iter().min().copied();
+                    lowest_id.map(|id| versions_to_keep.remove(&id));
+                }
+                // Add the current version ID
+                versions_to_keep.insert(self.metadata.current_version_id);
+            }
 
             let mut expired_versions = Vec::new();
             // remove all versions which are not in versions_to_keep from the metadata
@@ -737,6 +748,7 @@ mod test {
         );
 
         // Limit to 2 versions, we still want to keep 3 versions as 3 where added during this build
+        // Plus the current version
         let metadata = builder
             .clone()
             .set_properties(HashMap::from_iter(vec![(
@@ -749,11 +761,12 @@ mod test {
             .metadata;
         assert_eq!(
             metadata.versions.keys().cloned().collect::<HashSet<_>>(),
-            HashSet::from_iter(vec![2, 3, 4])
+            HashSet::from_iter(vec![1, 2, 3, 4])
         );
-        // assert_eq!(metadata.version_log.len(), 1); // ToDo: Enable after expiration discussion
+        assert_eq!(metadata.version_log.len(), 1);
 
-        // Limit to 2 versions in new build, only keep 2
+        // Limit to 2 versions in new build, only keep 2.
+        // One of them should be the current
         let metadata = builder_without_changes
             .clone()
             .set_properties(HashMap::from_iter(vec![(
@@ -766,10 +779,11 @@ mod test {
             .metadata;
         assert_eq!(
             metadata.versions.keys().cloned().collect::<HashSet<_>>(),
-            HashSet::from_iter(vec![3, 4])
+            HashSet::from_iter(vec![1, 4])
         );
 
-        // Keep at least 1 version irrespective of the limit
+        // Keep at least 1 version irrespective of the limit.
+        // This is the current version
         let metadata = builder_without_changes
             .set_properties(HashMap::from_iter(vec![(
                 VIEW_PROPERTY_VERSION_HISTORY_SIZE.to_string(),
@@ -781,7 +795,7 @@ mod test {
             .metadata;
         assert_eq!(
             metadata.versions.keys().cloned().collect::<HashSet<_>>(),
-            HashSet::from_iter(vec![4])
+            HashSet::from_iter(vec![1])
         );
     }
 
@@ -1037,7 +1051,6 @@ mod test {
         let builder = builder_without_changes();
         let v1 = new_view_version(0, 1, "select * from ns.tbl");
 
-        // ToDo Java: I think we should remove line 688 - 693 in Java TestVeiwMetadata.java as it does nothing.
         assert_eq!(builder.metadata.versions.len(), 1);
         let build_result = builder
             .clone()
