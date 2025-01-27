@@ -49,7 +49,7 @@ arrow-schema = { version = "53.4.0" }
 arrow-select = { version = "53.3.0" }
 arrow-string = { version = "53.3.0" }
 async-stream = "0.3.5"
-async-trait = "0.1.85"
+async-trait = "0.1"
 async-std = "1.12"
 aws-config = "1"
 aws-sdk-glue = "1.39"
