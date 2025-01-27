@@ -58,16 +58,17 @@ pub struct RestCatalogConfig {
 }
 
 impl RestCatalogConfig {
+    /// Returns the base URL for the REST catalog API
+    pub fn base_url(&self) -> String {
+        [&self.uri, PATH_V1].join("/")
+    }
+
     fn url_prefixed(&self, parts: &[&str]) -> String {
         [&self.uri, PATH_V1]
             .into_iter()
             .chain(self.props.get("prefix").map(|s| &**s))
             .chain(parts.iter().cloned())
             .join("/")
-    }
-
-    pub(crate) fn base_url(&self) -> String {
-        [&self.uri, PATH_V1].join("/")
     }
 
     fn config_endpoint(&self) -> String {

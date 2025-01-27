@@ -55,7 +55,7 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 port_scanner = { workspace = true }
 tokio = { workspace = true }
+wiremock = "0.6"
 
 [features]
-default = ["sigv4"]
 sigv4 = ["aws-config", "aws-sigv4", "aws-credential-types"]

@@ -75,15 +75,15 @@ impl Middleware for SigV4Middleware {
         let credential_provider = config.credentials_provider().ok_or_else(|| {
             reqwest_middleware::Error::Middleware(anyhow!("No credentials provider found"))
         })?;
-
-        let region: &str = config.region().map(|r| r.as_ref()).unwrap_or("us-east-1");
-
-        // Prepare signing parameters
         let credentials = credential_provider
             .provide_credentials()
             .await
             .map_err(|e| reqwest_middleware::Error::Middleware(e.into()))?
             .into();
+
+        let region: &str = config.region().map(|r| r.as_ref()).unwrap_or("us-east-1");
+
+        // Prepare signing parameters
         let signing_params = v4::SigningParams::builder()
             .identity(&credentials)
             .region(region)
@@ -119,11 +119,154 @@ impl Middleware for SigV4Middleware {
 
         let (new_headers, _) = signed_parts.into_parts();
         for header in new_headers.into_iter() {
-            let mut value = http::HeaderValue::from_str(header.value()).unwrap();
+            let mut value = http::HeaderValue::from_str(header.value()).map_err(|e| {
+                reqwest_middleware::Error::Middleware(anyhow!("Invalid header value: {e}"))
+            })?;
             value.set_sensitive(header.sensitive());
             req.headers_mut().insert(header.name(), value);
         }
 
         next.run(req, extensions).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::sync::{LazyLock, Mutex};
+
+    use reqwest::Client;
+    use reqwest_middleware::ClientBuilder;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn set_test_credentials() {
+        env::set_var("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE");
+        env::set_var(
+            "AWS_SECRET_ACCESS_KEY",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        );
+    }
+
+    fn unset_test_credentials() {
+        env::remove_var("AWS_ACCESS_KEY_ID");
+        env::remove_var("AWS_SECRET_ACCESS_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_middleware_handles_missing_credentials() {
+        let _guard = TEST_MUTEX.lock();
+
+        // Start a mock server
+        let mock_server = MockServer::start().await;
+        let catalog_uri = mock_server.uri();
+
+        // Create middleware
+        let middleware = SigV4Middleware::new(&catalog_uri, "s3", Some("us-east-1"));
+
+        // Create a client with the middleware
+        let client = ClientBuilder::new(Client::new()).with(middleware).build();
+
+        // Make request (should fail due to no credentials)
+        let resp = client.get(&catalog_uri).send().await;
+        assert!(resp.is_err());
+        match resp.unwrap_err() {
+            reqwest_middleware::Error::Middleware(e) => {
+                assert!(e
+                    .to_string()
+                    .contains("the credential provider was not enabled"));
+            }
+            _ => panic!("Unexpected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_middleware_signs_matching_requests() {
+        let _guard = TEST_MUTEX.lock();
+
+        // Start a mock server
+        let mock_server = MockServer::start().await;
+        let catalog_uri = mock_server.uri();
+
+        // Create middleware with test credentials
+        set_test_credentials();
+        let middleware = SigV4Middleware::new(&catalog_uri, "s3", Some("us-east-1"));
+
+        // Create a client with the middleware
+        let client = ClientBuilder::new(Client::new()).with(middleware).build();
+
+        // Set up mock to check for AWS auth header
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(HeaderStartsWith("Authorization", "AWS4-HMAC-SHA256"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Make request
+        let resp = client.get(&catalog_uri).send().await;
+        assert!(resp.is_ok());
+
+        // Verify all mocks were called as expected
+        mock_server.verify().await;
+        unset_test_credentials();
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_middleware_skips_non_matching_requests() {
+        let _guard = TEST_MUTEX.lock();
+
+        // Start a mock server
+        let mock_server = MockServer::start().await;
+
+        // Create middleware with different URI and test credentials
+        set_test_credentials();
+        let middleware = SigV4Middleware::new("http://different-uri", "s3", Some("us-east-1"));
+
+        // Create a client with the middleware
+        let client = ClientBuilder::new(Client::new()).with(middleware).build();
+
+        // Set up mock that expects no AWS auth header
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(HeaderMissing("Authorization"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Make request
+        let resp = client.get(mock_server.uri()).send().await;
+        assert!(resp.is_ok());
+
+        // Verify all mocks were called as expected
+        mock_server.verify().await;
+        unset_test_credentials();
+    }
+
+    struct HeaderMissing(&'static str);
+
+    impl wiremock::Match for HeaderMissing {
+        fn matches(&self, request: &wiremock::Request) -> bool {
+            !request.headers.contains_key(self.0)
+        }
+    }
+
+    struct HeaderStartsWith(&'static str, &'static str);
+
+    impl wiremock::Match for HeaderStartsWith {
+        fn matches(&self, request: &wiremock::Request) -> bool {
+            request
+                .headers
+                .get(self.0)
+                .and_then(|h| h.to_str().ok())
+                .map(|v| v.starts_with(self.1))
+                .unwrap_or(false)
+        }
     }
 }
