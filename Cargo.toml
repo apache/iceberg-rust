@@ -53,8 +53,8 @@ async-trait = "0.1"
 async-std = "1.12"
 aws-config = "1"
 aws-sdk-glue = "1.39"
-aws-sigv4 = { version = "1.2.7", features = ["sign-http"] }
-aws-credential-types = "1.2.1"
+aws-sigv4 = { version = "1.2", features = ["sign-http"] }
+aws-credential-types = "1.2"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.6"
