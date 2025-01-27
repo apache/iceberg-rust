@@ -195,7 +195,7 @@ pub struct ManifestWriter {
 
     key_metadata: Vec<u8>,
 
-    manifset_entries: Vec<ManifestEntry>,
+    manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
 }
@@ -281,7 +281,7 @@ impl ManifestWriter {
             deleted_rows: 0,
             min_seq_num: None,
             key_metadata,
-            manifset_entries: Vec::new(),
+            manifest_entries: Vec::new(),
             metadata,
         }
     }
@@ -295,7 +295,7 @@ impl ManifestWriter {
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
             .collect();
-        for partition in self.manifset_entries.iter().map(|e| &e.data_file.partition) {
+        for partition in self.manifest_entries.iter().map(|e| &e.data_file.partition) {
             for (literal, stat) in partition.iter().zip_eq(field_stats.iter_mut()) {
                 let primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
                 stat.update(primitive_literal)?;
@@ -469,7 +469,7 @@ impl ManifestWriter {
                 self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
             }
         }
-        self.manifset_entries.push(entry);
+        self.manifest_entries.push(entry);
         Ok(())
     }
 
@@ -519,7 +519,7 @@ impl ManifestWriter {
 
         let partition_summary = self.construct_partition_summaries(&partition_type)?;
         // Write manifest entries
-        for entry in std::mem::take(&mut self.manifset_entries) {
+        for entry in std::mem::take(&mut self.manifest_entries) {
             let value = match self.metadata.format_version {
                 FormatVersion::V1 => {
                     to_value(_serde::ManifestEntryV1::try_from(entry, &partition_type)?)?
@@ -2691,21 +2691,21 @@ mod tests {
         }
         let res = writer.write_manifest_file().await.unwrap();
 
-        assert!(res.partitions.len() == 3);
-        assert!(res.partitions[0].lower_bound == Some(Datum::int(1111)));
-        assert!(res.partitions[0].upper_bound == Some(Datum::int(2021)));
+        assert_eq!(res.partitions.len(), 3);
+        assert_eq!(res.partitions[0].lower_bound, Some(Datum::int(1111)));
+        assert_eq!(res.partitions[0].upper_bound, Some(Datum::int(2021)));
         assert!(!res.partitions[0].contains_null);
-        assert!(res.partitions[0].contains_nan == Some(false));
+        assert_eq!(res.partitions[0].contains_nan, Some(false));
 
-        assert!(res.partitions[1].lower_bound == Some(Datum::float(1.0)));
-        assert!(res.partitions[1].upper_bound == Some(Datum::float(15.5)));
+        assert_eq!(res.partitions[1].lower_bound, Some(Datum::float(1.0)));
+        assert_eq!(res.partitions[1].upper_bound, Some(Datum::float(15.5)));
         assert!(res.partitions[1].contains_null);
-        assert!(res.partitions[1].contains_nan == Some(true));
+        assert_eq!(res.partitions[1].contains_nan, Some(true));
 
-        assert!(res.partitions[2].lower_bound == Some(Datum::double(1.0)));
-        assert!(res.partitions[2].upper_bound == Some(Datum::double(25.5)));
+        assert_eq!(res.partitions[2].lower_bound, Some(Datum::double(1.0)));
+        assert_eq!(res.partitions[2].upper_bound, Some(Datum::double(25.5)));
         assert!(!res.partitions[2].contains_null);
-        assert!(res.partitions[2].contains_nan == Some(false));
+        assert_eq!(res.partitions[2].contains_nan, Some(false));
     }
 
     #[tokio::test]

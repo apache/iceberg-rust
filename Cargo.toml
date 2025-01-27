@@ -58,6 +58,7 @@ bitvec = "1.0.1"
 bytes = "1.6"
 chrono = "0.4.38"
 ctor = "0.2.8"
+datafusion = "44"
 derive_builder = "0.20"
 either = "1"
 env_logger = "0.11.0"
@@ -96,7 +97,7 @@ tokio = { version = "1.36", default-features = false }
 typed-builder = "0.20"
 url = "2.2.2"
 urlencoding = "2"
-uuid = { version = "1.10.0", features = ["v7"] }
+uuid = { version = "1.12.1", features = ["v7"] }
 volo-thrift = "0.10"
 hive_metastore = "0.1"
 tera = "1"
