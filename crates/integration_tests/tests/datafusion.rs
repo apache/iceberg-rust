@@ -30,8 +30,10 @@ use iceberg::{Catalog, Result, TableIdent};
 use iceberg_datafusion::IcebergTableProvider;
 use iceberg_integration_tests::set_test_fixture;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use serial_test::serial;
 
 #[tokio::test]
+#[serial]
 async fn test_basic_queries() -> Result<()> {
     let fixture = set_test_fixture("datafusion_basic_read").await;
 
@@ -137,6 +139,7 @@ async fn test_basic_queries() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_statistics() -> Result<()> {
     let fixture = set_test_fixture("datafusion_statistics").await;
 

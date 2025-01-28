@@ -34,5 +34,6 @@ iceberg-catalog-rest = { workspace = true }
 iceberg-datafusion = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 parquet = { workspace = true }
+serial_test = "*"
 tokio = { workspace = true }
 uuid = { workspace = true }
