@@ -166,9 +166,10 @@ impl<'a> ManifestsTable<'a> {
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
+    use futures::TryStreamExt;
 
-    use crate::inspect::metadata_table::tests::check_record_batches;
     use crate::scan::tests::TableTestFixture;
+    use crate::test_utils::check_record_batches;
 
     #[tokio::test]
     async fn test_manifests_table() {
@@ -178,7 +179,7 @@ mod tests {
         let batch_stream = fixture.table.inspect().manifests().scan().await.unwrap();
 
         check_record_batches(
-            batch_stream,
+            batch_stream.try_collect::<Vec<_>>().await.unwrap(),
             expect![[r#"
                 Field { name: "content", data_type: Int8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
@@ -263,6 +264,6 @@ mod tests {
                 ]"#]],
             &["path", "length"],
             Some("path"),
-        ).await;
+        );
     }
 }

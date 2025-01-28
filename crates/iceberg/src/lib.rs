@@ -83,6 +83,7 @@ pub mod transform;
 mod runtime;
 
 pub mod arrow;
+pub mod test_utils;
 mod utils;
 pub mod writer;
 
