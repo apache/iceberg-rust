@@ -94,7 +94,11 @@ impl RestCatalogConfig {
         self.url_prefixed(&["tables", "rename"])
     }
 
-    fn table_endpoint(&self, table: &TableIdent) -> String {
+    /// Builds a prefixed table endpoint from the given table identifier.
+    ///
+    /// Outputs an endpoint in the form of `/{base_url}/namespaces/{namespace}/tables/{table}`.
+    /// The base URL is defined by the catalog config, built from the URI, version and any specified prefix.
+    pub fn table_endpoint(&self, table: &TableIdent) -> String {
         self.url_prefixed(&[
             "namespaces",
             &table.namespace.to_url_string(),

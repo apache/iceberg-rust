@@ -24,3 +24,5 @@ mod client;
 mod types;
 
 pub use catalog::*;
+pub use client::HttpClient;
+pub use types::{ErrorResponse, OK};

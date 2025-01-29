@@ -27,7 +27,8 @@ use serde::de::DeserializeOwned;
 use crate::types::{ErrorResponse, TokenResponse, OK};
 use crate::RestCatalogConfig;
 
-pub(crate) struct HttpClient {
+/// The HTTP client for the REST catalog
+pub struct HttpClient {
     client: Client,
 
     /// The token to be used for authentication.
@@ -216,11 +217,19 @@ impl HttpClient {
         Ok(())
     }
 
+    /// Create a new request builder, from the inner client.
     #[inline]
     pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
         self.client.request(method, url)
     }
 
+    /// Send a request and parse the response into ``R`` on success, or ``E`` on error.
+    /// Assert the response code is ``SUCCESS_CODE``, otherwise return an error.
+    ///
+    /// # Errors
+    ///
+    /// - If the response code is not ``SUCCESS_CODE``, return an error.
+    /// - If the response body cannot be parsed into ``R`` or ``E``, return an error.
     pub async fn query<
         R: DeserializeOwned,
         E: DeserializeOwned + Into<Error>,
@@ -272,6 +281,13 @@ impl HttpClient {
         }
     }
 
+    /// Send a request, dropping any response body on success, parsing the response into ``E`` on error.
+    /// Assert the response code is ``SUCCESS_CODE``, otherwise return an error.
+    ///
+    /// # Errors
+    ///
+    /// - If the response code is not ``SUCCESS_CODE``, return an error.
+    /// - If the response body cannot be parsed into ``E``, return an error.
     pub async fn execute<E: DeserializeOwned + Into<Error>, const SUCCESS_CODE: u16>(
         &self,
         mut request: Request,
