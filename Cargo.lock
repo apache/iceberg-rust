@@ -717,9 +717,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3tables"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bac1682a1faaa29aeb8fb14be54727fd52fda934c4838b30b42727b810886823"
+checksum = "6c4b058ceaba1bdaee241e79f8d520dfcf3009a3fe6ac2aa453a58d7a22e8548"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1375,7 +1375,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6611,7 +6611,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
