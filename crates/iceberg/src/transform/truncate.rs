@@ -43,6 +43,11 @@ impl Truncate {
     }
 
     #[inline]
+    fn truncate_binary(s: &[u8], width: usize) -> &[u8] {
+        &s[0..width]
+    }
+
+    #[inline]
     fn truncate_i32(v: i32, width: i32) -> i32 {
         v - v.rem_euclid(width)
     }
@@ -116,6 +121,18 @@ impl TransformFunction for Truncate {
                         .unwrap()
                         .iter()
                         .map(|v| v.map(|v| Self::truncate_str(v, len))),
+                );
+                Ok(Arc::new(res))
+            }
+            DataType::Binary => {
+                let len = self.width as usize;
+                let res: arrow_array::BinaryArray = arrow_array::BinaryArray::from_iter(
+                    input
+                        .as_any()
+                        .downcast_ref::<arrow_array::BinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| Self::truncate_binary(v, len))),
                 );
                 Ok(Arc::new(res))
             }
@@ -746,6 +763,17 @@ mod test {
                 .unwrap()
                 .value(0),
             "ice"
+        );
+
+        // test binary
+        let input = Arc::new(arrow_array::BinaryArray::from_vec(vec![b"iceberg"]));
+        let res = super::Truncate::new(3).transform(input).unwrap();
+        assert_eq!(
+            res.as_any()
+                .downcast_ref::<arrow_array::BinaryArray>()
+                .unwrap()
+                .value(0),
+            b"ice"
         );
     }
 
