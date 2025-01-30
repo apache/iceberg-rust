@@ -35,12 +35,15 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
-use iceberg_integration_tests::set_test_fixture;
+use iceberg_catalog_rest::RestCatalog;
 use parquet::file::properties::WriterProperties;
+
+use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_append_partition_data_file() {
-    let fixture = set_test_fixture("test_partition_data_file").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["iceberg", "rust"]).unwrap(),
@@ -50,11 +53,9 @@ async fn test_append_partition_data_file() {
         ]),
     );
 
-    fixture
-        .rest_catalog
+    let _ = rest_catalog
         .create_namespace(ns.name(), ns.properties().clone())
-        .await
-        .unwrap();
+        .await;
 
     let schema = Schema::builder()
         .with_schema_id(1)
@@ -77,13 +78,12 @@ async fn test_append_partition_data_file() {
         .expect("could not bind to schema");
 
     let table_creation = TableCreation::builder()
-        .name("t1".to_string())
+        .name("t2".to_string())
         .schema(schema.clone())
         .partition_spec(partition_spec)
         .build();
 
-    let table = fixture
-        .rest_catalog
+    let table = rest_catalog
         .create_table(ns.name(), table_creation)
         .await
         .unwrap();
@@ -148,7 +148,7 @@ async fn test_append_partition_data_file() {
         .add_data_files(data_file_valid.clone())
         .unwrap();
     let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&fixture.rest_catalog).await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result
     let batch_stream = table

@@ -41,14 +41,17 @@ use iceberg::writer::file_writer::location_generator::{
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
-use iceberg_integration_tests::set_test_fixture;
+use iceberg_catalog_rest::RestCatalog;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
+use crate::get_shared_containers;
+
 #[tokio::test]
 async fn test_scan_all_type() {
-    let fixture = set_test_fixture("test_scan_all_type").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
     let ns = Namespace::with_properties(
         NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
@@ -58,11 +61,9 @@ async fn test_scan_all_type() {
         ]),
     );
 
-    fixture
-        .rest_catalog
+    let _ = rest_catalog
         .create_namespace(ns.name(), ns.properties().clone())
-        .await
-        .unwrap();
+        .await;
     let schema = Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
@@ -133,12 +134,11 @@ async fn test_scan_all_type() {
         .unwrap();
 
     let table_creation = TableCreation::builder()
-        .name("t1".to_string())
+        .name("t4".to_string())
         .schema(schema.clone())
         .build();
 
-    let table = fixture
-        .rest_catalog
+    let table = rest_catalog
         .create_table(ns.name(), table_creation)
         .await
         .unwrap();
@@ -321,7 +321,7 @@ async fn test_scan_all_type() {
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
     let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&fixture.rest_catalog).await.unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result
     let batch_stream = table
