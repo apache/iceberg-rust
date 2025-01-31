@@ -40,30 +40,21 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, TableCreation};
 use iceberg_catalog_rest::RestCatalog;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
 use crate::get_shared_containers;
+use crate::shared_tests::apple_ios_ns;
 
 #[tokio::test]
 async fn test_scan_all_type() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = apple_ios_ns().await;
 
-    let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
-        HashMap::from([
-            ("owner".to_string(), "ray".to_string()),
-            ("community".to_string(), "apache".to_string()),
-        ]),
-    );
-
-    let _ = rest_catalog
-        .create_namespace(ns.name(), ns.properties().clone())
-        .await;
     let schema = Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
@@ -134,7 +125,7 @@ async fn test_scan_all_type() {
         .unwrap();
 
     let table_creation = TableCreation::builder()
-        .name("t4".to_string())
+        .name("t_scan_all_types".to_string())
         .schema(schema.clone())
         .build();
 

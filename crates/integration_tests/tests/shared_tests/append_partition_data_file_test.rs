@@ -17,15 +17,11 @@
 
 //! Integration test for partition data file
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::spec::{
-    Literal, NestedField, PrimitiveLiteral, PrimitiveType, Schema, Struct, Transform, Type,
-    UnboundPartitionSpec,
-};
+use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -34,39 +30,19 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, TableCreation};
 use iceberg_catalog_rest::RestCatalog;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
+use crate::shared_tests::{apple_ios_ns, test_schema};
 
 #[tokio::test]
 async fn test_append_partition_data_file() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
-
-    let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["iceberg", "rust"]).unwrap(),
-        HashMap::from([
-            ("owner".to_string(), "ray".to_string()),
-            ("community".to_string(), "apache".to_string()),
-        ]),
-    );
-
-    let _ = rest_catalog
-        .create_namespace(ns.name(), ns.properties().clone())
-        .await;
-
-    let schema = Schema::builder()
-        .with_schema_id(1)
-        .with_identifier_field_ids(vec![2])
-        .with_fields(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
-        ])
-        .build()
-        .unwrap();
+    let ns = apple_ios_ns().await;
+    let schema = test_schema();
 
     let unbound_partition_spec = UnboundPartitionSpec::builder()
         .add_partition_field(2, "id", Transform::Identity)
@@ -78,7 +54,7 @@ async fn test_append_partition_data_file() {
         .expect("could not bind to schema");
 
     let table_creation = TableCreation::builder()
-        .name("t2".to_string())
+        .name("t_append_partition_data_file".to_string())
         .schema(schema.clone())
         .partition_spec(partition_spec)
         .build();

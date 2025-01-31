@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 use ctor::dtor;
 use iceberg_integration_tests::{set_test_fixture, TestFixture};
 
-pub mod shared;
+pub mod shared_tests;
 
 static DOCKER_CONTAINERS: OnceLock<Arc<TestFixture>> = OnceLock::new();
 

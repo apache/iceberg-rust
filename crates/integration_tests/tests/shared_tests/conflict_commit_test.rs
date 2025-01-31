@@ -17,12 +17,10 @@
 
 //! Integration tests for rest catalog.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -30,43 +28,22 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
+use iceberg::{Catalog, TableCreation};
 use iceberg_catalog_rest::RestCatalog;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
+use crate::shared_tests::{apple_ios_ns, test_schema};
 
 #[tokio::test]
-async fn test_append_data_file() {
+async fn test_append_data_file_conflict() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
-
-    let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
-        HashMap::from([
-            ("owner".to_string(), "ray".to_string()),
-            ("community".to_string(), "apache".to_string()),
-        ]),
-    );
-
-    let _ = rest_catalog
-        .create_namespace(ns.name(), ns.properties().clone())
-        .await;
-
-    let schema = Schema::builder()
-        .with_schema_id(1)
-        .with_identifier_field_ids(vec![2])
-        .with_fields(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
-        ])
-        .build()
-        .unwrap();
+    let ns = apple_ios_ns().await;
+    let schema = test_schema();
 
     let table_creation = TableCreation::builder()
-        .name("t1".to_string())
+        .name("t3".to_string())
         .schema(schema.clone())
         .build();
 
@@ -111,33 +88,19 @@ async fn test_append_data_file() {
     data_file_writer.write(batch.clone()).await.unwrap();
     let data_file = data_file_writer.close().await.unwrap();
 
-    // check parquet file schema
-    let content = table
-        .file_io()
-        .new_input(data_file[0].file_path())
-        .unwrap()
-        .read()
-        .await
-        .unwrap();
-    let parquet_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
-        &content,
-        ArrowReaderOptions::default(),
-    )
-    .unwrap();
-    let field_ids: Vec<i32> = parquet_reader
-        .parquet_schema()
-        .columns()
-        .iter()
-        .map(|col| col.self_type().get_basic_info().id())
-        .collect();
-    assert_eq!(field_ids, vec![1, 2, 3]);
-
-    // commit result
-    let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
+    // start two transaction and commit one of them
+    let tx1 = Transaction::new(&table);
+    let mut append_action = tx1.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
+    let tx1 = append_action.apply().await.unwrap();
+    let tx2 = Transaction::new(&table);
+    let mut append_action = tx2.fast_append(None, vec![]).unwrap();
+    append_action.add_data_files(data_file.clone()).unwrap();
+    let tx2 = append_action.apply().await.unwrap();
+    let table = tx2
+        .commit(&rest_catalog)
+        .await
+        .expect("The first commit should not fail.");
 
     // check result
     let batch_stream = table
@@ -152,24 +115,6 @@ async fn test_append_data_file() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
 
-    // commit result again
-    let tx = Transaction::new(&table);
-    let mut append_action = tx.fast_append(None, vec![]).unwrap();
-    append_action.add_data_files(data_file.clone()).unwrap();
-    let tx = append_action.apply().await.unwrap();
-    let table = tx.commit(&rest_catalog).await.unwrap();
-
-    // check result again
-    let batch_stream = table
-        .scan()
-        .select_all()
-        .build()
-        .unwrap()
-        .to_arrow()
-        .await
-        .unwrap();
-    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
-    assert_eq!(batches.len(), 2);
-    assert_eq!(batches[0], batch);
-    assert_eq!(batches[1], batch);
+    // another commit should fail
+    assert!(tx1.commit(&rest_catalog).await.is_err());
 }
