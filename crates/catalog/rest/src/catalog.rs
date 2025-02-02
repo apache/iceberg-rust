@@ -1335,17 +1335,13 @@ mod tests {
             ]),
             table.metadata().properties()
         );
-        let mut summary = SnapshotSummary::new(
+        let summary = SnapshotSummary::new(
             Operation::Append,
             HashMap::from_iter([(
                 "spark.app.id".to_string(),
                 "local-1646787004168".to_string(),
             )]),
         );
-
-        summary.add_data_file(697);
-        summary.add_records(1);
-        summary.changed_partition_count = 1;
 
         let expected_snapshot = Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
