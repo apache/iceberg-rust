@@ -705,39 +705,26 @@ mod tests {
     fn test_add_remove_data_files() {
         let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
 
-        // Initially, everything is zero
         assert_eq!(0, summary.added_data_files);
         assert_eq!(0, summary.deleted_data_files);
         assert_eq!(0, summary.total_data_files);
 
-        // Add two data files
         summary.add_data_file(100);
         summary.add_data_file(200);
 
-        // We expect that two files have been added
         assert_eq!(2, summary.added_data_files);
-        // No deletions yet
         assert_eq!(0, summary.deleted_data_files);
-        // The total number of data files should be 2
         assert_eq!(2, summary.total_data_files);
 
-        // The added file size should be 300 (100 + 200)
         assert_eq!(300, summary.added_file_size);
-        // Nothing has been removed yet
         assert_eq!(0, summary.removed_file_size);
-        // So total file size is 300
         assert_eq!(300, summary.total_file_size);
 
-        // Now remove one data file of size 100
         summary.delete_data_file(100);
 
-        // We've removed one file
         assert_eq!(1, summary.deleted_data_files);
-        // That leaves 1 total data file
         assert_eq!(1, summary.total_data_files);
-        // The “removed_file_size” should be 100
         assert_eq!(100, summary.removed_file_size);
-        // Total file size should now be 200 (300 - 100)
         assert_eq!(200, summary.total_file_size);
     }
 
@@ -745,7 +732,6 @@ mod tests {
     fn test_add_remove_delete_files() {
         let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
 
-        // Add some delete files
         summary.add_delete_file(50);
         summary.add_delete_file(75);
 
@@ -754,15 +740,11 @@ mod tests {
         assert_eq!(125, summary.added_file_size);
         assert_eq!(125, summary.total_file_size);
 
-        // Remove one delete file
         summary.remove_delete_file(50);
 
         assert_eq!(1, summary.removed_delete_files);
-        // total_delete_files should now be 1
         assert_eq!(1, summary.total_delete_files);
-        // removed_file_size should be 50
         assert_eq!(50, summary.removed_file_size);
-        // total_file_size should be 75
         assert_eq!(75, summary.total_file_size);
     }
 }
