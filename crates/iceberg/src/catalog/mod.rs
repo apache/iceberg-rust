@@ -655,7 +655,7 @@ pub(super) mod _serde {
     use serde::{Deserialize as _, Deserializer};
 
     use super::*;
-    use crate::spec::{SchemaId, Summary};
+    use crate::spec::{SchemaId, SnapshotSummary};
 
     pub(super) fn deserialize_snapshot<'de, D>(
         deserializer: D,
@@ -678,7 +678,7 @@ pub(super) mod _serde {
         sequence_number: i64,
         timestamp_ms: i64,
         manifest_list: String,
-        summary: Summary,
+        summary: SnapshotSummary,
         #[serde(skip_serializing_if = "Option::is_none")]
         schema_id: Option<SchemaId>,
     }
@@ -852,8 +852,8 @@ mod tests {
     use super::ViewUpdate;
     use crate::spec::{
         BlobMetadata, FormatVersion, NestedField, NullOrder, Operation, PartitionStatisticsFile,
-        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SortDirection,
-        SortField, SortOrder, SqlViewRepresentation, StatisticsFile, Summary, TableMetadata,
+        PrimitiveType, Schema, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummary,
+        SortDirection, SortField, SortOrder, SqlViewRepresentation, StatisticsFile, TableMetadata,
         TableMetadataBuilder, Transform, Type, UnboundPartitionSpec, ViewFormatVersion,
         ViewRepresentation, ViewRepresentations, ViewVersion, MAIN_BRANCH,
     };
@@ -1503,10 +1503,7 @@ mod tests {
                 .with_sequence_number(1)
                 .with_manifest_list("s3://a/b/2.avro")
                 .with_schema_id(1)
-                .with_summary(Summary {
-                    operation: Operation::Append,
-                    additional_properties: HashMap::default(),
-                })
+                .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
                 .build(),
         };
 
@@ -1537,10 +1534,7 @@ mod tests {
                 .with_timestamp_ms(1555100955770)
                 .with_sequence_number(0)
                 .with_manifest_list("s3://a/b/2.avro")
-                .with_summary(Summary {
-                    operation: Operation::Append,
-                    additional_properties: HashMap::default(),
-                })
+                .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
                 .build(),
         };
 

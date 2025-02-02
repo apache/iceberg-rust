@@ -698,7 +698,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use iceberg::spec::{
         FormatVersion, NestedField, NullOrder, Operation, PrimitiveType, Schema, Snapshot,
-        SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
+        SnapshotLog, SnapshotSummary, SortDirection, SortField, SortOrder, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::transaction::Transaction;
@@ -1335,29 +1335,31 @@ mod tests {
             ]),
             table.metadata().properties()
         );
-        assert_eq!(vec![&Arc::new(Snapshot::builder()
+        let mut summary = SnapshotSummary::new(
+            Operation::Append,
+            HashMap::from_iter([(
+                "spark.app.id".to_string(),
+                "local-1646787004168".to_string(),
+            )]),
+        );
+
+        summary.add_data_file(697);
+        summary.add_records(1);
+        summary.changed_partition_count = 1;
+
+        let expected_snapshot = Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
             .with_timestamp_ms(1646787054459)
             .with_manifest_list("s3://warehouse/database/table/metadata/snap-3497810964824022504-1-c4f68204-666b-4e50-a9df-b10c34bf6b82.avro")
             .with_sequence_number(0)
             .with_schema_id(0)
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::from_iter([
-                    ("spark.app.id", "local-1646787004168"),
-                    ("added-data-files", "1"),
-                    ("added-records", "1"),
-                    ("added-files-size", "697"),
-                    ("changed-partition-count", "1"),
-                    ("total-records", "1"),
-                    ("total-files-size", "697"),
-                    ("total-data-files", "1"),
-                    ("total-delete-files", "0"),
-                    ("total-position-deletes", "0"),
-                    ("total-equality-deletes", "0")
-                ].iter().map(|p| (p.0.to_string(), p.1.to_string()))),
-            }).build()
-        )], table.metadata().snapshots().collect::<Vec<_>>());
+            .with_summary(summary)
+            .build();
+
+        assert_eq!(
+            vec![&Arc::new(expected_snapshot)],
+            table.metadata().snapshots().collect::<Vec<_>>()
+        );
         assert_eq!(
             &[SnapshotLog {
                 timestamp_ms: 1646787054459,
