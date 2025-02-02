@@ -35,13 +35,13 @@ use iceberg_catalog_rest::RestCatalog;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
-use crate::shared_tests::{apple_ios_ns, test_schema};
+use crate::shared_tests::{random_ns, test_schema};
 
 #[tokio::test]
 async fn test_append_partition_data_file() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
-    let ns = apple_ios_ns().await;
+    let ns = random_ns().await;
     let schema = test_schema();
 
     let unbound_partition_spec = UnboundPartitionSpec::builder()
@@ -54,7 +54,7 @@ async fn test_append_partition_data_file() {
         .expect("could not bind to schema");
 
     let table_creation = TableCreation::builder()
-        .name("t_append_partition_data_file".to_string())
+        .name("t1".to_string())
         .schema(schema.clone())
         .partition_spec(partition_spec)
         .build();

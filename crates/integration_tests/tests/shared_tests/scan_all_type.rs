@@ -47,13 +47,13 @@ use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
 use crate::get_shared_containers;
-use crate::shared_tests::apple_ios_ns;
+use crate::shared_tests::random_ns;
 
 #[tokio::test]
 async fn test_scan_all_type() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
-    let ns = apple_ios_ns().await;
+    let ns = random_ns().await;
 
     let schema = Schema::builder()
         .with_schema_id(1)
@@ -125,7 +125,7 @@ async fn test_scan_all_type() {
         .unwrap();
 
     let table_creation = TableCreation::builder()
-        .name("t_scan_all_types".to_string())
+        .name("t1".to_string())
         .schema(schema.clone())
         .build();
 

@@ -16,12 +16,10 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, Namespace, NamespaceIdent};
 use iceberg_catalog_rest::RestCatalog;
-use tokio::sync::OnceCell;
 
 use crate::get_shared_containers;
 
@@ -33,30 +31,24 @@ mod read_evolved_schema;
 mod read_positional_deletes;
 mod scan_all_type;
 
-static TEST_NAMESPACE: OnceCell<Arc<Namespace>> = OnceCell::const_new();
+pub async fn random_ns() -> Namespace {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
-pub async fn apple_ios_ns() -> &'static Arc<Namespace> {
-    TEST_NAMESPACE
-        .get_or_init(|| async {
-            let fixture = get_shared_containers();
-            let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = Namespace::with_properties(
+        NamespaceIdent::from_strs([uuid::Uuid::new_v4().to_string()]).unwrap(),
+        HashMap::from([
+            ("owner".to_string(), "ray".to_string()),
+            ("community".to_string(), "apache".to_string()),
+        ]),
+    );
 
-            let ns = Namespace::with_properties(
-                NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
-                HashMap::from([
-                    ("owner".to_string(), "ray".to_string()),
-                    ("community".to_string(), "apache".to_string()),
-                ]),
-            );
-
-            rest_catalog
-                .create_namespace(ns.name(), ns.properties().clone())
-                .await
-                .unwrap();
-
-            Arc::new(ns)
-        })
+    rest_catalog
+        .create_namespace(ns.name(), ns.properties().clone())
         .await
+        .unwrap();
+
+    ns
 }
 
 fn test_schema() -> Schema {

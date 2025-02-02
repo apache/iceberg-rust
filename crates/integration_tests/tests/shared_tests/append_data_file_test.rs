@@ -34,17 +34,17 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::properties::WriterProperties;
 
 use crate::get_shared_containers;
-use crate::shared_tests::{apple_ios_ns, test_schema};
+use crate::shared_tests::{random_ns, test_schema};
 
 #[tokio::test]
 async fn test_append_data_file() {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
-    let ns = apple_ios_ns().await;
+    let ns = random_ns().await;
     let schema = test_schema();
 
     let table_creation = TableCreation::builder()
-        .name("t_append_data_file".to_string())
+        .name("t1".to_string())
         .schema(schema.clone())
         .build();
 
