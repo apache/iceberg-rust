@@ -66,8 +66,9 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Summarises the changes in the snapshot.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
+#[serde(default)]
 pub struct SnapshotSummary {
     /// The type of operation in the snapshot
     pub operation: Operation,
@@ -125,6 +126,7 @@ pub struct SnapshotSummary {
     /// Number of partitions changed
     pub changed_partition_count: u64,
     /// Tracks changes per partition (partition identifier -> summary of changes)
+    #[serde(default)]
     pub partitions: HashMap<String, String>,
 
     /// Other summary data (any custom properties)
@@ -132,17 +134,27 @@ pub struct SnapshotSummary {
     pub additional_properties: HashMap<String, String>,
 }
 
+// Update values macros
+macro_rules! update_counters {
+    (add, $self:ident, $files_field:ident, $total_files_field:ident,
+     $added_size_field:ident, $total_size_field:ident, $size:expr) => {
+        $self.$files_field = $self.$files_field.saturating_add(1);
+        $self.$total_files_field = $self.$total_files_field.saturating_add(1);
+        $self.$added_size_field = $self.$added_size_field.saturating_add($size);
+        $self.$total_size_field = $self.$total_size_field.saturating_add($size);
+    };
+
+    (remove, $self:ident, $files_field:ident, $total_files_field:ident,
+     $removed_size_field:ident, $total_size_field:ident, $size:expr) => {
+        $self.$files_field = $self.$files_field.saturating_add(1);
+        $self.$total_files_field = $self.$total_files_field.saturating_sub(1);
+        $self.$removed_size_field = $self.$removed_size_field.saturating_add($size);
+        $self.$total_size_field = $self.$total_size_field.saturating_sub($size);
+    };
+}
+
 impl SnapshotSummary {
-    /// Creates a new `Summary` instance with the given operation type and additional properties.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::collections::HashMap;
-    ///
-    /// let properties = HashMap::new();
-    /// let summary = Summary::new(Operation::Append, properties);
-    /// ```
+    /// Creates a new `SnapshotSummary` instance.
     pub fn new(operation: Operation, properties: HashMap<String, String>) -> Self {
         Self {
             operation,
@@ -175,76 +187,116 @@ impl SnapshotSummary {
 
     /// Adds a new data file and updates relevant counters.
     pub fn add_data_file(&mut self, size: u64) {
-        self.added_data_files = self.added_data_files.saturating_add(1);
-        self.total_data_files = self.total_data_files.saturating_add(1);
-        self.added_file_size = self.added_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_add(size);
+        update_counters!(
+            add,
+            self,
+            added_data_files,
+            total_data_files,
+            added_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Deletes a data file and updates relevant counters.
     pub fn delete_data_file(&mut self, size: u64) {
-        self.deleted_data_files = self.deleted_data_files.saturating_add(1);
-        self.total_data_files = self.total_data_files.saturating_sub(1);
-        self.removed_file_size = self.removed_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_sub(size);
+        update_counters!(
+            remove,
+            self,
+            deleted_data_files,
+            total_data_files,
+            removed_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Adds a delete file and updates relevant counters.
     pub fn add_delete_file(&mut self, size: u64) {
-        self.added_delete_files = self.added_delete_files.saturating_add(1);
-        self.total_delete_files = self.total_delete_files.saturating_add(1);
-        self.added_file_size = self.added_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_add(size);
+        update_counters!(
+            add,
+            self,
+            added_delete_files,
+            total_delete_files,
+            added_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Removes a delete file and updates relevant counters.
     pub fn remove_delete_file(&mut self, size: u64) {
-        self.removed_delete_files = self.removed_delete_files.saturating_add(1);
-        self.total_delete_files = self.total_delete_files.saturating_sub(1);
-        self.removed_file_size = self.removed_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_sub(size);
+        update_counters!(
+            remove,
+            self,
+            removed_delete_files,
+            total_delete_files,
+            removed_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Adds an equality delete file and updates relevant counters.
     pub fn add_eq_delete_file(&mut self, size: u64) {
-        self.added_eq_delete_files = self.added_eq_delete_files.saturating_add(1);
-        self.total_eq_deletes = self.total_eq_deletes.saturating_add(1);
-        self.added_file_size = self.added_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_add(size);
+        update_counters!(
+            add,
+            self,
+            added_eq_delete_files,
+            total_eq_deletes,
+            added_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Removes an equality delete file and updates relevant counters.
     pub fn remove_eq_delete_file(&mut self, size: u64) {
-        self.removed_eq_delete_files = self.removed_eq_delete_files.saturating_add(1);
-        self.total_eq_deletes = self.total_eq_deletes.saturating_sub(1);
-        self.removed_file_size = self.removed_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_sub(size);
+        update_counters!(
+            remove,
+            self,
+            removed_eq_delete_files,
+            total_eq_deletes,
+            removed_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Adds a positional delete file and updates relevant counters.
     pub fn add_pos_delete_file(&mut self, size: u64) {
-        self.added_pos_delete_files = self.added_pos_delete_files.saturating_add(1);
-        self.total_pos_deletes = self.total_pos_deletes.saturating_add(1);
-        self.added_file_size = self.added_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_add(size);
+        update_counters!(
+            add,
+            self,
+            added_pos_delete_files,
+            total_pos_deletes,
+            added_file_size,
+            total_file_size,
+            size
+        );
     }
 
     /// Removes a positional delete file and updates relevant counters.
     pub fn remove_pos_delete_file(&mut self, size: u64) {
-        self.removed_pos_delete_files = self.removed_pos_delete_files.saturating_add(1);
-        self.total_pos_deletes = self.total_pos_deletes.saturating_sub(1);
-        self.removed_file_size = self.removed_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_sub(size);
+        update_counters!(
+            remove,
+            self,
+            removed_pos_delete_files,
+            total_pos_deletes,
+            removed_file_size,
+            total_file_size,
+            size
+        );
     }
 
-    /// Adds a DV (delete vector) file and updates relevant counters.
+    /// Adds a delete vector file.
     pub fn add_dv(&mut self, size: u64) {
         self.added_dvs = self.added_dvs.saturating_add(1);
         self.added_file_size = self.added_file_size.saturating_add(size);
         self.total_file_size = self.total_file_size.saturating_add(size);
     }
 
-    /// Removes a DV (delete vector) file and updates relevant counters.
+    /// Removes a DV (delete vector) file.
     pub fn remove_dv(&mut self, size: u64) {
         self.removed_dvs = self.removed_dvs.saturating_add(1);
         self.removed_file_size = self.removed_file_size.saturating_add(size);
@@ -256,30 +308,30 @@ impl SnapshotSummary {
         self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(1);
     }
 
-    /// Increments the counter for deleted duplicate files by a given count.
+    /// Increments the counter for deleted duplicate files by the specified amount.
     pub fn increment_deleted_duplicate_files_by(&mut self, count: u64) {
         self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(count);
     }
 
-    /// Adds records and updates relevant counters.
+    /// Adds records.
     pub fn add_records(&mut self, count: u64) {
         self.added_records = self.added_records.saturating_add(count);
         self.total_records = self.total_records.saturating_add(count);
     }
 
-    /// Deletes records and updates relevant counters.
+    /// Deletes records.
     pub fn delete_records(&mut self, count: u64) {
         self.deleted_records = self.deleted_records.saturating_add(count);
         self.total_records = self.total_records.saturating_sub(count);
     }
 
-    /// Sets an additional property key-value pair.
+    /// Sets an additional property.
     pub fn set_property(&mut self, key: &str, value: &str) {
         self.additional_properties
             .insert(key.to_string(), value.to_string());
     }
 
-    /// Add partition change tracking
+    /// Tracks a partition change.
     pub fn add_partition_change(&mut self, partition: String, summary: String) {
         self.partitions.insert(partition, summary);
         self.changed_partition_count = self.changed_partition_count.saturating_add(1);
@@ -647,5 +699,70 @@ mod tests {
             *result.summary()
         );
         assert_eq!("s3://b/wh/.../s1.avro".to_string(), *result.manifest_list());
+    }
+
+    #[test]
+    fn test_add_remove_data_files() {
+        let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
+
+        // Initially, everything is zero
+        assert_eq!(0, summary.added_data_files);
+        assert_eq!(0, summary.deleted_data_files);
+        assert_eq!(0, summary.total_data_files);
+
+        // Add two data files
+        summary.add_data_file(100);
+        summary.add_data_file(200);
+
+        // We expect that two files have been added
+        assert_eq!(2, summary.added_data_files);
+        // No deletions yet
+        assert_eq!(0, summary.deleted_data_files);
+        // The total number of data files should be 2
+        assert_eq!(2, summary.total_data_files);
+
+        // The added file size should be 300 (100 + 200)
+        assert_eq!(300, summary.added_file_size);
+        // Nothing has been removed yet
+        assert_eq!(0, summary.removed_file_size);
+        // So total file size is 300
+        assert_eq!(300, summary.total_file_size);
+
+        // Now remove one data file of size 100
+        summary.delete_data_file(100);
+
+        // We've removed one file
+        assert_eq!(1, summary.deleted_data_files);
+        // That leaves 1 total data file
+        assert_eq!(1, summary.total_data_files);
+        // The “removed_file_size” should be 100
+        assert_eq!(100, summary.removed_file_size);
+        // Total file size should now be 200 (300 - 100)
+        assert_eq!(200, summary.total_file_size);
+    }
+
+    #[test]
+    fn test_add_remove_delete_files() {
+        let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
+
+        // Add some delete files
+        summary.add_delete_file(50);
+        summary.add_delete_file(75);
+
+        assert_eq!(2, summary.added_delete_files);
+        assert_eq!(2, summary.total_delete_files);
+        assert_eq!(125, summary.added_file_size);
+        assert_eq!(125, summary.total_file_size);
+
+        // Remove one delete file
+        summary.remove_delete_file(50);
+
+        assert_eq!(1, summary.removed_delete_files);
+        // total_delete_files should now be 1
+        assert_eq!(1, summary.total_delete_files);
+        // removed_file_size should be 50
+        assert_eq!(50, summary.removed_file_size);
+        // total_file_size should be 75
+        assert_eq!(75, summary.total_file_size);
     }
 }
