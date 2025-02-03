@@ -506,7 +506,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
         self.tx.append_updates(vec![
             TableUpdate::AddSnapshot {
-                snapshot: new_snapshot,
+                snapshot: Box::new(new_snapshot),
             },
             TableUpdate::SetSnapshotRef {
                 ref_name: MAIN_BRANCH.to_string(),

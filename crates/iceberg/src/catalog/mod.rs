@@ -402,7 +402,7 @@ pub enum TableUpdate {
     AddSnapshot {
         /// Snapshot to add.
         #[serde(deserialize_with = "deserialize_snapshot")]
-        snapshot: Snapshot,
+        snapshot: Box<Snapshot>,
     },
     /// Set table's snapshot ref.
     #[serde(rename_all = "kebab-case")]
@@ -485,7 +485,7 @@ impl TableUpdate {
             TableUpdate::SetDefaultSortOrder { sort_order_id } => {
                 builder.set_default_sort_order(sort_order_id)
             }
-            TableUpdate::AddSnapshot { snapshot } => builder.add_snapshot(snapshot),
+            TableUpdate::AddSnapshot { snapshot } => builder.add_snapshot(*snapshot),
             TableUpdate::SetSnapshotRef {
                 ref_name,
                 reference,
@@ -659,10 +659,10 @@ pub(super) mod _serde {
 
     pub(super) fn deserialize_snapshot<'de, D>(
         deserializer: D,
-    ) -> std::result::Result<Snapshot, D::Error>
+    ) -> std::result::Result<Box<Snapshot>, D::Error>
     where D: Deserializer<'de> {
         let buf = CatalogSnapshot::deserialize(deserializer)?;
-        Ok(buf.into())
+        Ok(Box::new(buf.into()))
     }
 
     #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -973,7 +973,7 @@ mod tests {
         let snapshot = serde_json::from_str::<Snapshot>(record).unwrap();
         let builder = metadata.into_builder(None);
         let builder = TableUpdate::AddSnapshot {
-            snapshot: snapshot.clone(),
+            snapshot: Box::new(snapshot.clone()),
         }
         .apply(builder)
         .unwrap();
@@ -1496,15 +1496,17 @@ mod tests {
         "#;
 
         let update = TableUpdate::AddSnapshot {
-            snapshot: Snapshot::builder()
-                .with_snapshot_id(3055729675574597000)
-                .with_parent_snapshot_id(Some(3051729675574597000))
-                .with_timestamp_ms(1555100955770)
-                .with_sequence_number(1)
-                .with_manifest_list("s3://a/b/2.avro")
-                .with_schema_id(1)
-                .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
-                .build(),
+            snapshot: Box::new(
+                Snapshot::builder()
+                    .with_snapshot_id(3055729675574597000)
+                    .with_parent_snapshot_id(Some(3051729675574597000))
+                    .with_timestamp_ms(1555100955770)
+                    .with_sequence_number(1)
+                    .with_manifest_list("s3://a/b/2.avro")
+                    .with_schema_id(1)
+                    .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
+                    .build(),
+            ),
         };
 
         test_serde_json(json, update);
@@ -1528,14 +1530,16 @@ mod tests {
     "#;
 
         let update = TableUpdate::AddSnapshot {
-            snapshot: Snapshot::builder()
-                .with_snapshot_id(3055729675574597000)
-                .with_parent_snapshot_id(Some(3051729675574597000))
-                .with_timestamp_ms(1555100955770)
-                .with_sequence_number(0)
-                .with_manifest_list("s3://a/b/2.avro")
-                .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
-                .build(),
+            snapshot: Box::new(
+                Snapshot::builder()
+                    .with_snapshot_id(3055729675574597000)
+                    .with_parent_snapshot_id(Some(3051729675574597000))
+                    .with_timestamp_ms(1555100955770)
+                    .with_sequence_number(0)
+                    .with_manifest_list("s3://a/b/2.avro")
+                    .with_summary(SnapshotSummary::new(Operation::Append, HashMap::default()))
+                    .build(),
+            ),
         };
 
         let actual: TableUpdate = serde_json::from_str(json).expect("Failed to parse from json");

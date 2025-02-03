@@ -381,7 +381,7 @@ impl TableMetadataBuilder {
 
         // Mutation happens in next line - must be infallible from here
         self.changes.push(TableUpdate::AddSnapshot {
-            snapshot: snapshot.clone(),
+            snapshot: Box::new(snapshot.clone()),
         });
 
         self.metadata.last_updated_ms = snapshot.timestamp_ms();
@@ -2057,7 +2057,9 @@ mod tests {
             Some(&reference)
         );
         assert_eq!(build_result.changes, vec![
-            TableUpdate::AddSnapshot { snapshot },
+            TableUpdate::AddSnapshot {
+                snapshot: Box::new(snapshot)
+            },
             TableUpdate::SetSnapshotRef {
                 ref_name: "new_branch".to_string(),
                 reference
