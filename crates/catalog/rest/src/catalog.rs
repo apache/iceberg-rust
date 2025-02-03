@@ -1337,10 +1337,19 @@ mod tests {
         );
         let summary = SnapshotSummary::new(
             Operation::Append,
-            HashMap::from_iter([(
-                "spark.app.id".to_string(),
-                "local-1646787004168".to_string(),
-            )]),
+            HashMap::from_iter([
+                ("spark.app.id", "local-1646787004168"),
+                ("added-data-files", "1"),
+                ("added-records", "1"),
+                ("added-files-size", "697"),
+                ("changed-partition-count", "1"),
+                ("total-records", "1"),
+                ("total-files-size", "697"),
+                ("total-data-files", "1"),
+                ("total-delete-files", "0"),
+                ("total-position-deletes", "0"),
+                ("total-equality-deletes", "0")
+            ].iter().map(|p| (p.0.to_string(), p.1.to_string()))),
         );
 
         let expected_snapshot = Snapshot::builder()
