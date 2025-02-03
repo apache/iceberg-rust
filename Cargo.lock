@@ -695,9 +695,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.76.0"
+version = "1.80.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c25c89d6efe63a398cb727b79c285e06184c432985a0d221df0f23d7d10f1f9"
+checksum = "4bde19b0ef08d7686c139044ee303a36a5c3fa18e1ebe9a77d48e6fc1b17c9c7"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
