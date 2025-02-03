@@ -1338,7 +1338,10 @@ mod tests {
         let summary = SnapshotSummary::new(
             Operation::Append,
             HashMap::from([
-                ("spark.app.id".to_string(), "local-1646787004168".to_string()),
+                (
+                    "spark.app.id".to_string(),
+                    "local-1646787004168".to_string(),
+                ),
                 ("added-data-files".to_string(), "1".to_string()),
                 ("added-records".to_string(), "1".to_string()),
                 ("added-files-size".to_string(), "697".to_string()),
