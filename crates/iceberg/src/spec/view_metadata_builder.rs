@@ -44,8 +44,8 @@ use crate::ViewCreation;
 pub struct ViewMetadataBuilder {
     metadata: ViewMetadata,
     changes: Vec<ViewUpdate>,
-    last_added_schema_id: Option<i32>,
-    last_added_version_id: Option<i32>,
+    last_added_schema_id: Option<SchemaId>,
+    last_added_version_id: Option<SchemaId>,
     history_entry: Option<ViewVersionLog>,
     // Previous view version is only used during build to check
     // weather dialects are dropped or not.
