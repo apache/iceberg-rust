@@ -36,9 +36,11 @@ use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 use crate::spec::PrimitiveLiteral;
 
 /// Field name for list type.
-pub(crate) const LIST_FILED_NAME: &str = "element";
-pub(crate) const MAP_KEY_FIELD_NAME: &str = "key";
-pub(crate) const MAP_VALUE_FIELD_NAME: &str = "value";
+pub const LIST_FIELD_NAME: &str = "element";
+/// Field name for map type's key.
+pub const MAP_KEY_FIELD_NAME: &str = "key";
+/// Field name for map type's value.
+pub const MAP_VALUE_FIELD_NAME: &str = "value";
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
@@ -226,8 +228,10 @@ pub enum PrimitiveType {
     /// Timestamp in microsecond precision, with timezone
     Timestamptz,
     /// Timestamp in nanosecond precision, without timezone
+    #[serde(rename = "timestamp_ns")]
     TimestampNs,
     /// Timestamp in nanosecond precision with timezone
+    #[serde(rename = "timestamptz_ns")]
     TimestamptzNs,
     /// Arbitrary-length character sequences encoded in utf-8
     String,
@@ -631,9 +635,9 @@ impl NestedField {
     /// Construct list type's element field.
     pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
         if required {
-            Self::required(id, LIST_FILED_NAME, field_type)
+            Self::required(id, LIST_FIELD_NAME, field_type)
         } else {
-            Self::optional(id, LIST_FILED_NAME, field_type)
+            Self::optional(id, LIST_FIELD_NAME, field_type)
         }
     }
 
@@ -855,64 +859,107 @@ mod tests {
     }
 
     #[test]
-    fn decimal() {
+    fn primitive_type_serde() {
         let record = r#"
-        {
-            "type": "struct",
-            "fields": [
-                {
-                    "id": 1,
-                    "name": "id",
-                    "required": true,
-                    "type": "decimal(9,2)"
-                }
-            ]
-        }
-        "#;
-
-        check_type_serde(
-            record,
-            Type::Struct(StructType {
-                fields: vec![NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Decimal {
-                        precision: 9,
-                        scale: 2,
-                    }),
-                )
-                .into()],
-                id_lookup: OnceLock::default(),
-                name_lookup: OnceLock::default(),
-            }),
-        )
+    {
+        "type": "struct",
+        "fields": [
+            {"id": 1, "name": "bool_field", "required": true, "type": "boolean"},
+            {"id": 2, "name": "int_field", "required": true, "type": "int"},
+            {"id": 3, "name": "long_field", "required": true, "type": "long"},
+            {"id": 4, "name": "float_field", "required": true, "type": "float"},
+            {"id": 5, "name": "double_field", "required": true, "type": "double"},
+            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9,2)"},
+            {"id": 7, "name": "date_field", "required": true, "type": "date"},
+            {"id": 8, "name": "time_field", "required": true, "type": "time"},
+            {"id": 9, "name": "timestamp_field", "required": true, "type": "timestamp"},
+            {"id": 10, "name": "timestamptz_field", "required": true, "type": "timestamptz"},
+            {"id": 11, "name": "timestamp_ns_field", "required": true, "type": "timestamp_ns"},
+            {"id": 12, "name": "timestamptz_ns_field", "required": true, "type": "timestamptz_ns"},
+            {"id": 13, "name": "uuid_field", "required": true, "type": "uuid"},
+            {"id": 14, "name": "fixed_field", "required": true, "type": "fixed[10]"},
+            {"id": 15, "name": "binary_field", "required": true, "type": "binary"},
+            {"id": 16, "name": "string_field", "required": true, "type": "string"}
+        ]
     }
-
-    #[test]
-    fn fixed() {
-        let record = r#"
-        {
-            "type": "struct",
-            "fields": [
-                {
-                    "id": 1,
-                    "name": "id",
-                    "required": true,
-                    "type": "fixed[8]"
-                }
-            ]
-        }
-        "#;
+    "#;
 
         check_type_serde(
             record,
             Type::Struct(StructType {
-                fields: vec![NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Fixed(8)),
-                )
-                .into()],
+                fields: vec![
+                    NestedField::required(1, "bool_field", Type::Primitive(PrimitiveType::Boolean))
+                        .into(),
+                    NestedField::required(2, "int_field", Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                    NestedField::required(3, "long_field", Type::Primitive(PrimitiveType::Long))
+                        .into(),
+                    NestedField::required(4, "float_field", Type::Primitive(PrimitiveType::Float))
+                        .into(),
+                    NestedField::required(
+                        5,
+                        "double_field",
+                        Type::Primitive(PrimitiveType::Double),
+                    )
+                    .into(),
+                    NestedField::required(
+                        6,
+                        "decimal_field",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 9,
+                            scale: 2,
+                        }),
+                    )
+                    .into(),
+                    NestedField::required(7, "date_field", Type::Primitive(PrimitiveType::Date))
+                        .into(),
+                    NestedField::required(8, "time_field", Type::Primitive(PrimitiveType::Time))
+                        .into(),
+                    NestedField::required(
+                        9,
+                        "timestamp_field",
+                        Type::Primitive(PrimitiveType::Timestamp),
+                    )
+                    .into(),
+                    NestedField::required(
+                        10,
+                        "timestamptz_field",
+                        Type::Primitive(PrimitiveType::Timestamptz),
+                    )
+                    .into(),
+                    NestedField::required(
+                        11,
+                        "timestamp_ns_field",
+                        Type::Primitive(PrimitiveType::TimestampNs),
+                    )
+                    .into(),
+                    NestedField::required(
+                        12,
+                        "timestamptz_ns_field",
+                        Type::Primitive(PrimitiveType::TimestamptzNs),
+                    )
+                    .into(),
+                    NestedField::required(13, "uuid_field", Type::Primitive(PrimitiveType::Uuid))
+                        .into(),
+                    NestedField::required(
+                        14,
+                        "fixed_field",
+                        Type::Primitive(PrimitiveType::Fixed(10)),
+                    )
+                    .into(),
+                    NestedField::required(
+                        15,
+                        "binary_field",
+                        Type::Primitive(PrimitiveType::Binary),
+                    )
+                    .into(),
+                    NestedField::required(
+                        16,
+                        "string_field",
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into(),
+                ],
                 id_lookup: OnceLock::default(),
                 name_lookup: OnceLock::default(),
             }),

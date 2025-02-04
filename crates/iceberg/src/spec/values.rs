@@ -3569,6 +3569,9 @@ mod tests {
         let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899").unwrap();
         assert_eq!(&format!("{value}"), "2021-08-01 01:09:00.089900");
 
+        let value = Datum::timestamp_from_str("2023-01-06T00:00:00").unwrap();
+        assert_eq!(&format!("{value}"), "2023-01-06 00:00:00");
+
         let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899+0800");
         assert!(value.is_err(), "Parse timestamp with timezone should fail!");
 
