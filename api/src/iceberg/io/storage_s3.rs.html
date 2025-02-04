@@ -175,8 +175,6 @@
 <a href="#175" id="175">175</a>
 <a href="#176" id="176">176</a>
 <a href="#177" id="177">177</a>
-<a href="#178" id="178">178</a>
-<a href="#179" id="179">179</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -268,9 +266,7 @@
         cfg.region = <span class="prelude-val">Some</span>(region);
     };
     <span class="kw">if let </span><span class="prelude-val">Some</span>(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
-        <span class="kw">if </span>is_truthy(path_style_access.to_lowercase().as_str()) {
-            cfg.enable_virtual_host_style = <span class="bool-val">true</span>;
-        }
+        cfg.enable_virtual_host_style = !is_truthy(path_style_access.to_lowercase().as_str());
     };
     <span class="kw">if let </span><span class="prelude-val">Some</span>(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
         cfg.role_arn = <span class="prelude-val">Some</span>(arn);
