@@ -480,6 +480,7 @@ pub(super) mod _serde {
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,
+        #[serde(default)]
         pub summary: SnapshotSummary,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schema_id: Option<SchemaId>,
