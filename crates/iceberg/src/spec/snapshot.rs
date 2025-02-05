@@ -281,7 +281,7 @@ impl SnapshotSummary {
             size
         );
     }
-    
+
     /// Increments the counter for deleted duplicate files by one.
     pub fn increment_deleted_duplicate_files(&mut self) {
         self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(1);
