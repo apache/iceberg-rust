@@ -14,12 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Mutex;
 
 use iceberg::{Error, ErrorKind, Result};
+use log::debug;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
@@ -236,36 +236,44 @@ impl HttpClient {
 
         let resp = self.client.execute(request).await?;
 
-        if resp.status().as_u16() == SUCCESS_CODE {
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            Ok(serde_json::from_slice::<R>(&text).map_err(|e| {
+        // Capture the status code before consuming the response body.
+        let status = resp.status();
+
+        // Consume the response body once and store the bytes.
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|err| err.with_url(url.clone()))?;
+
+        // Optionally, log the response.
+        debug!(
+            "Response from {} {}: {}",
+            method,
+            url,
+            String::from_utf8_lossy(&bytes)
+        );
+
+        if status.as_u16() == SUCCESS_CODE {
+            Ok(serde_json::from_slice::<R>(&bytes).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
                 .with_context("method", method.to_string())
                 .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
+                .with_context("json", String::from_utf8_lossy(&bytes))
                 .with_source(e)
             })?)
         } else {
-            let code = resp.status();
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
+            let e = serde_json::from_slice::<E>(&bytes).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to parse response from rest catalog server!",
                 )
-                .with_context("code", code.to_string())
+                .with_context("code", status.to_string())
                 .with_context("method", method.to_string())
                 .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
+                .with_context("json", String::from_utf8_lossy(&bytes))
                 .with_source(e)
             })?;
             Err(e.into())
