@@ -17,6 +17,7 @@
 
 use std::vec;
 
+use datafusion::functions::datetime::to_timestamp::ToTimestampFunc;
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
@@ -120,6 +121,21 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             }
         }
         Expr::Cast(c) => to_iceberg_predicate(&c.expr),
+        Expr::ScalarFunction(func) => {
+            if func
+                .func
+                .inner()
+                .as_any()
+                .downcast_ref::<ToTimestampFunc>()
+                .is_some()
+                && func.args.len() == 1
+            // More than 1 argument means it's a custom format - not
+            // supported for now
+            {
+                return to_iceberg_predicate(&func.args[0]);
+            }
+            TransformedResult::NotTransformed
+        }
         _ => TransformedResult::NotTransformed,
     }
 }
@@ -403,4 +419,39 @@ mod tests {
             Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
         assert_eq!(predicate, expected_predicate);
     }
+
+    #[test]
+    fn test_to_timestamp_comparison_creates_predicate() {
+        let sql = "TO_TIMESTAMP(ts) >= timestamp '2023-01-05T00:00:00'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_to_timestamp_comparison_to_cast_creates_predicate() {
+        let sql = "TO_TIMESTAMP(ts) >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_to_timestamp_with_custom_format_does_not_create_predicate() {
+        let sql =
+            "TO_TIMESTAMP(ts, 'YYYY-DD-MMTmm:HH:SS') >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    //#[test]
+    //fn test_to_date_comparison_creates_predicate() {
+    //    let sql = "TO_DATE(ts) >= CAST('2023-01-05T00:00:00' AS DATE)";
+    //    let predicate = convert_to_iceberg_predicate(sql).unwrap();
+    //    let expected_predicate =
+    //        Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05"));
+    //    assert_eq!(predicate, expected_predicate);
+    //}
 }
