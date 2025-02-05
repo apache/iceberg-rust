@@ -678,6 +678,7 @@ pub(super) mod _serde {
         sequence_number: i64,
         timestamp_ms: i64,
         manifest_list: String,
+        #[serde(default)]
         summary: SnapshotSummary,
         #[serde(skip_serializing_if = "Option::is_none")]
         schema_id: Option<SchemaId>,

@@ -66,7 +66,7 @@ impl Operation {
     }
 }
 
-/// Summarises the changes in the snapshot.
+/// Summarizes the changes in the snapshot.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
 #[serde(default)]
 pub struct SnapshotSummary {
@@ -114,11 +114,6 @@ pub struct SnapshotSummary {
     pub removed_pos_delete_files: u64,
     /// Total position delete files
     pub total_pos_deletes: u64,
-
-    /// Number of added delete vectors
-    pub added_dvs: u64,
-    /// Number of removed delete vectors
-    pub removed_dvs: u64,
 
     /// Number of deleted duplicate files
     pub deleted_duplicate_files: u64,
@@ -176,8 +171,6 @@ impl SnapshotSummary {
             added_pos_delete_files: 0,
             removed_pos_delete_files: 0,
             total_pos_deletes: 0,
-            added_dvs: 0,
-            removed_dvs: 0,
             deleted_duplicate_files: 0,
             changed_partition_count: 0,
             partitions: HashMap::new(),
@@ -288,21 +281,7 @@ impl SnapshotSummary {
             size
         );
     }
-
-    /// Adds a delete vector file.
-    pub fn add_dv(&mut self, size: u64) {
-        self.added_dvs = self.added_dvs.saturating_add(1);
-        self.added_file_size = self.added_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_add(size);
-    }
-
-    /// Removes a DV (delete vector) file.
-    pub fn remove_dv(&mut self, size: u64) {
-        self.removed_dvs = self.removed_dvs.saturating_add(1);
-        self.removed_file_size = self.removed_file_size.saturating_add(size);
-        self.total_file_size = self.total_file_size.saturating_sub(size);
-    }
-
+    
     /// Increments the counter for deleted duplicate files by one.
     pub fn increment_deleted_duplicate_files(&mut self) {
         self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(1);
