@@ -31,13 +31,12 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::{from_thrift, Statistics};
 use parquet::format::FileMetaData;
 
-use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, DEFAULT_MAP_FIELD_NAME,
 };
-use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::io::{FileWrite, OutputFile};
 use crate::spec::{
     visit_schema, DataFileBuilder, DataFileFormat, Datum, ListType, MapType, NestedFieldRef,
     PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
@@ -47,45 +46,25 @@ use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
-pub struct ParquetWriterBuilder<T: LocationGenerator, F: FileNameGenerator> {
+pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
-
-    file_io: FileIO,
-    location_generator: T,
-    file_name_generator: F,
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> ParquetWriterBuilder<T, F> {
+impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
-    pub fn new(
-        props: WriterProperties,
-        schema: SchemaRef,
-        file_io: FileIO,
-        location_generator: T,
-        file_name_generator: F,
-    ) -> Self {
-        Self {
-            props,
-            schema,
-            file_io,
-            location_generator,
-            file_name_generator,
-        }
+    pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
+        Self { props, schema }
     }
 }
 
-impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWriterBuilder<T, F> {
+impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self) -> crate::Result<Self::R> {
+    async fn build(self, out_file: OutputFile) -> crate::Result<Self::R> {
         let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
         let written_size = Arc::new(AtomicI64::new(0));
-        let out_file = self.file_io.new_output(
-            self.location_generator
-                .generate_location(&self.file_name_generator.generate_file_name()),
-        )?;
         let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
         let async_writer = AsyncFileWriter::new(inner_writer);
         let writer =
@@ -668,14 +647,14 @@ mod tests {
         let to_write_null = RecordBatch::try_new(schema.clone(), vec![null_col]).unwrap();
 
         // write data
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
         )
-        .build()
+        .build(output_file)
         .await?;
         pw.write(&to_write).await?;
         pw.write(&to_write_null).await?;
@@ -864,15 +843,13 @@ mod tests {
         .unwrap();
 
         // write data
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema),
-            file_io.clone(),
-            location_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
+        let mut pw =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema))
+                .build(output_file)
+                .await?;
         pw.write(&to_write).await?;
         let res = pw.close().await?;
         assert_eq!(res.len(), 1);
@@ -1054,15 +1031,13 @@ mod tests {
         .unwrap();
 
         // write data
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            Arc::new(schema),
-            file_io.clone(),
-            loccation_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
+        let mut pw =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema))
+                .build(output_file)
+                .await?;
         pw.write(&to_write).await?;
         let res = pw.close().await?;
         assert_eq!(res.len(), 1);
@@ -1198,15 +1173,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema.clone(),
-            file_io.clone(),
-            loccation_gen.clone(),
-            file_name_gen.clone(),
-        )
-        .build()
-        .await?;
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone())
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![Some(22000000000), Some(11000000000)])
                 .with_data_type(DataType::Decimal128(28, 10)),
@@ -1250,15 +1222,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema.clone(),
-            file_io.clone(),
-            loccation_gen.clone(),
-            file_name_gen.clone(),
-        )
-        .build()
-        .await?;
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone())
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![Some(-22000000000), Some(-11000000000)])
                 .with_data_type(DataType::Decimal128(28, 10)),
@@ -1305,15 +1274,12 @@ mod tests {
                 .unwrap(),
         );
         let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let mut pw = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            schema,
-            file_io.clone(),
-            loccation_gen,
-            file_name_gen,
-        )
-        .build()
-        .await?;
+        let output_file = file_io
+            .new_output(format!("{}/{}", loccation_gen.gen(), file_name_gen.gen()))
+            .unwrap();
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
                 Some(decimal_max.mantissa()),

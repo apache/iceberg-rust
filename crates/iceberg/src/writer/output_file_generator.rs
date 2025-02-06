@@ -17,18 +17,52 @@
 
 //! This module contains the location generator and file name generator for generating path of data file.
 
+use std::fmt::Debug;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use crate::spec::{DataFileFormat, TableMetadata};
+use crate::io::{FileIO, OutputFile};
+use crate::spec::{DataFileFormat, SchemaId, Struct, StructType, TableMetadata};
 use crate::{Error, ErrorKind, Result};
 
+/// `OutputFileGenerator` used to generate the output file.
+#[derive(Clone, Debug)]
+pub struct OutputFileGenerator {
+    location_generator: Arc<dyn LocationGenerator>,
+    file_name_generator: Arc<dyn FileNameGenerator>,
+    file_io: FileIO,
+}
+
+impl OutputFileGenerator {
+    /// Create a new `OutputFileGenerator`.
+    pub fn new(
+        file_io: FileIO,
+        location_generator: Arc<dyn LocationGenerator>,
+        file_name_generator: Arc<dyn FileNameGenerator>,
+    ) -> Self {
+        Self {
+            location_generator,
+            file_name_generator,
+            file_io,
+        }
+    }
+
+    /// Create a new output file. Partition value can be used to generate the location of the file.
+    pub fn create_output_file(&self, partition_value: &Option<Struct>) -> Result<OutputFile> {
+        let file_name = self.file_name_generator.generate_file_name();
+        let location = self
+            .location_generator
+            .generate_location(partition_value, &file_name)?;
+        self.file_io.new_output(&location)
+    }
+}
+
 /// `LocationGenerator` used to generate the location of data file.
-pub trait LocationGenerator: Clone + Send + 'static {
+pub trait LocationGenerator: Send + 'static + Debug + Sync {
     /// Generate an absolute path for the given file name.
     /// e.g
     /// For file name "part-00000.parquet", the generated location maybe "/table/data/part-00000.parquet"
-    fn generate_location(&self, file_name: &str) -> String;
+    fn generate_location(&self, partition: &Option<Struct>, file_name: &str) -> Result<String>;
 }
 
 const WRITE_DATA_LOCATION: &str = "write.data.path";
@@ -40,11 +74,44 @@ const DEFAULT_DATA_DIR: &str = "/data";
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
     dir_path: String,
+    partition_type: Option<StructType>,
 }
 
 impl DefaultLocationGenerator {
     /// Create a new `DefaultLocationGenerator`.
     pub fn new(table_metadata: TableMetadata) -> Result<Self> {
+        Self::new_inner(table_metadata, None)
+    }
+
+    /// Create a new `DefaultLocationGenerator` with partition spec.
+    pub fn new_with_partition_spec(
+        table_metadata: TableMetadata,
+        partition_spec_id: i32,
+        schema_id: SchemaId,
+    ) -> Result<Self> {
+        let partition_spec = table_metadata
+            .partition_spec_by_id(partition_spec_id)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("partition spec id {} not found", partition_spec_id),
+                )
+            })?;
+        let schema = table_metadata.schema_by_id(schema_id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("schema id {} not found", schema_id),
+            )
+        })?;
+        let partition_type = partition_spec.partition_type(&schema)?;
+        Self::new_inner(table_metadata, Some(partition_type))
+    }
+
+    fn new_inner(
+        table_metadata: TableMetadata,
+        partition_type: Option<StructType>,
+    ) -> Result<Self> {
         let table_location = table_metadata.location();
         let rel_dir_path = {
             let prop = table_metadata.properties();
@@ -68,18 +135,49 @@ impl DefaultLocationGenerator {
 
         Ok(Self {
             dir_path: format!("{}{}", table_location, rel_dir_path),
+            partition_type,
         })
+    }
+
+    /// Following implementation is based on the java implementation:
+    /// https://github.com/apache/iceberg/blob/d96901b843395fe669f6bd4f618f8e5e46c0eed4/api/src/main/java/org/apache/iceberg/PartitionSpec.java#L206
+    fn partition_dir_path(partition: &Struct, partition_type: &StructType) -> Result<String> {
+        let mut partition_path = String::with_capacity(128);
+        for (field, field_value) in partition_type.fields().iter().zip(partition.iter()) {
+            if !field.required && field_value.is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Partition value is not compatible with partition type",
+                ));
+            }
+            partition_path.push_str(&format!(
+                "/{}={:?}",
+                field.name,
+                field_value.as_ref().unwrap()
+            ));
+        }
+        Ok(partition_path)
     }
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
-    fn generate_location(&self, file_name: &str) -> String {
-        format!("{}/{}", self.dir_path, file_name)
+    fn generate_location(&self, partition: &Option<Struct>, file_name: &str) -> Result<String> {
+        if self.partition_type.is_none() || partition.is_none() {
+            return Ok(format!("{}/{}", self.dir_path, file_name));
+        }
+        let Some(partition) = partition else {
+            unreachable!();
+        };
+        let Some(partition_type) = &self.partition_type else {
+            unreachable!();
+        };
+        let partition_path = Self::partition_dir_path(partition, partition_type)?;
+        Ok(format!("{}{}/{}", self.dir_path, partition_path, file_name))
     }
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
-pub trait FileNameGenerator: Clone + Send + 'static {
+pub trait FileNameGenerator: Send + 'static + Debug + Sync {
     /// Generate a file name.
     fn generate_file_name(&self) -> String;
 }
@@ -87,12 +185,12 @@ pub trait FileNameGenerator: Clone + Send + 'static {
 /// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
 /// passed to `LocationGenerator` to generate the location of the file.
 /// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DefaultFileNameGenerator {
     prefix: String,
     suffix: String,
     format: String,
-    file_count: Arc<AtomicU64>,
+    file_count: AtomicU64,
 }
 
 impl DefaultFileNameGenerator {
@@ -108,7 +206,7 @@ impl DefaultFileNameGenerator {
             prefix,
             suffix,
             format: format.to_string(),
-            file_count: Arc::new(AtomicU64::new(0)),
+            file_count: AtomicU64::new(0),
         }
     }
 }
@@ -133,9 +231,6 @@ pub(crate) mod test {
 
     use super::LocationGenerator;
     use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
-    use crate::writer::file_writer::location_generator::{
-        FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
-    };
 
     #[derive(Clone)]
     pub(crate) struct MockLocationGenerator {
@@ -191,7 +286,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&None, &file_name_genertaor.generate_file_name());
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
@@ -202,7 +297,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&None, &file_name_genertaor.generate_file_name());
         assert_eq!(
             location,
             "s3://data.db/table/data_1/part-00001-test.parquet"
@@ -215,7 +310,7 @@ pub(crate) mod test {
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
-            location_generator.generate_location(&file_name_genertaor.generate_file_name());
+            location_generator.generate_location(&None, &file_name_genertaor.generate_file_name());
         assert_eq!(
             location,
             "s3://data.db/table/data_2/part-00002-test.parquet"

@@ -21,14 +21,12 @@ use arrow_array::RecordBatch;
 use futures::Future;
 
 use super::CurrentFileStatus;
-use crate::spec::DataFileBuilder;
+use crate::{io::OutputFile, spec::DataFileBuilder};
 use crate::Result;
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
 mod track_writer;
-
-pub mod location_generator;
 
 type DefaultOutput = Vec<DataFileBuilder>;
 
@@ -37,7 +35,7 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Send + Clone + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
     /// Build file writer.
-    fn build(self) -> impl Future<Output = Result<Self::R>> + Send;
+    fn build(self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
