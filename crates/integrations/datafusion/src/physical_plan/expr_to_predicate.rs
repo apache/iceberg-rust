@@ -496,8 +496,8 @@ mod tests {
     /// For now it is here in order to make sure that the value from within the cast
     /// is not used as-is when casting to date, because it can create false predicates.
     ///
-    /// (Consider for example `ts > CAST('2023-01-05T11:11:11' AS DATE)` which would be
-    /// creates a different predicate than `ts > CAST('2023-01-05T11:11:11' AS TIMESTAMP)`)
+    /// (Consider for example `ts > CAST('2023-01-05T11:11:11' AS DATE)` which should
+    /// create a different predicate than `ts > CAST('2023-01-05T11:11:11' AS TIMESTAMP)`)
     fn test_to_date_from_non_string_is_ignored() {
         let sql = "ts >= CAST(123456789 AS DATE)";
         let predicate = convert_to_iceberg_predicate(sql);
