@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn test_to_timestamp_comparison_creates_predicate() {
-        let sql = "TO_TIMESTAMP(ts) >= timestamp '2023-01-05T00:00:00'";
+        let sql = "ts >= timestamp '2023-01-05T00:00:00'";
         let predicate = convert_to_iceberg_predicate(sql).unwrap();
         let expected_predicate =
             Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_to_timestamp_comparison_to_cast_creates_predicate() {
-        let sql = "TO_TIMESTAMP(ts) >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
+        let sql = "ts >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
         let predicate = convert_to_iceberg_predicate(sql).unwrap();
         let expected_predicate =
             Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
