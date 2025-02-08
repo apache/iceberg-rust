@@ -561,7 +561,7 @@ impl ManifestWriter {
 }
 
 /// This is a helper module that defines the schema field of the manifest list entry.
-mod _const_schema {
+pub(crate) mod _const_schema {
     use std::sync::Arc;
 
     use apache_avro::Schema as AvroSchema;
@@ -862,7 +862,7 @@ mod _const_schema {
         })
     };
 
-    fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
+    pub(crate) fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         vec![
             CONTENT.clone(),
             FILE_PATH.clone(),
@@ -894,8 +894,8 @@ mod _const_schema {
         schema_to_avro_schema("data_file", &schema)
     }
 
-    pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSchema, Error> {
-        let fields = vec![
+    pub(crate) fn manifest_schema_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
+        vec![
             STATUS.clone(),
             SNAPSHOT_ID_V2.clone(),
             SEQUENCE_NUMBER.clone(),
@@ -905,8 +905,13 @@ mod _const_schema {
                 "data_file",
                 Type::Struct(StructType::new(data_file_fields_v2(partition_type))),
             )),
-        ];
-        let schema = Schema::builder().with_fields(fields).build()?;
+        ]
+    }
+
+    pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSchema, Error> {
+        let schema = Schema::builder()
+            .with_fields(manifest_schema_fields_v2(partition_type))
+            .build()?;
         schema_to_avro_schema("manifest_entry", &schema)
     }
 
@@ -941,8 +946,8 @@ mod _const_schema {
         schema_to_avro_schema("data_file", &schema)
     }
 
-    pub(super) fn manifest_schema_v1(partition_type: &StructType) -> Result<AvroSchema, Error> {
-        let fields = vec![
+    fn manifest_schema_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
+        vec![
             STATUS.clone(),
             SNAPSHOT_ID_V1.clone(),
             Arc::new(NestedField::required(
@@ -950,8 +955,13 @@ mod _const_schema {
                 "data_file",
                 Type::Struct(StructType::new(data_file_fields_v1(partition_type))),
             )),
-        ];
-        let schema = Schema::builder().with_fields(fields).build()?;
+        ]
+    }
+
+    pub(super) fn manifest_schema_v1(partition_type: &StructType) -> Result<AvroSchema, Error> {
+        let schema = Schema::builder()
+            .with_fields(manifest_schema_fields_v1(partition_type))
+            .build()?;
         schema_to_avro_schema("manifest_entry", &schema)
     }
 }

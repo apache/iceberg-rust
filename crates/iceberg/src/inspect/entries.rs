@@ -15,23 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::any::type_name;
+use std::string::ToString;
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    BinaryBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder, StringBuilder,
+    ArrayBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, FixedSizeBinaryBuilder,
+    Float32Builder, Float64Builder, Int32Builder, Int64Builder, LargeBinaryBuilder, ListBuilder,
+    MapBuilder, PrimitiveBuilder, StringBuilder, StructBuilder, TimestampMicrosecondBuilder,
+    TimestampNanosecondBuilder,
 };
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
+use arrow_array::types::{Int32Type, Int64Type};
+use arrow_array::{ArrowPrimitiveType, RecordBatch, StructArray};
+use arrow_schema::{DataType, Fields, TimeUnit};
 use async_stream::try_stream;
 use futures::StreamExt;
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 
-use crate::arrow::builder::AnyArrayBuilder;
-use crate::arrow::{get_arrow_datum, schema_to_arrow_schema, type_to_arrow_type};
+use crate::arrow::{schema_to_arrow_schema, type_to_arrow_type};
+use crate::inspect::metrics::ReadableMetricsStructBuilder;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{
-    DataFile, ManifestFile, PartitionField, PartitionSpec, SchemaRef, Struct, TableMetadata,
+    DataFile, Datum, ManifestFile, NestedFieldRef, PrimitiveLiteral, Schema, Struct, TableMetadata,
+    Type,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -52,29 +59,6 @@ impl<'a> EntriesTable<'a> {
         Self { table }
     }
 
-    /// Get the schema for the manifest entries table.
-    pub fn schema(&self) -> Schema {
-        Schema::new(vec![
-            Field::new("status", DataType::Int32, false),
-            Field::new("snapshot_id", DataType::Int64, true),
-            Field::new("sequence_number", DataType::Int64, true),
-            Field::new("file_sequence_number", DataType::Int64, true),
-            Field::new(
-                "data_file",
-                DataType::Struct(DataFileStructBuilder::fields(self.table.metadata())),
-                false,
-            ),
-            Field::new(
-                "readable_metrics",
-                DataType::Struct(
-                    ReadableMetricsStructBuilder::fields(self.table.metadata().current_schema())
-                        .expect("Failed to build schema for readable metrics"),
-                ),
-                false,
-            ),
-        ])
-    }
-
     /// Scan the manifest entries table.
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let current_snapshot = self.table.metadata().current_snapshot().ok_or_else(|| {
@@ -89,9 +73,14 @@ impl<'a> EntriesTable<'a> {
             .await?;
 
         // Copy to ensure that the stream can take ownership of these dependencies
-        let arrow_schema = Arc::new(self.schema());
+        let schema = self.schema();
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema)?);
         let table_metadata = self.table.metadata_ref();
         let file_io = Arc::new(self.table.file_io().clone());
+        let readable_metrics_schema = schema
+            .field_by_name("readable_metrics")
+            .and_then(|field| field.field_type.clone().to_struct_type())
+            .unwrap();
 
         Ok(try_stream! {
             for manifest_file in manifest_list.entries() {
@@ -99,9 +88,10 @@ impl<'a> EntriesTable<'a> {
                 let mut snapshot_id = Int64Builder::new();
                 let mut sequence_number = Int64Builder::new();
                 let mut file_sequence_number = Int64Builder::new();
-                let mut data_file = DataFileStructBuilder::new(&table_metadata);
+                let mut data_file = DataFileStructBuilder::new(&table_metadata)?;
                 let mut readable_metrics =
-                    ReadableMetricsStructBuilder::new(table_metadata.current_schema())?;
+                    ReadableMetricsStructBuilder::new(
+                    table_metadata.current_schema(), &readable_metrics_schema)?;
 
                 for manifest_entry in manifest_file.load_manifest(&file_io).await?.entries() {
                     status.append_value(manifest_entry.status() as i32);
@@ -126,6 +116,22 @@ impl<'a> EntriesTable<'a> {
         }
         .boxed())
     }
+
+    /// Get the schema for the manifest entries table.
+    pub fn schema(&self) -> Schema {
+        let partition_type = crate::spec::partition_type(self.table.metadata()).unwrap();
+        let schema = Schema::builder()
+            .with_fields(crate::spec::_const_schema::manifest_schema_fields_v2(
+                &partition_type,
+            ))
+            .build()
+            .unwrap();
+        let readable_metric_schema = ReadableMetricsStructBuilder::readable_metrics_schema(
+            self.table.metadata().current_schema(),
+            &schema,
+        );
+        join_schemas(&schema, &readable_metric_schema.unwrap()).unwrap()
+    }
 }
 
 /// Builds the struct describing data files listed in a table manifest.
@@ -134,500 +140,423 @@ impl<'a> EntriesTable<'a> {
 ///
 /// [1]: https://github.com/apache/iceberg/blob/apache-iceberg-1.7.1/api/src/main/java/org/apache/iceberg/DataFile.java
 struct DataFileStructBuilder<'a> {
-    // Reference to table metadata to retrieve partition specs based on partition spec ids
+    /// Builder for data file struct (including the partition struct).
+    struct_builder: StructBuilder,
+    /// Arrow fields of the combined partition struct of all partition specs.
+    /// We require this to reconstruct the field builders in the partition [`StructBuilder`].
+    combined_partition_fields: Fields,
+    /// Table metadata to look up partition specs by partition spec id.
     table_metadata: &'a TableMetadata,
-    // Below are the field builders of the "data_file" struct
-    content: Int8Builder,
-    file_path: StringBuilder,
-    file_format: StringBuilder,
-    partition: PartitionValuesStructBuilder,
-    record_count: Int64Builder,
-    file_size_in_bytes: Int64Builder,
-    column_sizes: MapBuilder<Int32Builder, Int64Builder>,
-    value_counts: MapBuilder<Int32Builder, Int64Builder>,
-    null_value_counts: MapBuilder<Int32Builder, Int64Builder>,
-    nan_value_counts: MapBuilder<Int32Builder, Int64Builder>,
-    lower_bounds: MapBuilder<Int32Builder, BinaryBuilder>,
-    upper_bounds: MapBuilder<Int32Builder, BinaryBuilder>,
-    key_metadata: BinaryBuilder,
-    split_offsets: ListBuilder<Int64Builder>,
-    equality_ids: ListBuilder<Int32Builder>,
-    sort_order_ids: Int32Builder,
 }
 
 impl<'a> DataFileStructBuilder<'a> {
-    fn new(table_metadata: &'a TableMetadata) -> Self {
-        Self {
+    fn new(table_metadata: &'a TableMetadata) -> Result<Self> {
+        let combined_partition_type = crate::spec::partition_type(table_metadata)?;
+        let data_file_fields =
+            crate::spec::_const_schema::data_file_fields_v2(&combined_partition_type);
+        let data_file_schema = Schema::builder().with_fields(data_file_fields).build()?;
+        let DataType::Struct(combined_partition_fields) =
+            type_to_arrow_type(&Type::Struct(combined_partition_type))?
+        else {
+            panic!("Converted Arrow type was not struct")
+        };
+
+        Ok(DataFileStructBuilder {
+            struct_builder: StructBuilder::from_fields(
+                schema_to_arrow_schema(&data_file_schema)?.fields,
+                0,
+            ),
+            combined_partition_fields,
             table_metadata,
-            content: Int8Builder::new(),
-            file_path: StringBuilder::new(),
-            file_format: StringBuilder::new(),
-            partition: PartitionValuesStructBuilder::new(table_metadata),
-            record_count: Int64Builder::new(),
-            file_size_in_bytes: Int64Builder::new(),
-            column_sizes: MapBuilder::new(None, Int32Builder::new(), Int64Builder::new()),
-            value_counts: MapBuilder::new(None, Int32Builder::new(), Int64Builder::new()),
-            null_value_counts: MapBuilder::new(None, Int32Builder::new(), Int64Builder::new()),
-            nan_value_counts: MapBuilder::new(None, Int32Builder::new(), Int64Builder::new()),
-            lower_bounds: MapBuilder::new(None, Int32Builder::new(), BinaryBuilder::new()),
-            upper_bounds: MapBuilder::new(None, Int32Builder::new(), BinaryBuilder::new()),
-            key_metadata: BinaryBuilder::new(),
-            split_offsets: ListBuilder::new(Int64Builder::new()),
-            equality_ids: ListBuilder::new(Int32Builder::new()),
-            sort_order_ids: Int32Builder::new(),
-        }
-    }
-
-    fn fields(table_metadata: &TableMetadata) -> Fields {
-        vec![
-            Field::new("content", DataType::Int8, false),
-            Field::new("file_path", DataType::Utf8, false),
-            Field::new("file_format", DataType::Utf8, false),
-            Field::new(
-                "partition",
-                DataType::Struct(PartitionValuesStructBuilder::combined_partition_fields(
-                    table_metadata,
-                )),
-                false,
-            ),
-            Field::new("record_count", DataType::Int64, false),
-            Field::new("file_size_in_bytes", DataType::Int64, false),
-            Field::new(
-                "column_sizes",
-                Self::column_id_to_value_type(DataType::Int64),
-                true,
-            ),
-            Field::new(
-                "value_counts",
-                Self::column_id_to_value_type(DataType::Int64),
-                true,
-            ),
-            Field::new(
-                "null_value_counts",
-                Self::column_id_to_value_type(DataType::Int64),
-                true,
-            ),
-            Field::new(
-                "nan_value_counts",
-                Self::column_id_to_value_type(DataType::Int64),
-                true,
-            ),
-            Field::new(
-                "lower_bounds",
-                Self::column_id_to_value_type(DataType::Binary),
-                true,
-            ),
-            Field::new(
-                "upper_bounds",
-                Self::column_id_to_value_type(DataType::Binary),
-                true,
-            ),
-            Field::new("key_metadata", DataType::Binary, true),
-            Field::new(
-                "split_offsets",
-                DataType::new_list(DataType::Int64, true),
-                true,
-            ),
-            Field::new(
-                "equality_ids",
-                DataType::new_list(DataType::Int32, true),
-                true,
-            ),
-            Field::new("sort_order_id", DataType::Int32, true),
-        ]
-        .into()
-    }
-
-    /// Construct a new struct type that maps from column ids (i32) to the provided value type.
-    /// Keys, values, and the whole struct are non-nullable.
-    fn column_id_to_value_type(value_type: DataType) -> DataType {
-        DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(
-                    vec![
-                        Field::new("keys", DataType::Int32, false),
-                        Field::new("values", value_type, true),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            false,
-        )
-    }
-
-    fn append(&mut self, manifest_file: &ManifestFile, data_file: &DataFile) -> Result<()> {
-        self.content.append_value(data_file.content as i8);
-        self.file_path.append_value(data_file.file_path());
-        self.file_format
-            .append_value(data_file.file_format().to_string().to_uppercase());
-        self.partition.append(
-            self.partition_spec(manifest_file)?.clone().fields(),
-            data_file.partition(),
-        )?;
-        self.record_count
-            .append_value(data_file.record_count() as i64);
-        self.file_size_in_bytes
-            .append_value(data_file.file_size_in_bytes() as i64);
-
-        // Sort keys to get matching order between rows
-        for (k, v) in data_file.column_sizes.iter().sorted_by_key(|(k, _)| *k) {
-            self.column_sizes.keys().append_value(*k);
-            self.column_sizes.values().append_value(*v as i64);
-        }
-        self.column_sizes.append(true)?;
-
-        for (k, v) in data_file.value_counts.iter().sorted_by_key(|(k, _)| *k) {
-            self.value_counts.keys().append_value(*k);
-            self.value_counts.values().append_value(*v as i64);
-        }
-        self.value_counts.append(true)?;
-
-        for (k, v) in data_file
-            .null_value_counts
-            .iter()
-            .sorted_by_key(|(k, _)| *k)
-        {
-            self.null_value_counts.keys().append_value(*k);
-            self.null_value_counts.values().append_value(*v as i64);
-        }
-        self.null_value_counts.append(true)?;
-
-        for (k, v) in data_file.nan_value_counts.iter().sorted_by_key(|(k, _)| *k) {
-            self.nan_value_counts.keys().append_value(*k);
-            self.nan_value_counts.values().append_value(*v as i64);
-        }
-        self.nan_value_counts.append(true)?;
-
-        for (k, v) in data_file.lower_bounds.iter().sorted_by_key(|(k, _)| *k) {
-            self.lower_bounds.keys().append_value(*k);
-            self.lower_bounds.values().append_value(v.to_bytes()?);
-        }
-        self.lower_bounds.append(true)?;
-
-        for (k, v) in data_file.upper_bounds.iter().sorted_by_key(|(k, _)| *k) {
-            self.upper_bounds.keys().append_value(*k);
-            self.upper_bounds.values().append_value(v.to_bytes()?);
-        }
-        self.upper_bounds.append(true)?;
-
-        self.key_metadata.append_option(data_file.key_metadata());
-
-        self.split_offsets
-            .values()
-            .append_slice(data_file.split_offsets());
-        self.split_offsets.append(true);
-
-        self.equality_ids
-            .values()
-            .append_slice(data_file.equality_ids());
-        self.equality_ids.append(true);
-
-        self.sort_order_ids.append_option(data_file.sort_order_id());
-        Ok(())
-    }
-
-    fn partition_spec(&self, manifest_file: &ManifestFile) -> Result<&PartitionSpec> {
-        self.table_metadata
-            .partition_spec_by_id(manifest_file.partition_spec_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Partition spec not found for manifest file",
-                )
-            })
-            .map(|spec| spec.as_ref())
-    }
-
-    fn finish(&mut self) -> StructArray {
-        let inner_arrays: Vec<ArrayRef> = vec![
-            Arc::new(self.content.finish()),
-            Arc::new(self.file_path.finish()),
-            Arc::new(self.file_format.finish()),
-            Arc::new(self.partition.finish()),
-            Arc::new(self.record_count.finish()),
-            Arc::new(self.file_size_in_bytes.finish()),
-            Arc::new(self.column_sizes.finish()),
-            Arc::new(self.value_counts.finish()),
-            Arc::new(self.null_value_counts.finish()),
-            Arc::new(self.nan_value_counts.finish()),
-            Arc::new(self.lower_bounds.finish()),
-            Arc::new(self.upper_bounds.finish()),
-            Arc::new(self.key_metadata.finish()),
-            Arc::new(self.split_offsets.finish()),
-            Arc::new(self.equality_ids.finish()),
-            Arc::new(self.sort_order_ids.finish()),
-        ];
-
-        StructArray::from(
-            Self::fields(self.table_metadata)
-                .into_iter()
-                .cloned()
-                .zip_eq(inner_arrays)
-                .collect::<Vec<(FieldRef, ArrayRef)>>(),
-        )
-    }
-}
-
-/// Builds a readable metrics struct for a single column.
-///
-/// For reference, see [Java][1] and [Python][2] implementations.
-///
-/// [1]: https://github.com/apache/iceberg/blob/4a432839233f2343a9eae8255532f911f06358ef/core/src/main/java/org/apache/iceberg/MetricsUtil.java#L337
-/// [2]: https://github.com/apache/iceberg-python/blob/a051584a3684392d2db6556449eb299145d47d15/pyiceberg/table/inspect.py#L101-L110
-struct PerColumnReadableMetricsBuilder {
-    field_id: i32,
-    data_type: DataType,
-    column_size: Int64Builder,
-    value_count: Int64Builder,
-    null_value_count: Int64Builder,
-    nan_value_count: Int64Builder,
-    lower_bound: AnyArrayBuilder,
-    upper_bound: AnyArrayBuilder,
-}
-
-impl PerColumnReadableMetricsBuilder {
-    fn fields(data_type: &DataType) -> Fields {
-        vec![
-            Field::new("column_size", DataType::Int64, true),
-            Field::new("value_count", DataType::Int64, true),
-            Field::new("null_value_count", DataType::Int64, true),
-            Field::new("nan_value_count", DataType::Int64, true),
-            Field::new("lower_bound", data_type.clone(), true),
-            Field::new("upper_bound", data_type.clone(), true),
-        ]
-        .into()
-    }
-
-    fn new_for_field(field_id: i32, data_type: &DataType) -> Self {
-        Self {
-            field_id,
-            data_type: data_type.clone(),
-            column_size: Int64Builder::new(),
-            value_count: Int64Builder::new(),
-            null_value_count: Int64Builder::new(),
-            nan_value_count: Int64Builder::new(),
-            lower_bound: AnyArrayBuilder::new(data_type),
-            upper_bound: AnyArrayBuilder::new(data_type),
-        }
-    }
-
-    fn append(&mut self, data_file: &DataFile) -> Result<()> {
-        self.column_size.append_option(
-            data_file
-                .column_sizes()
-                .get(&self.field_id)
-                .map(|&v| v as i64),
-        );
-        self.value_count.append_option(
-            data_file
-                .value_counts()
-                .get(&self.field_id)
-                .map(|&v| v as i64),
-        );
-        self.null_value_count.append_option(
-            data_file
-                .null_value_counts()
-                .get(&self.field_id)
-                .map(|&v| v as i64),
-        );
-        self.nan_value_count.append_option(
-            data_file
-                .nan_value_counts()
-                .get(&self.field_id)
-                .map(|&v| v as i64),
-        );
-        match data_file.lower_bounds().get(&self.field_id) {
-            Some(datum) => self
-                .lower_bound
-                .append_datum(get_arrow_datum(datum)?.as_ref())?,
-            None => self.lower_bound.append_null()?,
-        }
-        match data_file.upper_bounds().get(&self.field_id) {
-            Some(datum) => self
-                .upper_bound
-                .append_datum(get_arrow_datum(datum)?.as_ref())?,
-            None => self.upper_bound.append_null()?,
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) -> StructArray {
-        let inner_arrays: Vec<ArrayRef> = vec![
-            Arc::new(self.column_size.finish()),
-            Arc::new(self.value_count.finish()),
-            Arc::new(self.null_value_count.finish()),
-            Arc::new(self.nan_value_count.finish()),
-            Arc::new(self.lower_bound.finish()),
-            Arc::new(self.upper_bound.finish()),
-        ];
-
-        StructArray::from(
-            Self::fields(&self.data_type)
-                .into_iter()
-                .cloned()
-                .zip_eq(inner_arrays)
-                .collect::<Vec<(FieldRef, ArrayRef)>>(),
-        )
-    }
-}
-
-/// Build a [StructArray] with partition columns as fields and partition values as rows.
-struct PartitionValuesStructBuilder {
-    fields: Fields,
-    builders: Vec<AnyArrayBuilder>,
-}
-
-impl PartitionValuesStructBuilder {
-    /// Construct a new builder from the combined partition columns of the table metadata.
-    fn new(table_metadata: &TableMetadata) -> Self {
-        let combined_fields = Self::combined_partition_fields(table_metadata);
-        Self {
-            builders: combined_fields
-                .iter()
-                .map(|field| AnyArrayBuilder::new(field.data_type()))
-                .collect_vec(),
-            fields: combined_fields,
-        }
-    }
-
-    /// Build the combined partition spec union-ing past and current partition specs
-    fn combined_partition_fields(table_metadata: &TableMetadata) -> Fields {
-        let combined_fields: HashMap<i32, &PartitionField> = table_metadata
-            .partition_specs_iter()
-            .flat_map(|spec| spec.fields())
-            .map(|field| (field.field_id, field))
-            .collect();
-
-        combined_fields
-            .into_iter()
-            // Sort by field id to get a deterministic order
-            .sorted_by_key(|(id, _)| *id)
-            .map(|(_, field)| {
-                let source_type = &table_metadata
-                    .current_schema()
-                    .field_by_id(field.source_id)
-                    .unwrap()
-                    .field_type;
-                let result_type = field.transform.result_type(source_type).unwrap();
-                Field::new(
-                    field.name.clone(),
-                    type_to_arrow_type(&result_type).unwrap(),
-                    true,
-                )
-            })
-            .collect()
-    }
-
-    fn append(
-        &mut self,
-        partition_fields: &[PartitionField],
-        partition_values: &Struct,
-    ) -> Result<()> {
-        for (field, value) in partition_fields.iter().zip_eq(partition_values.iter()) {
-            let index = self.find_field(&field.name)?;
-
-            match value {
-                Some(literal) => self.builders[index].append_literal(literal)?,
-                None => self.builders[index].append_null()?,
-            }
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) -> StructArray {
-        let arrays: Vec<ArrayRef> = self
-            .builders
-            .iter_mut()
-            .map::<ArrayRef, _>(|builder| Arc::new(builder.finish()))
-            .collect();
-        StructArray::from(
-            self.fields
-                .iter()
-                .cloned()
-                .zip_eq(arrays)
-                .collect::<Vec<(FieldRef, ArrayRef)>>(),
-        )
-    }
-
-    fn find_field(&self, name: &str) -> Result<usize> {
-        match self.fields.find(name) {
-            Some((index, _)) => Ok(index),
-            None => Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Field not found: {}", name),
-            )),
-        }
-    }
-}
-
-struct ReadableMetricsStructBuilder<'a> {
-    table_schema: &'a SchemaRef,
-    column_builders: Vec<PerColumnReadableMetricsBuilder>,
-}
-
-impl<'a> ReadableMetricsStructBuilder<'a> {
-    /// Helper to construct per-column readable metrics. The metrics are "readable" in that the reported
-    /// and lower and upper bounds are reported as deserialized values.
-    fn fields(table_schema: &SchemaRef) -> Result<Fields> {
-        let arrow_schema = schema_to_arrow_schema(table_schema)?;
-
-        Ok(arrow_schema
-            .fields()
-            .iter()
-            .map(|field| {
-                Field::new(
-                    field.name(),
-                    DataType::Struct(PerColumnReadableMetricsBuilder::fields(field.data_type())),
-                    false,
-                )
-            })
-            .collect_vec()
-            .into())
-    }
-
-    fn new(table_schema: &'a SchemaRef) -> Result<ReadableMetricsStructBuilder> {
-        Ok(Self {
-            table_schema,
-            column_builders: table_schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|field| {
-                    type_to_arrow_type(&field.field_type).map(|arrow_type| {
-                        PerColumnReadableMetricsBuilder::new_for_field(field.id, &arrow_type)
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?,
         })
     }
 
-    fn append(&mut self, data_file: &DataFile) -> Result<()> {
-        for column_builder in &mut self.column_builders {
-            column_builder.append(data_file)?;
+    fn append(&mut self, manifest_file: &ManifestFile, data_file: &DataFile) -> Result<()> {
+        // Content type
+        self.field_builder::<Int32Builder>(0)?
+            .append_value(data_file.content as i32);
+
+        // File path
+        self.field_builder::<StringBuilder>(1)?
+            .append_value(data_file.file_path());
+
+        // File format
+        self.field_builder::<StringBuilder>(2)?
+            .append_value(data_file.file_format().to_string().to_uppercase());
+
+        // Partitions
+        self.append_partition_values(manifest_file.partition_spec_id, data_file.partition())?;
+
+        // Record count
+        self.field_builder::<Int64Builder>(4)?
+            .append_value(data_file.record_count() as i64);
+
+        // File size in bytes
+        self.field_builder::<Int64Builder>(5)?
+            .append_value(data_file.file_size_in_bytes() as i64);
+
+        // Column sizes
+        let (column_size_keys, column_size_values): (Vec<i32>, Vec<i64>) = data_file
+            .column_sizes()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, *v as i64))
+            .unzip();
+        self.append_to_map_field::<Int32Builder, Int64Builder>(
+            6,
+            |key_builder| key_builder.append_slice(column_size_keys.as_slice()),
+            |value_builder| value_builder.append_slice(column_size_values.as_slice()),
+        )?;
+
+        // Value counts
+        let (value_count_keys, value_count_values): (Vec<i32>, Vec<i64>) = data_file
+            .value_counts()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, *v as i64))
+            .unzip();
+        self.append_to_primitive_map_field::<Int32Type, Int64Type>(
+            7,
+            value_count_keys.as_slice(),
+            value_count_values.as_slice(),
+        )?;
+
+        // Null value counts
+        let (null_count_keys, null_count_values): (Vec<i32>, Vec<i64>) = data_file
+            .null_value_counts()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, *v as i64))
+            .unzip();
+        self.append_to_primitive_map_field::<Int32Type, Int64Type>(
+            8,
+            null_count_keys.as_slice(),
+            null_count_values.as_slice(),
+        )?;
+
+        // Nan value counts
+        let (nan_count_keys, nan_count_values): (Vec<i32>, Vec<i64>) = data_file
+            .nan_value_counts()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, *v as i64))
+            .unzip();
+        self.append_to_primitive_map_field::<Int32Type, Int64Type>(
+            9,
+            nan_count_keys.as_slice(),
+            nan_count_values.as_slice(),
+        )?;
+
+        // Lower bounds
+        let (lower_bound_keys, lower_bound_values): (Vec<i32>, Vec<Datum>) = data_file
+            .lower_bounds()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, v.clone()))
+            .unzip();
+        self.append_to_map_field::<Int32Builder, LargeBinaryBuilder>(
+            10,
+            |key_builder| key_builder.append_slice(lower_bound_keys.as_slice()),
+            |value_builder| {
+                for v in &lower_bound_values {
+                    value_builder.append_value(v.to_bytes().unwrap())
+                }
+            },
+        )?;
+
+        // Upper bounds
+        let (upper_bound_keys, upper_bound_values): (Vec<i32>, Vec<Datum>) = data_file
+            .upper_bounds()
+            .iter()
+            .sorted_by_key(|(k, _)| *k)
+            .map(|(k, v)| (k, v.clone()))
+            .unzip();
+        self.append_to_map_field::<Int32Builder, LargeBinaryBuilder>(
+            11,
+            |key_builder| key_builder.append_slice(upper_bound_keys.as_slice()),
+            |value_builder| {
+                for v in &upper_bound_values {
+                    value_builder.append_value(v.to_bytes().unwrap())
+                }
+            },
+        )?;
+
+        // Key metadata
+        self.field_builder::<LargeBinaryBuilder>(12)?
+            .append_option(data_file.key_metadata());
+
+        // Split offsets
+        self.append_to_list_field::<Int64Type>(13, data_file.split_offsets())?;
+
+        // Equality ids
+        self.append_to_list_field::<Int32Type>(14, data_file.equality_ids())?;
+
+        // Sort order ids
+        self.field_builder::<Int32Builder>(15)?
+            .append_option(data_file.sort_order_id());
+
+        // Append an element in the struct
+        self.struct_builder.append(true);
+        Ok(())
+    }
+
+    fn field_builder<T: ArrayBuilder>(&mut self, index: usize) -> Result<&mut T> {
+        self.struct_builder.field_builder_or_err::<T>(index)
+    }
+
+    fn append_to_list_field<T: ArrowPrimitiveType>(
+        &mut self,
+        index: usize,
+        values: &[T::Native],
+    ) -> Result<()> {
+        let list_builder = self.field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(index)?;
+        list_builder
+            .values()
+            .cast_or_err::<PrimitiveBuilder<T>>()?
+            .append_slice(values);
+        list_builder.append(true);
+        Ok(())
+    }
+
+    fn append_to_map_field<K: ArrayBuilder, V: ArrayBuilder>(
+        &mut self,
+        index: usize,
+        key_func: impl Fn(&mut K),
+        value_func: impl Fn(&mut V),
+    ) -> Result<()> {
+        let map_builder =
+            self.field_builder::<MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>>(index)?;
+        key_func(map_builder.keys().cast_or_err::<K>()?);
+        value_func(map_builder.values().cast_or_err::<V>()?);
+        Ok(map_builder.append(true)?)
+    }
+
+    fn append_to_primitive_map_field<K: ArrowPrimitiveType, V: ArrowPrimitiveType>(
+        &mut self,
+        index: usize,
+        keys: &[K::Native],
+        values: &[V::Native],
+    ) -> Result<()> {
+        let map_builder =
+            self.field_builder::<MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>>(index)?;
+        map_builder
+            .keys()
+            .cast_or_err::<PrimitiveBuilder<K>>()?
+            .append_slice(keys);
+        map_builder
+            .values()
+            .cast_or_err::<PrimitiveBuilder<V>>()?
+            .append_slice(values);
+        Ok(map_builder.append(true)?)
+    }
+
+    fn append_partition_values(
+        &mut self,
+        partition_spec_id: i32,
+        partition_values: &Struct,
+    ) -> Result<()> {
+        // Get the partition fields for the partition spec id in the manifest file
+        let partition_spec = self
+            .table_metadata
+            .partition_spec_by_id(partition_spec_id)
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition spec not found"))?
+            .fields();
+        // Clone here so we don't hold an immutable reference as we mutably-borrow the builder below
+        let combined_partition_fields = self.combined_partition_fields.clone();
+        // Get the partition struct builder
+        let partition_builder = self.field_builder::<StructBuilder>(3)?;
+        // Iterate the manifest's partition fields with the respect partition values from the data file
+        for (partition_field, partition_value) in
+            partition_spec.iter().zip_eq(partition_values.iter())
+        {
+            let (combined_index, combined_partition_spec_field) = combined_partition_fields
+                .find(&partition_field.name)
+                .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition field not found"))?;
+            let partition_type = combined_partition_spec_field.data_type();
+            let partition_value: Option<PrimitiveLiteral> = partition_value
+                .map(|value| -> std::result::Result<PrimitiveLiteral, Error> {
+                    value.as_primitive_literal().ok_or({
+                        Error::new(
+                            ErrorKind::FeatureUnsupported,
+                            "Only primitive types support in partition struct",
+                        )
+                    })
+                })
+                .transpose()?;
+
+            // Append a literal to a field builder cast based on the expected partition field type.
+            // We cannot solely rely on the literal type, because it doesn't sufficiently specify
+            // the underlying type. E.g., a `PrimtivieLiteral::Long` could represent either a long
+            // or a timestamp.
+            match (partition_type, partition_value.clone()) {
+                (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => partition_builder
+                    .field_builder_or_err::<BooleanBuilder>(combined_index)?
+                    .append_value(value),
+                (DataType::Boolean, None) => partition_builder
+                    .field_builder_or_err::<BooleanBuilder>(combined_index)?
+                    .append_null(),
+                (DataType::Int32, Some(PrimitiveLiteral::Int(value))) => partition_builder
+                    .field_builder_or_err::<Int32Builder>(combined_index)?
+                    .append_value(value),
+                (DataType::Int32, None) => partition_builder
+                    .field_builder_or_err::<Int32Builder>(combined_index)?
+                    .append_null(),
+                (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => partition_builder
+                    .field_builder_or_err::<Int64Builder>(combined_index)?
+                    .append_value(value),
+                (DataType::Int64, None) => partition_builder
+                    .field_builder_or_err::<Int64Builder>(combined_index)?
+                    .append_null(),
+                (DataType::Float32, Some(PrimitiveLiteral::Float(OrderedFloat(value)))) => {
+                    partition_builder
+                        .field_builder_or_err::<Float32Builder>(combined_index)?
+                        .append_value(value)
+                }
+                (DataType::Float32, None) => partition_builder
+                    .field_builder_or_err::<Float32Builder>(combined_index)?
+                    .append_null(),
+                (DataType::Float64, Some(PrimitiveLiteral::Double(OrderedFloat(value)))) => {
+                    partition_builder
+                        .field_builder_or_err::<Float64Builder>(combined_index)?
+                        .append_value(value)
+                }
+                (DataType::Float64, None) => partition_builder
+                    .field_builder_or_err::<Float64Builder>(combined_index)?
+                    .append_null(),
+                (DataType::Utf8, Some(PrimitiveLiteral::String(value))) => partition_builder
+                    .field_builder_or_err::<StringBuilder>(combined_index)?
+                    .append_value(value),
+                (DataType::Utf8, None) => partition_builder
+                    .field_builder_or_err::<StringBuilder>(combined_index)?
+                    .append_null(),
+                (DataType::FixedSizeBinary(_), Some(PrimitiveLiteral::Binary(value))) => {
+                    partition_builder
+                        .field_builder_or_err::<FixedSizeBinaryBuilder>(combined_index)?
+                        .append_value(value)?
+                }
+                (DataType::FixedSizeBinary(_), None) => partition_builder
+                    .field_builder_or_err::<FixedSizeBinaryBuilder>(combined_index)?
+                    .append_null(),
+                (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => partition_builder
+                    .field_builder_or_err::<LargeBinaryBuilder>(combined_index)?
+                    .append_value(value),
+                (DataType::LargeBinary, None) => partition_builder
+                    .field_builder_or_err::<LargeBinaryBuilder>(combined_index)?
+                    .append_null(),
+                (DataType::Date32, Some(PrimitiveLiteral::Int(value))) => partition_builder
+                    .field_builder_or_err::<Date32Builder>(combined_index)?
+                    .append_value(value),
+                (DataType::Date32, None) => partition_builder
+                    .field_builder_or_err::<Date32Builder>(combined_index)?
+                    .append_null(),
+                (
+                    DataType::Timestamp(TimeUnit::Microsecond, _),
+                    Some(PrimitiveLiteral::Long(value)),
+                ) => partition_builder
+                    .field_builder_or_err::<TimestampMicrosecondBuilder>(combined_index)?
+                    .append_value(value),
+                (DataType::Timestamp(TimeUnit::Microsecond, _), None) => partition_builder
+                    .field_builder_or_err::<TimestampMicrosecondBuilder>(combined_index)?
+                    .append_null(),
+                (
+                    DataType::Timestamp(TimeUnit::Nanosecond, _),
+                    Some(PrimitiveLiteral::Long(value)),
+                ) => partition_builder
+                    .field_builder_or_err::<TimestampNanosecondBuilder>(combined_index)?
+                    .append_value(value),
+                (DataType::Timestamp(TimeUnit::Nanosecond, _), None) => partition_builder
+                    .field_builder_or_err::<TimestampNanosecondBuilder>(combined_index)?
+                    .append_null(),
+                (DataType::Decimal128(_, _), Some(PrimitiveLiteral::Int128(value))) => {
+                    partition_builder
+                        .field_builder_or_err::<Decimal128Builder>(combined_index)?
+                        .append_value(value)
+                }
+                (DataType::Decimal128(_, _), None) => partition_builder
+                    .field_builder_or_err::<Decimal128Builder>(combined_index)?
+                    .append_null(),
+                (_, _) => {
+                    return Err(Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Cannot build partition struct with field type {:?} and partition value {:?}",
+                            partition_type, partition_value
+                        ),
+                    ));
+                }
+            }
         }
+
+        // Append an element in the struct
+        partition_builder.append(true);
         Ok(())
     }
 
     fn finish(&mut self) -> StructArray {
-        let fields: Vec<FieldRef> = Self::fields(self.table_schema)
-            // We already checked the schema conversion in the constructor
-            .unwrap()
-            .into_iter()
-            .cloned()
-            .collect();
-        let arrays: Vec<ArrayRef> = self
-            .column_builders
-            .iter_mut()
-            .map::<ArrayRef, _>(|builder| Arc::new(builder.finish()))
-            .collect();
-        StructArray::from(
-            fields
-                .into_iter()
-                .zip_eq(arrays)
-                .collect::<Vec<(FieldRef, ArrayRef)>>(),
-        )
+        self.struct_builder.finish()
+    }
+}
+
+/// Join two schemas by concatenating fields. Return [`Error`] if the schemas have fields with the
+/// same field id but different types.
+fn join_schemas(left: &Schema, right: &Schema) -> Result<Schema> {
+    let mut joined_fields: Vec<NestedFieldRef> = left.as_struct().fields().to_vec();
+
+    for right_field in right.as_struct().fields() {
+        match left.field_by_id(right_field.id) {
+            None => {
+                joined_fields.push(right_field.clone());
+            }
+            Some(left_field) => {
+                if left_field != right_field {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Schemas have different columns with the same id: {:?}, {:?}",
+                            left_field, right_field
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Schema::builder().with_fields(joined_fields).build()
+}
+
+/// Helper to cast a field builder in a [`StructBuilder`] to a specific builder type or return an
+/// [`Error`].
+trait StructBuilderExt {
+    fn field_builder_or_err<T: ArrayBuilder>(&mut self, index: usize) -> Result<&mut T>;
+}
+
+impl StructBuilderExt for StructBuilder {
+    fn field_builder_or_err<T: ArrayBuilder>(&mut self, index: usize) -> Result<&mut T> {
+        self.field_builder::<T>(index).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Field builder not found for index {index} and type {}",
+                    type_name::<T>()
+                ),
+            )
+        })
+    }
+}
+
+/// Helper to cast a [`Box<dyn ArrayBuilder>`] to a specific type or return an [`Error`].
+trait ArrayBuilderExt {
+    fn cast_or_err<T: ArrayBuilder>(&mut self) -> Result<&mut T>;
+}
+
+impl ArrayBuilderExt for Box<dyn ArrayBuilder> {
+    fn cast_or_err<T: ArrayBuilder>(&mut self) -> Result<&mut T> {
+        self.as_any_mut().downcast_mut::<T>().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Cannot cast builder to type {}", type_name::<T>()),
+            )
+        })
     }
 }
 
@@ -643,29 +572,32 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
         let table = fixture.table;
+        let inspect = table.inspect();
+        let entries_table = inspect.entries();
 
-        let batch_stream = table.inspect().entries().scan().await.unwrap();
+        let batch_stream = entries_table.scan().await.unwrap();
 
         check_record_batches(
             batch_stream,
             expect![[r#"
-                Field { name: "status", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "snapshot_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "file_sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "data_file", data_type: Struct([Field { name: "content", data_type: Int8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "file_path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "file_format", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "partition", data_type: Struct([Field { name: "x", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "record_count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "file_size_in_bytes", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "column_sizes", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_counts", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_counts", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_counts", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bounds", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Binary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bounds", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Binary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "key_metadata", data_type: Binary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "split_offsets", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "equality_ids", data_type: List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "sort_order_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "readable_metrics", data_type: Struct([Field { name: "x", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "y", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "z", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "a", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "dbl", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "i32", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "i64", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "bool", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "float", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "decimal", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Decimal128(3, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Decimal128(3, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "date", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Date32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Date32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "timestamp", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Timestamp(Microsecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Timestamp(Microsecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "timestamptz", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "timestampns", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Timestamp(Nanosecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Timestamp(Nanosecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "timestamptzns", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: Timestamp(Nanosecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: Timestamp(Nanosecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "binary", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "lower_bound", data_type: LargeBinary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "upper_bound", data_type: LargeBinary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+                Field { name: "status", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "0"} },
+                Field { name: "snapshot_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+                Field { name: "sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
+                Field { name: "file_sequence_number", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
+                Field { name: "data_file", data_type: Struct([Field { name: "content", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "134"} }, Field { name: "file_path", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "100"} }, Field { name: "file_format", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "101"} }, Field { name: "partition", data_type: Struct([Field { name: "x", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1000"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "102"} }, Field { name: "record_count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "103"} }, Field { name: "file_size_in_bytes", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "104"} }, Field { name: "column_sizes", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "117"} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "118"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "108"} }, Field { name: "value_counts", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "119"} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "120"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "109"} }, Field { name: "null_value_counts", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "121"} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "122"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "110"} }, Field { name: "nan_value_counts", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "138"} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "139"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "137"} }, Field { name: "lower_bounds", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "126"} }, Field { name: "value", data_type: LargeBinary, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "127"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "125"} }, Field { name: "upper_bounds", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "129"} }, Field { name: "value", data_type: LargeBinary, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "130"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "128"} }, Field { name: "key_metadata", data_type: LargeBinary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "131"} }, Field { name: "split_offsets", data_type: List(Field { name: "element", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "133"} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "132"} }, Field { name: "equality_ids", data_type: List(Field { name: "element", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "136"} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "135"} }, Field { name: "sort_order_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "140"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+                Field { name: "readable_metrics", data_type: Struct([Field { name: "a", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1001"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1002"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1003"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1004"} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1005"} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1006"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1007"} }, Field { name: "binary", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1008"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1009"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1010"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1011"} }, Field { name: "lower_bound", data_type: LargeBinary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1012"} }, Field { name: "upper_bound", data_type: LargeBinary, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1013"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1014"} }, Field { name: "bool", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1015"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1016"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1017"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1018"} }, Field { name: "lower_bound", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1019"} }, Field { name: "upper_bound", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1020"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1021"} }, Field { name: "date", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1022"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1023"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1024"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1025"} }, Field { name: "lower_bound", data_type: Date32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1026"} }, Field { name: "upper_bound", data_type: Date32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1027"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1028"} }, Field { name: "dbl", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1029"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1030"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1031"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1032"} }, Field { name: "lower_bound", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1033"} }, Field { name: "upper_bound", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1034"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1035"} }, Field { name: "decimal", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1036"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1037"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1038"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1039"} }, Field { name: "lower_bound", data_type: Decimal128(3, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1040"} }, Field { name: "upper_bound", data_type: Decimal128(3, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1041"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1042"} }, Field { name: "float", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1043"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1044"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1045"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1046"} }, Field { name: "lower_bound", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1047"} }, Field { name: "upper_bound", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1048"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1049"} }, Field { name: "i32", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1050"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1051"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1052"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1053"} }, Field { name: "lower_bound", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1054"} }, Field { name: "upper_bound", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1055"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1056"} }, Field { name: "i64", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1057"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1058"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1059"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1060"} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1061"} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1062"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1063"} }, Field { name: "timestamp", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1064"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1065"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1066"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1067"} }, Field { name: "lower_bound", data_type: Timestamp(Microsecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1068"} }, Field { name: "upper_bound", data_type: Timestamp(Microsecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1069"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1070"} }, Field { name: "timestampns", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1071"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1072"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1073"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1074"} }, Field { name: "lower_bound", data_type: Timestamp(Nanosecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1075"} }, Field { name: "upper_bound", data_type: Timestamp(Nanosecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1076"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1077"} }, Field { name: "timestamptz", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1078"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1079"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1080"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1081"} }, Field { name: "lower_bound", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1082"} }, Field { name: "upper_bound", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1083"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1084"} }, Field { name: "timestamptzns", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1085"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1086"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1087"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1088"} }, Field { name: "lower_bound", data_type: Timestamp(Nanosecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1089"} }, Field { name: "upper_bound", data_type: Timestamp(Nanosecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1090"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1091"} }, Field { name: "x", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1092"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1093"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1094"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1095"} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1096"} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1097"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1098"} }, Field { name: "y", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1099"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1100"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1101"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1102"} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1103"} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1104"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1105"} }, Field { name: "z", data_type: Struct([Field { name: "column_size", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1106"} }, Field { name: "value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1107"} }, Field { name: "null_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1108"} }, Field { name: "nan_value_count", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1109"} }, Field { name: "lower_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1110"} }, Field { name: "upper_bound", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1111"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1112"} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1113"} }"#]],
             expect![[r#"
                 +--------+---------------------+-----------------+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
                 | status | snapshot_id         | sequence_number | file_sequence_number | data_file                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | readable_metrics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
                 +--------+---------------------+-----------------+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-                | 1      | 3055729675574597004 | 1               | 1                    | {content: 0, file_format: PARQUET, partition: {x: 100}, record_count: 1, file_size_in_bytes: 100, column_sizes: {1: 1, 2: 1}, value_counts: {1: 2, 2: 2}, null_value_counts: {1: 3, 2: 3}, nan_value_counts: {1: 4, 2: 4}, lower_bounds: {1: 0100000000000000, 2: 0200000000000000, 3: 0300000000000000, 4: 417061636865, 5: 0000000000005940, 6: 64000000, 7: 6400000000000000, 8: 00, 9: 0000c842, 11: 00000000, 12: 0000000000000000, 13: 0000000000000000}, upper_bounds: {1: 0100000000000000, 2: 0500000000000000, 3: 0400000000000000, 4: 49636562657267, 5: 0000000000006940, 6: c8000000, 7: c800000000000000, 8: 01, 9: 00004843, 11: 00000000, 12: 0000000000000000, 13: 0000000000000000}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: } | {x: {column_size: 1, value_count: 2, null_value_count: 3, nan_value_count: 4, lower_bound: 1, upper_bound: 1}, y: {column_size: 1, value_count: 2, null_value_count: 3, nan_value_count: 4, lower_bound: 2, upper_bound: 5}, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 3, upper_bound: 4}, a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: Apache, upper_bound: Iceberg}, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100.0, upper_bound: 200.0}, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100, upper_bound: 200}, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100, upper_bound: 200}, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: false, upper_bound: true}, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100.0, upper_bound: 200.0}, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01, upper_bound: 1970-01-01}, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01T00:00:00, upper_bound: 1970-01-01T00:00:00}, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01T00:00:00Z, upper_bound: 1970-01-01T00:00:00Z}, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }} |
-                | 2      | 3055729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 200}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | {x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                       |
-                | 0      | 3051729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 300}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | {x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                       |
+                | 1      | 3055729675574597004 | 1               | 1                    | {content: 0, file_format: PARQUET, partition: {x: 100}, record_count: 1, file_size_in_bytes: 100, column_sizes: {1: 1, 2: 1}, value_counts: {1: 2, 2: 2}, null_value_counts: {1: 3, 2: 3}, nan_value_counts: {1: 4, 2: 4}, lower_bounds: {1: 0100000000000000, 2: 0200000000000000, 3: 0300000000000000, 4: 417061636865, 5: 0000000000005940, 6: 64000000, 7: 6400000000000000, 8: 00, 9: 0000c842, 11: 00000000, 12: 0000000000000000, 13: 0000000000000000}, upper_bounds: {1: 0100000000000000, 2: 0500000000000000, 3: 0400000000000000, 4: 49636562657267, 5: 0000000000006940, 6: c8000000, 7: c800000000000000, 8: 01, 9: 00004843, 11: 00000000, 12: 0000000000000000, 13: 0000000000000000}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: } | {a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: Apache, upper_bound: Iceberg}, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: false, upper_bound: true}, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01, upper_bound: 1970-01-01}, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100.0, upper_bound: 200.0}, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100.0, upper_bound: 200.0}, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100, upper_bound: 200}, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 100, upper_bound: 200}, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01T00:00:00, upper_bound: 1970-01-01T00:00:00}, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 1970-01-01T00:00:00Z, upper_bound: 1970-01-01T00:00:00Z}, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, x: {column_size: 1, value_count: 2, null_value_count: 3, nan_value_count: 4, lower_bound: 1, upper_bound: 1}, y: {column_size: 1, value_count: 2, null_value_count: 3, nan_value_count: 4, lower_bound: 2, upper_bound: 5}, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: 3, upper_bound: 4}} |
+                | 2      | 3055729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 200}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | {a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                       |
+                | 0      | 3051729675574597004 | 0               | 0                    | {content: 0, file_format: PARQUET, partition: {x: 300}, record_count: 1, file_size_in_bytes: 100, column_sizes: {}, value_counts: {}, null_value_counts: {}, nan_value_counts: {}, lower_bounds: {}, upper_bounds: {}, key_metadata: , split_offsets: [], equality_ids: [], sort_order_id: }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | {a: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, binary: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, bool: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, date: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, dbl: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, decimal: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, float: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i32: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, i64: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamp: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestampns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptz: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, timestamptzns: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, x: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, y: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }, z: {column_size: , value_count: , null_value_count: , nan_value_count: , lower_bound: , upper_bound: }}                                                                                                                                                                       |
                 +--------+---------------------+-----------------+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+"#]],
             &[],
             &["file_path"],
             None,
-        ).await;
+        )
+            .await;
     }
 }

@@ -20,6 +20,7 @@
 mod entries;
 mod manifests;
 mod metadata_table;
+mod metrics;
 mod snapshots;
 
 pub use entries::EntriesTable;

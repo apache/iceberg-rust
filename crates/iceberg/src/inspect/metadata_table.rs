@@ -56,7 +56,7 @@ pub mod tests {
 
     use arrow_array::{ArrayRef, RecordBatch, StructArray};
     use arrow_cast::pretty::pretty_format_batches;
-    use arrow_schema::{DataType, Field, FieldRef, Schema};
+    use arrow_schema::{DataType, Field, FieldRef, Schema as ArrowSchema};
     use expect_test::Expect;
     use futures::TryStreamExt;
     use itertools::Itertools;
@@ -133,9 +133,11 @@ pub mod tests {
             record_batch.schema().fields().iter().format(",\n")
         ));
         expected_data.assert_eq(
-            &pretty_format_batches(&[
-                RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
-            ])
+            &pretty_format_batches(&[RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(fields)),
+                columns,
+            )
+            .unwrap()])
             .unwrap()
             .to_string(),
         );
