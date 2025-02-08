@@ -33,7 +33,9 @@ use bytes::Bytes;
 use fnv::FnvHashSet;
 use futures::future::BoxFuture;
 use futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
@@ -341,15 +343,98 @@ impl ArrowReader {
     /// Using the Parquet page index, we build a `RowSelection` that rejects rows that are indicated
     /// as having been deleted by a positional delete, taking into account any row groups that have
     /// been skipped entirely by the filter predicate
-    #[allow(unused)]
     fn build_deletes_row_selection(
         row_group_metadata: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
         mut positional_deletes: RoaringTreemap,
     ) -> Result<RowSelection> {
-        // TODO
+        let mut results: Vec<RowSelector> = Vec::new();
+        let mut selected_row_groups_idx = 0;
+        let mut current_page_base_idx: u64 = 0;
 
-        Ok(RowSelection::default())
+        'outer: for (idx, row_group_metadata) in row_group_metadata.iter().enumerate() {
+            let page_num_rows = row_group_metadata.num_rows() as u64;
+            let next_page_base_idx = current_page_base_idx + page_num_rows;
+
+            // if row group selection is enabled,
+            if let Some(selected_row_groups) = selected_row_groups {
+                // if we've consumed all the selected row groups, we're done
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+
+                if idx == selected_row_groups[selected_row_groups_idx] {
+                    // we're in a selected row group. Increment selected_row_groups_idx
+                    // so that next time around the for loop we're looking for the next
+                    // selected row group
+                    selected_row_groups_idx += 1;
+                } else {
+                    // remove any positional deletes from the skipped page so that
+                    // `positional.deletes.min()` can be used
+                    positional_deletes.remove_range(current_page_base_idx..next_page_base_idx);
+
+                    // still increment the current page base index but then skip to the next row group
+                    // in the file
+                    current_page_base_idx += page_num_rows;
+                    continue;
+                }
+            }
+
+            let mut next_deleted_row_idx = match positional_deletes.min() {
+                Some(next_deleted_row_idx) => {
+                    // if the index of the next deleted row is beyond this page, skip to the next page
+                    if next_deleted_row_idx >= next_page_base_idx {
+                        continue;
+                    }
+
+                    next_deleted_row_idx
+                }
+
+                // If there are no more pos deletes, stop building row selections and return what we
+                // have. NB this depends on behavior of ParquetRecordBatchReader that appears to be
+                // undocumented (not that I can find!): if there are no further RowSelections
+                // then everything else is assumed to be selected.
+                // see https://github.com/apache/arrow-rs/blob/c245a45efef9d9453f121587365e56d53c39d28f/parquet/src/arrow/arrow_reader/mod.rs#L703
+                _ => break,
+            };
+
+            let mut current_idx = current_page_base_idx;
+            while next_deleted_row_idx < next_page_base_idx {
+                // `select` all rows that precede the next delete index
+                if current_idx < next_deleted_row_idx {
+                    let run_length = next_deleted_row_idx - current_idx;
+                    results.push(RowSelector::select(run_length as usize));
+                    current_idx += run_length;
+                }
+
+                // `skip` all consecutive deleted rows
+                let mut run_length = 0;
+                while next_deleted_row_idx == current_idx {
+                    run_length += 1;
+                    current_idx += 1;
+                    positional_deletes.remove(next_deleted_row_idx);
+
+                    next_deleted_row_idx = match positional_deletes.min() {
+                        Some(next_deleted_row_idx) => next_deleted_row_idx,
+                        _ => {
+                            results.push(RowSelector::skip(run_length));
+                            break 'outer;
+                        }
+                    };
+                }
+                results.push(RowSelector::skip(run_length));
+            }
+
+            if let Some(selected_row_groups) = selected_row_groups {
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+            }
+
+            current_page_base_idx += page_num_rows;
+        }
+
+        Ok(results.into())
     }
 
     fn build_field_id_set_and_map(
@@ -1255,9 +1340,12 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::ProjectionMask;
+    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use parquet::schema::parser::parse_message_type;
-    use parquet::schema::types::SchemaDescriptor;
+    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
+    use roaring::RoaringTreemap;
 
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
     use crate::arrow::ArrowReader;
@@ -1422,5 +1510,96 @@ message schema {
             ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
                 .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[test]
+    fn test_build_deletes_row_selection() {
+        let schema_descr = get_test_schema_descr();
+
+        let mut columns = vec![];
+        for ptr in schema_descr.columns() {
+            let column = ColumnChunkMetaData::builder(ptr.clone()).build().unwrap();
+            columns.push(column);
+        }
+
+        let row_groups_metadata = vec![
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 1000, 0),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 1),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 2),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 1000, 3),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 4),
+        ];
+
+        let selected_row_groups = Some(vec![1, 3]);
+
+        let positional_deletes = RoaringTreemap::from_iter(&[
+            1,    // in skipped row group 0, should be ignored
+            3,    // in skipped row group 0, should be ignored
+            4,    // in skipped row group 0, should be ignored
+            5,    // in skipped row group 0, should be ignored
+            1002, // solitary row in selected row group 1
+            1010, // run of 5 rows in selected row group 1
+            1011, 1012, 1013, 1014, 1600, // should ignore, in skipped row group 2
+            2100, // single row in selected row group 3,
+            2200, // run of 3 consecutive rows in selected row group 3
+            2201, 2202,
+        ]);
+
+        let result = ArrowReader::build_deletes_row_selection(
+            &row_groups_metadata,
+            &selected_row_groups,
+            positional_deletes,
+        )
+        .unwrap();
+
+        let expected = RowSelection::from(vec![
+            RowSelector::select(2),
+            RowSelector::skip(1),
+            RowSelector::select(7),
+            RowSelector::skip(5),
+            RowSelector::select(100),
+            RowSelector::skip(1),
+            RowSelector::select(99),
+            RowSelector::skip(3),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    fn build_test_row_group_meta(
+        schema_descr: SchemaDescPtr,
+        columns: Vec<ColumnChunkMetaData>,
+        num_rows: i64,
+        ordinal: i16,
+    ) -> RowGroupMetaData {
+        RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(num_rows)
+            .set_total_byte_size(2000)
+            .set_column_metadata(columns)
+            .set_ordinal(ordinal)
+            .build()
+            .unwrap()
+    }
+
+    fn get_test_schema_descr() -> SchemaDescPtr {
+        use parquet::schema::types::Type as SchemaType;
+
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![
+                Arc::new(
+                    SchemaType::primitive_type_builder("a", parquet::basic::Type::INT32)
+                        .build()
+                        .unwrap(),
+                ),
+                Arc::new(
+                    SchemaType::primitive_type_builder("b", parquet::basic::Type::INT32)
+                        .build()
+                        .unwrap(),
+                ),
+            ])
+            .build()
+            .unwrap();
+
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 }
