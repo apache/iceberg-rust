@@ -135,6 +135,10 @@
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -202,7 +206,7 @@
         }
     }
 
-    <span class="kw">pub fn </span>run(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+    <span class="kw">pub fn </span>up(<span class="kw-2">&amp;</span><span class="self">self</span>) {
         <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(<span class="string">"docker"</span>);
         cmd.current_dir(<span class="kw-2">&amp;</span><span class="self">self</span>.docker_compose_dir);
 
@@ -223,6 +227,28 @@
             cmd,
             <span class="macro">format!</span>(
                 <span class="string">"Starting docker compose in {}, project name: {}"</span>,
+                <span class="self">self</span>.docker_compose_dir, <span class="self">self</span>.project_name
+            ),
+        )
+    }
+
+    <span class="kw">pub fn </span>down(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(<span class="string">"docker"</span>);
+        cmd.current_dir(<span class="kw-2">&amp;</span><span class="self">self</span>.docker_compose_dir);
+
+        cmd.args(<span class="macro">vec!</span>[
+            <span class="string">"compose"</span>,
+            <span class="string">"-p"</span>,
+            <span class="self">self</span>.project_name.as_str(),
+            <span class="string">"down"</span>,
+            <span class="string">"-v"</span>,
+            <span class="string">"--remove-orphans"</span>,
+        ]);
+
+        run_command(
+            cmd,
+            <span class="macro">format!</span>(
+                <span class="string">"Stopping docker compose in {}, project name: {}"</span>,
                 <span class="self">self</span>.docker_compose_dir, <span class="self">self</span>.project_name
             ),
         )
@@ -251,25 +277,7 @@
 
 <span class="kw">impl </span>Drop <span class="kw">for </span>DockerCompose {
     <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(<span class="string">"docker"</span>);
-        cmd.current_dir(<span class="kw-2">&amp;</span><span class="self">self</span>.docker_compose_dir);
-
-        cmd.args(<span class="macro">vec!</span>[
-            <span class="string">"compose"</span>,
-            <span class="string">"-p"</span>,
-            <span class="self">self</span>.project_name.as_str(),
-            <span class="string">"down"</span>,
-            <span class="string">"-v"</span>,
-            <span class="string">"--remove-orphans"</span>,
-        ]);
-
-        run_command(
-            cmd,
-            <span class="macro">format!</span>(
-                <span class="string">"Stopping docker compose in {}, project name: {}"</span>,
-                <span class="self">self</span>.docker_compose_dir, <span class="self">self</span>.project_name
-            ),
-        )
+        <span class="self">self</span>.down()
     }
 }
 </code></pre></div></section></main></body></html>

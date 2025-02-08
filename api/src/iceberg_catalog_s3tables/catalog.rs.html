@@ -664,11 +664,12 @@
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, <span class="prelude-ty">Result</span>, TableCommit, TableCreation,
     TableIdent,
 };
+<span class="kw">use </span>typed_builder::TypedBuilder;
 
 <span class="kw">use </span><span class="kw">crate</span>::utils::{create_metadata_location, create_sdk_config};
 
 <span class="doccomment">/// S3Tables catalog configuration.
-</span><span class="attr">#[derive(Debug)]
+</span><span class="attr">#[derive(Debug, TypedBuilder)]
 </span><span class="kw">pub struct </span>S3TablesCatalogConfig {
     <span class="doccomment">/// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
     /// that is managed by s3tables. We can't directly access the bucket with path like
@@ -681,8 +682,10 @@
     /// - `aws_access_key_id`: The AWS access key ID to use.
     /// - `aws_secret_access_key`: The AWS secret access key to use.
     /// - `aws_session_token`: The AWS session token to use.
+    </span><span class="attr">#[builder(default)]
     </span>properties: HashMap&lt;String, String&gt;,
     <span class="doccomment">/// Endpoint URL for the catalog.
+    </span><span class="attr">#[builder(default, setter(strip_option(fallback = endpoint_url_opt)))]
     </span>endpoint_url: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
@@ -1148,12 +1151,9 @@
             <span class="prelude-val">None </span>=&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
         };
 
-        <span class="kw">let </span>properties = HashMap::new();
-        <span class="kw">let </span>config = S3TablesCatalogConfig {
-            table_bucket_arn,
-            properties,
-            endpoint_url: <span class="prelude-val">None</span>,
-        };
+        <span class="kw">let </span>config = S3TablesCatalogConfig::builder()
+            .table_bucket_arn(table_bucket_arn)
+            .build();
 
         <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(S3TablesCatalog::new(config).<span class="kw">await</span><span class="question-mark">?</span>))
     }

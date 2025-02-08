@@ -81,7 +81,7 @@
 </span><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
-<span class="kw">use </span>iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+<span class="kw">use </span>iceberg_catalog_rest::RestCatalogConfig;
 <span class="kw">use </span>iceberg_test_utils::docker::DockerCompose;
 <span class="kw">use </span>iceberg_test_utils::{normalize_test_name, set_up};
 
@@ -89,23 +89,24 @@
 
 <span class="kw">pub struct </span>TestFixture {
     <span class="kw">pub </span>_docker_compose: DockerCompose,
-    <span class="kw">pub </span>rest_catalog: RestCatalog,
+    <span class="kw">pub </span>catalog_config: RestCatalogConfig,
 }
 
-<span class="kw">pub async fn </span>set_test_fixture(func: <span class="kw-2">&amp;</span>str) -&gt; TestFixture {
+<span class="kw">pub fn </span>set_test_fixture(func: <span class="kw-2">&amp;</span>str) -&gt; TestFixture {
     set_up();
     <span class="kw">let </span>docker_compose = DockerCompose::new(
         normalize_test_name(<span class="macro">format!</span>(<span class="string">"{}_{func}"</span>, <span class="macro">module_path!</span>())),
         <span class="macro">format!</span>(<span class="string">"{}/testdata"</span>, <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>)),
     );
 
-    <span class="comment">// Start docker compose
-    </span>docker_compose.run();
+    <span class="comment">// Stop any containers from previous runs and start new ones
+    </span>docker_compose.down();
+    docker_compose.up();
 
     <span class="kw">let </span>rest_catalog_ip = docker_compose.get_container_ip(<span class="string">"rest"</span>);
     <span class="kw">let </span>minio_ip = docker_compose.get_container_ip(<span class="string">"minio"</span>);
 
-    <span class="kw">let </span>config = RestCatalogConfig::builder()
+    <span class="kw">let </span>catalog_config = RestCatalogConfig::builder()
         .uri(<span class="macro">format!</span>(<span class="string">"http://{}:{}"</span>, rest_catalog_ip, REST_CATALOG_PORT))
         .props(HashMap::from([
             (
@@ -117,11 +118,10 @@
             (S3_REGION.to_string(), <span class="string">"us-east-1"</span>.to_string()),
         ]))
         .build();
-    <span class="kw">let </span>rest_catalog = RestCatalog::new(config);
 
     TestFixture {
         _docker_compose: docker_compose,
-        rest_catalog,
+        catalog_config,
     }
 }
 </code></pre></div></section></main></body></html>

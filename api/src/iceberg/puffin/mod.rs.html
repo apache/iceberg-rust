@@ -26,6 +26,9 @@
 <a href="#26" id="26">26</a>
 <a href="#27" id="27">27</a>
 <a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -49,8 +52,11 @@
 </span><span class="comment">// Temporarily allowing this while crate is under active development
 </span><span class="attr">#![allow(dead_code)]
 
-</span><span class="kw">mod </span>compression;
+</span><span class="kw">mod </span>blob;
+<span class="kw">mod </span>compression;
 <span class="kw">mod </span>metadata;
+<span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
+</span><span class="kw">mod </span>reader;
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>test_utils;
