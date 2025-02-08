@@ -15,17 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Puffin implementation.
+use std::sync::{Arc, OnceLock};
 
-#![deny(missing_docs)]
-// Temporarily allowing this while crate is under active development
-#![allow(dead_code)]
+use ctor::dtor;
+use iceberg_integration_tests::{set_test_fixture, TestFixture};
 
-mod blob;
-mod compression;
-mod metadata;
-#[cfg(feature = "tokio")]
-mod reader;
+pub mod shared_tests;
 
-#[cfg(test)]
-mod test_utils;
+static DOCKER_CONTAINERS: OnceLock<Arc<TestFixture>> = OnceLock::new();
+
+pub fn get_shared_containers() -> &'static Arc<TestFixture> {
+    DOCKER_CONTAINERS.get_or_init(|| Arc::new(set_test_fixture("shared_tests")))
+}
+
+#[dtor]
+fn shutdown() {
+    if let Some(fixture) = DOCKER_CONTAINERS.get() {
+        fixture._docker_compose.down()
+    }
+}

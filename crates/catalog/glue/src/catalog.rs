@@ -20,7 +20,9 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use aws_sdk_glue::types::TableInput;
-use iceberg::io::FileIO;
+use iceberg::io::{
+    FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
+};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -34,7 +36,9 @@ use crate::utils::{
     convert_to_database, convert_to_glue_table, convert_to_namespace, create_metadata_location,
     create_sdk_config, get_default_table_location, get_metadata_location, validate_namespace,
 };
-use crate::with_catalog_id;
+use crate::{
+    with_catalog_id, AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+};
 
 #[derive(Debug, TypedBuilder)]
 /// Glue Catalog configuration
@@ -69,11 +73,40 @@ impl GlueCatalog {
     /// Create a new glue catalog
     pub async fn new(config: GlueCatalogConfig) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
+        let mut file_io_props = config.props.clone();
+        if !file_io_props.contains_key(S3_ACCESS_KEY_ID) {
+            if let Some(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID) {
+                file_io_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
+            }
+        }
+        if !file_io_props.contains_key(S3_SECRET_ACCESS_KEY) {
+            if let Some(secret_access_key) = file_io_props.get(AWS_SECRET_ACCESS_KEY) {
+                file_io_props.insert(
+                    S3_SECRET_ACCESS_KEY.to_string(),
+                    secret_access_key.to_string(),
+                );
+            }
+        }
+        if !file_io_props.contains_key(S3_REGION) {
+            if let Some(region) = file_io_props.get(AWS_REGION_NAME) {
+                file_io_props.insert(S3_REGION.to_string(), region.to_string());
+            }
+        }
+        if !file_io_props.contains_key(S3_SESSION_TOKEN) {
+            if let Some(session_token) = file_io_props.get(AWS_SESSION_TOKEN) {
+                file_io_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
+            }
+        }
+        if !file_io_props.contains_key(S3_ENDPOINT) {
+            if let Some(aws_endpoint) = config.uri.as_ref() {
+                file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
+            }
+        }
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
         let file_io = FileIO::from_path(&config.warehouse)?
-            .with_props(&config.props)
+            .with_props(file_io_props)
             .build()?;
 
         Ok(GlueCatalog {
