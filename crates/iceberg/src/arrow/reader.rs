@@ -1117,14 +1117,14 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 /// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
 /// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
 /// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
-struct ArrowFileReader<R: FileRead> {
+pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
     r: R,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
     /// Create a new ArrowFileReader
-    fn new(meta: FileMetadata, r: R) -> Self {
+    pub fn new(meta: FileMetadata, r: R) -> Self {
         Self { meta, r }
     }
 }

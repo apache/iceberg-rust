@@ -981,7 +981,7 @@ pub mod tests {
     use crate::TableIdent;
 
     pub struct TableTestFixture {
-        table_location: String,
+        pub table_location: String,
         pub table: Table,
     }
 

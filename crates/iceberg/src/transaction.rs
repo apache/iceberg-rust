@@ -18,19 +18,22 @@
 //! This module contains transaction api.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
 
+use parquet::arrow::async_reader::AsyncFileReader;
 use uuid::Uuid;
 
+use crate::arrow::ArrowFileReader;
 use crate::error::Result;
-use crate::io::OutputFile;
+use crate::io::{FileIO, OutputFile};
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
+    DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriterBuilder, NullOrder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType,
+    Summary, TableMetadata, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::TableUpdate::UpgradeFormatVersion;
@@ -168,6 +171,110 @@ impl<'a> Transaction<'a> {
             .build();
 
         catalog.update_table(table_commit).await
+    }
+
+    /// Adds existing parquet files
+    pub async fn add_parquet_files(
+        self,
+        file_paths: Vec<String>,
+        check_duplicate_files: bool,
+    ) -> Result<Transaction<'a>> {
+        if check_duplicate_files {
+            let unique_paths: HashSet<_> = file_paths.iter().collect();
+            if unique_paths.len() != file_paths.len() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Duplicate file paths provided",
+                ));
+            }
+        }
+        let table_metadata = self.table.metadata();
+
+        let data_files = Transaction::parquet_files_to_data_files(
+            &self,
+            self.table.file_io(),
+            file_paths,
+            table_metadata,
+        )
+        .await?;
+
+        let mut fast_append_action = self.fast_append(Some(Uuid::new_v4()), Vec::new())?;
+        fast_append_action.add_data_files(data_files)?;
+
+        fast_append_action.apply().await
+    }
+
+    async fn parquet_files_to_data_files(
+        &self,
+        file_io: &FileIO,
+        file_paths: Vec<String>,
+        table_metadata: &TableMetadata,
+    ) -> Result<Vec<DataFile>> {
+        let mut data_files: Vec<DataFile> = Vec::new();
+
+        for file_path in file_paths {
+            let input_file = file_io.new_input(&file_path)?;
+            if !input_file.exists().await? {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("File does not exist."),
+                ));
+            }
+            let file_metadata = input_file.metadata().await?;
+            let file_size_in_bytes = file_metadata.size;
+            let reader = input_file.reader().await?;
+
+            let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+            let parquet_metadata = parquet_reader.get_metadata().await.map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Error reading Parquet metadata: {}", err),
+                )
+            })?;
+            let record_count: u64 = parquet_metadata
+                .file_metadata()
+                .num_rows()
+                .try_into()
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Negative row count in Parquet metadata",
+                    )
+                })?;
+            let partition_value =
+                self.create_default_partition_value(&table_metadata.default_partition_type)?;
+
+            // TODO: Add more metadata from parquet's metadata to the `DataFile`
+            let data_file = DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(file_path)
+                .file_format(DataFileFormat::Parquet)
+                .partition(partition_value)
+                .record_count(record_count)
+                .file_size_in_bytes(file_size_in_bytes)
+                .build()
+                .unwrap();
+            data_files.push(data_file);
+        }
+        Ok(data_files)
+    }
+
+    fn create_default_partition_value(&self, partition_type: &StructType) -> Result<Struct> {
+        let literals = partition_type
+            .fields()
+            .iter()
+            .map(|field| {
+                let primitive_type = field.field_type.as_primitive_type().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Partition field should only be a primitive type.",
+                    )
+                })?;
+                Ok(Some(primitive_type.type_to_literal()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Struct::from_iter(literals))
     }
 }
 
@@ -607,6 +714,7 @@ mod tests {
     use std::io::BufReader;
 
     use crate::io::FileIOBuilder;
+    use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Struct,
         TableMetadata,
@@ -847,6 +955,7 @@ mod tests {
                 .sequence_number()
                 .expect("Inherit sequence number by load manifest")
         );
+
         assert_eq!(
             new_snapshot.snapshot_id(),
             manifest.entries()[0].snapshot_id().unwrap()
@@ -868,5 +977,81 @@ mod tests {
             tx.is_err(),
             "Should not allow to do same kinds update in same transaction"
         );
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_parquet_files() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let tx = crate::transaction::Transaction::new(&fixture.table);
+
+        let file_paths = vec![
+            format!("{}/1.parquet", &fixture.table_location),
+            format!("{}/2.parquet", &fixture.table_location),
+            format!("{}/3.parquet", &fixture.table_location),
+        ];
+
+        // attempt to add the existing Parquet files with fast append
+        let new_tx = tx
+            .add_parquet_files(file_paths.clone(), true)
+            .await
+            .expect("Adding existing Parquet files should succeed");
+
+        let mut found_add_snapshot = false;
+        let mut found_set_snapshot_ref = false;
+        for update in new_tx.updates.iter() {
+            match update {
+                TableUpdate::AddSnapshot { .. } => {
+                    found_add_snapshot = true;
+                }
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    found_set_snapshot_ref = true;
+                    assert_eq!(ref_name, crate::transaction::MAIN_BRANCH);
+                    assert!(reference.snapshot_id > 0);
+                }
+                _ => {}
+            }
+        }
+        assert!(found_add_snapshot);
+        assert!(found_set_snapshot_ref);
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &new_tx.updates[0] {
+            snapshot
+        } else {
+            panic!("Expected the first update to be an AddSnapshot update");
+        };
+
+        let manifest_list = new_snapshot
+            .load_manifest_list(fixture.table.file_io(), fixture.table.metadata())
+            .await
+            .expect("Failed to load manifest list");
+
+        assert_eq!(manifest_list.entries().len(), 2);
+
+        // Load the manifest from the manifest list
+        let manifest = manifest_list.entries()[0]
+            .load_manifest(fixture.table.file_io())
+            .await
+            .expect("Failed to load manifest");
+
+        // Since we added three files with add_parquet_files, check that the manifest contains three entries
+        assert_eq!(manifest.entries().len(), 3);
+
+        // Verify each file path appears in manifest
+        let manifest_paths: Vec<String> = manifest
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().file_path.clone())
+            .collect();
+        for path in file_paths {
+            assert!(
+                manifest_paths.contains(&path),
+                "Manifest does not contain expected file path: {}",
+                path
+            );
+        }
     }
 }

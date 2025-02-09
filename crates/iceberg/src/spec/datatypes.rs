@@ -25,6 +25,7 @@ use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 
 use ::serde::de::{MapAccess, Visitor};
+use ordered_float::OrderedFloat;
 use serde::de::{Error, IntoDeserializer};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -265,6 +266,28 @@ impl PrimitiveType {
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
         )
+    }
+
+    /// Used to convert `PrimitiveType` to `Literal`.
+    pub fn type_to_literal(&self) -> Literal {
+        Literal::Primitive(match self {
+            PrimitiveType::Boolean => PrimitiveLiteral::Boolean(false),
+            PrimitiveType::Int => PrimitiveLiteral::Int(0),
+            PrimitiveType::Long => PrimitiveLiteral::Long(0),
+            PrimitiveType::Float => PrimitiveLiteral::Float(OrderedFloat(0.0)),
+            PrimitiveType::Double => PrimitiveLiteral::Double(OrderedFloat(0.0)),
+            PrimitiveType::Decimal { .. } => PrimitiveLiteral::Int128(0),
+            PrimitiveType::Date => PrimitiveLiteral::Int(0),
+            PrimitiveType::Time => PrimitiveLiteral::Long(0),
+            PrimitiveType::Timestamp => PrimitiveLiteral::Long(0),
+            PrimitiveType::Timestamptz => PrimitiveLiteral::Long(0),
+            PrimitiveType::TimestampNs => PrimitiveLiteral::Long(0),
+            PrimitiveType::TimestamptzNs => PrimitiveLiteral::Long(0),
+            PrimitiveType::String => PrimitiveLiteral::String(String::new()),
+            PrimitiveType::Uuid => PrimitiveLiteral::UInt128(0),
+            PrimitiveType::Fixed(_size) => PrimitiveLiteral::Binary(Vec::new()),
+            PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::new()),
+        })
     }
 }
 
