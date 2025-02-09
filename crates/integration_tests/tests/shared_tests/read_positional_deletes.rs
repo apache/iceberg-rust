@@ -17,17 +17,19 @@
 
 //! Integration tests for rest catalog.
 
+use futures::TryStreamExt;
 use iceberg::ErrorKind::FeatureUnsupported;
 use iceberg::{Catalog, TableIdent};
-use iceberg_integration_tests::set_test_fixture;
+use iceberg_catalog_rest::RestCatalog;
+
+use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_read_table_with_positional_deletes() {
-    let fixture = set_test_fixture("read_table_with_positional_deletes").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
-    let catalog = fixture.rest_catalog;
-
-    let table = catalog
+    let table = rest_catalog
         .load_table(
             &TableIdent::from_strs(["default", "test_positional_merge_on_read_double_deletes"])
                 .unwrap(),
@@ -35,16 +37,31 @@ async fn test_read_table_with_positional_deletes() {
         .await
         .unwrap();
 
-    let scan = table.scan().build().unwrap();
+    let scan = table
+        .scan()
+        .with_delete_file_processing_enabled(true)
+        .build()
+        .unwrap();
     println!("{:?}", scan);
 
-    assert!(scan
-        .to_arrow()
+    let plan: Vec<_> = scan
+        .plan_files()
         .await
-        .is_err_and(|e| e.kind() == FeatureUnsupported));
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    println!("{:?}", plan);
+
+    // Scan plan phase should include delete files in file plan
+    // when with_delete_file_processing_enabled == true
+    assert_eq!(plan[0].deletes.len(), 2);
 
     // 😱 If we don't support positional deletes, we should fail when we try to read a table that
     // has positional deletes. The table has 12 rows, and 2 are deleted, see provision.py
+    let result = scan.to_arrow().await.unwrap().try_collect::<Vec<_>>().await;
+
+    assert!(result.is_err_and(|e| e.kind() == FeatureUnsupported));
 
     // When we get support for it:
     // let batch_stream = scan.to_arrow().await.unwrap();

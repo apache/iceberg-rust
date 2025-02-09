@@ -35,6 +35,7 @@ aws-config = { workspace = true }
 aws-sdk-s3tables = "1.8.0"
 iceberg = { workspace = true }
 serde_json = { workspace = true }
+typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
