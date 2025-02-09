@@ -70,7 +70,7 @@ catalog = load_catalog(
 
 # Create a corresponding Iceberg table and append the file to it
 iceberg_table = catalog.create_table_if_not_exists(
-    identifier=f"default.types_test",
+    identifier=f"default.types_test_pyiceberg",
     schema=schema,
 )
 iceberg_table.append(table)

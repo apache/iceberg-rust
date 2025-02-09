@@ -32,7 +32,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use crate::get_shared_containers;
 
 #[tokio::test]
-async fn test_basic_queries() -> Result<(), DataFusionError> {
+async fn test_spark_types() -> Result<(), DataFusionError> {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
@@ -135,5 +135,124 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
         "+----------+----------+-----------+------+---------+--------+---------+----------+------------+---------------------+----------------------+---------+----------+",
     ];
     assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pyiceberg_types() -> Result<(), DataFusionError> {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+
+    let table = rest_catalog
+        .load_table(&TableIdent::from_strs(["default", "types_test_pyiceberg"]).unwrap())
+        .await
+        .unwrap();
+
+    let ctx = SessionContext::new();
+
+    let table_provider = Arc::new(
+        IcebergTableProvider::try_new_from_table(table)
+            .await
+            .unwrap(),
+    );
+
+    let schema = table_provider.schema();
+
+    assert_eq!(
+        schema.as_ref(),
+        &Schema::new(vec![
+            Field::new("cboolean", DataType::Boolean, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("cint8", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("cint16", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "3".to_string(),
+            )])),
+            Field::new("cint32", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "4".to_string(),
+            )])),
+            Field::new("cint64", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "5".to_string(),
+            )])),
+            Field::new("cfloat32", DataType::Float32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "6".to_string(),
+            )])),
+            Field::new("cfloat64", DataType::Float64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "7".to_string(),
+            )])),
+            Field::new("cdecimal128", DataType::Decimal128(8, 2), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "8".to_string(),)])
+            ),
+            Field::new("cdate32", DataType::Date32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "9".to_string(),
+            )])),
+            Field::new(
+                "ctimestamp",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "10".to_string(),
+            )])),
+            Field::new(
+                "ctimestamptz",
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+                true
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "11".to_string(),
+            )])),
+            Field::new("cutf8", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "12".to_string(),
+            )])),
+            Field::new("cbinary", DataType::LargeBinary, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "13".to_string(),
+            )])),
+        ])
+    );
+
+    ctx.register_table("types_table", table_provider)?;
+
+    let batches = ctx
+        .sql("SELECT * FROM types_table LIMIT 3")
+        .await?
+        .collect()
+        .await?;
+    let expected = [
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
+        "| cboolean | cint8 | cint16 | cint32 | cint64 | cfloat32 | cfloat64 | cdecimal128 | cdate32    | ctimestamp          | ctimestamptz         | cutf8 | cbinary |",
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
+        "| false    | -128  | 0      | 0      | 0      | 0.0      | 0.0      | 0.00        | 1970-01-01 | 1970-01-01T00:00:00 | 1970-01-01T00:00:00Z | 0     | 30      |",
+        "| true     | -127  | 1      | 1      | 1      | 1.0      | 1.0      | 0.01        | 1970-01-02 | 1970-01-01T00:00:01 | 1970-01-01T00:00:01Z | 1     | 31      |",
+        "| false    | -126  | 2      | 2      | 2      | 2.0      | 2.0      | 0.02        | 1970-01-03 | 1970-01-01T00:00:02 | 1970-01-01T00:00:02Z | 2     | 32      |",
+        "+----------+-------+--------+--------+--------+----------+----------+-------------+------------+---------------------+----------------------+-------+---------+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // TODO: this isn't OK, and should be fixed with https://github.com/apache/iceberg-rust/issues/813
+    let err = ctx
+        .sql("SELECT cdecimal128 FROM types_table WHERE cint16 <= 2")
+        .await?
+        .collect()
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Invalid comparison operation: Int16 <= Int32"));
+
     Ok(())
 }
