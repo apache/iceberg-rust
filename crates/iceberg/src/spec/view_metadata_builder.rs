@@ -31,6 +31,7 @@ use super::{
 };
 use crate::catalog::ViewUpdate;
 use crate::error::{Error, ErrorKind, Result};
+use crate::io::is_truthy;
 use crate::ViewCreation;
 
 /// Manipulating view metadata.
@@ -572,7 +573,7 @@ fn allow_replace_drop_dialects(properties: &HashMap<String, String>) -> bool {
         .get(VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED)
         .map_or(
             VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED_DEFAULT,
-            |value| value.to_lowercase() == "true",
+            |value| is_truthy(&value),
         )
 }
 
