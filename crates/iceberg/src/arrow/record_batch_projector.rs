@@ -190,7 +190,7 @@ mod test {
             RecordBatchProjector::new(schema.clone(), &[1, 3], field_id_fetch_func, |_| true)
                 .unwrap();
 
-        assert!(projector.field_indices.len() == 2);
+        assert_eq!(projector.field_indices.len(), 2);
         assert_eq!(projector.field_indices[0], vec![0]);
         assert_eq!(projector.field_indices[1], vec![0, 1]);
 

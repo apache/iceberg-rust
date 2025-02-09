@@ -48,7 +48,7 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, PrimitiveType, Schema};
+use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -163,6 +163,14 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
+        // TODO: add support for delete files
+        if !task.deletes.is_empty() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Delete files are not yet supported",
+            ));
+        }
+
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(&task.data_file_path)?;
@@ -273,6 +281,28 @@ impl ArrowReader {
         Ok((iceberg_field_ids, field_id_map))
     }
 
+    /// Insert the leaf field id into the field_ids using for projection.
+    /// For nested type, it will recursively insert the leaf field id.
+    fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
+        match field.field_type.as_ref() {
+            Type::Primitive(_) => {
+                field_ids.push(field.id);
+            }
+            Type::Struct(struct_type) => {
+                for nested_field in struct_type.fields() {
+                    Self::include_leaf_field_id(nested_field, field_ids);
+                }
+            }
+            Type::List(list_type) => {
+                Self::include_leaf_field_id(&list_type.element_field, field_ids);
+            }
+            Type::Map(map_type) => {
+                Self::include_leaf_field_id(&map_type.key_field, field_ids);
+                Self::include_leaf_field_id(&map_type.value_field, field_ids);
+            }
+        }
+    }
+
     fn get_arrow_projection_mask(
         field_ids: &[i32],
         iceberg_schema_of_task: &Schema,
@@ -297,11 +327,21 @@ impl ArrowReader {
                         scale: requested_scale,
                     }),
                 ) if requested_precision >= file_precision && file_scale == requested_scale => true,
+                // Uuid will be store as Fixed(16) in parquet file, so the read back type will be Fixed(16).
+                (Some(PrimitiveType::Fixed(16)), Some(PrimitiveType::Uuid)) => true,
                 _ => false,
             }
         }
 
-        if field_ids.is_empty() {
+        let mut leaf_field_ids = vec![];
+        for field_id in field_ids {
+            let field = iceberg_schema_of_task.field_by_id(*field_id);
+            if let Some(field) = field {
+                Self::include_leaf_field_id(field, &mut leaf_field_ids);
+            }
+        }
+
+        if leaf_field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
             // Build the map between field id and column index in Parquet schema.
@@ -318,7 +358,7 @@ impl ArrowReader {
                         .and_then(|field_id| i32::from_str(field_id).ok())
                         .map_or(false, |field_id| {
                             projected_fields.insert((*f).clone(), field_id);
-                            field_ids.contains(&field_id)
+                            leaf_field_ids.contains(&field_id)
                         })
                 }),
                 arrow_schema.metadata().clone(),
@@ -351,19 +391,26 @@ impl ArrowReader {
                 true
             });
 
-            if column_map.len() != field_ids.len() {
+            if column_map.len() != leaf_field_ids.len() {
+                let missing_fields = leaf_field_ids
+                    .iter()
+                    .filter(|field_id| !column_map.contains_key(field_id))
+                    .collect::<Vec<_>>();
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Parquet schema {} and Iceberg schema {} do not match.",
                         iceberg_schema, iceberg_schema_of_task
                     ),
-                ));
+                )
+                .with_context("column_map", format! {"{:?}", column_map})
+                .with_context("field_ids", format! {"{:?}", leaf_field_ids})
+                .with_context("missing_fields", format! {"{:?}", missing_fields}));
             }
 
             let mut indices = vec![];
-            for field_id in field_ids {
-                if let Some(col_idx) = column_map.get(field_id) {
+            for field_id in leaf_field_ids {
+                if let Some(col_idx) = column_map.get(&field_id) {
                     indices.push(*col_idx);
                 } else {
                     return Err(Error::new(
@@ -712,10 +759,14 @@ impl PredicateConverter<'_> {
             let index = self
                 .column_indices
                 .iter()
-                .position(|&idx| idx == *column_idx).ok_or(Error::new(ErrorKind::DataInvalid, format!(
-                    "Leave column `{}` in predicates cannot be found in the required column indices.",
-                    reference.field().name
-                )))?;
+                .position(|&idx| idx == *column_idx)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                reference.field().name
+            ),
+                ))?;
 
             Ok(Some(index))
         } else {

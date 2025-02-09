@@ -40,7 +40,7 @@ mod tests {
             normalize_test_name(module_path!()),
             format!("{}/testdata/file_io_gcs", env!("CARGO_MANIFEST_DIR")),
         );
-        docker_compose.run();
+        docker_compose.up();
         guard.replace(docker_compose);
     }
 

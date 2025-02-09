@@ -40,7 +40,7 @@ uuid = { workspace = true, features = ["v4"] }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
 regex = "1.10.5"
-sqlx = { version = "0.8.0", features = [
+sqlx = { version = "0.8.1", features = [
   "tls-rustls",
   "runtime-tokio",
   "any",

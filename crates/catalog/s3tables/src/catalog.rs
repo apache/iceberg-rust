@@ -31,11 +31,12 @@ use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
+use typed_builder::TypedBuilder;
 
 use crate::utils::{create_metadata_location, create_sdk_config};
 
 /// S3Tables catalog configuration.
-#[derive(Debug)]
+#[derive(Debug, TypedBuilder)]
 pub struct S3TablesCatalogConfig {
     /// Unlike other buckets, S3Tables bucket is not a physical bucket, but a virtual bucket
     /// that is managed by s3tables. We can't directly access the bucket with path like
@@ -48,8 +49,10 @@ pub struct S3TablesCatalogConfig {
     /// - `aws_access_key_id`: The AWS access key ID to use.
     /// - `aws_secret_access_key`: The AWS secret access key to use.
     /// - `aws_session_token`: The AWS session token to use.
+    #[builder(default)]
     properties: HashMap<String, String>,
     /// Endpoint URL for the catalog.
+    #[builder(default, setter(strip_option(fallback = endpoint_url_opt)))]
     endpoint_url: Option<String>,
 }
 
@@ -515,12 +518,9 @@ mod tests {
             None => return Ok(None),
         };
 
-        let properties = HashMap::new();
-        let config = S3TablesCatalogConfig {
-            table_bucket_arn,
-            properties,
-            endpoint_url: None,
-        };
+        let config = S3TablesCatalogConfig::builder()
+            .table_bucket_arn(table_bucket_arn)
+            .build();
 
         Ok(Some(S3TablesCatalog::new(config).await?))
     }

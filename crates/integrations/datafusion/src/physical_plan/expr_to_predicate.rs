@@ -119,6 +119,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                 _ => TransformedResult::NotTransformed,
             }
         }
+        Expr::Cast(c) => to_iceberg_predicate(&c.expr),
         _ => TransformedResult::NotTransformed,
     }
 }
@@ -211,7 +212,7 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::DFSchema;
     use datafusion::logical_expr::utils::split_conjunction;
     use datafusion::prelude::{Expr, SessionContext};
@@ -224,6 +225,7 @@ mod tests {
         let arrow_schema = Schema::new(vec![
             Field::new("foo", DataType::Int32, true),
             Field::new("bar", DataType::Utf8, true),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Second, None), true),
         ]);
         DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
     }
@@ -390,6 +392,15 @@ mod tests {
         let sql = "(foo > 1 or length(bar) = 1 ) and foo < 0 ";
         let predicate = convert_to_iceberg_predicate(sql).unwrap();
         let expected_predicate = Reference::new("foo").less_than(Datum::long(0));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_predicate_conversion_with_cast() {
+        let sql = "ts >= timestamp '2023-01-05T00:00:00'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
         assert_eq!(predicate, expected_predicate);
     }
 }
