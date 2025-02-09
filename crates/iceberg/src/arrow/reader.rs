@@ -36,8 +36,9 @@ use futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
+use roaring::RoaringTreemap;
 
 use crate::arrow::delete_file_manager::DeleteFileManager;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
@@ -276,9 +277,9 @@ impl ArrowReader {
 
         if let Some(positional_delete_indexes) = positional_delete_indexes {
             let delete_row_selection = Self::build_deletes_row_selection(
-                record_batch_stream_builder.metadata(),
+                record_batch_stream_builder.metadata().row_groups(),
                 &selected_row_group_indices,
-                &positional_delete_indexes,
+                positional_delete_indexes,
             )?;
 
             // merge the row selection from the delete files with the row selection
@@ -342,9 +343,9 @@ impl ArrowReader {
     /// been skipped entirely by the filter predicate
     #[allow(unused)]
     fn build_deletes_row_selection(
-        parquet_metadata: &Arc<ParquetMetaData>,
+        row_group_metadata: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
-        positional_deletes: &[usize],
+        mut positional_deletes: RoaringTreemap,
     ) -> Result<RowSelection> {
         // TODO
 
