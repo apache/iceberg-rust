@@ -136,7 +136,8 @@ SELECT
     CAST(from_unixtime(s) AS TIMESTAMP_NTZ) AS ctimestamp_ntz,
     CAST(from_unixtime(s) AS TIMESTAMP) AS ctimestamp,
     CAST(s AS STRING) AS cstring,
-    CAST(s AS BINARY) AS cbinary
+    CAST(s AS BINARY) AS cbinary,
+    ARRAY(s, s, s) AS carray
 FROM (
     SELECT EXPLODE(SEQUENCE(0, 1000)) AS s
 );

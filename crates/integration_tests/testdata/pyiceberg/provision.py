@@ -36,6 +36,7 @@ columns = [
     pa.array([(datetime(1970, 1, 1) + timedelta(seconds=i)) for i in range(rows)]),
     pa.array([str(i) for i in range(rows)]),
     pa.array([str(i).encode("utf-8") for i in range(rows)]),
+    pa.array([[i, i, i] for i in range(rows)]),
 ]
 schema = pa.schema([
     ('cboolean', pa.bool_()),
@@ -51,6 +52,7 @@ schema = pa.schema([
     ('ctimestamptz', pa.timestamp('us', tz='UTC')),
     ('cutf8', pa.utf8()),
     ('cbinary', pa.binary()),
+    ('clist', pa.large_list(pa.int16()))
 ])
 
 # Convert to a PyArrow table
