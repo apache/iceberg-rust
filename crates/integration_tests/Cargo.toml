@@ -27,6 +27,7 @@ rust-version = { workspace = true }
 [dependencies]
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+ctor = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }

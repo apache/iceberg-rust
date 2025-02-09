@@ -3068,6 +3068,7 @@ dependencies = [
  "itertools",
  "serde_json",
  "tokio",
+ "typed-builder 0.20.0",
  "uuid",
 ]
 
@@ -3117,6 +3118,7 @@ version = "0.4.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "ctor",
  "datafusion",
  "futures",
  "iceberg",
