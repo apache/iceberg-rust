@@ -217,7 +217,7 @@ impl<'a> Transaction<'a> {
             if !input_file.exists().await? {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("File does not exist."),
+                    "File does not exist".to_string(),
                 ));
             }
             let file_metadata = input_file.metadata().await?;
