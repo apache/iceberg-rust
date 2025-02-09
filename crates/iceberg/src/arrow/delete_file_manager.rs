@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use roaring::RoaringTreemap;
+
 use crate::expr::BoundPredicate;
 use crate::io::FileIO;
 use crate::scan::FileScanTaskDeleteFile;
@@ -54,7 +56,7 @@ impl DeleteFileManager {
     pub(crate) fn get_positional_delete_indexes_for_data_file(
         &self,
         data_file_path: &str,
-    ) -> Option<Vec<usize>> {
+    ) -> Option<RoaringTreemap> {
         // TODO
 
         None
