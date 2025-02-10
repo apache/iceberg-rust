@@ -18,7 +18,7 @@
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
-    LargeListArray, LargeStringArray, ListArray, MapArray, NullArray, StringArray, StructArray,
+    LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
     Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
 use arrow_schema::DataType;
@@ -26,8 +26,8 @@ use uuid::Uuid;
 
 use super::get_field_id;
 use crate::spec::{
-    visit_struct_with_partner, ListPartnerIterator, Literal, Map, MapPartnerIterator,
-    PartnerAccessor, PrimitiveType, SchemaWithPartnerVisitor, Struct, StructType,
+    visit_struct_with_partner, Literal, Map, PartnerAccessor, PrimitiveType,
+    SchemaWithPartnerVisitor, Struct, StructType,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -64,7 +64,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
     fn r#struct(
         &mut self,
         _struct: &StructType,
-        _partner: &ArrayRef,
+        array: &ArrayRef,
         results: Vec<Vec<Option<Literal>>>,
     ) -> Result<Vec<Option<Literal>>> {
         let row_len = results.first().map(|column| column.len()).unwrap_or(0);
@@ -81,12 +81,16 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
             .map(|column| column.into_iter())
             .collect::<Vec<_>>();
 
-        for _ in 0..row_len {
+        for i in 0..row_len {
             let mut literals = Vec::with_capacity(columns_iters.len());
             for column_iter in columns_iters.iter_mut() {
                 literals.push(column_iter.next().unwrap());
             }
-            struct_literals.push(Some(Literal::Struct(Struct::from_iter(literals))));
+            if array.is_null(i) {
+                struct_literals.push(None);
+            } else {
+                struct_literals.push(Some(Literal::Struct(Struct::from_iter(literals))));
+            }
         }
 
         Ok(struct_literals)
@@ -95,29 +99,75 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
     fn list(
         &mut self,
         list: &crate::spec::ListType,
-        _partner: &ArrayRef,
-        results: Vec<Vec<Option<Literal>>>,
+        array: &ArrayRef,
+        elements: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
-        if list.element_field.required {
-            if results.iter().any(|row| row.iter().any(Option::is_none)) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "The list should not have null value",
-                ));
-            }
+        if list.element_field.required && elements.iter().any(Option::is_none) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "The list should not have null value",
+            ));
         }
-        Ok(results
-            .into_iter()
-            .map(|row| Some(Literal::List(row)))
-            .collect())
+        match array.data_type() {
+            DataType::List(_) => {
+                let offset = array
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::DataInvalid, "The partner is not a list array")
+                    })?
+                    .offsets();
+                // combine the result according to the offset
+                let mut result = Vec::with_capacity(offset.len() - 1);
+                for i in 0..offset.len() - 1 {
+                    let start = offset[i] as usize;
+                    let end = offset[i + 1] as usize;
+                    result.push(Some(Literal::List(elements[start..end].to_vec())));
+                }
+                Ok(result)
+            }
+            DataType::LargeList(_) => {
+                let offset = array
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "The partner is not a large list array",
+                        )
+                    })?
+                    .offsets();
+                // combine the result according to the offset
+                let mut result = Vec::with_capacity(offset.len() - 1);
+                for i in 0..offset.len() - 1 {
+                    let start = offset[i] as usize;
+                    let end = offset[i + 1] as usize;
+                    result.push(Some(Literal::List(elements[start..end].to_vec())));
+                }
+                Ok(result)
+            }
+            DataType::FixedSizeList(_, len) => {
+                let mut result = Vec::with_capacity(elements.len() / *len as usize);
+                for i in 0..elements.len() / *len as usize {
+                    let start = i * *len as usize;
+                    let end = (i + 1) * *len as usize;
+                    result.push(Some(Literal::List(elements[start..end].to_vec())));
+                }
+                Ok(result)
+            }
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "The partner is not a list type",
+            )),
+        }
     }
 
     fn map(
         &mut self,
-        map: &crate::spec::MapType,
-        _partner: &ArrayRef,
-        key_values: Vec<Vec<Option<Literal>>>,
-        values: Vec<Vec<Option<Literal>>>,
+        _map: &crate::spec::MapType,
+        partner: &ArrayRef,
+        key_values: Vec<Option<Literal>>,
+        values: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
         // Make sure key_value and value have the same row length
         if key_values.len() != values.len() {
@@ -127,45 +177,26 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
             ));
         }
 
-        let mut result = Vec::with_capacity(key_values.len());
-        for (key, value) in key_values.into_iter().zip(values.into_iter()) {
-            // Make sure key_value and value have the same length
-            if key.len() != value.len() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "The key value and value of map should have the same length",
-                ));
-            }
-            // Make sure no null value in key_value
-            if key.iter().any(Option::is_none) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "The key value of map should not have null value",
-                ));
-            }
-
-            // Make sure no null value in value if value field is required
-            if map.value_field.required && value.iter().any(Option::is_none) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "The value of map should not have null value",
-                ));
-            }
-
+        let offsets = partner
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "The partner is not a map array"))?
+            .offsets();
+        // combine the result according to the offset
+        let mut result = Vec::with_capacity(offsets.len() - 1);
+        for i in 0..offsets.len() - 1 {
+            let start = offsets[i] as usize;
+            let end = offsets[i + 1] as usize;
             let mut map = Map::new();
-            for (k, v) in key.into_iter().zip(value.into_iter()) {
-                map.insert(k.unwrap(), v.clone());
+            for (key, value) in key_values[start..end].iter().zip(values[start..end].iter()) {
+                map.insert(key.clone().unwrap(), value.clone());
             }
             result.push(Some(Literal::Map(map)));
         }
-
         Ok(result)
     }
 
     fn primitive(&mut self, p: &PrimitiveType, partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
-        if let Some(_) = partner.as_any().downcast_ref::<NullArray>() {
-            return Ok(vec![None; partner.len()]);
-        }
         match p {
             PrimitiveType::Boolean => {
                 let array = partner
@@ -344,10 +375,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
                         })
                         .collect::<Result<Vec<_>>>()?)
                 } else {
-                    return Err(Error::new(
+                    Err(Error::new(
                         ErrorKind::DataInvalid,
                         "The partner is not a uuid array",
-                    ));
+                    ))
                 }
             }
             PrimitiveType::Fixed(len) => {
@@ -388,25 +419,11 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
             }
         }
     }
-
-    fn visit_type_before(
-        &mut self,
-        _ty: &crate::spec::Type,
-        partner: &ArrayRef,
-    ) -> Result<Option<Vec<Option<Literal>>>> {
-        if let Some(_) = partner.as_any().downcast_ref::<NullArray>() {
-            return Ok(Some(vec![None; partner.len()]));
-        }
-        Ok(None)
-    }
 }
 
 struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
-    type L = ArrowArrayListIterator;
-    type M = ArrowArrayMapIterator;
-
     fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
             return Err(Error::new(
@@ -449,80 +466,69 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         Ok(struct_array.column(field_pos))
     }
 
-    fn list_element_partner<'a>(
-        &self,
-        list_partner: &'a ArrayRef,
-    ) -> Result<ArrowArrayListIterator> {
-        if !matches!(
-            list_partner.data_type(),
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-        ) {
-            return Err(Error::new(
+    fn list_element_partner<'a>(&self, list_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+        match list_partner.data_type() {
+            DataType::List(_) => {
+                let list_array = list_partner
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "The list partner is not a list array",
+                        )
+                    })?;
+                Ok(list_array.values())
+            }
+            DataType::LargeList(_) => {
+                let list_array = list_partner
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "The list partner is not a large list array",
+                        )
+                    })?;
+                Ok(list_array.values())
+            }
+            DataType::FixedSizeList(_, _) => {
+                let list_array = list_partner
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "The list partner is not a fixed size list array",
+                        )
+                    })?;
+                Ok(list_array.values())
+            }
+            _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The list partner is not a list type",
-            ));
-        }
-        Ok(ArrowArrayListIterator {
-            array: list_partner.clone(),
-            index: 0,
-        })
-    }
-
-    fn map_element_partner<'a>(&self, map_partner: &'a ArrayRef) -> Result<Self::M> {
-        if !matches!(map_partner.data_type(), DataType::Map(_, _)) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "The map partner is not a map type",
-            ));
-        }
-        Ok(ArrowArrayMapIterator {
-            array: map_partner.clone(),
-            index: 0,
-        })
-    }
-}
-
-struct ArrowArrayListIterator {
-    array: ArrayRef,
-    index: usize,
-}
-
-impl ListPartnerIterator<ArrayRef> for ArrowArrayListIterator {
-    fn next(&mut self) -> Option<ArrayRef> {
-        if self.index >= self.array.len() {
-            return None;
-        }
-        if let Some(array) = self.array.as_any().downcast_ref::<ListArray>() {
-            let result = Some(array.value(self.index));
-            self.index += 1;
-            result
-        } else if let Some(array) = self.array.as_any().downcast_ref::<LargeListArray>() {
-            let result = Some(array.value(self.index));
-            self.index += 1;
-            result
-        } else if let Some(array) = self.array.as_any().downcast_ref::<FixedSizeListArray>() {
-            let result = Some(array.value(self.index));
-            self.index += 1;
-            result
-        } else {
-            None
+            )),
         }
     }
-}
 
-struct ArrowArrayMapIterator {
-    array: ArrayRef,
-    index: usize,
-}
+    fn map_key_partner<'a>(&self, map_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+        let map_array = map_partner
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
+            })?;
+        Ok(map_array.keys())
+    }
 
-impl MapPartnerIterator<ArrayRef> for ArrowArrayMapIterator {
-    fn next(&mut self) -> Option<(ArrayRef, ArrayRef)> {
-        if let Some(array) = self.array.as_any().downcast_ref::<MapArray>() {
-            let entry = array.value(self.index);
-            Some((entry.column(0).clone(), entry.column(1).clone()))
-        } else {
-            None
-        }
+    fn map_value_partner<'a>(&self, map_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+        let map_array = map_partner
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
+            })?;
+        Ok(map_array.values())
     }
 }
 
@@ -545,21 +551,21 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StructBuilder};
     use arrow_array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
-        Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+        Float64Array, Int32Array, Int64Array, StringArray, StructArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray, TimestampNanosecondArray,
     };
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
-    use crate::spec::{Literal, NestedField, PrimitiveType, StructType, Type};
+    use crate::spec::{ListType, Literal, MapType, NestedField, PrimitiveType, StructType, Type};
 
     #[test]
     fn test_arrow_struct_to_iceberg_struct() {
         let bool_array = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let int16_array = Int16Array::from(vec![Some(1), Some(2), None]);
         let int32_array = Int32Array::from(vec![Some(3), Some(4), None]);
         let int64_array = Int64Array::from(vec![Some(5), Some(6), None]);
         let float32_array = Float32Array::from(vec![Some(1.1), Some(2.2), None]);
@@ -585,71 +591,113 @@ mod test {
 
         let struct_array = Arc::new(StructArray::from(vec![
             (
-                Arc::new(Field::new("bool_field", DataType::Boolean, true)),
+                Arc::new(
+                    Field::new("bool_field", DataType::Boolean, true).with_metadata(HashMap::from(
+                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())],
+                    )),
+                ),
                 Arc::new(bool_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("int16_field", DataType::Int16, true)),
-                Arc::new(int16_array) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("int32_field", DataType::Int32, true)),
+                Arc::new(
+                    Field::new("int32_field", DataType::Int32, true).with_metadata(HashMap::from(
+                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
+                    )),
+                ),
                 Arc::new(int32_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("int64_field", DataType::Int64, true)),
+                Arc::new(
+                    Field::new("int64_field", DataType::Int64, true).with_metadata(HashMap::from(
+                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())],
+                    )),
+                ),
                 Arc::new(int64_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("float32_field", DataType::Float32, true)),
+                Arc::new(
+                    Field::new("float32_field", DataType::Float32, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+                    ),
+                ),
                 Arc::new(float32_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("float64_field", DataType::Float64, true)),
+                Arc::new(
+                    Field::new("float64_field", DataType::Float64, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "5".to_string())]),
+                    ),
+                ),
                 Arc::new(float64_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(
-                    "decimal_field",
-                    DataType::Decimal128(10, 2),
-                    true,
-                )),
+                Arc::new(
+                    Field::new("decimal_field", DataType::Decimal128(10, 2), true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "6".to_string())]),
+                    ),
+                ),
                 Arc::new(decimal_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("date_field", DataType::Date32, true)),
+                Arc::new(
+                    Field::new("date_field", DataType::Date32, true).with_metadata(HashMap::from(
+                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "7".to_string())],
+                    )),
+                ),
                 Arc::new(date_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(
-                    "time_field",
-                    DataType::Time64(TimeUnit::Microsecond),
-                    true,
-                )),
+                Arc::new(
+                    Field::new("time_field", DataType::Time64(TimeUnit::Microsecond), true)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "8".to_string(),
+                        )])),
+                ),
                 Arc::new(time_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(
-                    "timestamp_micro_field",
-                    DataType::Timestamp(TimeUnit::Microsecond, None),
-                    true,
-                )),
+                Arc::new(
+                    Field::new(
+                        "timestamp_micro_field",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "9".to_string(),
+                    )])),
+                ),
                 Arc::new(timestamp_micro_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new(
-                    "timestamp_nano_field",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    true,
-                )),
+                Arc::new(
+                    Field::new(
+                        "timestamp_nano_field",
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        true,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "10".to_string(),
+                    )])),
+                ),
                 Arc::new(timestamp_nano_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("string_field", DataType::Utf8, true)),
+                Arc::new(
+                    Field::new("string_field", DataType::Utf8, true).with_metadata(HashMap::from(
+                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "11".to_string())],
+                    )),
+                ),
                 Arc::new(string_array) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("binary_field", DataType::Binary, true)),
+                Arc::new(
+                    Field::new("binary_field", DataType::Binary, true).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "12".to_string())]),
+                    ),
+                ),
                 Arc::new(binary_array) as ArrayRef,
             ),
         ])) as ArrayRef;
@@ -659,11 +707,6 @@ mod test {
                 0,
                 "bool_field",
                 Type::Primitive(PrimitiveType::Boolean),
-            )),
-            Arc::new(NestedField::optional(
-                1,
-                "int16_field",
-                Type::Primitive(PrimitiveType::Int),
             )),
             Arc::new(NestedField::optional(
                 2,
@@ -730,7 +773,6 @@ mod test {
         assert_eq!(result, vec![
             Some(Literal::Struct(Struct::from_iter(vec![
                 Some(Literal::bool(true)),
-                Some(Literal::int(1)),
                 Some(Literal::int(3)),
                 Some(Literal::long(5)),
                 Some(Literal::float(1.1)),
@@ -745,7 +787,6 @@ mod test {
             ]))),
             Some(Literal::Struct(Struct::from_iter(vec![
                 Some(Literal::bool(false)),
-                Some(Literal::int(2)),
                 Some(Literal::int(4)),
                 Some(Literal::long(6)),
                 Some(Literal::float(2.2)),
@@ -759,24 +800,88 @@ mod test {
                 Some(Literal::binary(b"def".to_vec())),
             ]))),
             Some(Literal::Struct(Struct::from_iter(vec![
-                None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None,
             ]))),
         ]);
     }
 
     #[test]
-    fn test_single_column_nullable_struct() {
-        let struct_array = Arc::new(StructArray::new_null(
-            Fields::from(vec![Field::new("bool_field", DataType::Boolean, true)]),
-            3,
-        )) as ArrayRef;
-        let iceberg_struct_type = StructType::new(vec![Arc::new(NestedField::optional(
-            0,
-            "bool_field",
-            Type::Primitive(PrimitiveType::Boolean),
-        ))]);
+    fn test_nullable_struct() {
+        // test case that partial columns are null
+        // [
+        //   {a: null, b: null} // child column is null
+        //   {a: 1, b: null},   // partial child column is null
+        //   null               // parent column is null
+        // ]
+        let struct_array = {
+            let mut builder = StructBuilder::from_fields(
+                Fields::from(vec![
+                    Field::new("a", DataType::Int32, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                    Field::new("b", DataType::Int32, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "1".to_string(),
+                    )])),
+                ]),
+                3,
+            );
+            builder
+                .field_builder::<Int32Builder>(0)
+                .unwrap()
+                .append_null();
+            builder
+                .field_builder::<Int32Builder>(1)
+                .unwrap()
+                .append_null();
+            builder.append(true);
+
+            builder
+                .field_builder::<Int32Builder>(0)
+                .unwrap()
+                .append_value(1);
+            builder
+                .field_builder::<Int32Builder>(1)
+                .unwrap()
+                .append_null();
+            builder.append(true);
+
+            builder
+                .field_builder::<Int32Builder>(0)
+                .unwrap()
+                .append_value(1);
+            builder
+                .field_builder::<Int32Builder>(1)
+                .unwrap()
+                .append_value(1);
+            builder.append_null();
+
+            Arc::new(builder.finish()) as ArrayRef
+        };
+
+        let iceberg_struct_type = StructType::new(vec![
+            Arc::new(NestedField::optional(
+                0,
+                "a",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(NestedField::optional(
+                1,
+                "b",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+        ]);
+
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
-        assert_eq!(result, vec![None; 3]);
+        assert_eq!(result, vec![
+            Some(Literal::Struct(Struct::from_iter(vec![None, None,]))),
+            Some(Literal::Struct(Struct::from_iter(vec![
+                Some(Literal::int(1)),
+                None,
+            ]))),
+            None,
+        ]);
     }
 
     #[test]
@@ -788,92 +893,329 @@ mod test {
     }
 
     #[test]
-    fn test_arrow_struct_to_iceberg_struct_from_field_id() {
-        let bool_array = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let int16_array = Int16Array::from(vec![Some(1), Some(2), None]);
-        let int32_array = Int32Array::from(vec![Some(3), Some(4), None]);
-        let int64_array = Int64Array::from(vec![Some(5), Some(6), None]);
-        let float32_array = Float32Array::from(vec![Some(1.1), Some(2.2), None]);
-        let struct_array = Arc::new(StructArray::from(vec![
-            (
-                Arc::new(
-                    Field::new("bool_field", DataType::Boolean, true).with_metadata(HashMap::from(
-                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
-                    )),
-                ),
-                Arc::new(bool_array) as ArrayRef,
-            ),
-            (
-                Arc::new(
-                    Field::new("int16_field", DataType::Int16, true).with_metadata(HashMap::from(
-                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())],
-                    )),
-                ),
-                Arc::new(int16_array) as ArrayRef,
-            ),
-            (
-                Arc::new(
-                    Field::new("int32_field", DataType::Int32, true).with_metadata(HashMap::from(
-                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())],
-                    )),
-                ),
-                Arc::new(int32_array) as ArrayRef,
-            ),
-            (
-                Arc::new(
-                    Field::new("int64_field", DataType::Int64, true).with_metadata(HashMap::from(
-                        [(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())],
-                    )),
-                ),
-                Arc::new(int64_array) as ArrayRef,
-            ),
-            (
-                Arc::new(
-                    Field::new("float32_field", DataType::Float32, true).with_metadata(
-                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "5".to_string())]),
-                    ),
-                ),
-                Arc::new(float32_array) as ArrayRef,
-            ),
-        ])) as ArrayRef;
+    fn test_complex_nested() {
+        // complex nested type for test
+        // <
+        //   A: list< struct(a1: int, a2: int) >,
+        //   B: list< map<int, int> >,
+        //   C: list< list<int> >,
+        // >
         let struct_type = StructType::new(vec![
-            Arc::new(NestedField::optional(
-                1,
-                "int16_field",
-                Type::Primitive(PrimitiveType::Int),
+            Arc::new(NestedField::required(
+                0,
+                "A",
+                Type::List(ListType::new(Arc::new(NestedField::required(
+                    1,
+                    "item",
+                    Type::Struct(StructType::new(vec![
+                        Arc::new(NestedField::required(
+                            2,
+                            "a1",
+                            Type::Primitive(PrimitiveType::Int),
+                        )),
+                        Arc::new(NestedField::required(
+                            3,
+                            "a2",
+                            Type::Primitive(PrimitiveType::Int),
+                        )),
+                    ])),
+                )))),
             )),
-            Arc::new(NestedField::optional(
-                2,
-                "bool_field",
-                Type::Primitive(PrimitiveType::Boolean),
-            )),
-            Arc::new(NestedField::optional(
-                3,
-                "int64_field",
-                Type::Primitive(PrimitiveType::Long),
-            )),
-            Arc::new(NestedField::optional(
+            Arc::new(NestedField::required(
                 4,
-                "int32_field",
-                Type::Primitive(PrimitiveType::Int),
+                "B",
+                Type::List(ListType::new(Arc::new(NestedField::required(
+                    5,
+                    "item",
+                    Type::Map(MapType::new(
+                        NestedField::optional(6, "keys", Type::Primitive(PrimitiveType::Int))
+                            .into(),
+                        NestedField::optional(7, "values", Type::Primitive(PrimitiveType::Int))
+                            .into(),
+                    )),
+                )))),
+            )),
+            Arc::new(NestedField::required(
+                8,
+                "C",
+                Type::List(ListType::new(Arc::new(NestedField::required(
+                    9,
+                    "item",
+                    Type::List(ListType::new(Arc::new(NestedField::optional(
+                        10,
+                        "item",
+                        Type::Primitive(PrimitiveType::Int),
+                    )))),
+                )))),
             )),
         ]);
+
+        // Generate a complex nested struct array
+        // [
+        //   {A: [{a1: 10, a2: 20}, {a1: 11, a2: 21}], B: [{(1,100),(3,300)},{(2,200)}], C: [[100,101,102], [200,201]]},
+        //   {A: [{a1: 12, a2: 22}, {a1: 13, a2: 23}], B: [{(3,300)},{(4,400)}], C: [[300,301,302], [400,401]]},
+        // ]
+        let struct_array =
+            {
+                let a_struct_a1_builder = Int32Builder::new();
+                let a_struct_a2_builder = Int32Builder::new();
+                let a_struct_builder =
+                    StructBuilder::new(
+                        vec![
+                            Field::new("a1", DataType::Int32, false).with_metadata(HashMap::from(
+                                [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
+                            )),
+                            Field::new("a2", DataType::Int32, false).with_metadata(HashMap::from(
+                                [(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())],
+                            )),
+                        ],
+                        vec![Box::new(a_struct_a1_builder), Box::new(a_struct_a2_builder)],
+                    );
+                let a_builder = ListBuilder::new(a_struct_builder);
+
+                let map_key_builder = Int32Builder::new();
+                let map_value_builder = Int32Builder::new();
+                let map_builder = MapBuilder::new(None, map_key_builder, map_value_builder);
+                let b_builder = ListBuilder::new(map_builder);
+
+                let inner_list_item_builder = Int32Builder::new();
+                let inner_list_builder = ListBuilder::new(inner_list_item_builder);
+                let c_builder = ListBuilder::new(inner_list_builder);
+
+                let mut top_struct_builder = {
+                    let a_struct_type =
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("a1", DataType::Int32, false).with_metadata(HashMap::from(
+                                [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
+                            )),
+                            Field::new("a2", DataType::Int32, false).with_metadata(HashMap::from(
+                                [(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())],
+                            )),
+                        ]));
+                    let a_type =
+                        DataType::List(Arc::new(Field::new("item", a_struct_type.clone(), true)));
+
+                    let b_map_entry_struct = Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Int32, false),
+                            Field::new("values", DataType::Int32, true),
+                        ])),
+                        false,
+                    );
+                    let b_map_type =
+                        DataType::Map(Arc::new(b_map_entry_struct), /* sorted_keys = */ false);
+                    let b_type =
+                        DataType::List(Arc::new(Field::new("item", b_map_type.clone(), true)));
+
+                    let c_inner_list_type =
+                        DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+                    let c_type = DataType::List(Arc::new(Field::new(
+                        "item",
+                        c_inner_list_type.clone(),
+                        true,
+                    )));
+                    StructBuilder::new(
+                        Fields::from(vec![
+                            Field::new("A", a_type.clone(), false).with_metadata(HashMap::from([
+                                (PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string()),
+                            ])),
+                            Field::new("B", b_type.clone(), false).with_metadata(HashMap::from([
+                                (PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string()),
+                            ])),
+                            Field::new("C", c_type.clone(), false).with_metadata(HashMap::from([
+                                (PARQUET_FIELD_ID_META_KEY.to_string(), "8".to_string()),
+                            ])),
+                        ]),
+                        vec![
+                            Box::new(a_builder),
+                            Box::new(b_builder),
+                            Box::new(c_builder),
+                        ],
+                    )
+                };
+
+                // first row
+                // {A: [{a1: 10, a2: 20}, {a1: 11, a2: 21}], B: [{(1,100),(3,300)},{(2,200)}], C: [[100,101,102], [200,201]]},
+                {
+                    let a_builder = top_struct_builder
+                        .field_builder::<ListBuilder<StructBuilder>>(0)
+                        .unwrap();
+                    let struct_builder = a_builder.values();
+                    struct_builder
+                        .field_builder::<Int32Builder>(0)
+                        .unwrap()
+                        .append_value(10);
+                    struct_builder
+                        .field_builder::<Int32Builder>(1)
+                        .unwrap()
+                        .append_value(20);
+                    struct_builder.append(true);
+                    let struct_builder = a_builder.values();
+                    struct_builder
+                        .field_builder::<Int32Builder>(0)
+                        .unwrap()
+                        .append_value(11);
+                    struct_builder
+                        .field_builder::<Int32Builder>(1)
+                        .unwrap()
+                        .append_value(21);
+                    struct_builder.append(true);
+                    a_builder.append(true);
+                }
+                {
+                    let b_builder = top_struct_builder
+                        .field_builder::<ListBuilder<MapBuilder<Int32Builder, Int32Builder>>>(1)
+                        .unwrap();
+                    let map_builder = b_builder.values();
+                    map_builder.keys().append_value(1);
+                    map_builder.values().append_value(100);
+                    map_builder.keys().append_value(3);
+                    map_builder.values().append_value(300);
+                    map_builder.append(true).unwrap();
+
+                    map_builder.keys().append_value(2);
+                    map_builder.values().append_value(200);
+                    map_builder.append(true).unwrap();
+
+                    b_builder.append(true);
+                }
+                {
+                    let c_builder = top_struct_builder
+                        .field_builder::<ListBuilder<ListBuilder<Int32Builder>>>(2)
+                        .unwrap();
+                    let inner_list_builder = c_builder.values();
+                    inner_list_builder.values().append_value(100);
+                    inner_list_builder.values().append_value(101);
+                    inner_list_builder.values().append_value(102);
+                    inner_list_builder.append(true);
+                    let inner_list_builder = c_builder.values();
+                    inner_list_builder.values().append_value(200);
+                    inner_list_builder.values().append_value(201);
+                    inner_list_builder.append(true);
+                    c_builder.append(true);
+                }
+                top_struct_builder.append(true);
+
+                // second row
+                // {A: [{a1: 12, a2: 22}, {a1: 13, a2: 23}], B: [{(3,300)}], C: [[300,301,302], [400,401]]},
+                {
+                    let a_builder = top_struct_builder
+                        .field_builder::<ListBuilder<StructBuilder>>(0)
+                        .unwrap();
+                    let struct_builder = a_builder.values();
+                    struct_builder
+                        .field_builder::<Int32Builder>(0)
+                        .unwrap()
+                        .append_value(12);
+                    struct_builder
+                        .field_builder::<Int32Builder>(1)
+                        .unwrap()
+                        .append_value(22);
+                    struct_builder.append(true);
+                    let struct_builder = a_builder.values();
+                    struct_builder
+                        .field_builder::<Int32Builder>(0)
+                        .unwrap()
+                        .append_value(13);
+                    struct_builder
+                        .field_builder::<Int32Builder>(1)
+                        .unwrap()
+                        .append_value(23);
+                    struct_builder.append(true);
+                    a_builder.append(true);
+                }
+                {
+                    let b_builder = top_struct_builder
+                        .field_builder::<ListBuilder<MapBuilder<Int32Builder, Int32Builder>>>(1)
+                        .unwrap();
+                    let map_builder = b_builder.values();
+                    map_builder.keys().append_value(3);
+                    map_builder.values().append_value(300);
+                    map_builder.append(true).unwrap();
+
+                    b_builder.append(true);
+                }
+                {
+                    let c_builder = top_struct_builder
+                        .field_builder::<ListBuilder<ListBuilder<Int32Builder>>>(2)
+                        .unwrap();
+                    let inner_list_builder = c_builder.values();
+                    inner_list_builder.values().append_value(300);
+                    inner_list_builder.values().append_value(301);
+                    inner_list_builder.values().append_value(302);
+                    inner_list_builder.append(true);
+                    let inner_list_builder = c_builder.values();
+                    inner_list_builder.values().append_value(400);
+                    inner_list_builder.values().append_value(401);
+                    inner_list_builder.append(true);
+                    c_builder.append(true);
+                }
+                top_struct_builder.append(true);
+
+                Arc::new(top_struct_builder.finish()) as ArrayRef
+            };
+
         let result = arrow_struct_to_literal(&struct_array, &struct_type).unwrap();
         assert_eq!(result, vec![
             Some(Literal::Struct(Struct::from_iter(vec![
-                Some(Literal::int(1)),
-                Some(Literal::bool(true)),
-                Some(Literal::long(5)),
-                Some(Literal::int(3)),
+                Some(Literal::List(vec![
+                    Some(Literal::Struct(Struct::from_iter(vec![
+                        Some(Literal::int(10)),
+                        Some(Literal::int(20)),
+                    ]))),
+                    Some(Literal::Struct(Struct::from_iter(vec![
+                        Some(Literal::int(11)),
+                        Some(Literal::int(21)),
+                    ]))),
+                ])),
+                Some(Literal::List(vec![
+                    Some(Literal::Map(Map::from_iter(vec![
+                        (Literal::int(1), Some(Literal::int(100))),
+                        (Literal::int(3), Some(Literal::int(300))),
+                    ]))),
+                    Some(Literal::Map(Map::from_iter(vec![(
+                        Literal::int(2),
+                        Some(Literal::int(200))
+                    ),]))),
+                ])),
+                Some(Literal::List(vec![
+                    Some(Literal::List(vec![
+                        Some(Literal::int(100)),
+                        Some(Literal::int(101)),
+                        Some(Literal::int(102)),
+                    ])),
+                    Some(Literal::List(vec![
+                        Some(Literal::int(200)),
+                        Some(Literal::int(201)),
+                    ])),
+                ])),
             ]))),
             Some(Literal::Struct(Struct::from_iter(vec![
-                Some(Literal::int(2)),
-                Some(Literal::bool(false)),
-                Some(Literal::long(6)),
-                Some(Literal::int(4)),
-            ]))),
-            Some(Literal::Struct(Struct::from_iter(vec![
-                None, None, None, None,
+                Some(Literal::List(vec![
+                    Some(Literal::Struct(Struct::from_iter(vec![
+                        Some(Literal::int(12)),
+                        Some(Literal::int(22)),
+                    ]))),
+                    Some(Literal::Struct(Struct::from_iter(vec![
+                        Some(Literal::int(13)),
+                        Some(Literal::int(23)),
+                    ]))),
+                ])),
+                Some(Literal::List(vec![Some(Literal::Map(Map::from_iter(
+                    vec![(Literal::int(3), Some(Literal::int(300))),]
+                ))),])),
+                Some(Literal::List(vec![
+                    Some(Literal::List(vec![
+                        Some(Literal::int(300)),
+                        Some(Literal::int(301)),
+                        Some(Literal::int(302)),
+                    ])),
+                    Some(Literal::List(vec![
+                        Some(Literal::int(400)),
+                        Some(Literal::int(401)),
+                    ])),
+                ])),
             ]))),
         ]);
     }
