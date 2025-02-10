@@ -407,9 +407,11 @@ impl ArrowReader {
                     current_idx += run_length;
                 }
 
-                // `skip` all consecutive deleted rows
+                // `skip` all consecutive deleted rows in the current row group
                 let mut run_length = 0;
-                while next_deleted_row_idx == current_idx {
+                while next_deleted_row_idx == current_idx
+                    && next_deleted_row_idx < next_page_base_idx
+                {
                     run_length += 1;
                     current_idx += 1;
                     positional_deletes.remove(next_deleted_row_idx);
@@ -417,6 +419,7 @@ impl ArrowReader {
                     next_deleted_row_idx = match positional_deletes.min() {
                         Some(next_deleted_row_idx) => next_deleted_row_idx,
                         _ => {
+                            // conclude the selection and break if this was the last positional delete
                             results.push(RowSelector::skip(run_length));
                             break 'outer;
                         }
@@ -425,6 +428,7 @@ impl ArrowReader {
                 results.push(RowSelector::skip(run_length));
             }
 
+            // break if this was the final selected row group
             if let Some(selected_row_groups) = selected_row_groups {
                 if selected_row_groups_idx == selected_row_groups.len() {
                     break;
@@ -1532,35 +1536,85 @@ message schema {
 
         let selected_row_groups = Some(vec![1, 3]);
 
+        /* cases to cover:
+           * {skip|select} {first|intermediate|last} {one row|multiple rows} in
+             {first|imtermediate|last} {skipped|selected} row group
+           * row group selection disabled
+        */
+
         let positional_deletes = RoaringTreemap::from_iter(&[
-            1,    // in skipped row group 0, should be ignored
-            3,    // in skipped row group 0, should be ignored
-            4,    // in skipped row group 0, should be ignored
-            5,    // in skipped row group 0, should be ignored
-            1002, // solitary row in selected row group 1
-            1010, // run of 5 rows in selected row group 1
-            1011, 1012, 1013, 1014, 1600, // should ignore, in skipped row group 2
-            2100, // single row in selected row group 3,
+            1, // in skipped rg 0, should be ignored
+            3, // run of three consecutive items in skipped rg0
+            4, 5, 998, // two consecutive items at end of skipped rg0
+            999, 1000, // solitary row at start of selected rg1 (1, 9)
+            1010, // run of 3 rows in selected rg1
+            1011, 1012, // (3, 485)
+            1498, // run of two items at end of selected rg1
+            1499, 1500, // run of two items at start of skipped rg2
+            1501, 1600, // should ignore, in skipped rg2
+            1999, // single row at end of skipped rg2
+            2000, // run of two items at start of selected rg3
+            2001, // (4, 98)
+            2100, // single row in selected row group 3 (1, 99)
             2200, // run of 3 consecutive rows in selected row group 3
-            2201, 2202,
+            2201, 2202, // (3, 796)
+            2999, // single item at end of selected rg3 (1)
+            3000, // single item at start of skipped rg4
         ]);
 
+        // using selected row groups 1 and 3
         let result = ArrowReader::build_deletes_row_selection(
             &row_groups_metadata,
             &selected_row_groups,
+            positional_deletes.clone(),
+        )
+        .unwrap();
+
+        let expected = RowSelection::from(vec![
+            RowSelector::skip(1),
+            RowSelector::select(9),
+            RowSelector::skip(3),
+            RowSelector::select(485),
+            RowSelector::skip(4),
+            RowSelector::select(98),
+            RowSelector::skip(1),
+            RowSelector::select(99),
+            RowSelector::skip(3),
+            RowSelector::select(796),
+            RowSelector::skip(1),
+        ]);
+
+        assert_eq!(result, expected);
+
+        // selecting all row groups
+        let result = ArrowReader::build_deletes_row_selection(
+            &row_groups_metadata,
+            &None,
             positional_deletes,
         )
         .unwrap();
 
         let expected = RowSelection::from(vec![
-            RowSelector::select(2),
+            RowSelector::select(1),
             RowSelector::skip(1),
-            RowSelector::select(7),
-            RowSelector::skip(5),
-            RowSelector::select(100),
+            RowSelector::select(1),
+            RowSelector::skip(3),
+            RowSelector::select(992),
+            RowSelector::skip(3),
+            RowSelector::select(9),
+            RowSelector::skip(3),
+            RowSelector::select(485),
+            RowSelector::skip(4),
+            RowSelector::select(98),
+            RowSelector::skip(1),
+            RowSelector::select(398),
+            RowSelector::skip(3),
+            RowSelector::select(98),
             RowSelector::skip(1),
             RowSelector::select(99),
             RowSelector::skip(3),
+            RowSelector::select(796),
+            RowSelector::skip(2),
         ]);
 
         assert_eq!(result, expected);
