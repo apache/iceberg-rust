@@ -1123,8 +1123,11 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::{
-        ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
+        ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+        Int32Array, Int64Array, LargeBinaryArray, RecordBatch, StringArray,
+        TimestampMicrosecondArray, TimestampNanosecondArray,
     };
+    use arrow_schema::{DataType, TimeUnit};
     use futures::{stream, TryStreamExt};
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
@@ -1235,6 +1238,50 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
                                 .key_metadata(None)
+                                // Note:
+                                // The bounds below need to agree with the test data written below
+                                // into the Parquet file. If not, tests that rely on filter scans
+                                // fail because of wrong bounds.
+                                .lower_bounds(HashMap::from([
+                                    (1, Datum::long(1)),
+                                    (2, Datum::long(2)),
+                                    (3, Datum::long(3)),
+                                    (4, Datum::string("Apache")),
+                                    (5, Datum::double(100)),
+                                    (6, Datum::int(100)),
+                                    (7, Datum::long(100)),
+                                    (8, Datum::bool(false)),
+                                    (9, Datum::float(100.0)),
+                                    // decimal values are not supported by schema::get_arrow_datum
+                                    // (10, Datum::decimal(Decimal(123, 2))),
+                                    (11, Datum::date(0)),
+                                    (12, Datum::timestamp_micros(0)),
+                                    (13, Datum::timestamptz_micros(0)),
+                                    // ns timestamps, uuid, fixed, binary are currently not
+                                    // supported in schema::get_arrow_datum
+                                ]))
+                                .upper_bounds(HashMap::from([
+                                    (1, Datum::long(1)),
+                                    (2, Datum::long(5)),
+                                    (3, Datum::long(4)),
+                                    (4, Datum::string("Iceberg")),
+                                    (5, Datum::double(200)),
+                                    (6, Datum::int(200)),
+                                    (7, Datum::long(200)),
+                                    (8, Datum::bool(true)),
+                                    (9, Datum::float(200.0)),
+                                    // decimal values are not supported by schema::get_arrow_datum
+                                    // (10, Datum::decimal(Decimal(123, 2))),
+                                    (11, Datum::date(0)),
+                                    (12, Datum::timestamp_micros(0)),
+                                    (13, Datum::timestamptz_micros(0)),
+                                    // ns timestamps, uuid, fixed, binary are currently not
+                                    // supported in schema::get_arrow_datum
+                                ]))
+                                .column_sizes(HashMap::from([(1, 1u64), (2, 1u64)]))
+                                .value_counts(HashMap::from([(1, 2u64), (2, 2u64)]))
+                                .null_value_counts(HashMap::from([(1, 3u64), (2, 3u64)]))
+                                .nan_value_counts(HashMap::from([(1, 4u64), (2, 4u64)]))
                                 .build()
                                 .unwrap(),
                         )
@@ -1343,6 +1390,69 @@ pub mod tests {
                             PARQUET_FIELD_ID_META_KEY.to_string(),
                             "8".to_string(),
                         )])),
+                    arrow_schema::Field::new("float", arrow_schema::DataType::Float32, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "9".to_string(),
+                        )])),
+                    arrow_schema::Field::new(
+                        "decimal",
+                        arrow_schema::DataType::Decimal128(3, 2),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "10".to_string(),
+                    )])),
+                    arrow_schema::Field::new("date", arrow_schema::DataType::Date32, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "11".to_string(),
+                        )])),
+                    arrow_schema::Field::new(
+                        "timestamp",
+                        arrow_schema::DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "12".to_string(),
+                    )])),
+                    arrow_schema::Field::new(
+                        "timestamptz",
+                        arrow_schema::DataType::Timestamp(
+                            TimeUnit::Microsecond,
+                            Some("UTC".into()),
+                        ),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "13".to_string(),
+                    )])),
+                    arrow_schema::Field::new(
+                        "timestampns",
+                        arrow_schema::DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "14".to_string(),
+                    )])),
+                    arrow_schema::Field::new(
+                        "timestamptzns",
+                        arrow_schema::DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "15".to_string(),
+                    )])),
+                    arrow_schema::Field::new("binary", arrow_schema::DataType::LargeBinary, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "16".to_string(),
+                        )])),
                 ];
                 Arc::new(arrow_schema::Schema::new(fields))
             };
@@ -1392,8 +1502,54 @@ pub mod tests {
             let values: BooleanArray = values.into();
             let col8 = Arc::new(values) as ArrayRef;
 
+            // float:
+            let mut values = vec![100.0f32; 512];
+            values.append(vec![150.0f32; 12].as_mut());
+            values.append(vec![200.0f32; 500].as_mut());
+            let col9 = Arc::new(Float32Array::from_iter_values(values)) as ArrayRef;
+
+            // decimal:
+            let values = vec![123i128; 1024];
+            let col10 = Arc::new(
+                Decimal128Array::from_iter_values(values)
+                    .with_data_type(DataType::Decimal128(3, 2)),
+            );
+
+            // date:
+            let values = vec![0i32; 1024];
+            let col11 = Arc::new(Date32Array::from_iter_values(values));
+
+            // timestamp:
+            let values = vec![0i64; 1024];
+            let col12 = Arc::new(TimestampMicrosecondArray::from_iter_values(values));
+
+            // timestamptz:
+            let values = vec![0i64; 1024];
+            let col13 = Arc::new(
+                TimestampMicrosecondArray::from_iter_values(values).with_data_type(
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                ),
+            );
+
+            // timestampns:
+            let values = vec![0i64; 1024];
+            let col14 = Arc::new(TimestampNanosecondArray::from_iter_values(values));
+
+            // timestamptzns:
+            let values = vec![0i64; 1024];
+            let col15 = Arc::new(
+                TimestampNanosecondArray::from_iter_values(values).with_data_type(
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                ),
+            );
+
+            // binary:
+            let values = vec![[0u8; 8]; 1024];
+            let col16 = Arc::new(LargeBinaryArray::from_iter_values(values));
+
             let to_write = RecordBatch::try_new(schema.clone(), vec![
-                col1, col2, col3, col4, col5, col6, col7, col8,
+                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,
+                col14, col15, col16,
             ])
             .unwrap();
 

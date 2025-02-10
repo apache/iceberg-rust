@@ -868,6 +868,34 @@ impl PruneColumn {
     }
 }
 
+/// Join two schemas by concatenating fields. Return [Error] if the schemas have different columns
+/// with the same id.
+pub fn join_schemas(left: &Schema, right: &Schema) -> Result<Schema> {
+    let mut joined_fields: Vec<NestedFieldRef> =
+        left.as_struct().fields().iter().cloned().collect_vec();
+
+    for right_field in right.as_struct().fields() {
+        match left.field_by_id(right_field.id) {
+            None => {
+                joined_fields.push(right_field.clone());
+            }
+            Some(left_field) => {
+                if left_field != right_field {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Schemas have different columns with the same id: {:?}, {:?}",
+                            left_field, right_field
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Schema::builder().with_fields(joined_fields).build()
+}
+
 impl SchemaVisitor for PruneColumn {
     type T = Option<Type>;
 
@@ -952,9 +980,9 @@ impl SchemaVisitor for PruneColumn {
                 return Ok(Some(Type::List(list.clone())));
             } else {
                 return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
-                    ));
+                    ErrorKind::DataInvalid,
+                    format!("Cannot explicitly project List or Map types, List element {} of type {} was selected", list.element_field.id, list.element_field.field_type),
+                ));
             }
         } else if let Some(result) = value {
             Ok(Some(Type::List(PruneColumn::project_list(list, result)?)))
@@ -983,9 +1011,9 @@ impl SchemaVisitor for PruneColumn {
                 return Ok(Some(Type::Map(map.clone())));
             } else {
                 return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
-                    ));
+                    ErrorKind::DataInvalid,
+                    format!("Cannot explicitly project List or Map types, Map value {} of type {} was selected", map.value_field.id, map.value_field.field_type),
+                ));
             }
         } else if let Some(value_result) = value {
             return Ok(Some(Type::Map(PruneColumn::project_map(

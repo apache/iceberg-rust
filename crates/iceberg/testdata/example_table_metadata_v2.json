@@ -25,7 +25,15 @@
         {"id": 5, "name": "dbl", "required": true, "type": "double"},
         {"id": 6, "name": "i32", "required": true, "type": "int"},
         {"id": 7, "name": "i64", "required": true, "type": "long"},
-        {"id": 8, "name": "bool", "required": true, "type": "boolean"}
+        {"id": 8, "name": "bool", "required": true, "type": "boolean"},
+        {"id": 9, "name": "float", "required": true, "type": "float"},
+        {"id": 10, "name": "decimal", "required": true, "type": "decimal(3,2)"},
+        {"id": 11, "name": "date", "required": true, "type": "date"},
+        {"id": 12, "name": "timestamp", "required": true, "type": "timestamp"},
+        {"id": 13, "name": "timestamptz", "required": true, "type": "timestamptz"},
+        {"id": 14, "name": "timestampns", "required": true, "type": "timestamp_ns"},
+        {"id": 15, "name": "timestamptzns", "required": true, "type": "timestamptz_ns"},
+        {"id": 16, "name": "binary", "required": true, "type": "binary"}
       ]
     }
   ],

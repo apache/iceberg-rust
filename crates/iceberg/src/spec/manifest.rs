@@ -1171,6 +1171,12 @@ impl ManifestEntry {
         self.sequence_number
     }
 
+    /// File sequence number.
+    #[inline]
+    pub fn file_sequence_number(&self) -> Option<i64> {
+        self.file_sequence_number
+    }
+
     /// File size in bytes.
     #[inline]
     pub fn file_size_in_bytes(&self) -> u64 {

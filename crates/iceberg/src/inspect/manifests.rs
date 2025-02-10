@@ -285,75 +285,13 @@ mod tests {
                 Field { name: "deleted_delete_files_count", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "17"} },
                 Field { name: "partition_summaries", data_type: List(Field { name: "item", data_type: Struct([Field { name: "contains_null", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "10"} }, Field { name: "contains_nan", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "11"} }, Field { name: "lower_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "12"} }, Field { name: "upper_bound", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "13"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "9"} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }"#]],
             expect![[r#"
-                content: PrimitiveArray<Int32>
-                [
-                  0,
-                ],
-                path: (skipped),
-                length: (skipped),
-                partition_spec_id: PrimitiveArray<Int32>
-                [
-                  0,
-                ],
-                added_snapshot_id: PrimitiveArray<Int64>
-                [
-                  3055729675574597004,
-                ],
-                added_data_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                existing_data_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                deleted_data_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                added_delete_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                existing_delete_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                deleted_delete_files_count: PrimitiveArray<Int32>
-                [
-                  1,
-                ],
-                partition_summaries: ListArray
-                [
-                  StructArray
-                -- validity: 
-                [
-                  valid,
-                ]
-                [
-                -- child 0: "contains_null" (Boolean)
-                BooleanArray
-                [
-                  false,
-                ]
-                -- child 1: "contains_nan" (Boolean)
-                BooleanArray
-                [
-                  false,
-                ]
-                -- child 2: "lower_bound" (Utf8)
-                StringArray
-                [
-                  "100",
-                ]
-                -- child 3: "upper_bound" (Utf8)
-                StringArray
-                [
-                  "300",
-                ]
-                ],
-                ]"#]],
+                +---------+-------------------+---------------------+------------------------+---------------------------+--------------------------+--------------------------+-----------------------------+----------------------------+-----------------------------------------------------------------------------------+
+                | content | partition_spec_id | added_snapshot_id   | added_data_files_count | existing_data_files_count | deleted_data_files_count | added_delete_files_count | existing_delete_files_count | deleted_delete_files_count | partition_summaries                                                               |
+                +---------+-------------------+---------------------+------------------------+---------------------------+--------------------------+--------------------------+-----------------------------+----------------------------+-----------------------------------------------------------------------------------+
+                | 0       | 0                 | 3055729675574597004 | 1                      | 1                         | 1                        | 1                        | 1                           | 1                          | [{contains_null: false, contains_nan: false, lower_bound: 100, upper_bound: 300}] |
+                +---------+-------------------+---------------------+------------------------+---------------------------+--------------------------+--------------------------+-----------------------------+----------------------------+-----------------------------------------------------------------------------------+"#]],
             &["path", "length"],
+            &[],
             Some("path"),
         ).await;
     }

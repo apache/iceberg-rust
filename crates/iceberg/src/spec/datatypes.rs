@@ -632,12 +632,73 @@ impl NestedField {
         }
     }
 
+    /// Construct a required struct field using a builder.
+    pub fn required_struct(id: i32, name: impl ToString) -> NestedStructFieldBuilder {
+        Self::r#struct(id, name, true)
+    }
+
+    /// Construct an optional struct field using a builder.
+    pub fn optional_struct(id: i32, name: impl ToString) -> NestedStructFieldBuilder {
+        Self::r#struct(id, name, false)
+    }
+
+    /// Construct a struct field using a builder.
+    fn r#struct(id: i32, name: impl ToString, required: bool) -> NestedStructFieldBuilder {
+        NestedStructFieldBuilder {
+            id,
+            name: name.to_string(),
+            required,
+            fields: vec![],
+        }
+    }
+
+    /// Construct a required list field using a builder.
+    pub fn required_list(id: i32, name: impl ToString) -> NestedListFieldBuilder {
+        Self::list(id, name, true)
+    }
+
+    /// Construct an optional list field using a builder.
+    pub fn optional_list(id: i32, name: impl ToString) -> NestedListFieldBuilder {
+        Self::list(id, name, false)
+    }
+
+    /// Construct a list field using a builder.
+    fn list(id: i32, name: impl ToString, required: bool) -> NestedListFieldBuilder {
+        NestedListFieldBuilder {
+            id,
+            name: name.to_string(),
+            required,
+            element_field: None,
+        }
+    }
+
     /// Construct list type's element field.
     pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
         if required {
             Self::required(id, LIST_FIELD_NAME, field_type)
         } else {
             Self::optional(id, LIST_FIELD_NAME, field_type)
+        }
+    }
+
+    /// Construct a required map field using a builder.
+    pub fn required_map(id: i32, name: impl ToString) -> NestedMapFieldBuilder {
+        Self::map(id, name, true)
+    }
+
+    /// Construct an optional map field using a builder.
+    pub fn optional_map(id: i32, name: impl ToString) -> NestedMapFieldBuilder {
+        Self::map(id, name, false)
+    }
+
+    /// Construct a map field using a builder.
+    fn map(id: i32, name: impl ToString, required: bool) -> NestedMapFieldBuilder {
+        NestedMapFieldBuilder {
+            id,
+            name: name.to_string(),
+            required,
+            key: None,
+            value: None,
         }
     }
 
@@ -677,6 +738,110 @@ impl NestedField {
     pub(crate) fn with_id(mut self, id: i32) -> Self {
         self.id = id;
         self
+    }
+}
+
+/// Builder for struct type.
+pub struct NestedStructFieldBuilder {
+    id: i32,
+    name: String,
+    required: bool,
+    fields: Vec<NestedFieldRef>,
+}
+
+impl NestedStructFieldBuilder {
+    /// Add a required field to the struct.
+    pub fn required(mut self, id: i32, name: impl ToString, field_type: Type) -> Self {
+        self.fields.push(Arc::new(NestedField::required(
+            id,
+            name.to_string(),
+            field_type,
+        )));
+        self
+    }
+
+    /// Add an optional field to the struct.
+    pub fn optional(mut self, id: i32, name: impl ToString, field_type: Type) -> Self {
+        self.fields.push(Arc::new(NestedField::required(
+            id,
+            name.to_string(),
+            field_type,
+        )));
+        self
+    }
+
+    /// Build a [NestedField] of the struct type.
+    pub fn build(self) -> NestedField {
+        NestedField::new(
+            self.id,
+            self.name,
+            Type::Struct(StructType::new(self.fields)),
+            self.required,
+        )
+    }
+}
+
+/// Builder for list type.
+pub struct NestedListFieldBuilder {
+    id: i32,
+    name: String,
+    required: bool,
+    element_field: Option<NestedFieldRef>,
+}
+
+impl NestedListFieldBuilder {
+    /// Set the element field of the list.
+    pub fn element_field(mut self, id: i32, field_type: Type, required: bool) -> Self {
+        self.element_field = Some(Arc::new(NestedField::list_element(
+            id, field_type, required,
+        )));
+        self
+    }
+
+    /// Build a [NestedField] of the list type.
+    pub fn build(self) -> NestedField {
+        NestedField::new(
+            self.id,
+            self.name,
+            Type::List(ListType::new(self.element_field.unwrap())),
+            self.required,
+        )
+    }
+}
+
+/// Builder for map type.
+#[derive(Debug)]
+pub struct NestedMapFieldBuilder {
+    id: i32,
+    name: String,
+    required: bool,
+    key: Option<NestedFieldRef>,
+    value: Option<NestedFieldRef>,
+}
+
+impl NestedMapFieldBuilder {
+    /// Set the key field of the map.
+    pub fn key(mut self, id: i32, field_type: Type) -> Self {
+        self.key = Some(Arc::new(NestedField::map_key_element(id, field_type)));
+        self
+    }
+
+    /// Set the value field of the map.
+    pub fn value(mut self, id: i32, field_type: Type, required: bool) -> Self {
+        self.value = Some(Arc::new(NestedField::map_value_element(
+            id, field_type, required,
+        )));
+        self
+    }
+
+    /// Build a new [NestedField] of the map type.
+    pub fn build(self) -> NestedField {
+        NestedField::new(
+            self.id,
+            self.name,
+            Type::Map(MapType::new(self.key.unwrap(), self.value.unwrap())),
+            self.required,
+        )
     }
 }
 

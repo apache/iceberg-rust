@@ -52,6 +52,7 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
+async-stream = { workspace = true }
 async-trait = { workspace = true }
 bimap = { workspace = true }
 bitvec = { workspace = true }
@@ -85,6 +86,7 @@ uuid = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+arrow-cast = { workspace = true, features = ["prettyprint"] }
 ctor = { workspace = true }
 expect-test = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
