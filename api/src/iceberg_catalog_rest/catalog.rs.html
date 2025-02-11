@@ -1836,7 +1836,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
-    RenameTableRequest, NO_CONTENT, OK,
+    RenameTableRequest,
 };
 
 <span class="kw">const </span>ICEBERG_REST_SPEC_VERSION: <span class="kw-2">&amp;</span>str = <span class="string">"0.14.1"</span>;
@@ -2071,7 +2071,7 @@
         }
 
         <span class="kw">let </span>config = client
-            .query::&lt;CatalogConfig, ErrorResponse, OK&gt;(request.build()<span class="question-mark">?</span>)
+            .query::&lt;CatalogConfig, ErrorResponse&gt;(request.build()<span class="question-mark">?</span>)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(config)
@@ -2128,7 +2128,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;ListNamespaceResponse, ErrorResponse, OK&gt;(request.build()<span class="question-mark">?</span>)
+            .query::&lt;ListNamespaceResponse, ErrorResponse&gt;(request.build()<span class="question-mark">?</span>)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         resp.namespaces
@@ -2161,7 +2161,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;NamespaceSerde, ErrorResponse, OK&gt;(request)
+            .query::&lt;NamespaceSerde, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         Namespace::try_from(resp)
@@ -2183,7 +2183,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;NamespaceSerde, ErrorResponse, OK&gt;(request)
+            .query::&lt;NamespaceSerde, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
         Namespace::try_from(resp)
     }
@@ -2219,7 +2219,7 @@
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
             .do_execute::&lt;bool, ErrorResponse&gt;(request, |resp| <span class="kw">match </span>resp.status() {
-                StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
+                StatusCode::OK | StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
                 StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
                 <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
             })
@@ -2241,7 +2241,7 @@
         <span class="self">self</span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .execute::&lt;ErrorResponse, NO_CONTENT&gt;(request)
+            .execute::&lt;ErrorResponse&gt;(request)
             .<span class="kw">await
     </span>}
 
@@ -2261,7 +2261,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;ListTableResponse, ErrorResponse, OK&gt;(request)
+            .query::&lt;ListTableResponse, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(resp.identifiers)
@@ -2308,7 +2308,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;LoadTableResponse, ErrorResponse, OK&gt;(request)
+            .query::&lt;LoadTableResponse, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>config = resp
@@ -2356,7 +2356,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;LoadTableResponse, ErrorResponse, OK&gt;(request)
+            .query::&lt;LoadTableResponse, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>config = resp
@@ -2397,7 +2397,7 @@
         <span class="self">self</span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .execute::&lt;ErrorResponse, NO_CONTENT&gt;(request)
+            .execute::&lt;ErrorResponse&gt;(request)
             .<span class="kw">await
     </span>}
 
@@ -2417,7 +2417,7 @@
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
             .do_execute::&lt;bool, ErrorResponse&gt;(request, |resp| <span class="kw">match </span>resp.status() {
-                StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
+                StatusCode::OK | StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
                 StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
                 <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
             })
@@ -2443,7 +2443,7 @@
         <span class="self">self</span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .execute::&lt;ErrorResponse, NO_CONTENT&gt;(request)
+            .execute::&lt;ErrorResponse&gt;(request)
             .<span class="kw">await
     </span>}
 
@@ -2471,7 +2471,7 @@
             </span>.context()
             .<span class="kw">await</span><span class="question-mark">?
             </span>.client
-            .query::&lt;CommitTableResponse, ErrorResponse, OK&gt;(request)
+            .query::&lt;CommitTableResponse, ErrorResponse&gt;(request)
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>file_io = <span class="self">self
