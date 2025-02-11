@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains rest catalog implementation.
+//! This module contains the iceberg REST catalog implementation.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -50,6 +50,7 @@ const PATH_V1: &str = "v1";
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RestCatalogConfig {
     uri: String,
+
     #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
     warehouse: Option<String>,
 
@@ -105,13 +106,13 @@ impl RestCatalogConfig {
 
     /// Get the token from the config.
     ///
-    /// Client will use `token` to send requests if exists.
+    /// The client can use this token to send requests.
     pub(crate) fn token(&self) -> Option<String> {
         self.props.get("token").cloned()
     }
 
-    /// Get the credentials from the config. Client will use `credential`
-    /// to fetch a new token if exists.
+    /// Get the credentials from the config. The client can use these credentials to fetch a new
+    /// token.
     ///
     /// ## Output
     ///
@@ -129,14 +130,12 @@ impl RestCatalogConfig {
         }
     }
 
-    /// Get the extra headers from config.
-    ///
-    /// We will include:
+    /// Get the extra headers from config, which includes:
     ///
     /// - `content-type`
     /// - `x-client-version`
     /// - `user-agnet`
-    /// - all headers specified by `header.xxx` in props.
+    /// - All headers specified by `header.xxx` in props.
     pub(crate) fn extra_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::from_iter([
             (
@@ -156,9 +155,7 @@ impl RestCatalogConfig {
         for (key, value) in self
             .props
             .iter()
-            .filter(|(k, _)| k.starts_with("header."))
-            // The unwrap here is same since we are filtering the keys
-            .map(|(k, v)| (k.strip_prefix("header.").unwrap(), v))
+            .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
         {
             headers.insert(
                 HeaderName::from_str(key).map_err(|e| {
@@ -181,7 +178,7 @@ impl RestCatalogConfig {
         Ok(headers)
     }
 
-    /// Get the optional oauth headers from the config.
+    /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
         let mut params = HashMap::new();
 
@@ -197,10 +194,11 @@ impl RestCatalogConfig {
                 params.insert(param_name.to_string(), value.to_string());
             }
         }
+
         params
     }
 
-    /// Merge the config with the given config fetched from rest server.
+    /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
         if let Some(uri) = config.overrides.remove("uri") {
             self.uri = uri;
@@ -218,14 +216,11 @@ impl RestCatalogConfig {
 #[derive(Debug)]
 struct RestContext {
     client: HttpClient,
-
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
     config: RestCatalogConfig,
 }
-
-impl RestContext {}
 
 /// Rest catalog implementation.
 #[derive(Debug)]
@@ -238,7 +233,7 @@ pub struct RestCatalog {
 }
 
 impl RestCatalog {
-    /// Creates a rest catalog from config.
+    /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
     pub fn new(config: RestCatalogConfig) -> Self {
         Self {
             user_config: config,
@@ -246,7 +241,7 @@ impl RestCatalog {
         }
     }
 
-    /// Get the context from the catalog.
+    /// Gets the [`RestContext`] from the catalog.
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
@@ -260,9 +255,9 @@ impl RestCatalog {
             .await
     }
 
-    /// Load the runtime config from the server by user_config.
+    /// Load the runtime config from the server by `user_config`.
     ///
-    /// It's required for a rest catalog to update it's config after creation.
+    /// It's required for a REST catalog to update its config after creation.
     async fn load_config(
         client: &HttpClient,
         user_config: &RestCatalogConfig,
@@ -314,45 +309,44 @@ impl RestCatalog {
 
 #[async_trait]
 impl Catalog for RestCatalog {
-    /// List namespaces from table.
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let mut request = self.context().await?.client.request(
-            Method::GET,
-            self.context().await?.config.namespaces_endpoint(),
-        );
+        let context = self.context().await?;
+
+        let mut request = context
+            .client
+            .request(Method::GET, context.config.namespaces_endpoint());
+
         if let Some(ns) = parent {
             request = request.query(&[("parent", ns.to_url_string())]);
         }
 
-        let resp = self
-            .context()
-            .await?
+        let response = context
             .client
             .query::<ListNamespaceResponse, ErrorResponse>(request.build()?)
             .await?;
 
-        resp.namespaces
+        response
+            .namespaces
             .into_iter()
             .map(NamespaceIdent::from_vec)
             .collect::<Result<Vec<NamespaceIdent>>>()
     }
 
-    /// Create a new namespace inside the catalog.
     async fn create_namespace(
         &self,
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::POST,
-                self.context().await?.config.namespaces_endpoint(),
+                context.config.namespaces_endpoint(),
             )
             .json(&NamespaceSerde {
                 namespace: namespace.as_ref().clone(),
@@ -360,35 +354,31 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let response = context
             .client
             .query::<NamespaceSerde, ErrorResponse>(request)
             .await?;
 
-        Namespace::try_from(resp)
+        Namespace::try_from(response)
     }
 
-    /// Get a namespace information from the catalog.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::GET,
-                self.context().await?.config.namespace_endpoint(namespace),
+                context.config.namespace_endpoint(namespace),
             )
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let response = context
             .client
             .query::<NamespaceSerde, ErrorResponse>(request)
             .await?;
-        Namespace::try_from(resp)
+
+        Namespace::try_from(response)
     }
 
     /// Update a namespace inside the catalog.
@@ -408,18 +398,17 @@ impl Catalog for RestCatalog {
     }
 
     async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::HEAD,
-                self.context().await?.config.namespace_endpoint(ns),
+                context.config.namespace_endpoint(ns),
             )
             .build()?;
 
-        self.context()
-            .await?
+        context
             .client
             .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
                 StatusCode::OK | StatusCode::NO_CONTENT => Some(true),
@@ -429,40 +418,35 @@ impl Catalog for RestCatalog {
             .await
     }
 
-    /// Drop a namespace from the catalog.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::DELETE,
-                self.context().await?.config.namespace_endpoint(namespace),
+                context.config.namespace_endpoint(namespace),
             )
             .build()?;
 
-        self.context()
-            .await?
+        context
             .client
             .execute::<ErrorResponse>(request)
             .await
     }
 
-    /// List tables from namespace.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::GET,
-                self.context().await?.config.tables_endpoint(namespace),
+                context.config.tables_endpoint(namespace),
             )
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let resp = context
             .client
             .query::<ListTableResponse, ErrorResponse>(request)
             .await?;
@@ -483,13 +467,13 @@ impl Catalog for RestCatalog {
     ) -> Result<Table> {
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::POST,
-                self.context().await?.config.tables_endpoint(namespace),
+                context.config.tables_endpoint(namespace),
             )
             .json(&CreateTableRequest {
                 name: creation.name,
@@ -507,9 +491,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let resp = context
             .client
             .query::<LoadTableResponse, ErrorResponse>(request)
             .await?;
@@ -545,19 +527,17 @@ impl Catalog for RestCatalog {
     /// when creating this `RestCatalog` instance then the value
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table: &TableIdent) -> Result<Table> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::GET,
-                self.context().await?.config.table_endpoint(table),
+                context.config.table_endpoint(table),
             )
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let resp = context
             .client
             .query::<LoadTableResponse, ErrorResponse>(request)
             .await?;
@@ -587,18 +567,17 @@ impl Catalog for RestCatalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::DELETE,
-                self.context().await?.config.table_endpoint(table),
+                context.config.table_endpoint(table),
             )
             .build()?;
 
-        self.context()
-            .await?
+        context
             .client
             .execute::<ErrorResponse>(request)
             .await
@@ -606,18 +585,17 @@ impl Catalog for RestCatalog {
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::HEAD,
-                self.context().await?.config.table_endpoint(table),
+                context.config.table_endpoint(table),
             )
             .build()?;
 
-        self.context()
-            .await?
+        context
             .client
             .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
                 StatusCode::OK | StatusCode::NO_CONTENT => Some(true),
@@ -629,13 +607,13 @@ impl Catalog for RestCatalog {
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::POST,
-                self.context().await?.config.rename_table_endpoint(),
+                context.config.rename_table_endpoint(),
             )
             .json(&RenameTableRequest {
                 source: src.clone(),
@@ -643,23 +621,18 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        self.context()
-            .await?
-            .client
-            .execute::<ErrorResponse>(request)
-            .await
+        context.client.execute::<ErrorResponse>(request).await
     }
 
     /// Update table.
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::POST,
-                self.context()
-                    .await?
+                context
                     .config
                     .table_endpoint(commit.identifier()),
             )
@@ -670,9 +643,7 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
+        let resp = context
             .client
             .query::<CommitTableResponse, ErrorResponse>(request)
             .await?;
@@ -680,6 +651,7 @@ impl Catalog for RestCatalog {
         let file_io = self
             .load_file_io(Some(&resp.metadata_location), None)
             .await?;
+
         Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)

@@ -266,10 +266,12 @@ impl HttpClient {
     ) -> Result<()> {
         self.authenticate(&mut request).await?;
 
+        dbg!(&request);
         let method = request.method().clone();
         let url = request.url().clone();
         let response = self.client.execute(request).await?;
-
+        dbg!(&response);
+        
         match response.status() {
             StatusCode::OK | StatusCode::NO_CONTENT => Ok(()),
             code => {
@@ -298,9 +300,11 @@ impl HttpClient {
     ) -> Result<R> {
         self.authenticate(&mut request).await?;
 
+        dbg!(&request);
         let method = request.method().clone();
         let url = request.url().clone();
         let response = self.client.execute(request).await?;
+        dbg!(&response);
 
         if let Some(ret) = handler(&response) {
             Ok(ret)
