@@ -39,7 +39,7 @@ use crate::client::HttpClient;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
-    RenameTableRequest, NO_CONTENT, OK,
+    RenameTableRequest,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -274,7 +274,7 @@ impl RestCatalog {
         }
 
         let config = client
-            .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
+            .query::<CatalogConfig, ErrorResponse>(request.build()?)
             .await?;
 
         Ok(config)
@@ -331,7 +331,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<ListNamespaceResponse, ErrorResponse, OK>(request.build()?)
+            .query::<ListNamespaceResponse, ErrorResponse>(request.build()?)
             .await?;
 
         resp.namespaces
@@ -364,7 +364,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<NamespaceSerde, ErrorResponse, OK>(request)
+            .query::<NamespaceSerde, ErrorResponse>(request)
             .await?;
 
         Namespace::try_from(resp)
@@ -386,7 +386,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<NamespaceSerde, ErrorResponse, OK>(request)
+            .query::<NamespaceSerde, ErrorResponse>(request)
             .await?;
         Namespace::try_from(resp)
     }
@@ -422,7 +422,7 @@ impl Catalog for RestCatalog {
             .await?
             .client
             .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
-                StatusCode::NO_CONTENT => Some(true),
+                StatusCode::OK | StatusCode::NO_CONTENT => Some(true),
                 StatusCode::NOT_FOUND => Some(false),
                 _ => None,
             })
@@ -444,7 +444,7 @@ impl Catalog for RestCatalog {
         self.context()
             .await?
             .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .execute::<ErrorResponse>(request)
             .await
     }
 
@@ -464,7 +464,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<ListTableResponse, ErrorResponse, OK>(request)
+            .query::<ListTableResponse, ErrorResponse>(request)
             .await?;
 
         Ok(resp.identifiers)
@@ -511,7 +511,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<LoadTableResponse, ErrorResponse, OK>(request)
+            .query::<LoadTableResponse, ErrorResponse>(request)
             .await?;
 
         let config = resp
@@ -559,7 +559,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<LoadTableResponse, ErrorResponse, OK>(request)
+            .query::<LoadTableResponse, ErrorResponse>(request)
             .await?;
 
         let config = resp
@@ -600,7 +600,7 @@ impl Catalog for RestCatalog {
         self.context()
             .await?
             .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .execute::<ErrorResponse>(request)
             .await
     }
 
@@ -620,7 +620,7 @@ impl Catalog for RestCatalog {
             .await?
             .client
             .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
-                StatusCode::NO_CONTENT => Some(true),
+                StatusCode::OK | StatusCode::NO_CONTENT => Some(true),
                 StatusCode::NOT_FOUND => Some(false),
                 _ => None,
             })
@@ -646,7 +646,7 @@ impl Catalog for RestCatalog {
         self.context()
             .await?
             .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
+            .execute::<ErrorResponse>(request)
             .await
     }
 
@@ -674,7 +674,7 @@ impl Catalog for RestCatalog {
             .context()
             .await?
             .client
-            .query::<CommitTableResponse, ErrorResponse, OK>(request)
+            .query::<CommitTableResponse, ErrorResponse>(request)
             .await?;
 
         let file_io = self
