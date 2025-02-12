@@ -2931,6 +2931,7 @@ dependencies = [
  "array-init",
  "arrow-arith",
  "arrow-array",
+ "arrow-buffer",
  "arrow-cast",
  "arrow-ord",
  "arrow-schema",
