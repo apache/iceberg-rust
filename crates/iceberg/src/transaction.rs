@@ -22,20 +22,23 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
+use std::sync::Arc;
 
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::file::metadata::ParquetMetaData;
 use uuid::Uuid;
 
 use crate::arrow::ArrowFileReader;
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::{
-    DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriterBuilder, NullOrder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType,
-    Summary, TableMetadata, Transform, MAIN_BRANCH,
+    visit_schema, DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriterBuilder, NullOrder, Operation,
+    SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+    Struct, StructType, Summary, TableMetadata, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
+use crate::writer::file_writer::parquet_writer::{IndexByParquetPathName, MinMaxColAggregator};
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
@@ -211,6 +214,8 @@ impl<'a> Transaction<'a> {
         table_metadata: &TableMetadata,
     ) -> Result<Vec<DataFile>> {
         let mut data_files: Vec<DataFile> = Vec::new();
+        let partition_value =
+                self.create_default_partition_value(&table_metadata.default_partition_type)?;
 
         for file_path in file_paths {
             let input_file = file_io.new_input(&file_path)?;
@@ -221,7 +226,7 @@ impl<'a> Transaction<'a> {
                 ));
             }
             let file_metadata = input_file.metadata().await?;
-            let file_size_in_bytes = file_metadata.size;
+            let file_size_in_bytes = file_metadata.size as usize;
             let reader = input_file.reader().await?;
 
             let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
@@ -231,32 +236,92 @@ impl<'a> Transaction<'a> {
                     format!("Error reading Parquet metadata: {}", err),
                 )
             })?;
-            let record_count: u64 = parquet_metadata
-                .file_metadata()
-                .num_rows()
-                .try_into()
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Negative row count in Parquet metadata",
-                    )
-                })?;
-            let partition_value =
-                self.create_default_partition_value(&table_metadata.default_partition_type)?;
-
-            // TODO: Add more metadata from parquet's metadata to the `DataFile`
-            let data_file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(file_path)
-                .file_format(DataFileFormat::Parquet)
-                .partition(partition_value)
-                .record_count(record_count)
-                .file_size_in_bytes(file_size_in_bytes)
-                .build()
-                .unwrap();
+            let builder = self.parquet_to_data_file_builder(
+                table_metadata.current_schema().clone(),
+                parquet_metadata,
+                &partition_value,
+                file_size_in_bytes,
+                file_path,
+            )?;
+            let data_file = builder.build().unwrap();
             data_files.push(data_file);
         }
         Ok(data_files)
+    }
+
+    /// `ParquetMetadata` to data file builder
+    pub fn parquet_to_data_file_builder(
+        &self,
+        schema: SchemaRef,
+        metadata: Arc<ParquetMetaData>,
+        partition: &Struct,
+        written_size: usize,
+        file_path: String,
+    ) -> Result<DataFileBuilder> {
+        let index_by_parquet_path = {
+            let mut visitor = IndexByParquetPathName::new();
+            visit_schema(&schema, &mut visitor)?;
+            visitor
+        };
+
+        let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
+            let mut per_col_size: HashMap<i32, u64> = HashMap::new();
+            let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
+            let mut per_col_null_val_num: HashMap<i32, u64> = HashMap::new();
+            let mut min_max_agg = MinMaxColAggregator::new(schema);
+
+            for row_group in metadata.row_groups() {
+                for column_chunk_metadata in row_group.columns() {
+                    let parquet_path = column_chunk_metadata.column_descr().path().string();
+
+                    let Some(&field_id) = index_by_parquet_path.get(&parquet_path) else {
+                        continue;
+                    };
+
+                    *per_col_size.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.compressed_size() as u64;
+                    *per_col_val_num.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.num_values() as u64;
+
+                    if let Some(statistics) = column_chunk_metadata.statistics() {
+                        if let Some(null_count) = statistics.null_count_opt() {
+                            *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
+                        }
+
+                        min_max_agg.update(field_id, statistics.clone())?;
+                    }
+                }
+            }
+            (
+                per_col_size,
+                per_col_val_num,
+                per_col_null_val_num,
+                min_max_agg.produce(),
+            )
+        };
+
+        let mut builder = DataFileBuilder::default();
+        builder
+            .content(DataContentType::Data)
+            .file_path(file_path)
+            .file_format(DataFileFormat::Parquet)
+            .partition(partition.clone())
+            .record_count(metadata.file_metadata().num_rows() as u64)
+            .file_size_in_bytes(written_size as u64)
+            .column_sizes(column_sizes)
+            .value_counts(value_counts)
+            .null_value_counts(null_value_counts)
+            .lower_bounds(lower_bounds)
+            .upper_bounds(upper_bounds)
+            .split_offsets(
+                metadata
+                    .row_groups()
+                    .iter()
+                    .filter_map(|group| group.file_offset())
+                    .collect(),
+            );
+
+        Ok(builder)
     }
 
     fn create_default_partition_value(&self, partition_type: &StructType) -> Result<Struct> {

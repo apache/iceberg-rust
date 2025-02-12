@@ -105,7 +105,8 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     }
 }
 
-struct IndexByParquetPathName {
+/// A mapping from Parquet column path names to internal field id
+pub struct IndexByParquetPathName {
     name_to_id: HashMap<String, i32>,
 
     field_names: Vec<String>,
@@ -114,6 +115,7 @@ struct IndexByParquetPathName {
 }
 
 impl IndexByParquetPathName {
+    /// Creates a new, empty `IndexByParquetPathName`
     pub fn new() -> Self {
         Self {
             name_to_id: HashMap::new(),
@@ -122,6 +124,7 @@ impl IndexByParquetPathName {
         }
     }
 
+    /// Retrieves the internal field ID
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
     }
@@ -219,14 +222,15 @@ pub struct ParquetWriter {
 }
 
 /// Used to aggregate min and max value of each column.
-struct MinMaxColAggregator {
+pub struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
     upper_bounds: HashMap<i32, Datum>,
     schema: SchemaRef,
 }
 
 impl MinMaxColAggregator {
-    fn new(schema: SchemaRef) -> Self {
+    /// Creates new and empty `MinMaxColAggregator`
+    pub fn new(schema: SchemaRef) -> Self {
         Self {
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
@@ -256,7 +260,8 @@ impl MinMaxColAggregator {
             .or_insert(datum);
     }
 
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    /// Update statistics
+    pub fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -301,7 +306,8 @@ impl MinMaxColAggregator {
         Ok(())
     }
 
-    fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
+    /// Returns lower and upper bounds
+    pub fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
         (self.lower_bounds, self.upper_bounds)
     }
 }
