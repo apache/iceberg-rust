@@ -215,7 +215,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<Vec<DataFile>> {
         let mut data_files: Vec<DataFile> = Vec::new();
         let partition_value =
-                self.create_default_partition_value(&table_metadata.default_partition_type)?;
+            self.create_default_partition_value(&table_metadata.default_partition_type)?;
 
         for file_path in file_paths {
             let input_file = file_io.new_input(&file_path)?;
