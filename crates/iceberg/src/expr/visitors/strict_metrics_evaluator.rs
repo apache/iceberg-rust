@@ -22,15 +22,19 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, Schema};
 use crate::Result;
 
+#[allow(dead_code)]
 const ROWS_MUST_MATCH: Result<bool> = Ok(true);
+#[allow(dead_code)]
 const ROWS_MIGHT_NOT_MATCH: Result<bool> = Ok(false);
 
+#[allow(dead_code)]
 pub(crate) struct StrictMetricsEvaluator<'a> {
     data_file: &'a DataFile,
     schema: Schema,
 }
 
 impl<'a> StrictMetricsEvaluator<'a> {
+    #[allow(dead_code)]
     fn new(data_file: &'a DataFile, schema: Schema) -> Self {
         StrictMetricsEvaluator { data_file, schema }
     }
@@ -39,6 +43,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
     /// provided [`DataFile`]'s metrics. Used by [`TableScan`] to
     /// see if this `DataFile` contains data that could match
     /// the scan's filter.
+    #[allow(dead_code)]
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
         data_file: &'a DataFile,
