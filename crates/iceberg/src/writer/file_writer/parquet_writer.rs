@@ -130,6 +130,12 @@ impl IndexByParquetPathName {
     }
 }
 
+impl Default for IndexByParquetPathName {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchemaVisitor for IndexByParquetPathName {
     type T = ();
 
