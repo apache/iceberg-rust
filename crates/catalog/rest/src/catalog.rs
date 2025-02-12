@@ -408,7 +408,7 @@ impl Catalog for RestCatalog {
                     response, &method, &url,
                 )
                 .await?),
-                
+
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "The namespace already exists",
@@ -416,7 +416,7 @@ impl Catalog for RestCatalog {
                 .with_context("code", StatusCode::NOT_FOUND.to_string())
                 .with_context("method", method.to_string())
                 .with_context("url", url.to_string())),
-                
+
                 error_code => {
                     Err(
                         deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
@@ -448,7 +448,7 @@ impl Catalog for RestCatalog {
                     response, &method, &url,
                 )
                 .await?),
-                
+
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to get a namespace that does not exist",
@@ -456,7 +456,7 @@ impl Catalog for RestCatalog {
                 .with_context("code", StatusCode::NOT_FOUND.to_string())
                 .with_context("method", method.to_string())
                 .with_context("url", url.to_string())),
-                
+
                 error_code => {
                     Err(
                         deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
@@ -572,7 +572,7 @@ impl Catalog for RestCatalog {
                     response, &method, &url,
                 )
                 .await?),
-                
+
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to list tables of a namespace that does not exist",
@@ -580,7 +580,7 @@ impl Catalog for RestCatalog {
                 .with_context("code", StatusCode::NOT_FOUND.to_string())
                 .with_context("method", method.to_string())
                 .with_context("url", url.to_string())),
-                
+
                 error_code => {
                     Err(
                         deserialize_unexpected_catalog_error(&error_code, response, &method, &url)

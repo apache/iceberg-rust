@@ -26,7 +26,7 @@ static NAMESPACE: &str = "default";
 static TABLE_NAME: &str = "t1";
 
 /// This is a simple example that demonstrates how to use [`RestCatalog`] to create tables.
-/// 
+///
 /// The demo creates a table creates a table and then later retrieves the same table.
 ///
 /// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
