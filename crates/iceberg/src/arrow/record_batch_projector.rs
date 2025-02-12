@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
+use arrow_array::{make_array, ArrayRef, RecordBatch, StructArray};
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
 use crate::error::Result;
@@ -138,6 +139,7 @@ impl RecordBatchProjector {
     fn get_column_by_field_index(batch: &[ArrayRef], field_index: &[usize]) -> Result<ArrayRef> {
         let mut rev_iterator = field_index.iter().rev();
         let mut array = batch[*rev_iterator.next().unwrap()].clone();
+        let mut null_buffer = array.logical_nulls();
         for idx in rev_iterator {
             array = array
                 .as_any()
@@ -148,8 +150,11 @@ impl RecordBatchProjector {
                 ))?
                 .column(*idx)
                 .clone();
+            null_buffer = NullBuffer::union(null_buffer.as_ref(), array.logical_nulls().as_ref());
         }
-        Ok(array)
+        Ok(make_array(
+            array.to_data().into_builder().nulls(null_buffer).build()?,
+        ))
     }
 }
 
