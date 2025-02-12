@@ -371,7 +371,7 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 ///
 /// TODO: Eventually, this fucntion should return an error response that is custom to the error
 /// codes that all endpoints share (400, 404, etc.).
-pub(crate) async fn deserialize_unexepcted_catalog_error(
+pub(crate) async fn deserialize_unexpected_catalog_error(
     error_code: &StatusCode,
     response: Response,
     method: &Method,

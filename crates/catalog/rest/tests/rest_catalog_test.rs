@@ -84,7 +84,7 @@ async fn test_get_non_exist_namespace() {
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("Namespace does not exist"));
+        .contains("does not exist"));
 }
 
 #[tokio::test]

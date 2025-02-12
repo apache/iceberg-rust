@@ -36,7 +36,7 @@ use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
 use crate::client::{
-    deserialize_catalog_response, deserialize_unexepcted_catalog_error, HttpClient,
+    deserialize_catalog_response, deserialize_unexpected_catalog_error, HttpClient,
 };
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
@@ -264,17 +264,34 @@ impl RestCatalog {
         client: &HttpClient,
         user_config: &RestCatalogConfig,
     ) -> Result<CatalogConfig> {
-        let mut request = client.request(Method::GET, user_config.config_endpoint());
+        let mut request_builder = client.request(Method::GET, user_config.config_endpoint());
 
         if let Some(warehouse_location) = &user_config.warehouse {
-            request = request.query(&[("warehouse", warehouse_location)]);
+            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
         }
 
-        let config = client
-            .query::<CatalogConfig, ErrorResponse>(request.build()?)
-            .await?;
+        let request = request_builder.build()?;
+        let method = request.method().clone();
+        let url = request.url().clone();
 
-        Ok(config)
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::OK => Ok(deserialize_catalog_response::<CatalogConfig>(
+                    response, &method, &url,
+                )
+                .await?),
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        let response = client.query_catalog(request, handler).await?;
+
+        Ok(response)
     }
 
     async fn load_file_io(
@@ -309,6 +326,8 @@ impl RestCatalog {
     }
 }
 
+/// All requests and expected responses are derived from the REST catalog API spec:
+/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
 #[async_trait]
 impl Catalog for RestCatalog {
     async fn list_namespaces(
@@ -337,9 +356,18 @@ impl Catalog for RestCatalog {
                     response, &method, &url,
                 )
                 .await?),
+
+                StatusCode::NOT_FOUND => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Namespace provided in the `parent` query parameter is not found",
+                )
+                .with_context("code", StatusCode::NOT_FOUND.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())),
+
                 error_code => {
                     Err(
-                        deserialize_unexepcted_catalog_error(&error_code, response, &method, &url)
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
                             .await,
                     )
                 }
@@ -371,10 +399,34 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let response = context
-            .client
-            .query::<NamespaceSerde, ErrorResponse>(request)
-            .await?;
+        let method = request.method().clone();
+        let url = request.url().clone();
+
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::OK => Ok(deserialize_catalog_response::<NamespaceSerde>(
+                    response, &method, &url,
+                )
+                .await?),
+                
+                StatusCode::NOT_FOUND => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "The namespace already exists",
+                )
+                .with_context("code", StatusCode::NOT_FOUND.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())),
+                
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        let response = context.client.query_catalog(request, handler).await?;
 
         Namespace::try_from(response)
     }
@@ -387,10 +439,34 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let response = context
-            .client
-            .query::<NamespaceSerde, ErrorResponse>(request)
-            .await?;
+        let method = request.method().clone();
+        let url = request.url().clone();
+
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::OK => Ok(deserialize_catalog_response::<NamespaceSerde>(
+                    response, &method, &url,
+                )
+                .await?),
+                
+                StatusCode::NOT_FOUND => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to get a namespace that does not exist",
+                )
+                .with_context("code", StatusCode::NOT_FOUND.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())),
+                
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        let response = context.client.query_catalog(request, handler).await?;
 
         Namespace::try_from(response)
     }
@@ -419,14 +495,26 @@ impl Catalog for RestCatalog {
             .request(Method::HEAD, context.config.namespace_endpoint(ns))
             .build()?;
 
-        context
-            .client
-            .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
-                StatusCode::OK | StatusCode::NO_CONTENT => Some(true),
-                StatusCode::NOT_FOUND => Some(false),
-                _ => None,
-            })
-            .await
+        let method = request.method().clone();
+        let url = request.url().clone();
+
+        // Note that a `StatusCode::NOT_FOUND` is is not an unexpected response, it simply means
+        // that the namespace does not exist.
+        // Also note that `StatusCode::OK` is not an expected response code.
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::NO_CONTENT => Ok(true),
+                StatusCode::NOT_FOUND => Ok(false),
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        Ok(context.client.query_catalog(request, handler).await?)
     }
 
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
@@ -437,7 +525,34 @@ impl Catalog for RestCatalog {
             .request(Method::DELETE, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        context.client.execute::<ErrorResponse>(request).await
+        let method = request.method().clone();
+        let url = request.url().clone();
+
+        // Note that a `StatusCode::NOT_FOUND` is is not an unexpected response, it simply means
+        // that the namespace does not exist.
+        // Also note that `StatusCode::OK` is **not** an expected response code.
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::NO_CONTENT => Ok(()),
+
+                StatusCode::NOT_FOUND => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to drop a namespace that does not exist",
+                )
+                .with_context("code", StatusCode::NOT_FOUND.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())),
+
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        Ok(context.client.query_catalog(request, handler).await?)
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -448,12 +563,36 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.tables_endpoint(namespace))
             .build()?;
 
-        let resp = context
-            .client
-            .query::<ListTableResponse, ErrorResponse>(request)
-            .await?;
+        let method = request.method().clone();
+        let url = request.url().clone();
 
-        Ok(resp.identifiers)
+        let handler = |response: Response| async move {
+            match response.status() {
+                StatusCode::OK => Ok(deserialize_catalog_response::<ListTableResponse>(
+                    response, &method, &url,
+                )
+                .await?),
+                
+                StatusCode::NOT_FOUND => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to list tables of a namespace that does not exist",
+                )
+                .with_context("code", StatusCode::NOT_FOUND.to_string())
+                .with_context("method", method.to_string())
+                .with_context("url", url.to_string())),
+                
+                error_code => {
+                    Err(
+                        deserialize_unexpected_catalog_error(&error_code, response, &method, &url)
+                            .await,
+                    )
+                }
+            }
+        };
+
+        let response = context.client.query_catalog(request, handler).await?;
+
+        Ok(response.identifiers)
     }
 
     /// Create a new table inside the namespace.
