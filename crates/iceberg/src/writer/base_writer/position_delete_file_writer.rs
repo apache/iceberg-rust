@@ -101,12 +101,12 @@ pub struct PositionDeleteWriter<B: FileWriterBuilder> {
 
 #[async_trait::async_trait]
 impl<B: FileWriterBuilder> IcebergWriter<Vec<PositionDeleteInput>> for PositionDeleteWriter<B> {
-    async fn write(&mut self, input: Vec<PositionDeleteInput>) -> Result<()> {
+    async fn write(&mut self, inputs: Vec<PositionDeleteInput>) -> Result<()> {
         let mut path_column_builder = StringBuilder::new();
         let mut offset_column_builder = PrimitiveBuilder::<Int64Type>::new();
-        for input in input.into_iter() {
-            for offset in input.offsets {
-                path_column_builder.append_value(&input.path);
+        for pd_input in inputs.into_iter() {
+            for offset in pd_input.offsets {
+                path_column_builder.append_value(&pd_input.path);
                 offset_column_builder.append_value(offset);
             }
         }
