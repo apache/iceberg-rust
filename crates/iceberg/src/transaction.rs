@@ -24,6 +24,8 @@ use std::mem::discriminant;
 use std::ops::RangeFrom;
 use std::sync::Arc;
 
+use arrow_array::StringArray;
+use futures::TryStreamExt;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::file::metadata::ParquetMetaData;
 use uuid::Uuid;
@@ -183,14 +185,42 @@ impl<'a> Transaction<'a> {
         check_duplicate_files: bool,
     ) -> Result<Transaction<'a>> {
         if check_duplicate_files {
-            let unique_paths: HashSet<_> = file_paths.iter().collect();
-            if unique_paths.len() != file_paths.len() {
+            let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
+
+            let mut manifest_stream = self.table.inspect().manifests().scan().await?;
+            let mut referenced_files = Vec::new();
+
+            while let Some(batch) = manifest_stream.try_next().await? {
+                let file_path_array = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Failed to downcast file_path column to StringArray",
+                        )
+                    })?;
+
+                for i in 0..batch.num_rows() {
+                    let file_path = file_path_array.value(i);
+                    if new_files.contains(file_path) {
+                        referenced_files.push(file_path.to_string());
+                    }
+                }
+            }
+
+            if !referenced_files.is_empty() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Duplicate file paths provided",
+                    format!(
+                        "Cannot add files that are already referenced by table, files: {}",
+                        referenced_files.join(", ")
+                    ),
                 ));
             }
         }
+
         let table_metadata = self.table.metadata();
 
         let data_files = Transaction::parquet_files_to_data_files(
@@ -214,17 +244,17 @@ impl<'a> Transaction<'a> {
         table_metadata: &TableMetadata,
     ) -> Result<Vec<DataFile>> {
         let mut data_files: Vec<DataFile> = Vec::new();
-        let partition_value =
-            self.create_default_partition_value(&table_metadata.default_partition_type)?;
+
+        // TODO: support adding to partitioned table
+        if !table_metadata.default_spec.fields().is_empty() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Appending to partitioned tables is not supported",
+            ));
+        }
 
         for file_path in file_paths {
             let input_file = file_io.new_input(&file_path)?;
-            if !input_file.exists().await? {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "File does not exist".to_string(),
-                ));
-            }
             let file_metadata = input_file.metadata().await?;
             let file_size_in_bytes = file_metadata.size as usize;
             let reader = input_file.reader().await?;
@@ -239,7 +269,6 @@ impl<'a> Transaction<'a> {
             let builder = self.parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
-                &partition_value,
                 file_size_in_bytes,
                 file_path,
             )?;
@@ -254,7 +283,6 @@ impl<'a> Transaction<'a> {
         &self,
         schema: SchemaRef,
         metadata: Arc<ParquetMetaData>,
-        partition: &Struct,
         written_size: usize,
         file_path: String,
     ) -> Result<DataFileBuilder> {
@@ -305,7 +333,7 @@ impl<'a> Transaction<'a> {
             .content(DataContentType::Data)
             .file_path(file_path)
             .file_format(DataFileFormat::Parquet)
-            .partition(partition.clone())
+            .partition(Struct::empty())
             .record_count(metadata.file_metadata().num_rows() as u64)
             .file_size_in_bytes(written_size as u64)
             .column_sizes(column_sizes)
@@ -322,24 +350,6 @@ impl<'a> Transaction<'a> {
             );
 
         Ok(builder)
-    }
-
-    fn create_default_partition_value(&self, partition_type: &StructType) -> Result<Struct> {
-        let literals = partition_type
-            .fields()
-            .iter()
-            .map(|field| {
-                let primitive_type = field.field_type.as_primitive_type().ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Partition field should only be a primitive type.",
-                    )
-                })?;
-                Ok(Some(primitive_type.type_to_literal()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Struct::from_iter(literals))
     }
 }
 
@@ -491,6 +501,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 "Partition value is not compatible with partition type",
             ));
         }
+
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
             if !field
                 .field_type
@@ -1045,9 +1056,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_existing_parquet_files() {
-        let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
+    async fn test_add_existing_parquet_files_to_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
         let tx = crate::transaction::Transaction::new(&fixture.table);
 
         let file_paths = vec![
@@ -1056,7 +1067,7 @@ mod tests {
             format!("{}/3.parquet", &fixture.table_location),
         ];
 
-        // attempt to add the existing Parquet files with fast append
+        // Attempt to add the existing Parquet files with fast append.
         let new_tx = tx
             .add_parquet_files(file_paths.clone(), true)
             .await
@@ -1094,7 +1105,12 @@ mod tests {
             .await
             .expect("Failed to load manifest list");
 
-        assert_eq!(manifest_list.entries().len(), 2);
+        assert_eq!(
+            manifest_list.entries().len(),
+            2,
+            "Expected 2 manifest list entries, got {}",
+            manifest_list.entries().len()
+        );
 
         // Load the manifest from the manifest list
         let manifest = manifest_list.entries()[0]
@@ -1102,10 +1118,15 @@ mod tests {
             .await
             .expect("Failed to load manifest");
 
-        // Since we added three files with add_parquet_files, check that the manifest contains three entries
-        assert_eq!(manifest.entries().len(), 3);
+        // Check that the manifest contains three entries.
+        assert_eq!(
+            manifest.entries().len(),
+            3,
+            "Expected 3 manifest entries, got {}",
+            manifest.entries().len()
+        );
 
-        // Verify each file path appears in manifest
+        // Verify each file path appears in manifest.
         let manifest_paths: Vec<String> = manifest
             .entries()
             .iter()
