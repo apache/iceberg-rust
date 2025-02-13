@@ -19,7 +19,7 @@ use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{DataFile, Datum, Schema};
+use crate::spec::{DataFile, Datum};
 use crate::Result;
 
 #[allow(dead_code)]
@@ -29,14 +29,13 @@ const ROWS_MIGHT_NOT_MATCH: Result<bool> = Ok(false);
 
 #[allow(dead_code)]
 pub(crate) struct StrictMetricsEvaluator<'a> {
-    data_file: &'a DataFile,
-    schema: Schema,
+    data_file: &'a DataFile
 }
 
 impl<'a> StrictMetricsEvaluator<'a> {
     #[allow(dead_code)]
-    fn new(data_file: &'a DataFile, schema: Schema) -> Self {
-        StrictMetricsEvaluator { data_file, schema }
+    fn new(data_file: &'a DataFile) -> Self {
+        StrictMetricsEvaluator { data_file }
     }
 
     /// Evaluate this `StrictMetricsEvaluator`'s filter predicate against the
@@ -47,13 +46,12 @@ impl<'a> StrictMetricsEvaluator<'a> {
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
         data_file: &'a DataFile,
-        schema: Schema,
     ) -> crate::Result<bool> {
         if data_file.record_count == 0 {
             return ROWS_MUST_MATCH;
         }
 
-        let mut evaluator = Self::new(data_file, schema);
+        let mut evaluator = Self::new(data_file);
         visit(&mut evaluator, filter)
     }
 
@@ -120,10 +118,6 @@ impl<'a> StrictMetricsEvaluator<'a> {
             return ROWS_MIGHT_NOT_MATCH;
         }
 
-        if datum.is_nan() {
-            return ROWS_MIGHT_NOT_MATCH;
-        }
-
         let bound = if use_lower_bound {
             self.lower_bound(field_id)
         } else {
@@ -134,8 +128,6 @@ impl<'a> StrictMetricsEvaluator<'a> {
             if cmp_fn(bound, datum) {
                 return ROWS_MUST_MATCH;
             }
-
-            return ROWS_MIGHT_NOT_MATCH;
         }
 
         ROWS_MIGHT_NOT_MATCH
@@ -256,6 +248,14 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
+        let field_id = reference.field().id;
+
+        if let Some(lower) = self.lower_bound(field_id) {
+            if lower.is_nan() {
+                return ROWS_MIGHT_NOT_MATCH;
+            }
+        }
+
         self.visit_inequality(reference, datum, PartialOrd::gt, true)
     }
 
@@ -284,10 +284,10 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         {
             // For an equality predicate to hold strictly, we must have:
             //     lower == literal.value == upper.
-            if lower.literal() != datum.literal() || upper.literal() != datum.literal() {
-                return ROWS_MIGHT_NOT_MATCH;
-            } else {
+            if lower.literal() == datum.literal() && upper.literal() == datum.literal() {
                 return ROWS_MUST_MATCH;
+            } else {
+                return ROWS_MIGHT_NOT_MATCH;
             }
         }
 
@@ -866,7 +866,7 @@ mod test {
         let data_file = get_test_file_1();
 
         let result =
-            StrictMetricsEvaluator::eval(&partition_filter, &data_file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&partition_filter, &data_file)
                 .unwrap();
         assert!(result, "Should read: AlwaysTrue predicate");
     }
@@ -874,26 +874,24 @@ mod test {
     #[test]
     fn test_all_nulls() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         // "all_nulls" (field 4) is all null.
         let result =
-            StrictMetricsEvaluator::eval(&not_null("all_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_null("all_nulls"), &file)
                 .unwrap();
         assert!(!result, "Should skip: notNull on all-null column");
 
         let result = StrictMetricsEvaluator::eval(
             &less_than("all_nulls", "a"),
-            &file,
-            schema.as_ref().clone(),
+            &file
         )
         .unwrap();
         assert!(!result, "Should skip: lessThan on all-null column");
 
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal("all_nulls", "a"),
-            &file,
-            schema.as_ref().clone(),
+            &file
         )
         .unwrap();
         assert!(!result, "Should skip: lessThanOrEqual on all-null column");
@@ -901,7 +899,6 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than("all_nulls", "a"),
             &file,
-            schema.as_ref().clone(),
         )
         .unwrap();
         assert!(!result, "Should skip: greaterThan on all-null column");
@@ -909,7 +906,6 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal("all_nulls", "a"),
             &file,
-            schema.as_ref().clone(),
         )
         .unwrap();
         assert!(
@@ -918,14 +914,13 @@ mod test {
         );
 
         let result =
-            StrictMetricsEvaluator::eval(&equal("all_nulls", "a"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&equal("all_nulls", "a"), &file, )
                 .unwrap();
         assert!(!result, "Should skip: equal on all-null column");
 
         let result = StrictMetricsEvaluator::eval(
             &starts_with("all_nulls", "a"),
             &file,
-            schema.as_ref().clone(),
         )
         .unwrap();
         assert!(!result, "Strict eval: startsWith always returns false");
@@ -933,20 +928,20 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_starts_with("all_nulls", "a"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Strict eval: notStartsWith always returns false");
 
         // "some_nulls" (field 5) has some nulls.
         let result =
-            StrictMetricsEvaluator::eval(&not_null("some_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_null("some_nulls"), &file)
                 .unwrap();
         assert!(!result, "Should skip: notNull on column with some nulls");
 
         // "no_nulls" (field 6) has no nulls.
         let result =
-            StrictMetricsEvaluator::eval(&not_null("no_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_null("no_nulls"), &file)
                 .unwrap();
         assert!(result, "Should read: notNull on column with no nulls");
     }
@@ -954,17 +949,17 @@ mod test {
     #[test]
     fn test_no_nulls() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         // "all_nulls" is all null so isNull returns MUST_MATCH.
         let result =
-            StrictMetricsEvaluator::eval(&is_null("all_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_null("all_nulls"), &file)
                 .unwrap();
         assert!(result, "Should read: isNull on all-null column");
 
         // "some_nulls" is not all null.
         let result =
-            StrictMetricsEvaluator::eval(&is_null("some_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_null("some_nulls"), &file)
                 .unwrap();
         assert!(
             !result,
@@ -973,7 +968,7 @@ mod test {
 
         // "no_nulls" has no nulls.
         let result =
-            StrictMetricsEvaluator::eval(&is_null("no_nulls"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_null("no_nulls"), &file)
                 .unwrap();
         assert!(!result, "Should skip: isNull on column with no nulls");
     }
@@ -981,23 +976,23 @@ mod test {
     #[test]
     fn test_is_nan() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         // "all_nans" (field 7) is all NaN.
         let result =
-            StrictMetricsEvaluator::eval(&is_nan("all_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_nan("all_nans"), &file)
                 .unwrap();
         assert!(result, "Should read: isNan on all-NaN column");
 
         // "some_nans" (field 8) has some NaN.
         let result =
-            StrictMetricsEvaluator::eval(&is_nan("some_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_nan("some_nans"), &file)
                 .unwrap();
         assert!(!result, "Should skip: isNan on column with some NaNs");
 
         // "no_nans" (field 9) has no NaN.
         let result =
-            StrictMetricsEvaluator::eval(&is_nan("no_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_nan("no_nans"), &file)
                 .unwrap();
         assert!(!result, "Should skip: isNan on column with no NaNs");
 
@@ -1005,14 +1000,14 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &is_nan("all_nulls_double"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Should skip: isNan on all-null double column");
 
         // "no_nan_stats" (field 13) missing stats → cannot guarantee, so false.
         let result =
-            StrictMetricsEvaluator::eval(&is_nan("no_nan_stats"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&is_nan("no_nan_stats"), &file)
                 .unwrap();
         assert!(!result, "Should skip: isNan when stats are missing");
 
@@ -1020,7 +1015,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &is_nan("all_nans_v1_stats"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(result, "Should read: isNan on all-NaN (v1 stats) column");
@@ -1029,7 +1024,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &is_nan("nan_and_null_only"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Should skip: isNan on nan-and-null-only column");
@@ -1038,11 +1033,11 @@ mod test {
     #[test]
     fn test_not_nan() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         // "all_nans" → notNan returns MIGHT_NOT_MATCH.
         let result =
-            StrictMetricsEvaluator::eval(&not_nan("all_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_nan("all_nans"), &file)
                 .unwrap();
         assert!(
             !result,
@@ -1051,13 +1046,13 @@ mod test {
 
         // "some_nans" → returns false.
         let result =
-            StrictMetricsEvaluator::eval(&not_nan("some_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_nan("some_nans"), &file)
                 .unwrap();
         assert!(!result, "Should skip: notNan on column with some NaNs");
 
         // "no_nans" → notNan returns MUST_MATCH.
         let result =
-            StrictMetricsEvaluator::eval(&not_nan("no_nans"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_nan("no_nans"), &file)
                 .unwrap();
         assert!(result, "Should read: notNan on column with no NaNs");
 
@@ -1065,14 +1060,14 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_nan("all_nulls_double"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(result, "Should read: notNan on all-null double column");
 
         // "no_nan_stats" → missing stats so returns false.
         let result =
-            StrictMetricsEvaluator::eval(&not_nan("no_nan_stats"), &file, schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&not_nan("no_nan_stats"), &file)
                 .unwrap();
         assert!(!result, "Should skip: notNan when stats are missing");
 
@@ -1080,7 +1075,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_nan("all_nans_v1_stats"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Should read: notNan on all-NaN (v1 stats) column");
@@ -1089,7 +1084,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_nan("nan_and_null_only"),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Should skip: notNan on nan-and-null-only column");
@@ -1101,14 +1096,13 @@ mod test {
         let _ = StrictMetricsEvaluator::eval(
             &less_than("missing", "a"),
             &get_test_file_1(),
-            create_test_schema().as_ref().clone(),
         );
     }
 
     #[test]
     fn test_zero_record_file() {
         let file = create_zero_records_data_file();
-        let schema = create_test_schema();
+        
         let expressions = [
             less_than_int("no_stats", 5),
             less_than_or_equal_int("no_stats", 30),
@@ -1122,7 +1116,7 @@ mod test {
 
         for expr in expressions {
             let result =
-                StrictMetricsEvaluator::eval(&expr, &file, schema.as_ref().clone()).unwrap();
+                StrictMetricsEvaluator::eval(&expr, &file).unwrap();
             // For zero-record files, strict eval returns MUST_MATCH.
             assert!(
                 result,
@@ -1135,12 +1129,12 @@ mod test {
     #[test]
     fn test_not() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &not_less_than_int("id", INT_MIN_VALUE - 25),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         // less_than_int("id", 5) on file1 returns false, so its NOT is true.
@@ -1149,7 +1143,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_greater_than_int("id", INT_MIN_VALUE - 25),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         // greater_than_int("id", 5) returns true (since 30 > 5), so NOT(true) is false.
@@ -1159,6 +1153,7 @@ mod test {
     #[test]
     fn test_and() {
         let schema = create_test_schema();
+        
         // (id < (INT_MIN_VALUE - 25)) AND (id >= (INT_MAX_VALUE + 1))
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
@@ -1172,7 +1167,7 @@ mod test {
         )));
         let bound = filter.bind(schema.clone(), true).unwrap();
         let result =
-            StrictMetricsEvaluator::eval(&bound, &get_test_file_1(), schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&bound, &get_test_file_1())
                 .unwrap();
         assert!(!result, "Strict eval: and(false, false) should be false");
 
@@ -1189,7 +1184,7 @@ mod test {
         )));
         let bound = filter.bind(schema.clone(), true).unwrap();
         let result =
-            StrictMetricsEvaluator::eval(&bound, &get_test_file_1(), schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&bound, &get_test_file_1())
                 .unwrap();
         assert!(result, "Strict eval: and(true, true) should be true");
     }
@@ -1197,6 +1192,7 @@ mod test {
     #[test]
     fn test_or() {
         let schema = create_test_schema();
+        
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
             Reference::new("id"),
@@ -1209,7 +1205,7 @@ mod test {
         )));
         let bound = filter.bind(schema.clone(), true).unwrap();
         let result =
-            StrictMetricsEvaluator::eval(&bound, &get_test_file_1(), schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&bound, &get_test_file_1())
                 .unwrap();
         assert!(result, "Strict eval: or(false, true) should be true");
 
@@ -1225,7 +1221,7 @@ mod test {
         )));
         let bound = filter.bind(schema.clone(), true).unwrap();
         let result =
-            StrictMetricsEvaluator::eval(&bound, &get_test_file_1(), schema.as_ref().clone())
+            StrictMetricsEvaluator::eval(&bound, &get_test_file_1())
                 .unwrap();
         assert!(!result, "Strict eval: or(false, false) should be false");
     }
@@ -1233,12 +1229,12 @@ mod test {
     #[test]
     fn test_integer_lt() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &less_than_int("id", INT_MIN_VALUE - 25),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1250,7 +1246,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1262,7 +1258,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_int("id", INT_MIN_VALUE + 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1274,7 +1270,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_int("id", INT_MAX_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1286,7 +1282,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_int("id", INT_MAX_VALUE + 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1299,12 +1295,12 @@ mod test {
     #[test]
     fn test_integer_lt_eq() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal_int("id", INT_MIN_VALUE - 25),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1316,7 +1312,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal_int("id", INT_MIN_VALUE - 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1328,7 +1324,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1340,7 +1336,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal_int("id", INT_MAX_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1352,7 +1348,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &less_than_or_equal_int("id", INT_MAX_VALUE + 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1365,12 +1361,12 @@ mod test {
     #[test]
     fn test_integer_gt() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &greater_than_int("id", INT_MAX_VALUE + 6),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1382,7 +1378,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_int("id", INT_MAX_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1394,7 +1390,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1406,7 +1402,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_int("id", INT_MIN_VALUE - 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1418,7 +1414,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_int("id", INT_MIN_VALUE - 4),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1431,12 +1427,12 @@ mod test {
     #[test]
     fn test_integer_gt_eq() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal_int("id", INT_MAX_VALUE + 6),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1448,7 +1444,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal_int("id", INT_MAX_VALUE + 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1460,7 +1456,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal_int("id", INT_MAX_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1472,7 +1468,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1484,7 +1480,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &greater_than_or_equal_int("id", INT_MIN_VALUE - 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1497,12 +1493,12 @@ mod test {
     #[test]
     fn test_integer_eq() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &equal_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1513,8 +1509,7 @@ mod test {
         let eq_file = get_test_file_eq();
         let result = StrictMetricsEvaluator::eval(
             &equal_int("id", 42),
-            &eq_file,
-            create_test_schema().as_ref().clone(),
+            &eq_file
         )
         .unwrap();
         assert!(
@@ -1524,8 +1519,7 @@ mod test {
 
         let result = StrictMetricsEvaluator::eval(
             &equal_int("id", 41),
-            &eq_file,
-            create_test_schema().as_ref().clone(),
+            &eq_file
         )
         .unwrap();
         assert!(
@@ -1537,12 +1531,12 @@ mod test {
     #[test]
     fn test_integer_not_eq() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MIN_VALUE - 25),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1553,7 +1547,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MIN_VALUE - 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1564,7 +1558,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MIN_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Strict eval: notEqual should be false when literal equals lower bound (but upper is different)");
@@ -1572,7 +1566,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MAX_VALUE - 4),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1583,7 +1577,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MAX_VALUE),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1594,7 +1588,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MAX_VALUE + 1),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1605,7 +1599,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", INT_MAX_VALUE + 6),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1617,7 +1611,6 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", 42),
             &eq_file,
-            create_test_schema().as_ref().clone(),
         )
         .unwrap();
         assert!(
@@ -1627,8 +1620,7 @@ mod test {
 
         let result = StrictMetricsEvaluator::eval(
             &not_equal_int("id", 41),
-            &eq_file,
-            create_test_schema().as_ref().clone(),
+            &eq_file
         )
         .unwrap();
         assert!(
@@ -1642,8 +1634,7 @@ mod test {
     fn test_case_sensitive_integer_not_eq_rewritten() {
         let _ = StrictMetricsEvaluator::eval(
             &equal_int_not("ID", 5),
-            &get_test_file_1(),
-            create_test_schema().as_ref().clone(),
+            &get_test_file_1()
         )
         .unwrap();
     }
@@ -1652,12 +1643,12 @@ mod test {
     fn test_string_starts_with() {
         let file1 = get_test_file_1();
         let file2 = get_test_file_2();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &starts_with("required", "a"),
             &file1,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1667,7 +1658,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &starts_with("required", "a"),
             &file2,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "strict eval: startsWith always false");
@@ -1677,19 +1668,19 @@ mod test {
     fn test_string_not_starts_with() {
         let file1 = get_test_file_1();
         let file2 = get_test_file_2();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &not_starts_with("required", "a"),
             &file1,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Strict eval: notStartsWith always false");
         let result = StrictMetricsEvaluator::eval(
             &not_starts_with("required", "a"),
             &file2,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(!result, "Strict eval: notStartsWith always false");
@@ -1698,12 +1689,12 @@ mod test {
     #[test]
     fn test_integer_in() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &in_int("id", &[INT_MIN_VALUE - 25, INT_MIN_VALUE - 24]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1714,7 +1705,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &in_int("id", &[INT_MIN_VALUE - 1, INT_MIN_VALUE]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1726,8 +1717,7 @@ mod test {
         let eq_file = get_test_file_eq();
         let result = StrictMetricsEvaluator::eval(
             &in_int("id", &[42]),
-            &eq_file,
-            create_test_schema().as_ref().clone(),
+            &eq_file
         )
         .unwrap();
         assert!(
@@ -1738,7 +1728,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &in_int("id", &[INT_MAX_VALUE, INT_MAX_VALUE + 1]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1750,12 +1740,12 @@ mod test {
     #[test]
     fn test_integer_not_in() {
         let file = get_test_file_1();
-        let schema = create_test_schema();
+        
 
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MIN_VALUE - 25, INT_MIN_VALUE - 24]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1766,7 +1756,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MIN_VALUE - 2, INT_MIN_VALUE - 1]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1777,7 +1767,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MIN_VALUE - 1, INT_MIN_VALUE]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1788,7 +1778,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MAX_VALUE - 4, INT_MAX_VALUE - 3]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1799,7 +1789,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MAX_VALUE, INT_MAX_VALUE + 1]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1810,7 +1800,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MAX_VALUE + 1, INT_MAX_VALUE + 2]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1821,7 +1811,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_int("id", &[INT_MAX_VALUE + 6, INT_MAX_VALUE + 7]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1832,7 +1822,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_str("all_nulls", &["abc", "def"]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
@@ -1843,7 +1833,7 @@ mod test {
         let result = StrictMetricsEvaluator::eval(
             &not_in_str("some_nulls", &["abc", "def"]),
             &file,
-            schema.as_ref().clone(),
+            
         )
         .unwrap();
         assert!(
