@@ -114,7 +114,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
 
-        if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
+        if self. may_contain_null(field_id) || self. may_contain_nan(field_id) {
             return ROWS_MIGHT_NOT_MATCH;
         }
 
@@ -302,7 +302,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
 
-        if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
+        if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
         }
 
@@ -377,7 +377,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
 
-        if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
+        if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
         }
 
