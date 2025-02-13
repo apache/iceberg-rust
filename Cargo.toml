@@ -26,7 +26,7 @@ members = [
     "crates/sqllogictest",
     "crates/test_utils",
 ]
-exclude = ["bindings/python"]
+exclude = ["bindings/python", "bindings/c"]
 
 [workspace.package]
 version = "0.4.0"
