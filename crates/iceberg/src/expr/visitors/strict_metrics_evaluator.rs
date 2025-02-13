@@ -853,7 +853,7 @@ mod test {
         let filter = Predicate::Set(SetExpression::new(
             NotIn,
             Reference::new(reference),
-            FnvHashSet::from_iter(str_literals.iter().map(|s| Datum::string(s))),
+            FnvHashSet::from_iter(str_literals.iter().map(Datum::string)),
         ));
         filter.bind(schema.clone(), true).unwrap()
     }
