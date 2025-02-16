@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-use iceberg::{Catalog, TableCreation, TableIdent};
+use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 
 static REST_URI: &str = "http://localhost:8181";
@@ -41,12 +41,16 @@ async fn main() {
     let catalog = RestCatalog::new(config);
 
     // Create the table identifier.
-    let table_id = TableIdent::from_strs([NAMESPACE, TABLE_NAME]).unwrap();
+    let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
+    let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
+
+    // You can also use the `from_strs` method on `TableIdent` to create the table identifier.
+    // let table_ident = TableIdent::from_strs([NAMESPACE, TABLE_NAME]).unwrap();
 
     // Drop the table if it already exists.
-    if catalog.table_exists(&table_id).await.unwrap() {
+    if catalog.table_exists(&table_ident).await.unwrap() {
         println!("Table {TABLE_NAME} already exists, dropping now.");
-        catalog.drop_table(&table_id).await.unwrap();
+        catalog.drop_table(&table_ident).await.unwrap();
     }
 
     // Build the table schema.
@@ -63,19 +67,22 @@ async fn main() {
 
     // Build the table creation parameters.
     let table_creation = TableCreation::builder()
-        .name(table_id.name.clone())
+        .name(table_ident.name.clone())
         .schema(table_schema.clone())
         .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
         .build();
 
     // Create the table.
     let _created_table = catalog
-        .create_table(&table_id.namespace, table_creation)
+        .create_table(&table_ident.namespace, table_creation)
         .await
         .unwrap();
     println!("Table {TABLE_NAME} created!");
 
+    // Ensure that the table is under the correct namespace.
+    assert!(catalog.list_tables(&namespace_ident).await.unwrap().contains(&table_ident));
+
     // Load the table back from the catalog. It should be identical to the created table.
-    let loaded_table = catalog.load_table(&table_id).await.unwrap();
-    println!("Table {TABLE_NAME} loaded: {:#?}", loaded_table.metadata());
+    let loaded_table = catalog.load_table(&table_ident).await.unwrap();
+    println!("Table {TABLE_NAME} loaded!\n\nTable: {:?}", loaded_table);
 }

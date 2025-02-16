@@ -39,25 +39,31 @@ async fn main() {
 
     // List all namespaces already in the catalog.
     let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
-    println!("Namespaces in existing catalog: {:?}", existing_namespaces);
+    println!(
+        "Namespaces alreading in the existing catalog: {:?}",
+        existing_namespaces
+    );
 
     // Create a new namespace identifier.
-    let namespace_id =
+    let namespace_ident =
         NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap();
 
     // Drop the namespace if it already exists.
-    if catalog.namespace_exists(&namespace_id).await.unwrap() {
-        println!("Namespace {:?} already exists, dropping now.", namespace_id);
-        catalog.drop_namespace(&namespace_id).await.unwrap();
+    if catalog.namespace_exists(&namespace_ident).await.unwrap() {
+        println!("Namespace already exists, dropping now.",);
+        catalog.drop_namespace(&namespace_ident).await.unwrap();
     }
 
     // Create the new namespace in the catalog.
-    let namespace = catalog
+    let _created_namespace = catalog
         .create_namespace(
-            &namespace_id,
+            &namespace_ident,
             HashMap::from([("key1".to_string(), "value1".to_string())]),
         )
         .await
         .unwrap();
-    println!("Namespace {:?} created: {:?}", namespace_id, namespace);
+    println!("Namespace {:?} created!", namespace_ident);
+
+    let loaded_namespace = catalog.get_namespace(&namespace_ident).await.unwrap();
+    println!("Namespace loaded!\n\nNamespace: {:#?}", loaded_namespace,);
 }
