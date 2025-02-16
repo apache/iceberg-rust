@@ -6416,9 +6416,9 @@ dependencies = [
 
 [[package]]
 name = "volo-thrift"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13048a3c99b710fa880da90810fca1cb070ffe5af17d59fe3d96e078df51b8d8"
+checksum = "4d14413f977646e7170c595cf8dffedfcaac029a017119b99561be3500425013"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
