@@ -31,7 +31,7 @@ static TABLE_NAME: &str = "t1";
 ///
 /// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
 /// the iceberg-rest catalog with `docker compose` in the official
-/// [quickstart documentation]((https://iceberg.apache.org/spark-quickstart/)).
+/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 #[tokio::main]
 async fn main() {
     // Create the REST iceberg catalog.
@@ -42,7 +42,6 @@ async fn main() {
 
     // Create the table identifier.
     let table_id = TableIdent::from_strs([NAMESPACE, TABLE_NAME]).unwrap();
-    // println!("{:?}", table_id);
 
     // Drop the table if it already exists.
     if catalog.table_exists(&table_id).await.unwrap() {
@@ -70,16 +69,13 @@ async fn main() {
         .build();
 
     // Create the table.
-    let created_table = catalog
+    let _created_table = catalog
         .create_table(&table_id.namespace, table_creation)
         .await
         .unwrap();
-    // println!(
-    //     "Table {TABLE_NAME} created: {:#?}",
-    //     created_table.metadata()
-    // );
+    println!("Table {TABLE_NAME} created!");
 
-    // Load the table back from the catalog.
+    // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&table_id).await.unwrap();
-    // println!("Table {TABLE_NAME} loaded: {:#?}", loaded_table.metadata());
+    println!("Table {TABLE_NAME} loaded: {:#?}", loaded_table.metadata());
 }

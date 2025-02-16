@@ -28,7 +28,7 @@ static REST_URI: &str = "http://localhost:8181";
 ///
 /// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
 /// the iceberg-rest catalog with `docker compose` in the official
-/// [quickstart documentation]((https://iceberg.apache.org/spark-quickstart/)).
+/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 #[tokio::main]
 async fn main() {
     // Create the REST iceberg catalog.
@@ -47,7 +47,7 @@ async fn main() {
 
     // Drop the namespace if it already exists.
     if catalog.namespace_exists(&namespace_id).await.unwrap() {
-        println!("Namespace already exists, dropping now.");
+        println!("Namespace {:?} already exists, dropping now.", namespace_id);
         catalog.drop_namespace(&namespace_id).await.unwrap();
     }
 
@@ -59,5 +59,5 @@ async fn main() {
         )
         .await
         .unwrap();
-    println!("Namespace created: {:?}", namespace);
+    println!("Namespace {:?} created: {:?}", namespace_id, namespace);
 }
