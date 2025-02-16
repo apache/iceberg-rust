@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response, Url};
+use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 
 use crate::types::{ErrorResponse, TokenResponse};
@@ -227,115 +227,17 @@ impl HttpClient {
     {
         self.authenticate(&mut request).await?;
 
+        let method = request.method().to_string();
+        let url = request.url().to_string();
         let response = self.client.execute(request).await?;
+        let status_code = response.status().to_string();
 
-        handler(response).await
-    }
-
-    pub async fn query<R: DeserializeOwned, E: DeserializeOwned + Into<Error>>(
-        &self,
-        mut request: Request,
-    ) -> Result<R> {
-        self.authenticate(&mut request).await?;
-
-        let method = request.method().clone();
-        let url = request.url().clone();
-        let response = self.client.execute(request).await?;
-
-        if response.status() == StatusCode::OK {
-            let text = response
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            Ok(serde_json::from_slice::<R>(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("method", method.to_string())
-                .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?)
-        } else {
-            let code = response.status();
-            let text = response
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("method", method.to_string())
-                    .with_context("url", url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(e.into())
-        }
-    }
-
-    pub async fn execute<E: DeserializeOwned + Into<Error>>(
-        &self,
-        mut request: Request,
-    ) -> Result<()> {
-        self.authenticate(&mut request).await?;
-
-        let method = request.method().clone();
-        let url = request.url().clone();
-        let response = self.client.execute(request).await?;
-
-        match response.status() {
-            StatusCode::OK | StatusCode::NO_CONTENT => Ok(()),
-            code => {
-                let text = response
-                    .bytes()
-                    .await
-                    .map_err(|err| err.with_url(url.clone()))?;
-                let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                    Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                        .with_context("code", code.to_string())
-                        .with_context("method", method.to_string())
-                        .with_context("url", url.to_string())
-                        .with_context("json", String::from_utf8_lossy(&text))
-                        .with_source(e)
-                })?;
-                Err(e.into())
-            }
-        }
-    }
-
-    /// More generic logic handling for special cases like head.
-    pub async fn do_execute<R, E: DeserializeOwned + Into<Error>>(
-        &self,
-        mut request: Request,
-        handler: impl FnOnce(&Response) -> Option<R>,
-    ) -> Result<R> {
-        self.authenticate(&mut request).await?;
-
-        dbg!(&request);
-        let method = request.method().clone();
-        let url = request.url().clone();
-        let response = self.client.execute(request).await?;
-        dbg!(&response);
-
-        if let Some(ret) = handler(&response) {
-            Ok(ret)
-        } else {
-            let code = response.status();
-            let text = response
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("method", method.to_string())
-                    .with_context("url", url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(e.into())
+        match handler(response).await {
+            Ok(result) => Ok(result),
+            Err(err) => Err(err
+                .with_context("code", status_code)
+                .with_context("method", method)
+                .with_context("url", url)),
         }
     }
 }
@@ -345,21 +247,16 @@ impl HttpClient {
 /// Returns an error if unable to parse the response bytes.
 pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     response: Response,
-    method: &Method,
-    url: &Url,
 ) -> Result<R> {
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| err.with_url(url.clone()))?;
+    let error_code = response.status();
+    let bytes = response.bytes().await?;
 
     let result = serde_json::from_slice::<R>(&bytes).map_err(|e| {
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("method", method.to_string())
-        .with_context("url", url.to_string())
+        .with_context("code", error_code.to_string())
         .with_context("json", String::from_utf8_lossy(&bytes))
         .with_source(e)
     })?;
@@ -369,22 +266,17 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 
 /// Deserializes a unexpected catalog response into an error.
 ///
-/// TODO: Eventually, this fucntion should return an error response that is custom to the error
+/// TODO: Eventually, this function should return an error response that is custom to the error
 /// codes that all endpoints share (400, 404, etc.).
-pub(crate) async fn deserialize_unexpected_catalog_error(
-    error_code: &StatusCode,
-    response: Response,
-    method: &Method,
-    url: &Url,
-) -> Error {
+pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
+    let error_code = response.status();
+
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
-        Err(err) => return err.with_url(url.clone()).into(),
+        Err(err) => return err.into(),
     };
 
     Error::new(ErrorKind::Unexpected, "Received unexpected response")
         .with_context("code", error_code.to_string())
-        .with_context("method", method.to_string())
-        .with_context("url", url.to_string())
         .with_context("json", String::from_utf8_lossy(&bytes))
 }
