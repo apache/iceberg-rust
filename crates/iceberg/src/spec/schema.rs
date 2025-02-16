@@ -60,6 +60,13 @@ pub struct Schema {
     field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
 }
 
+impl Schema {
+    /// Returns id to field mapping
+    pub fn id_to_field(&self) -> HashMap<i32, NestedFieldRef> {
+        self.id_to_field.clone()
+    }
+}
+
 impl PartialEq for Schema {
     fn eq(&self, other: &Self) -> bool {
         self.r#struct == other.r#struct
