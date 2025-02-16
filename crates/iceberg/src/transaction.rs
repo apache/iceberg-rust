@@ -1378,7 +1378,7 @@ mod tests {
         // Try to add the same partition field (same source and transform).
         let res = ups.add_field(
             source_name,
-            existing_field.transform.clone(),
+            existing_field.transform,
             Some(existing_field.name.clone()),
         );
 
