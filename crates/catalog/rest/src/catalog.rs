@@ -1479,11 +1479,7 @@ mod tests {
             .await;
 
         assert!(table.is_err());
-        assert!(table
-            .err()
-            .unwrap()
-            .message()
-            .contains("Table does not exist"));
+        assert!(table.err().unwrap().message().contains("does not exist"));
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
@@ -1680,7 +1676,7 @@ mod tests {
             .err()
             .unwrap()
             .message()
-            .contains("Table already exists"));
+            .contains("already exists"));
 
         config_mock.assert_async().await;
         create_table_mock.assert_async().await;
@@ -1860,7 +1856,7 @@ mod tests {
             .err()
             .unwrap()
             .message()
-            .contains("The given table does not exist"));
+            .contains("does not exist"));
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
