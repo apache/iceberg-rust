@@ -439,7 +439,7 @@ impl Catalog for RestCatalog {
 
         let handler = |response: Response| async move {
             match response.status() {
-                StatusCode::NO_CONTENT => Ok(true),
+                StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
                 StatusCode::NOT_FOUND => Ok(false),
                 _ => Err(deserialize_unexpected_catalog_error(response).await),
             }
@@ -458,7 +458,7 @@ impl Catalog for RestCatalog {
 
         let handler = |response: Response| async move {
             match response.status() {
-                StatusCode::NO_CONTENT => Ok(()),
+                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to drop a namespace that does not exist",
@@ -639,7 +639,7 @@ impl Catalog for RestCatalog {
 
         let handler = |response: Response| async move {
             match response.status() {
-                StatusCode::NO_CONTENT => Ok(()),
+                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to drop a table that does not exist",
@@ -662,7 +662,7 @@ impl Catalog for RestCatalog {
 
         let handler = |response: Response| async move {
             match response.status() {
-                StatusCode::NO_CONTENT => Ok(true),
+                StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
                 StatusCode::NOT_FOUND => Ok(false),
                 _ => Err(deserialize_unexpected_catalog_error(response).await),
             }
@@ -686,10 +686,14 @@ impl Catalog for RestCatalog {
 
         let handler = |response: Response| async move {
             match response.status() {
-                StatusCode::NO_CONTENT => Ok(()),
+                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
                 StatusCode::NOT_FOUND => Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to rename a table that does not exist (is the namespace correct?)",
+                )),
+                StatusCode::CONFLICT => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to rename a table to a name that already exists",
                 )),
                 _ => Err(deserialize_unexpected_catalog_error(response).await),
             }
