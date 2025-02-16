@@ -232,13 +232,11 @@ impl HttpClient {
         let response = self.client.execute(request).await?;
         let status_code = response.status().to_string();
 
-        match handler(response).await {
-            Ok(result) => Ok(result),
-            Err(err) => Err(err
-                .with_context("code", status_code)
+        handler(response).await.map_err(|e| {
+            e.with_context("code", status_code)
                 .with_context("method", method)
-                .with_context("url", url)),
-        }
+                .with_context("url", url)
+        })
     }
 }
 
@@ -248,20 +246,16 @@ impl HttpClient {
 pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
     response: Response,
 ) -> Result<R> {
-    let error_code = response.status();
     let bytes = response.bytes().await?;
 
-    let result = serde_json::from_slice::<R>(&bytes).map_err(|e| {
+    serde_json::from_slice::<R>(&bytes).map_err(|e| {
         Error::new(
             ErrorKind::Unexpected,
             "Failed to parse response from rest catalog server",
         )
-        .with_context("code", error_code.to_string())
         .with_context("json", String::from_utf8_lossy(&bytes))
         .with_source(e)
-    })?;
-
-    Ok(result)
+    })
 }
 
 /// Deserializes a unexpected catalog response into an error.
@@ -269,14 +263,11 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 /// TODO: Eventually, this function should return an error response that is custom to the error
 /// codes that all endpoints share (400, 404, etc.).
 pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
-    let error_code = response.status();
-
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => return err.into(),
     };
 
     Error::new(ErrorKind::Unexpected, "Received unexpected response")
-        .with_context("code", error_code.to_string())
         .with_context("json", String::from_utf8_lossy(&bytes))
 }
