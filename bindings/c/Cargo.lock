@@ -1299,12 +1299,10 @@ dependencies = [
 
 [[package]]
 name = "iceberg-c"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cbindgen",
  "iceberg",
- "ordered-float 4.6.0",
- "tokio",
 ]
 
 [[package]]

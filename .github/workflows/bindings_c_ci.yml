@@ -49,7 +49,7 @@ jobs:
         working-directory: "bindings/c"
         run: |
           mkdir build && cd build
-          cmake .. -DTEST_ENABLE_ASAN=ON
+          cmake ..
 
       - name: Check diff
         run: git diff --exit-code

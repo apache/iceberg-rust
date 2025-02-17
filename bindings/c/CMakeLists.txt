@@ -24,27 +24,11 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-option(TEST_ENABLE_ASAN "Enable AddressSanitizer for tests" OFF)
-
 # force the compiler to support these standards
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-
-# for GoogleTest, it should be no less than C++14
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# fetch google test via GitHub
-include(FetchContent)
-
-set(GOOGLETEST_VERSION 1.15.2)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v${GOOGLETEST_VERSION}.zip
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
 
 set(CARGO_DIST_DIR "${PROJECT_SOURCE_DIR}/target/debug")
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
