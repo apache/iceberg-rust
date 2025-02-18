@@ -103,9 +103,9 @@ jobs:
         path: bindings/python/dist
     - name: List downloaded artifacts
       run: ls -R bindings/python/dist
-    # - name: Publish to TestPyPI
-    #   uses: pypa/gh-action-pypi-publish@release/v1
-    #   with:
-    #     repository-url: https://test.pypi.org/legacy/
-    #     skip-existing: true
-    #     packages-dir: bindings/python/dist
+    - name: Publish to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        packages-dir: bindings/python/dist
