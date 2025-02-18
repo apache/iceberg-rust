@@ -20,3 +20,14 @@
 # Iceberg C FFI
 
 This project is used to build an FFI for iceberg-rust.
+
+## Build
+
+Building the project requires a complete Rust environment setup. You can find the instructions [here](../../CONTRIBUTING.md). In addition to setting up Rust, you will also need `make` and `cmake`.
+
+```shell
+mkdir build && cd build
+cmake ..
+```
+
+The built library will be in the `target/` directory.
