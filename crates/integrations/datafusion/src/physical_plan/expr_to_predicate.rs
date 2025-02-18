@@ -17,7 +17,10 @@
 
 use std::vec;
 
-use datafusion::logical_expr::{Expr, Operator};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::functions::datetime::to_date::ToDateFunc;
+use datafusion::functions::datetime::to_timestamp::ToTimestampFunc;
+use datafusion::logical_expr::{Cast, Expr, Operator};
 use datafusion::scalar::ScalarValue;
 use iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
 use iceberg::spec::Datum;
@@ -119,7 +122,53 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                 _ => TransformedResult::NotTransformed,
             }
         }
-        Expr::Cast(c) => to_iceberg_predicate(&c.expr),
+        Expr::Cast(c) => {
+            if DataType::Date32 == c.data_type || DataType::Date64 == c.data_type {
+                match c.expr.as_ref() {
+                    Expr::Literal(ScalarValue::Utf8(Some(literal))) => {
+                        let date = literal.split('T').next();
+                        if let Some(date) = date {
+                            return TransformedResult::Literal(Datum::string(date));
+                        }
+                    }
+                    _ => return TransformedResult::NotTransformed,
+                }
+            }
+            to_iceberg_predicate(&c.expr)
+        }
+        Expr::ScalarFunction(func) => {
+            if func
+                .func
+                .inner()
+                .as_any()
+                .downcast_ref::<ToTimestampFunc>()
+                .is_some()
+            // More than 1 argument means it's a custom format - not
+            // supported for now
+                && func.args.len() == 1
+            {
+                return to_iceberg_predicate(&Expr::Cast(Cast::new(
+                    Box::new(func.args[0].clone()),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                )));
+            }
+            if func
+                .func
+                .inner()
+                .as_any()
+                .downcast_ref::<ToDateFunc>()
+                .is_some()
+            // More than 1 argument means it's a custom format - not
+            // supported for now
+                && func.args.len() == 1
+            {
+                return to_iceberg_predicate(&Expr::Cast(Cast::new(
+                    Box::new(func.args[0].clone()),
+                    DataType::Date32,
+                )));
+            }
+            TransformedResult::NotTransformed
+        }
         _ => TransformedResult::NotTransformed,
     }
 }
@@ -402,5 +451,56 @@ mod tests {
         let expected_predicate =
             Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
         assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_to_timestamp_comparison_creates_predicate() {
+        let sql = "ts >= timestamp '2023-01-05T00:00:00'";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_to_timestamp_comparison_to_cast_creates_predicate() {
+        let sql = "ts >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05T00:00:00"));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    fn test_to_timestamp_with_custom_format_does_not_create_predicate() {
+        let sql =
+            "TO_TIMESTAMP(ts, 'YYYY-DD-MMTmm:HH:SS') >= CAST('2023-01-05T00:00:00' AS TIMESTAMP)";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
+    }
+
+    #[test]
+    fn test_to_date_comparison_creates_predicate() {
+        let sql = "ts >= CAST('2023-01-05T11:11:11' AS DATE)";
+        let predicate = convert_to_iceberg_predicate(sql).unwrap();
+        let expected_predicate =
+            Reference::new("ts").greater_than_or_equal_to(Datum::string("2023-01-05"));
+        assert_eq!(predicate, expected_predicate);
+    }
+
+    #[test]
+    /// When casting to DATE, usually the value is converted to datetime or timestamp,
+    /// and then it is truncated. DayTransform is not yet supported fully here.
+    /// It is specifically implemented for Strings because it is the most common use case.
+    /// When actual support is implemented, this test will fail and should be removed.
+    /// For now it is here in order to make sure that the value from within the cast
+    /// is not used as-is when casting to date, because it can create false predicates.
+    ///
+    /// (Consider for example `ts > CAST('2023-01-05T11:11:11' AS DATE)` which should
+    /// create a different predicate than `ts > CAST('2023-01-05T11:11:11' AS TIMESTAMP)`)
+    fn test_to_date_from_non_string_is_ignored() {
+        let sql = "ts >= CAST(123456789 AS DATE)";
+        let predicate = convert_to_iceberg_predicate(sql);
+        assert_eq!(predicate, None);
     }
 }
