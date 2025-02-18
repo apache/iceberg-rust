@@ -254,8 +254,8 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     pub async fn add_parquet_files(
-        transaction: Transaction<'a>,
-        file_paths: Vec<String>,
+        &mut self,
+        file_path: &str
     ) -> Result<Transaction<'a>> {
         // Checks duplicate files
         let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
