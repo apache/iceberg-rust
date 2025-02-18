@@ -45,7 +45,7 @@ use crate::ErrorKind;
 /// predicates and partition predicates.
 ///
 /// All transforms must return `null` for a `null` input value.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum Transform {
     /// Source value, unmodified
     ///
@@ -355,9 +355,28 @@ impl Transform {
     }
 
     /// Check if `Transform` is applicable on datum's `PrimitiveType`
-    fn can_transform(&self, datum: &Datum) -> bool {
+    pub fn can_transform(&self, datum: &Datum) -> bool {
         let input_type = datum.data_type().clone();
         self.result_type(&Type::Primitive(input_type)).is_ok()
+    }
+
+    /// Checks if can transform from type
+    pub fn can_transform_from_primitive_type(&self, primitive_type: &PrimitiveType) -> bool {
+        self.result_type(&Type::Primitive(primitive_type.clone()))
+            .is_ok()
+    }
+
+    /// Checks if time transform
+    pub fn is_time_transform(&self) -> bool {
+        matches!(
+            self,
+            Transform::Hour | Transform::Day | Transform::Month | Transform::Year
+        )
+    }
+
+    /// Checks if void transform
+    pub fn is_void_transform(&self) -> bool {
+        matches!(self, Transform::Void)
     }
 
     /// Creates a unary predicate from a given operator and a reference name.
