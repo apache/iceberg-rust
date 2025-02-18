@@ -30,6 +30,7 @@ permissions:
 
 jobs:
   sdist:
+    if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +49,7 @@ jobs:
           path: bindings/python/dist
 
   wheels:
+    if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
       matrix:
