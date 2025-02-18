@@ -44,9 +44,9 @@ python-source = "python"
 ignore = ["F403", "F405"]
 
 [tool.hatch.envs.dev]
-dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0"]
+dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0", "datafusion>=45", "pyiceberg[sql-sqlite]>=0.8.1"]
 
 [tool.hatch.envs.dev.scripts]
 build = "maturin build --out dist --sdist"
 develop = "maturin develop"
-test = "pytest"
+test = "RUST_BACKTRACE=full pytest -vvv -s"

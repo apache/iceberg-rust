@@ -18,10 +18,12 @@
 use pyo3::prelude::*;
 
 mod error;
+mod table_provider;
 mod transform;
 
 #[pymodule]
 fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    table_provider::register_module(py, m)?;
     transform::register_module(py, m)?;
     Ok(())
 }
