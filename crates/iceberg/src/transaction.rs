@@ -22,25 +22,23 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
-use std::sync::Arc;
 
 use arrow_array::StringArray;
 use futures::TryStreamExt;
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::file::metadata::ParquetMetaData;
 use uuid::Uuid;
 
 use crate::arrow::ArrowFileReader;
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::{
-    visit_schema, DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriterBuilder, NullOrder, Operation,
-    SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
-    Struct, StructType, Summary, TableMetadata, Transform, MAIN_BRANCH,
+    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
+    ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SortDirection, SortField, SortOrder, Struct, StructType, Summary, TableMetadata, Transform,
+    MAIN_BRANCH,
 };
 use crate::table::Table;
-use crate::writer::file_writer::parquet_writer::{IndexByParquetPathName, MinMaxColAggregator};
+use crate::writer::file_writer::ParquetWriter;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
@@ -178,65 +176,6 @@ impl<'a> Transaction<'a> {
         catalog.update_table(table_commit).await
     }
 
-    /// Adds existing parquet files
-    pub async fn add_parquet_files(
-        self,
-        file_paths: Vec<String>,
-        check_duplicate_files: bool,
-    ) -> Result<Transaction<'a>> {
-        if check_duplicate_files {
-            let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
-
-            let mut manifest_stream = self.table.inspect().manifests().scan().await?;
-            let mut referenced_files = Vec::new();
-
-            while let Some(batch) = manifest_stream.try_next().await? {
-                let file_path_array = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Failed to downcast file_path column to StringArray",
-                        )
-                    })?;
-
-                for i in 0..batch.num_rows() {
-                    let file_path = file_path_array.value(i);
-                    if new_files.contains(file_path) {
-                        referenced_files.push(file_path.to_string());
-                    }
-                }
-            }
-
-            if !referenced_files.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add files that are already referenced by table, files: {}",
-                        referenced_files.join(", ")
-                    ),
-                ));
-            }
-        }
-
-        let table_metadata = self.table.metadata();
-
-        let data_files = Transaction::parquet_files_to_data_files(
-            &self,
-            self.table.file_io(),
-            file_paths,
-            table_metadata,
-        )
-        .await?;
-
-        let mut fast_append_action = self.fast_append(Some(Uuid::new_v4()), Vec::new())?;
-        fast_append_action.add_data_files(data_files)?;
-
-        fast_append_action.apply().await
-    }
-
     async fn parquet_files_to_data_files(
         &self,
         file_io: &FileIO,
@@ -266,7 +205,7 @@ impl<'a> Transaction<'a> {
                     format!("Error reading Parquet metadata: {}", err),
                 )
             })?;
-            let builder = self.parquet_to_data_file_builder(
+            let builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
                 file_size_in_bytes,
@@ -276,80 +215,6 @@ impl<'a> Transaction<'a> {
             data_files.push(data_file);
         }
         Ok(data_files)
-    }
-
-    /// `ParquetMetadata` to data file builder
-    pub fn parquet_to_data_file_builder(
-        &self,
-        schema: SchemaRef,
-        metadata: Arc<ParquetMetaData>,
-        written_size: usize,
-        file_path: String,
-    ) -> Result<DataFileBuilder> {
-        let index_by_parquet_path = {
-            let mut visitor = IndexByParquetPathName::new();
-            visit_schema(&schema, &mut visitor)?;
-            visitor
-        };
-
-        let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
-            let mut per_col_size: HashMap<i32, u64> = HashMap::new();
-            let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
-            let mut per_col_null_val_num: HashMap<i32, u64> = HashMap::new();
-            let mut min_max_agg = MinMaxColAggregator::new(schema);
-
-            for row_group in metadata.row_groups() {
-                for column_chunk_metadata in row_group.columns() {
-                    let parquet_path = column_chunk_metadata.column_descr().path().string();
-
-                    let Some(&field_id) = index_by_parquet_path.get(&parquet_path) else {
-                        continue;
-                    };
-
-                    *per_col_size.entry(field_id).or_insert(0) +=
-                        column_chunk_metadata.compressed_size() as u64;
-                    *per_col_val_num.entry(field_id).or_insert(0) +=
-                        column_chunk_metadata.num_values() as u64;
-
-                    if let Some(statistics) = column_chunk_metadata.statistics() {
-                        if let Some(null_count) = statistics.null_count_opt() {
-                            *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
-                        }
-
-                        min_max_agg.update(field_id, statistics.clone())?;
-                    }
-                }
-            }
-            (
-                per_col_size,
-                per_col_val_num,
-                per_col_null_val_num,
-                min_max_agg.produce(),
-            )
-        };
-
-        let mut builder = DataFileBuilder::default();
-        builder
-            .content(DataContentType::Data)
-            .file_path(file_path)
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::empty())
-            .record_count(metadata.file_metadata().num_rows() as u64)
-            .file_size_in_bytes(written_size as u64)
-            .column_sizes(column_sizes)
-            .value_counts(value_counts)
-            .null_value_counts(null_value_counts)
-            .lower_bounds(lower_bounds)
-            .upper_bounds(upper_bounds)
-            .split_offsets(
-                metadata
-                    .row_groups()
-                    .iter()
-                    .filter_map(|group| group.file_offset())
-                    .collect(),
-            );
-
-        Ok(builder)
     }
 }
 
@@ -385,6 +250,64 @@ impl<'a> FastAppendAction<'a> {
     ) -> Result<&mut Self> {
         self.snapshot_produce_action.add_data_files(data_files)?;
         Ok(self)
+    }
+
+    /// Adds existing parquet files
+    pub async fn add_parquet_files(
+        transaction: Transaction<'a>,
+        file_paths: Vec<String>,
+    ) -> Result<Transaction<'a>> {
+        // Checks duplicate files
+        let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
+
+        let mut manifest_stream = transaction.table.inspect().manifests().scan().await?;
+        let mut referenced_files = Vec::new();
+
+        while let Some(batch) = manifest_stream.try_next().await? {
+            let file_path_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Failed to downcast file_path column to StringArray",
+                    )
+                })?;
+
+            for i in 0..batch.num_rows() {
+                let file_path = file_path_array.value(i);
+                if new_files.contains(file_path) {
+                    referenced_files.push(file_path.to_string());
+                }
+            }
+        }
+
+        if !referenced_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add files that are already referenced by table, files: {}",
+                    referenced_files.join(", ")
+                ),
+            ));
+        }
+
+        let table_metadata = transaction.table.metadata();
+
+        let data_files = Transaction::parquet_files_to_data_files(
+            &transaction,
+            transaction.table.file_io(),
+            file_paths,
+            table_metadata,
+        )
+        .await?;
+
+        let mut fast_append_action =
+            Transaction::fast_append(transaction, Some(Uuid::new_v4()), Vec::new())?;
+        fast_append_action.add_data_files(data_files)?;
+
+        fast_append_action.apply().await
     }
 
     /// Finished building the action and apply it to the transaction.
@@ -789,6 +712,7 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
+    use super::*;
     use crate::io::FileIOBuilder;
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
@@ -1068,8 +992,7 @@ mod tests {
         ];
 
         // Attempt to add the existing Parquet files with fast append.
-        let new_tx = tx
-            .add_parquet_files(file_paths.clone(), true)
+        let new_tx = FastAppendAction::add_parquet_files(tx, file_paths.clone())
             .await
             .expect("Adding existing Parquet files should succeed");
 
