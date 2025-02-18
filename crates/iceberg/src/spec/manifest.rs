@@ -1182,6 +1182,12 @@ impl ManifestEntry {
     pub fn data_file(&self) -> &DataFile {
         &self.data_file
     }
+
+    /// get file sequence number
+    #[inline]
+    pub fn file_sequence_number(&self) -> Option<i64> {
+        self.file_sequence_number
+    }
 }
 
 /// Used to track additions and deletions in ManifestEntry.
