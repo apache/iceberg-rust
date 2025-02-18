@@ -27,6 +27,7 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::arrow::AsyncArrowWriter;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::{from_thrift, Statistics};
 use parquet::format::FileMetaData;
@@ -39,8 +40,8 @@ use crate::arrow::{
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
-    visit_schema, DataFileBuilder, DataFileFormat, Datum, ListType, MapType, NestedFieldRef,
-    PrimitiveType, Schema, SchemaRef, SchemaVisitor, StructType, Type,
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType, Type,
 };
 use crate::writer::CurrentFileStatus;
 use crate::{Error, ErrorKind, Result};
@@ -105,7 +106,8 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     }
 }
 
-struct IndexByParquetPathName {
+/// A mapping from Parquet column path names to internal field id
+pub struct IndexByParquetPathName {
     name_to_id: HashMap<String, i32>,
 
     field_names: Vec<String>,
@@ -114,6 +116,7 @@ struct IndexByParquetPathName {
 }
 
 impl IndexByParquetPathName {
+    /// Creates a new, empty `IndexByParquetPathName`
     pub fn new() -> Self {
         Self {
             name_to_id: HashMap::new(),
@@ -122,8 +125,15 @@ impl IndexByParquetPathName {
         }
     }
 
+    /// Retrieves the internal field ID
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
+    }
+}
+
+impl Default for IndexByParquetPathName {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -219,14 +229,15 @@ pub struct ParquetWriter {
 }
 
 /// Used to aggregate min and max value of each column.
-struct MinMaxColAggregator {
+pub struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
     upper_bounds: HashMap<i32, Datum>,
     schema: SchemaRef,
 }
 
 impl MinMaxColAggregator {
-    fn new(schema: SchemaRef) -> Self {
+    /// Creates new and empty `MinMaxColAggregator`
+    pub fn new(schema: SchemaRef) -> Self {
         Self {
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
@@ -256,7 +267,8 @@ impl MinMaxColAggregator {
             .or_insert(datum);
     }
 
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    /// Update statistics
+    pub fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -301,7 +313,8 @@ impl MinMaxColAggregator {
         Ok(())
     }
 
-    fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
+    /// Returns lower and upper bounds
+    pub fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
         (self.lower_bounds, self.upper_bounds)
     }
 }
@@ -389,6 +402,79 @@ impl ParquetWriter {
                     .filter_map(|group| group.file_offset)
                     .collect(),
             );
+        Ok(builder)
+    }
+
+    /// `ParquetMetadata` to data file builder
+    pub fn parquet_to_data_file_builder(
+        schema: SchemaRef,
+        metadata: Arc<ParquetMetaData>,
+        written_size: usize,
+        file_path: String,
+    ) -> Result<DataFileBuilder> {
+        let index_by_parquet_path = {
+            let mut visitor = IndexByParquetPathName::new();
+            visit_schema(&schema, &mut visitor)?;
+            visitor
+        };
+
+        let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
+            let mut per_col_size: HashMap<i32, u64> = HashMap::new();
+            let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
+            let mut per_col_null_val_num: HashMap<i32, u64> = HashMap::new();
+            let mut min_max_agg = MinMaxColAggregator::new(schema);
+
+            for row_group in metadata.row_groups() {
+                for column_chunk_metadata in row_group.columns() {
+                    let parquet_path = column_chunk_metadata.column_descr().path().string();
+
+                    let Some(&field_id) = index_by_parquet_path.get(&parquet_path) else {
+                        continue;
+                    };
+
+                    *per_col_size.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.compressed_size() as u64;
+                    *per_col_val_num.entry(field_id).or_insert(0) +=
+                        column_chunk_metadata.num_values() as u64;
+
+                    if let Some(statistics) = column_chunk_metadata.statistics() {
+                        if let Some(null_count) = statistics.null_count_opt() {
+                            *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
+                        }
+
+                        min_max_agg.update(field_id, statistics.clone())?;
+                    }
+                }
+            }
+            (
+                per_col_size,
+                per_col_val_num,
+                per_col_null_val_num,
+                min_max_agg.produce(),
+            )
+        };
+
+        let mut builder = DataFileBuilder::default();
+        builder
+            .content(DataContentType::Data)
+            .file_path(file_path)
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::empty())
+            .record_count(metadata.file_metadata().num_rows() as u64)
+            .file_size_in_bytes(written_size as u64)
+            .column_sizes(column_sizes)
+            .value_counts(value_counts)
+            .null_value_counts(null_value_counts)
+            .lower_bounds(lower_bounds)
+            .upper_bounds(upper_bounds)
+            .split_offsets(
+                metadata
+                    .row_groups()
+                    .iter()
+                    .filter_map(|group| group.file_offset())
+                    .collect(),
+            );
+
         Ok(builder)
     }
 }
