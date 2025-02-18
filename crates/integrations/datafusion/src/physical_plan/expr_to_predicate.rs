@@ -123,7 +123,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
         Expr::Cast(c) => {
             if c.data_type == DataType::Date32 || c.data_type == DataType::Date64 {
                 // Casts to date truncate the expression, we cannot simply extract it as it
-                // can create erronous predicates.
+                // can create erroneous predicates.
                 return TransformedResult::NotTransformed;
             }
             to_iceberg_predicate(&c.expr)
