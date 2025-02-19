@@ -404,6 +404,21 @@
 <a href="#404" id="404">404</a>
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -423,6 +438,7 @@
 
 </span><span class="kw">use </span>std::vec;
 
+<span class="kw">use </span>datafusion::arrow::datatypes::DataType;
 <span class="kw">use </span>datafusion::logical_expr::{Expr, Operator};
 <span class="kw">use </span>datafusion::scalar::ScalarValue;
 <span class="kw">use </span>iceberg::expr::{BinaryExpression, Predicate, PredicateOperator, Reference, UnaryExpression};
@@ -525,7 +541,14 @@
                 <span class="kw">_ </span>=&gt; TransformedResult::NotTransformed,
             }
         }
-        Expr::Cast(c) =&gt; to_iceberg_predicate(<span class="kw-2">&amp;</span>c.expr),
+        Expr::Cast(c) =&gt; {
+            <span class="kw">if </span>c.data_type == DataType::Date32 || c.data_type == DataType::Date64 {
+                <span class="comment">// Casts to date truncate the expression, we cannot simply extract it as it
+                // can create erroneous predicates.
+                </span><span class="kw">return </span>TransformedResult::NotTransformed;
+            }
+            to_iceberg_predicate(<span class="kw-2">&amp;</span>c.expr)
+        }
         <span class="kw">_ </span>=&gt; TransformedResult::NotTransformed,
     }
 }
@@ -808,6 +831,13 @@
         <span class="kw">let </span>expected_predicate =
             Reference::new(<span class="string">"ts"</span>).greater_than_or_equal_to(Datum::string(<span class="string">"2023-01-05T00:00:00"</span>));
         <span class="macro">assert_eq!</span>(predicate, expected_predicate);
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_predicate_conversion_with_date_cast() {
+        <span class="kw">let </span>sql = <span class="string">"ts &gt;= date '2023-01-05T11:00:00'"</span>;
+        <span class="kw">let </span>predicate = convert_to_iceberg_predicate(sql);
+        <span class="macro">assert_eq!</span>(predicate, <span class="prelude-val">None</span>);
     }
 }
 </code></pre></div></section></main></body></html>
