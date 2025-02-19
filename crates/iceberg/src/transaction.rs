@@ -18,21 +18,27 @@
 //! This module contains transaction api.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
 
+use arrow_array::StringArray;
+use futures::TryStreamExt;
+use parquet::arrow::async_reader::AsyncFileReader;
 use uuid::Uuid;
 
+use crate::arrow::ArrowFileReader;
 use crate::error::Result;
-use crate::io::OutputFile;
+use crate::io::{FileIO, OutputFile};
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
     ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
+    SortDirection, SortField, SortOrder, Struct, StructType, Summary, TableMetadata, Transform,
+    MAIN_BRANCH,
 };
 use crate::table::Table;
+use crate::writer::file_writer::ParquetWriter;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
@@ -169,6 +175,47 @@ impl<'a> Transaction<'a> {
 
         catalog.update_table(table_commit).await
     }
+
+    async fn parquet_files_to_data_files(
+        &self,
+        file_io: &FileIO,
+        file_paths: Vec<String>,
+        table_metadata: &TableMetadata,
+    ) -> Result<Vec<DataFile>> {
+        let mut data_files: Vec<DataFile> = Vec::new();
+
+        // TODO: support adding to partitioned table
+        if !table_metadata.default_spec.fields().is_empty() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Appending to partitioned tables is not supported",
+            ));
+        }
+
+        for file_path in file_paths {
+            let input_file = file_io.new_input(&file_path)?;
+            let file_metadata = input_file.metadata().await?;
+            let file_size_in_bytes = file_metadata.size as usize;
+            let reader = input_file.reader().await?;
+
+            let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+            let parquet_metadata = parquet_reader.get_metadata().await.map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Error reading Parquet metadata: {}", err),
+                )
+            })?;
+            let builder = ParquetWriter::parquet_to_data_file_builder(
+                table_metadata.current_schema().clone(),
+                parquet_metadata,
+                file_size_in_bytes,
+                file_path,
+            )?;
+            let data_file = builder.build().unwrap();
+            data_files.push(data_file);
+        }
+        Ok(data_files)
+    }
 }
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
@@ -203,6 +250,64 @@ impl<'a> FastAppendAction<'a> {
     ) -> Result<&mut Self> {
         self.snapshot_produce_action.add_data_files(data_files)?;
         Ok(self)
+    }
+
+    /// Adds existing parquet files
+    pub async fn add_parquet_files(
+        &mut self,
+        file_path: &str
+    ) -> Result<Transaction<'a>> {
+        // Checks duplicate files
+        let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
+
+        let mut manifest_stream = transaction.table.inspect().manifests().scan().await?;
+        let mut referenced_files = Vec::new();
+
+        while let Some(batch) = manifest_stream.try_next().await? {
+            let file_path_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Failed to downcast file_path column to StringArray",
+                    )
+                })?;
+
+            for i in 0..batch.num_rows() {
+                let file_path = file_path_array.value(i);
+                if new_files.contains(file_path) {
+                    referenced_files.push(file_path.to_string());
+                }
+            }
+        }
+
+        if !referenced_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add files that are already referenced by table, files: {}",
+                    referenced_files.join(", ")
+                ),
+            ));
+        }
+
+        let table_metadata = transaction.table.metadata();
+
+        let data_files = Transaction::parquet_files_to_data_files(
+            &transaction,
+            transaction.table.file_io(),
+            file_paths,
+            table_metadata,
+        )
+        .await?;
+
+        let mut fast_append_action =
+            Transaction::fast_append(transaction, Some(Uuid::new_v4()), Vec::new())?;
+        fast_append_action.add_data_files(data_files)?;
+
+        fast_append_action.apply().await
     }
 
     /// Finished building the action and apply it to the transaction.
@@ -319,6 +424,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 "Partition value is not compatible with partition type",
             ));
         }
+
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
             if !field
                 .field_type
@@ -606,7 +712,9 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
+    use super::*;
     use crate::io::FileIOBuilder;
+    use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Struct,
         TableMetadata,
@@ -847,6 +955,7 @@ mod tests {
                 .sequence_number()
                 .expect("Inherit sequence number by load manifest")
         );
+
         assert_eq!(
             new_snapshot.snapshot_id(),
             manifest.entries()[0].snapshot_id().unwrap()
@@ -868,5 +977,90 @@ mod tests {
             tx.is_err(),
             "Should not allow to do same kinds update in same transaction"
         );
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_parquet_files_to_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+        let tx = crate::transaction::Transaction::new(&fixture.table);
+
+        let file_paths = vec![
+            format!("{}/1.parquet", &fixture.table_location),
+            format!("{}/2.parquet", &fixture.table_location),
+            format!("{}/3.parquet", &fixture.table_location),
+        ];
+
+        // Attempt to add the existing Parquet files with fast append.
+        let new_tx = FastAppendAction::add_parquet_files(tx, file_paths.clone())
+            .await
+            .expect("Adding existing Parquet files should succeed");
+
+        let mut found_add_snapshot = false;
+        let mut found_set_snapshot_ref = false;
+        for update in new_tx.updates.iter() {
+            match update {
+                TableUpdate::AddSnapshot { .. } => {
+                    found_add_snapshot = true;
+                }
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    found_set_snapshot_ref = true;
+                    assert_eq!(ref_name, crate::transaction::MAIN_BRANCH);
+                    assert!(reference.snapshot_id > 0);
+                }
+                _ => {}
+            }
+        }
+        assert!(found_add_snapshot);
+        assert!(found_set_snapshot_ref);
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &new_tx.updates[0] {
+            snapshot
+        } else {
+            panic!("Expected the first update to be an AddSnapshot update");
+        };
+
+        let manifest_list = new_snapshot
+            .load_manifest_list(fixture.table.file_io(), fixture.table.metadata())
+            .await
+            .expect("Failed to load manifest list");
+
+        assert_eq!(
+            manifest_list.entries().len(),
+            2,
+            "Expected 2 manifest list entries, got {}",
+            manifest_list.entries().len()
+        );
+
+        // Load the manifest from the manifest list
+        let manifest = manifest_list.entries()[0]
+            .load_manifest(fixture.table.file_io())
+            .await
+            .expect("Failed to load manifest");
+
+        // Check that the manifest contains three entries.
+        assert_eq!(
+            manifest.entries().len(),
+            3,
+            "Expected 3 manifest entries, got {}",
+            manifest.entries().len()
+        );
+
+        // Verify each file path appears in manifest.
+        let manifest_paths: Vec<String> = manifest
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().file_path.clone())
+            .collect();
+        for path in file_paths {
+            assert!(
+                manifest_paths.contains(&path),
+                "Manifest does not contain expected file path: {}",
+                path
+            );
+        }
     }
 }

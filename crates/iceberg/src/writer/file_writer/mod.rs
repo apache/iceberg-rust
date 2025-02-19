@@ -24,7 +24,7 @@ use super::CurrentFileStatus;
 use crate::spec::DataFileBuilder;
 use crate::Result;
 
-mod parquet_writer;
+pub mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
 mod track_writer;
 
