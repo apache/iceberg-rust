@@ -29,6 +29,12 @@ pub(crate) struct TrackWriter {
     written_size: Arc<AtomicI64>,
 }
 
+impl std::fmt::Debug for TrackWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrackWriter").finish()
+    }
+}
+
 impl TrackWriter {
     pub fn new(writer: Box<dyn FileWrite>, written_size: Arc<AtomicI64>) -> Self {
         Self {

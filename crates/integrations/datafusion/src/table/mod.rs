@@ -24,19 +24,33 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::error::Result as DFResult;
+use datafusion::error::{DataFusionError as DFError, Result as DFResult};
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::ExecutionPlan;
 use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::spec::DataFileFormat;
 use iceberg::table::Table;
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::IcebergWriterBuilder;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::sink::IcebergSink;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
+    /// catalog for this table provider.
+    /// catalog is optional which is used for insert operation.
+    catalog: Option<Arc<dyn Catalog>>,
     /// A table in the catalog.
     table: Table,
     /// Table snapshot id that will be queried via this provider.
@@ -48,11 +62,13 @@ pub struct IcebergTableProvider {
 impl IcebergTableProvider {
     pub(crate) fn new(table: Table, schema: ArrowSchemaRef) -> Self {
         IcebergTableProvider {
+            catalog: None,
             table,
             snapshot_id: None,
             schema,
         }
     }
+
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
     /// using the given client and table name to fetch an actual [`Table`]
     /// in the provided namespace.
@@ -67,6 +83,7 @@ impl IcebergTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
+            catalog: Some(client),
             table,
             snapshot_id: None,
             schema,
@@ -78,6 +95,7 @@ impl IcebergTableProvider {
     pub async fn try_new_from_table(table: Table) -> Result<Self> {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergTableProvider {
+            catalog: None,
             table,
             snapshot_id: None,
             schema,
@@ -102,6 +120,7 @@ impl IcebergTableProvider {
         let schema = snapshot.schema(table.metadata())?;
         let schema = Arc::new(schema_to_arrow_schema(&schema)?);
         Ok(IcebergTableProvider {
+            catalog: None,
             table,
             snapshot_id: Some(snapshot_id),
             schema,
@@ -146,6 +165,50 @@ impl TableProvider for IcebergTableProvider {
     {
         // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+
+    async fn insert_into(
+        &self,
+        _state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let Some(catalog) = &self.catalog else {
+            return Err(DFError::Internal(
+                "Static table can't not be inserted".to_string(),
+            ));
+        };
+
+        if !matches!(insert_op, InsertOp::Append) {
+            return Err(DFError::Internal(
+                "Only support append only table".to_string(),
+            ));
+        }
+
+        // create data file writer
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            self.table.metadata().current_schema().clone(),
+            self.table.file_io().clone(),
+            DefaultLocationGenerator::new(self.table.metadata().clone())
+                .map_err(|err| DFError::External(Box::new(err)))?,
+            DefaultFileNameGenerator::new("".to_string(), None, DataFileFormat::Parquet),
+        );
+        let data_file_writer = DataFileWriterBuilder::new(parquet_writer_builder, None)
+            .build()
+            .await
+            .map_err(|err| DFError::External(Box::new(err)))?;
+
+        let iceberg_sink = IcebergSink::new(data_file_writer, catalog.clone(), self.table.clone());
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(iceberg_sink),
+            schema_to_arrow_schema(self.table.metadata().current_schema())
+                .map_err(|err| DFError::External(Box::new(err)))?
+                .into(),
+            None,
+        )))
     }
 }
 
