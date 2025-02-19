@@ -19,6 +19,7 @@
 
 mod schema;
 pub use schema::*;
+pub(crate) mod delete_file_manager;
 mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
