@@ -16,13 +16,13 @@
 // under the License.
 
 pub mod table_provider_factory;
-
 use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::Statistics;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
@@ -31,6 +31,7 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
+use crate::compute_statistics;
 use crate::physical_plan::scan::IcebergTableScan;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
@@ -41,6 +42,9 @@ pub struct IcebergTableProvider {
     table: Table,
     /// Table snapshot id that will be queried via this provider.
     snapshot_id: Option<i64>,
+    /// Statistics for the table; row count and null count/min-max values per column.
+    /// If not present defaults to `None`.
+    statistics: Option<Statistics>,
     /// A reference-counted arrow `Schema`.
     schema: ArrowSchemaRef,
 }
@@ -51,6 +55,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics: None,
         }
     }
     /// Asynchronously tries to construct a new [`IcebergTableProvider`]
@@ -70,6 +75,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics: None,
         })
     }
 
@@ -81,6 +87,7 @@ impl IcebergTableProvider {
             table,
             snapshot_id: None,
             schema,
+            statistics: None,
         })
     }
 
@@ -105,7 +112,18 @@ impl IcebergTableProvider {
             table,
             snapshot_id: Some(snapshot_id),
             schema,
+            statistics: None,
         })
+    }
+
+    // Try to compute the underlying table statistics directly from the manifest/data files
+    pub async fn with_computed_statistics(mut self) -> Self {
+        let statistics = compute_statistics(&self.table, self.snapshot_id)
+            .await
+            .inspect_err(|err| log::warn!("Failed computing table statistics: {err}"))
+            .ok();
+        self.statistics = statistics;
+        self
     }
 }
 
@@ -134,9 +152,14 @@ impl TableProvider for IcebergTableProvider {
             self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
+            self.statistics.clone(),
             projection,
             filters,
         )))
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.statistics.clone()
     }
 
     fn supports_filters_pushdown(
