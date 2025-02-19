@@ -15,34 +15,28 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Publish Python 🐍 distribution 📦 to PyPI
+name: "Nightly PyPI Build"
 
 on:
-  push:
-    tags:
-      - '*'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/release_python.yml"
-  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"  # Runs at midnight UTC every day
+  workflow_dispatch:  # Allows manual triggering
 
 env:
   rust_msrv: "1.77.1"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   sdist:
+    if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/overwrite-package-version  # overwrite the pacakge version with current timestamp
+
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: "bindings/python"
@@ -55,6 +49,7 @@ jobs:
           path: bindings/python/dist
 
   wheels:
+    if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
       matrix:
@@ -66,6 +61,7 @@ jobs:
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
         - uses: actions/checkout@v4
+        - uses: ./.github/actions/overwrite-package-version  # overwrite the pacakge version with current timestamp
         - uses: actions/setup-python@v5
           with:
             python-version: 3.9
@@ -86,16 +82,13 @@ jobs:
             name: wheels-${{ matrix.os }}-${{ matrix.target }}
             path: bindings/python/dist
 
-  pypi-publish:
-    name: Publish Python 🐍 distribution 📦 to Pypi
+  testpypi-publish:
     needs: [ sdist, wheels ]
     runs-on: ubuntu-latest
-    # Only publish to PyPi if the tag is not a pre-release
-    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
 
     environment:
-      name: pypi
-      url: https://pypi.org/p/pyiceberg_core
+      name: testpypi
+      url: https://test.pypi.org/p/pyiceberg_core
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
@@ -107,9 +100,11 @@ jobs:
         pattern: wheels-*
         merge-multiple: true
         path: bindings/python/dist
-    - name: Publish to PyPI
+    - name: List downloaded artifacts
+      run: ls -R bindings/python/dist
+    - name: Publish to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-
       with:
+        repository-url: https://test.pypi.org/legacy/
         skip-existing: true
         packages-dir: bindings/python/dist
