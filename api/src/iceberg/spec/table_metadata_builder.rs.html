@@ -2342,6 +2342,47 @@
 <a href="#2342" id="2342">2342</a>
 <a href="#2343" id="2343">2343</a>
 <a href="#2344" id="2344">2344</a>
+<a href="#2345" id="2345">2345</a>
+<a href="#2346" id="2346">2346</a>
+<a href="#2347" id="2347">2347</a>
+<a href="#2348" id="2348">2348</a>
+<a href="#2349" id="2349">2349</a>
+<a href="#2350" id="2350">2350</a>
+<a href="#2351" id="2351">2351</a>
+<a href="#2352" id="2352">2352</a>
+<a href="#2353" id="2353">2353</a>
+<a href="#2354" id="2354">2354</a>
+<a href="#2355" id="2355">2355</a>
+<a href="#2356" id="2356">2356</a>
+<a href="#2357" id="2357">2357</a>
+<a href="#2358" id="2358">2358</a>
+<a href="#2359" id="2359">2359</a>
+<a href="#2360" id="2360">2360</a>
+<a href="#2361" id="2361">2361</a>
+<a href="#2362" id="2362">2362</a>
+<a href="#2363" id="2363">2363</a>
+<a href="#2364" id="2364">2364</a>
+<a href="#2365" id="2365">2365</a>
+<a href="#2366" id="2366">2366</a>
+<a href="#2367" id="2367">2367</a>
+<a href="#2368" id="2368">2368</a>
+<a href="#2369" id="2369">2369</a>
+<a href="#2370" id="2370">2370</a>
+<a href="#2371" id="2371">2371</a>
+<a href="#2372" id="2372">2372</a>
+<a href="#2373" id="2373">2373</a>
+<a href="#2374" id="2374">2374</a>
+<a href="#2375" id="2375">2375</a>
+<a href="#2376" id="2376">2376</a>
+<a href="#2377" id="2377">2377</a>
+<a href="#2378" id="2378">2378</a>
+<a href="#2379" id="2379">2379</a>
+<a href="#2380" id="2380">2380</a>
+<a href="#2381" id="2381">2381</a>
+<a href="#2382" id="2382">2382</a>
+<a href="#2383" id="2383">2383</a>
+<a href="#2384" id="2384">2384</a>
+<a href="#2385" id="2385">2385</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2398,6 +2439,7 @@
     last_added_order_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
     <span class="comment">// None if this is a new table (from_metadata) method not used
     </span>previous_history_entry: <span class="prelude-ty">Option</span>&lt;MetadataLog&gt;,
+    last_updated_ms: <span class="prelude-ty">Option</span>&lt;i64&gt;,
 }
 
 <span class="attr">#[derive(Debug, Clone, PartialEq)]
@@ -2464,6 +2506,7 @@
                 statistics: HashMap::new(),
                 partition_statistics: HashMap::new(),
             },
+            last_updated_ms: <span class="prelude-val">None</span>,
             changes: <span class="macro">vec!</span>[],
             last_added_schema_id: <span class="prelude-val">Some</span>(schema_id),
             last_added_spec_id: <span class="prelude-val">None</span>,
@@ -2500,6 +2543,7 @@
             last_added_schema_id: <span class="prelude-val">None</span>,
             last_added_spec_id: <span class="prelude-val">None</span>,
             last_added_order_id: <span class="prelude-val">None</span>,
+            last_updated_ms: <span class="prelude-val">None</span>,
         }
     }
 
@@ -2712,13 +2756,17 @@
             }
         }
 
-        <span class="kw">if </span>snapshot.timestamp_ms() - <span class="self">self</span>.metadata.last_updated_ms &lt; -ONE_MINUTE_MS {
+        <span class="kw">let </span>max_last_updated = <span class="self">self
+            </span>.last_updated_ms
+            .unwrap_or_default()
+            .max(<span class="self">self</span>.metadata.last_updated_ms);
+        <span class="kw">if </span>snapshot.timestamp_ms() - max_last_updated &lt; -ONE_MINUTE_MS {
             <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::DataInvalid,
                 <span class="macro">format!</span>(
                     <span class="string">"Invalid snapshot timestamp {}: before last updated timestamp {}"</span>,
                     snapshot.timestamp_ms(),
-                    <span class="self">self</span>.metadata.last_updated_ms
+                    max_last_updated
                 ),
             ));
         }
@@ -2728,7 +2776,7 @@
             snapshot: snapshot.clone(),
         });
 
-        <span class="self">self</span>.metadata.last_updated_ms = snapshot.timestamp_ms();
+        <span class="self">self</span>.last_updated_ms = <span class="prelude-val">Some</span>(snapshot.timestamp_ms());
         <span class="self">self</span>.metadata.last_sequence_number = snapshot.sequence_number();
         <span class="self">self</span>.metadata
             .snapshots
@@ -2827,19 +2875,23 @@
             <span class="macro">matches!</span>(update, TableUpdate::AddSnapshot { snapshot: snap } <span class="kw">if </span>snap.snapshot_id() == snapshot.snapshot_id())
         });
         <span class="kw">if </span>is_added_snapshot {
-            <span class="self">self</span>.metadata.last_updated_ms = snapshot.timestamp_ms();
+            <span class="self">self</span>.last_updated_ms = <span class="prelude-val">Some</span>(snapshot.timestamp_ms());
         }
 
         <span class="comment">// Current snapshot id is set only for the main branch
         </span><span class="kw">if </span>ref_name == MAIN_BRANCH {
             <span class="self">self</span>.metadata.current_snapshot_id = <span class="prelude-val">Some</span>(snapshot.snapshot_id());
-            <span class="kw">if </span><span class="self">self</span>.metadata.last_updated_ms == i64::default() {
-                <span class="self">self</span>.metadata.last_updated_ms = chrono::Utc::now().timestamp_millis();
+            <span class="kw">let </span>timestamp_ms = <span class="kw">if let </span><span class="prelude-val">Some</span>(last_updated_ms) = <span class="self">self</span>.last_updated_ms {
+                last_updated_ms
+            } <span class="kw">else </span>{
+                <span class="kw">let </span>last_updated_ms = chrono::Utc::now().timestamp_millis();
+                <span class="self">self</span>.last_updated_ms = <span class="prelude-val">Some</span>(last_updated_ms);
+                last_updated_ms
             };
 
             <span class="self">self</span>.metadata.snapshot_log.push(SnapshotLog {
                 snapshot_id: snapshot.snapshot_id(),
-                timestamp_ms: <span class="self">self</span>.metadata.last_updated_ms,
+                timestamp_ms,
             });
         }
 
@@ -3255,9 +3307,9 @@
 
     <span class="doccomment">/// Build the table metadata.
     </span><span class="kw">pub fn </span>build(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;TableMetadataBuildResult&gt; {
-        <span class="kw">if </span><span class="self">self</span>.metadata.last_updated_ms == i64::default() {
-            <span class="self">self</span>.metadata.last_updated_ms = chrono::Utc::now().timestamp_millis();
-        }
+        <span class="self">self</span>.metadata.last_updated_ms = <span class="self">self
+            </span>.last_updated_ms
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
         <span class="comment">// Check compatibility of the current schema to the default partition spec and sort order.
         // We use the `get_xxx` methods from the builder to avoid using the panicking
@@ -3554,6 +3606,8 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
+    <span class="kw">use </span>std::thread::sleep;
+
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
@@ -4684,6 +4738,34 @@
             .unwrap();
         <span class="macro">assert_eq!</span>(build_result.metadata.partition_statistics.len(), <span class="number">0</span>);
         <span class="macro">assert_eq!</span>(build_result.changes.len(), <span class="number">0</span>);
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>last_update_increased_for_property_only_update() {
+        <span class="kw">let </span>builder = builder_without_changes(FormatVersion::V2);
+
+        <span class="kw">let </span>metadata = builder.build().unwrap().metadata;
+        <span class="kw">let </span>last_updated_ms = metadata.last_updated_ms;
+        sleep(std::time::Duration::from_millis(<span class="number">2</span>));
+
+        <span class="kw">let </span>build_result = metadata
+            .into_builder(<span class="prelude-val">Some</span>(
+                <span class="string">"s3://bucket/test/location/metadata/metadata1.json"</span>.to_string(),
+            ))
+            .set_properties(HashMap::from_iter(<span class="macro">vec!</span>[(
+                <span class="string">"foo"</span>.to_string(),
+                <span class="string">"bar"</span>.to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        <span class="macro">assert!</span>(
+            build_result.metadata.last_updated_ms &gt; last_updated_ms,
+            <span class="string">"{} &gt; {}"</span>,
+            build_result.metadata.last_updated_ms,
+            last_updated_ms
+        );
     }
 }
 </code></pre></div></section></main></body></html>
