@@ -852,6 +852,10 @@
 <a href="#852" id="852">852</a>
 <a href="#853" id="853">853</a>
 <a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -898,7 +902,11 @@
 
     <span class="attr">#[inline]
     </span><span class="kw">fn </span>truncate_binary(s: <span class="kw-2">&amp;</span>[u8], width: usize) -&gt; <span class="kw-2">&amp;</span>[u8] {
-        <span class="kw-2">&amp;</span>s[<span class="number">0</span>..width]
+        <span class="kw">if </span>s.len() &gt; width {
+            <span class="kw-2">&amp;</span>s[<span class="number">0</span>..width]
+        } <span class="kw">else </span>{
+            s
+        }
     }
 
     <span class="attr">#[inline]
