@@ -764,17 +764,6 @@ mod test {
         filter.bind(schema.clone(), true).unwrap()
     }
 
-    fn not_greater_than_int(reference: &str, int_literal: i32) -> BoundPredicate {
-        let schema = create_test_schema();
-        let filter = Predicate::Binary(BinaryExpression::new(
-            GreaterThan,
-            Reference::new(reference),
-            Datum::int(int_literal),
-        ))
-        .not();
-        filter.bind(schema.clone(), true).unwrap()
-    }
-
     fn greater_than_or_equal_int(reference: &str, int_literal: i32) -> BoundPredicate {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
