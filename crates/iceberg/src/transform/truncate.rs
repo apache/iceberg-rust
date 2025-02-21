@@ -47,7 +47,7 @@ impl Truncate {
         if s.len() > width {
             &s[0..width]
         } else {
-            &s
+            s
         }
     }
 
