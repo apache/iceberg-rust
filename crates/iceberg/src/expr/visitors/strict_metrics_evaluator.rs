@@ -158,7 +158,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> crate::Result<bool> {
+    fn not(&mut self, _inner: bool) -> crate::Result<bool> {
         Err(Error::new(
             ErrorKind::DataInvalid,
             "NOT should be rewritten",
