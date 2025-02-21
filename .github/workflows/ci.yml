@@ -47,7 +47,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.6.0
+        uses: apache/skywalking-eyes/header@v0.7.0
 
       - name: Install taplo-cli
         uses: taiki-e/install-action@v2
