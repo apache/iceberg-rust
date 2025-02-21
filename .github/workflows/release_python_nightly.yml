@@ -29,19 +29,32 @@ permissions:
   contents: read
 
 jobs:
+  set-version:
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.set-ts.outputs.TIMESTAMP }}
+    steps:
+      - name: Generate version timestamp
+        id: set-ts
+        run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> "$GITHUB_OUTPUT"
+
   sdist:
+    needs: set-version
     if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/overwrite-package-version  # overwrite the pacakge version with current timestamp
+      
+      - uses: ./.github/actions/overwrite-package-version  # Overwrite package version with timestamp
+        with:
+          timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
 
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: "bindings/python"
           command: sdist
           args: -o dist
+      
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
@@ -49,6 +62,7 @@ jobs:
           path: bindings/python/dist
 
   wheels:
+    needs: set-version
     if: github.repository == 'apache/iceberg-rust'  # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
@@ -61,14 +75,20 @@ jobs:
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
         - uses: actions/checkout@v4
-        - uses: ./.github/actions/overwrite-package-version  # overwrite the pacakge version with current timestamp
+
+        - uses: ./.github/actions/overwrite-package-version  # Overwrite package version with timestamp
+          with:
+            timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
+
         - uses: actions/setup-python@v5
           with:
             python-version: 3.9
+
         - name: Setup Rust toolchain
           uses: ./.github/actions/setup-builder
           with:
             rust-version: ${{ env.rust_msrv }}
+
         - uses: PyO3/maturin-action@v1
           with:
             target: ${{ matrix.target }}
@@ -76,6 +96,7 @@ jobs:
             working-directory: "bindings/python"
             command: build
             args: --release -o dist
+
         - name: Upload wheels
           uses: actions/upload-artifact@v4
           with:
