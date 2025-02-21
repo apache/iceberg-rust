@@ -16,7 +16,11 @@
 # under the License.
 
 name: 'Update Package Version'
-description: 'Updates pyproject.toml version with timestamp'
+description: 'Updates pyproject.toml version with a provided timestamp'
+inputs:
+  timestamp:
+    description: 'Timestamp to override to the package version'
+    required: true
 runs:
   using: "composite"
   steps:
@@ -33,8 +37,7 @@ runs:
       shell: bash
       run: |
         CURRENT_VERSION=$(python -c "import toml; print(toml.load('bindings/python/pyproject.toml')['project']['version'])")
-        TIMESTAMP=$(date +%Y%m%d%H%M%S)
-        NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
+        NEW_VERSION="${CURRENT_VERSION}.dev${{ inputs.timestamp }}"
         NEW_VERSION=$NEW_VERSION python -c "
         import toml
         import os
