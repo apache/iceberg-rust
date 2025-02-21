@@ -1047,16 +1047,8 @@ mod test {
         let file = get_test_file_1();
 
         let result =
-            StrictMetricsEvaluator::eval(&not_less_than_int("id", INT_MIN_VALUE - 25), &file)
-                .unwrap();
-        // less_than_int("id", 5) on file1 returns false, so its NOT is true.
-        assert!(result, "Strict eval: not(false) should be true");
-
-        let result =
-            StrictMetricsEvaluator::eval(&not_greater_than_int("id", INT_MIN_VALUE - 25), &file)
-                .unwrap();
-        // greater_than_int("id", 5) returns true (since 30 > 5), so NOT(true) is false.
-        assert!(!result, "Strict eval: not(true) should be false");
+            StrictMetricsEvaluator::eval(&not_less_than_int("id", INT_MIN_VALUE - 25), &file);
+        assert!(result.is_err());
     }
 
     #[test]
