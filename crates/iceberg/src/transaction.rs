@@ -45,6 +45,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 const META_ROOT_PATH: &str = "metadata";
 
 /// Table transaction.
+#[derive(Clone)]
 pub struct Transaction<'a> {
     table: &'a Table,
     updates: Vec<TableUpdate>,
@@ -137,7 +138,7 @@ impl<'a> Transaction<'a> {
 
     /// Creates a fast append action.
     pub fn fast_append(
-        self,
+        &self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
@@ -182,9 +183,9 @@ impl<'a> Transaction<'a> {
         file_paths: Vec<String>,
         table_metadata: &TableMetadata,
     ) -> Result<Vec<DataFile>> {
+        // TODO: support adding to partitioned table
         let mut data_files: Vec<DataFile> = Vec::new();
 
-        // TODO: support adding to partitioned table
         if !table_metadata.default_spec.fields().is_empty() {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -214,6 +215,7 @@ impl<'a> Transaction<'a> {
             let data_file = builder.build().unwrap();
             data_files.push(data_file);
         }
+
         Ok(data_files)
     }
 }
@@ -226,7 +228,7 @@ pub struct FastAppendAction<'a> {
 impl<'a> FastAppendAction<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        tx: Transaction<'a>,
+        tx: &Transaction<'a>,
         snapshot_id: i64,
         commit_uuid: Uuid,
         key_metadata: Vec<u8>,
@@ -254,11 +256,35 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     pub async fn add_parquet_files(
-        &mut self,
-        file_path: &str
+        transaction: Transaction<'a>,
+        file_path: Vec<String>,
     ) -> Result<Transaction<'a>> {
+        let table_metadata = transaction.table.metadata();
+
+        let data_file = Transaction::parquet_files_to_data_files(
+            &transaction,
+            transaction.table.file_io(),
+            file_path,
+            table_metadata,
+        )
+        .await?;
+
+        let mut fast_append_action =
+            Transaction::fast_append(&transaction, Some(Uuid::new_v4()), Vec::new())?;
+        fast_append_action.add_data_files(data_file)?;
+
+        fast_append_action.apply(transaction).await
+    }
+
+    /// Finished building the action and apply it to the transaction.
+    pub async fn apply(self, transaction: Transaction<'a>) -> Result<Transaction<'a>> {
         // Checks duplicate files
-        let new_files: HashSet<&str> = file_paths.iter().map(|s| s.as_str()).collect();
+        let new_files: HashSet<&str> = self
+            .snapshot_produce_action
+            .added_data_files
+            .iter()
+            .map(|df| df.file_path.as_str())
+            .collect();
 
         let mut manifest_stream = transaction.table.inspect().manifests().scan().await?;
         let mut referenced_files = Vec::new();
@@ -293,25 +319,6 @@ impl<'a> FastAppendAction<'a> {
             ));
         }
 
-        let table_metadata = transaction.table.metadata();
-
-        let data_files = Transaction::parquet_files_to_data_files(
-            &transaction,
-            transaction.table.file_io(),
-            file_paths,
-            table_metadata,
-        )
-        .await?;
-
-        let mut fast_append_action =
-            Transaction::fast_append(transaction, Some(Uuid::new_v4()), Vec::new())?;
-        fast_append_action.add_data_files(data_files)?;
-
-        fast_append_action.apply().await
-    }
-
-    /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self) -> Result<Transaction<'a>> {
         self.snapshot_produce_action
             .apply(FastAppendOperation, DefaultManifestProcess)
             .await
@@ -396,14 +403,14 @@ struct SnapshotProduceAction<'a> {
 
 impl<'a> SnapshotProduceAction<'a> {
     pub(crate) fn new(
-        tx: Transaction<'a>,
+        tx: &Transaction<'a>,
         snapshot_id: i64,
         key_metadata: Vec<u8>,
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
-            tx,
+            tx: tx.clone(),
             snapshot_id,
             commit_uuid,
             snapshot_properties,
@@ -884,7 +891,7 @@ mod tests {
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let mut action = tx.fast_append(None, vec![]).unwrap();
+        let mut action = tx.clone().fast_append(None, vec![]).unwrap();
 
         // check add data file with incompatible partition value
         let data_file = DataFileBuilder::default()
@@ -908,7 +915,7 @@ mod tests {
             .build()
             .unwrap();
         action.add_data_files(vec![data_file.clone()]).unwrap();
-        let tx = action.apply().await.unwrap();
+        let tx = action.apply(tx).await.unwrap();
 
         // check updates and requirements
         assert!(
@@ -983,7 +990,7 @@ mod tests {
     async fn test_add_existing_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
         fixture.setup_unpartitioned_manifest_files().await;
-        let tx = crate::transaction::Transaction::new(&fixture.table);
+        let mut tx = crate::transaction::Transaction::new(&fixture.table);
 
         let file_paths = vec![
             format!("{}/1.parquet", &fixture.table_location),
@@ -1042,12 +1049,7 @@ mod tests {
             .expect("Failed to load manifest");
 
         // Check that the manifest contains three entries.
-        assert_eq!(
-            manifest.entries().len(),
-            3,
-            "Expected 3 manifest entries, got {}",
-            manifest.entries().len()
-        );
+        assert_eq!(manifest.entries().len(), 3);
 
         // Verify each file path appears in manifest.
         let manifest_paths: Vec<String> = manifest
@@ -1056,11 +1058,7 @@ mod tests {
             .map(|entry| entry.data_file().file_path.clone())
             .collect();
         for path in file_paths {
-            assert!(
-                manifest_paths.contains(&path),
-                "Manifest does not contain expected file path: {}",
-                path
-            );
+            assert!(manifest_paths.contains(&path));
         }
     }
 }

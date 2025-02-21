@@ -229,7 +229,7 @@ pub struct ParquetWriter {
 }
 
 /// Used to aggregate min and max value of each column.
-pub struct MinMaxColAggregator {
+struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
     upper_bounds: HashMap<i32, Datum>,
     schema: SchemaRef,
