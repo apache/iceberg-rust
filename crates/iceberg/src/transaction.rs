@@ -990,7 +990,7 @@ mod tests {
     async fn test_add_existing_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
         fixture.setup_unpartitioned_manifest_files().await;
-        let mut tx = crate::transaction::Transaction::new(&fixture.table);
+        let tx = crate::transaction::Transaction::new(&fixture.table);
 
         let file_paths = vec![
             format!("{}/1.parquet", &fixture.table_location),
