@@ -44,7 +44,11 @@ impl Truncate {
 
     #[inline]
     fn truncate_binary(s: &[u8], width: usize) -> &[u8] {
-        &s[0..width]
+        if s.len() > width {
+            &s[0..width]
+        } else {
+            &s
+        }
     }
 
     #[inline]
