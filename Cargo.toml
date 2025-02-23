@@ -70,7 +70,7 @@ iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
 iceberg-catalog-hms = { version = "0.4.0", path = "./crates/catalog/hms" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
-itertools = "0.13"
+itertools = "0.14"
 log = "0.4.22"
 mockito = "1"
 murmur3 = "0.5.2"
