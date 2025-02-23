@@ -102,5 +102,5 @@ uuid = { version = "1.13.1", features = ["v7"] }
 volo-thrift = "0.10"
 hive_metastore = "0.1"
 tera = "1"
-zstd = "0.13.2"
+zstd = "0.13.3"
 expect-test = "1"
