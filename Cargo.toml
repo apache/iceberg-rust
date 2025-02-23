@@ -98,7 +98,7 @@ tokio = { version = "1.36", default-features = false }
 typed-builder = "0.20"
 url = "2.5.4"
 urlencoding = "2"
-uuid = { version = "1.13.1", features = ["v7"] }
+uuid = { version = "1.14.0", features = ["v7"] }
 volo-thrift = "0.10"
 hive_metastore = "0.1"
 tera = "1"
