@@ -38,7 +38,7 @@ license = "Apache-2.0"
 rust-version = "1.77.1"
 
 [workspace.dependencies]
-anyhow = "1.0.72"
+anyhow = "1.0.96"
 apache-avro = "0.17"
 array-init = "2"
 arrow-arith = { version = "54.1.0" }
