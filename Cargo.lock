@@ -2969,7 +2969,7 @@ dependencies = [
  "parquet",
  "paste",
  "pretty_assertions",
- "rand 0.8.5",
+ "rand 0.9.0",
  "reqwest",
  "rust_decimal",
  "serde",
