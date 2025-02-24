@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 mod utils;
 mod visitor;
-pub use self::visitor::{visit_schema, visit_struct, visit_type, SchemaVisitor};
+pub use self::visitor::*;
 pub(super) mod _serde;
 mod id_reassigner;
 mod index;
