@@ -26,14 +26,14 @@ use uuid::Uuid;
 
 use super::get_field_id;
 use crate::spec::{
-    visit_struct_with_partner, Literal, Map, PartnerAccessor, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType,
+    visit_struct_with_partner, ListType, Literal, Map, MapType, NestedField, PartnerAccessor,
+    PrimitiveType, SchemaWithPartnerVisitor, Struct, StructType,
 };
 use crate::{Error, ErrorKind, Result};
 
-struct ArrowArrayConverter;
+struct ArrowArrayToIcebergStructConverter;
 
-impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
+impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     type T = Vec<Option<Literal>>;
 
     fn schema(
@@ -56,7 +56,9 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The field is required but has null value",
-            ));
+            )
+            .with_context("field_id", field.id.to_string())
+            .with_context("field_name", &field.name));
         }
         Ok(value)
     }
@@ -68,11 +70,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
         results: Vec<Vec<Option<Literal>>>,
     ) -> Result<Vec<Option<Literal>>> {
         let row_len = results.first().map(|column| column.len()).unwrap_or(0);
-        if results.iter().any(|column| column.len() != row_len) {
+        if let Some(col) = results.iter().find(|col| col.len() != row_len) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The struct columns have different row length",
-            ));
+            )
+            .with_context("first col length", row_len.to_string())
+            .with_context("actual col length", col.len().to_string()));
         }
 
         let mut struct_literals = Vec::with_capacity(row_len);
@@ -98,7 +102,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
 
     fn list(
         &mut self,
-        list: &crate::spec::ListType,
+        list: &ListType,
         array: &ArrayRef,
         elements: Vec<Option<Literal>>,
     ) -> Result<Vec<Option<Literal>>> {
@@ -164,7 +168,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayConverter {
 
     fn map(
         &mut self,
-        _map: &crate::spec::MapType,
+        _map: &MapType,
         partner: &ArrayRef,
         key_values: Vec<Option<Literal>>,
         values: Vec<Option<Literal>>,
@@ -437,8 +441,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn field_partner<'a>(
         &self,
         struct_partner: &'a ArrayRef,
-        field_id: i32,
-        _field_name: &str,
+        field: &NestedField,
     ) -> Result<&'a ArrayRef> {
         let struct_array = struct_partner
             .as_any()
@@ -452,15 +455,15 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         let field_pos = struct_array
             .fields()
             .iter()
-            .position(|field| {
-                get_field_id(field)
-                    .map(|id| id == field_id)
+            .position(|arrow_field| {
+                get_field_id(arrow_field)
+                    .map(|id| id == field.id)
                     .unwrap_or(false)
             })
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field_id),
+                    format!("Field id {} not found in struct array", field.id),
                 )
             })?;
         Ok(struct_array.column(field_pos))
@@ -541,7 +544,7 @@ pub fn arrow_struct_to_literal(
     visit_struct_with_partner(
         ty,
         struct_array,
-        &mut ArrowArrayConverter,
+        &mut ArrowArrayToIcebergStructConverter,
         &ArrowArrayAccessor,
     )
 }
