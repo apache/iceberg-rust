@@ -943,7 +943,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    fn table_schema_simple() -> SchemaRef {
+    pub fn table_schema_simple() -> SchemaRef {
         Arc::new(
             Schema::builder()
                 .with_schema_id(1)
