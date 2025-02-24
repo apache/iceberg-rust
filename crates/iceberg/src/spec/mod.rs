@@ -29,6 +29,7 @@ mod statistic_file;
 mod table_metadata;
 mod table_metadata_builder;
 mod transform;
+pub(crate) mod update;
 mod values;
 mod view_metadata;
 mod view_version;
