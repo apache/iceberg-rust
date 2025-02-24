@@ -509,8 +509,8 @@ impl TableScan {
 
         if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
             let BoundPredicates {
-                ref snapshot_bound_predicate,
-                ref partition_bound_predicate,
+                snapshot_bound_predicate,
+                partition_bound_predicate,
             } = bound_predicates.as_ref();
 
             let expression_evaluator_cache =
@@ -733,7 +733,7 @@ impl PlanContext {
         manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
-    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>>>> {
+    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let manifest_files = manifest_list.entries().iter();
 
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
