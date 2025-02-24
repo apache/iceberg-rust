@@ -573,7 +573,7 @@ fn allow_replace_drop_dialects(properties: &HashMap<String, String>) -> bool {
         .get(VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED)
         .map_or(
             VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED_DEFAULT,
-            |value| is_truthy(&value),
+            |value| is_truthy(value),
         )
 }
 
