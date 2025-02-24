@@ -46,6 +46,16 @@ pub struct PartitionField {
 }
 
 impl PartitionField {
+    /// Creates new `PartitionField`` instance
+    pub fn new(source_id: i32, field_id: i32, name: String, transform: Transform) -> Self {
+        Self {
+            source_id,
+            field_id,
+            name,
+            transform,
+        }
+    }
+
     /// To unbound partition field
     pub fn into_unbound(self) -> UnboundPartitionField {
         self.into()
