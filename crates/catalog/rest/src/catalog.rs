@@ -280,7 +280,7 @@ impl RestCatalog {
             }
         };
 
-        let response = client.query_catalog(request, handler).await?;
+        let response: CatalogConfig = client.query_catalog(request, handler).await?;
 
         Ok(response)
     }
@@ -349,7 +349,8 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: ListNamespaceResponse =
+            context.client.query_catalog(request, handler).await?;
 
         response
             .namespaces
@@ -387,7 +388,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: NamespaceSerde = context.client.query_catalog(request, handler).await?;
 
         Namespace::try_from(response)
     }
@@ -413,7 +414,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: NamespaceSerde = context.client.query_catalog(request, handler).await?;
 
         Namespace::try_from(response)
     }
@@ -445,7 +446,10 @@ impl Catalog for RestCatalog {
             }
         };
 
-        context.client.query_catalog(request, handler).await
+        context
+            .client
+            .query_catalog::<bool, _, _>(request, handler)
+            .await
     }
 
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
@@ -467,7 +471,10 @@ impl Catalog for RestCatalog {
             }
         };
 
-        context.client.query_catalog(request, handler).await
+        context
+            .client
+            .query_catalog::<(), _, _>(request, handler)
+            .await
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -491,7 +498,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: ListTableResponse = context.client.query_catalog(request, handler).await?;
 
         Ok(response.identifiers)
     }
@@ -547,7 +554,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: LoadTableResponse = context.client.query_catalog(request, handler).await?;
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
             ErrorKind::DataInvalid,
@@ -603,7 +610,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: LoadTableResponse = context.client.query_catalog(request, handler).await?;
 
         let config = response
             .config
@@ -648,7 +655,10 @@ impl Catalog for RestCatalog {
             }
         };
 
-        context.client.query_catalog(request, handler).await
+        context
+            .client
+            .query_catalog::<(), _, _>(request, handler)
+            .await
     }
 
     /// Check if a table exists in the catalog.
@@ -668,7 +678,10 @@ impl Catalog for RestCatalog {
             }
         };
 
-        context.client.query_catalog(request, handler).await
+        context
+            .client
+            .query_catalog::<bool, _, _>(request, handler)
+            .await
     }
 
     /// Rename a table in the catalog.
@@ -699,7 +712,10 @@ impl Catalog for RestCatalog {
             }
         };
 
-        context.client.query_catalog(request, handler).await
+        context
+            .client
+            .query_catalog::<(), _, _>(request, handler)
+            .await
     }
 
     /// Update table.
@@ -749,7 +765,7 @@ impl Catalog for RestCatalog {
             Err(Error::new(ErrorKind::Unexpected, error_message))
         };
 
-        let response = context.client.query_catalog(request, handler).await?;
+        let response: CommitTableResponse = context.client.query_catalog(request, handler).await?;
 
         let file_io = self
             .load_file_io(Some(&response.metadata_location), None)
