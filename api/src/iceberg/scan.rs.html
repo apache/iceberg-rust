@@ -2556,8 +2556,8 @@
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bound_predicates) = manifest_entry_context.bound_predicates {
             <span class="kw">let </span>BoundPredicates {
-                <span class="kw-2">ref </span>snapshot_bound_predicate,
-                <span class="kw-2">ref </span>partition_bound_predicate,
+                snapshot_bound_predicate,
+                partition_bound_predicate,
             } = bound_predicates.as_ref();
 
             <span class="kw">let </span>expression_evaluator_cache =
@@ -2780,7 +2780,7 @@
         manifest_list: Arc&lt;ManifestList&gt;,
         tx_data: Sender&lt;ManifestEntryContext&gt;,
         delete_file_idx_and_tx: <span class="prelude-ty">Option</span>&lt;(DeleteFileIndex, Sender&lt;ManifestEntryContext&gt;)&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt;&gt;&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">impl </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;ManifestFileContext&gt;&gt; + <span class="lifetime">'static</span>&gt;&gt; {
         <span class="kw">let </span>manifest_files = manifest_list.entries().iter();
 
         <span class="comment">// TODO: Ideally we could ditch this intermediate Vec as we return an iterator.

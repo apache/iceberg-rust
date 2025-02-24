@@ -756,8 +756,8 @@
         <span class="prelude-val">Ok</span>(<span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.batch_transform {
             <span class="prelude-val">Some</span>(BatchTransform::PassThrough) =&gt; record_batch,
             <span class="prelude-val">Some</span>(BatchTransform::Modify {
-                <span class="kw-2">ref </span>target_schema,
-                <span class="kw-2">ref </span>operations,
+                target_schema,
+                operations,
             }) =&gt; {
                 <span class="kw">let </span>options = RecordBatchOptions::default()
                     .with_match_field_names(<span class="bool-val">false</span>)
@@ -910,7 +910,7 @@
                     Error::new(ErrorKind::Unexpected, <span class="string">"Field not found in snapshot schema"</span>)
                 )<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>default_value = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>iceberg_default_value) =
+                <span class="kw">let </span>default_value = <span class="kw">if let </span><span class="prelude-val">Some</span>(iceberg_default_value) =
                     <span class="kw-2">&amp;</span>iceberg_field.initial_default
                 {
                     <span class="kw">let </span>Literal::Primitive(primitive_literal) = iceberg_default_value <span class="kw">else </span>{
