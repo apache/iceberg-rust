@@ -2404,7 +2404,7 @@
         <span class="macro">assert_eq!</span>(result, expected);
     }
 
-    <span class="kw">fn </span>table_schema_simple() -&gt; SchemaRef {
+    <span class="kw">pub fn </span>table_schema_simple() -&gt; SchemaRef {
         Arc::new(
             Schema::builder()
                 .with_schema_id(<span class="number">1</span>)
