@@ -39,7 +39,7 @@ use crate::{Error, ErrorKind};
 pub type ViewMetadataRef = Arc<ViewMetadata>;
 
 // ID of the initial version of views
-pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 0;
+pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 1;
 
 /// Property key for allowing to drop dialects when replacing a view.
 pub const VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED: &str = "replace.drop-dialect.allowed";
@@ -405,7 +405,7 @@ pub(crate) mod tests {
     use super::{ViewFormatVersion, ViewMetadataBuilder, ViewVersionLog};
     use crate::spec::{
         NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
-        ViewRepresentations, ViewVersion,
+        ViewRepresentations, ViewVersion, INITIAL_VIEW_VERSION_ID,
     };
     use crate::{NamespaceIdent, ViewCreation};
 
@@ -555,7 +555,7 @@ pub(crate) mod tests {
             metadata.location(),
             "s3://bucket/warehouse/default.db/event_agg"
         );
-        assert_eq!(metadata.current_version_id(), 0);
+        assert_eq!(metadata.current_version_id(), INITIAL_VIEW_VERSION_ID);
         assert_eq!(metadata.versions().count(), 1);
         assert_eq!(metadata.schemas_iter().count(), 1);
         assert_eq!(metadata.properties().len(), 0);

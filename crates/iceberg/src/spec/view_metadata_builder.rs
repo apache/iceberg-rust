@@ -342,10 +342,6 @@ impl ViewMetadataBuilder {
             .unwrap_or_else(|| {
                 self.get_highest_view_version_id()
                     .map(|id| id + 1)
-                    // ToDo Discuss: In Java this uses `new_view_version.version_id()` instead.
-                    // I believe 0 is more appropriate here, as the first version should always be 0.
-                    // The TableMetadataBuilder also uses 0 for partition specs (and other `reuse_or_create_*` functions).
-                    // Consistent behaviour between the two builders is desirable.
                     .unwrap_or(INITIAL_VIEW_VERSION_ID)
             })
     }
@@ -697,22 +693,27 @@ mod test {
 
         let metadata = build_result.metadata;
         assert_eq!(metadata.location, location);
-        assert_eq!(metadata.current_version_id, 0);
+        assert_eq!(metadata.current_version_id, INITIAL_VIEW_VERSION_ID);
         assert_eq!(metadata.format_version, format_version);
         assert_eq!(metadata.properties, properties);
         assert_eq!(metadata.versions.len(), 1);
         assert_eq!(metadata.schemas.len(), 1);
         assert_eq!(metadata.version_log.len(), 1);
         assert_eq!(
-            Arc::unwrap_or_clone(metadata.versions[&0].clone()),
-            version.clone().with_version_id(0).with_schema_id(0)
+            Arc::unwrap_or_clone(metadata.versions[&INITIAL_VIEW_VERSION_ID].clone()),
+            version
+                .clone()
+                .with_version_id(INITIAL_VIEW_VERSION_ID)
+                .with_schema_id(0)
         );
 
         let changes = build_result.changes;
         assert_eq!(changes.len(), 5);
         assert!(changes.contains(&ViewUpdate::SetLocation { location }));
         assert!(changes.contains(&ViewUpdate::AddViewVersion {
-            view_version: version.with_version_id(0).with_schema_id(-1)
+            view_version: version
+                .with_version_id(INITIAL_VIEW_VERSION_ID)
+                .with_schema_id(-1)
         }));
         assert!(changes.contains(&ViewUpdate::SetCurrentViewVersion {
             view_version_id: -1
