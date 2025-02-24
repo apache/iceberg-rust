@@ -44,7 +44,7 @@ fn before_all() {
         normalize_test_name(module_path!()),
         format!("{}/testdata/glue_catalog", env!("CARGO_MANIFEST_DIR")),
     );
-    docker_compose.run();
+    docker_compose.up();
     guard.replace(docker_compose);
 }
 

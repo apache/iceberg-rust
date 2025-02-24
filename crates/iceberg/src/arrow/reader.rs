@@ -163,6 +163,14 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
+        // TODO: add support for delete files
+        if !task.deletes.is_empty() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Delete files are not yet supported",
+            ));
+        }
+
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(&task.data_file_path)?;
@@ -751,10 +759,14 @@ impl PredicateConverter<'_> {
             let index = self
                 .column_indices
                 .iter()
-                .position(|&idx| idx == *column_idx).ok_or(Error::new(ErrorKind::DataInvalid, format!(
-                    "Leave column `{}` in predicates cannot be found in the required column indices.",
-                    reference.field().name
-                )))?;
+                .position(|&idx| idx == *column_idx)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                reference.field().name
+            ),
+                ))?;
 
             Ok(Some(index))
         } else {

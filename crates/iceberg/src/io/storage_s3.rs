@@ -89,9 +89,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         cfg.region = Some(region);
     };
     if let Some(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
-        if is_truthy(path_style_access.to_lowercase().as_str()) {
-            cfg.enable_virtual_host_style = true;
-        }
+        cfg.enable_virtual_host_style = !is_truthy(path_style_access.to_lowercase().as_str());
     };
     if let Some(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
         cfg.role_arn = Some(arn);

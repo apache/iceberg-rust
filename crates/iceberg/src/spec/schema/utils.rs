@@ -15,17 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Iceberg Puffin implementation.
+use std::collections::HashMap;
 
-#![deny(missing_docs)]
-// Temporarily allowing this while crate is under active development
-#![allow(dead_code)]
+use crate::{Error, ErrorKind, Result};
 
-mod blob;
-mod compression;
-mod metadata;
-#[cfg(feature = "tokio")]
-mod reader;
-
-#[cfg(test)]
-mod test_utils;
+pub fn try_insert_field<V>(map: &mut HashMap<i32, V>, field_id: i32, value: V) -> Result<()> {
+    map.insert(field_id, value).map_or_else(
+        || Ok(()),
+        |_| {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Found duplicate 'field.id' {}. Field ids must be unique.",
+                    field_id
+                ),
+            ))
+        },
+    )
+}
