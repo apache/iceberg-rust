@@ -199,6 +199,7 @@ impl<T> BinaryExpression<T> {
         Self { op, term, literal }
     }
 
+    /// Return the operator used by this predicate expression.
     pub fn op(&self) -> PredicateOperator {
         self.op
     }
@@ -265,6 +266,7 @@ impl<T> SetExpression<T> {
         self.op
     }
 
+    /// Return the hash set of values compared against the term in this expression.
     pub fn literals(&self) -> &FnvHashSet<Datum> {
         &self.literals
     }
