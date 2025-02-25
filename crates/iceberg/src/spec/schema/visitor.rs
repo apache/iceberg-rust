@@ -72,7 +72,7 @@ pub trait SchemaVisitor {
 }
 
 /// Visiting a type in post order.
-pub fn visit_type<V: SchemaVisitor>(r#type: &Type, visitor: &mut V) -> Result<V::T> {
+pub(crate) fn visit_type<V: SchemaVisitor>(r#type: &Type, visitor: &mut V) -> Result<V::T> {
     match r#type {
         Type::Primitive(p) => visitor.primitive(p),
         Type::List(list) => {
@@ -202,7 +202,7 @@ pub trait PartnerAccessor<P> {
 }
 
 /// Visiting a type in post order.
-pub fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAccessor<P>>(
+pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAccessor<P>>(
     r#type: &Type,
     partner: &P,
     visitor: &mut V,

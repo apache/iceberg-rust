@@ -1565,12 +1565,12 @@ impl Literal {
     }
 
     /// Creates a timestamp from unix epoch in nanoseconds.
-    pub fn timestamp_nano(value: i64) -> Self {
+    pub(crate) fn timestamp_nano(value: i64) -> Self {
         Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
     /// Creates a timestamp with timezone from unix epoch in nanoseconds.
-    pub fn timestamptz_nano(value: i64) -> Self {
+    pub(crate) fn timestamptz_nano(value: i64) -> Self {
         Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
