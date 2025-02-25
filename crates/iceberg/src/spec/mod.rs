@@ -31,6 +31,7 @@ mod table_metadata_builder;
 mod transform;
 mod values;
 mod view_metadata;
+mod view_metadata_builder;
 mod view_version;
 
 pub use datatypes::*;

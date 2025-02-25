@@ -138,7 +138,6 @@ impl TableMetadataBuilder {
     }
 
     /// Creates a new table metadata builder from the given metadata to modify it.
-
     /// `current_file_location` is the location where the current version
     /// of the metadata file is stored. This is used to update the metadata log.
     /// If `current_file_location` is `None`, the metadata log will not be updated.
@@ -312,7 +311,7 @@ impl TableMetadataBuilder {
         Ok(self)
     }
 
-    /// Set the location of the table metadata, stripping any trailing slashes.
+    /// Set the location of the table, stripping any trailing slashes.
     pub fn set_location(mut self, location: String) -> Self {
         let location = location.trim_end_matches('/').to_string();
         if self.metadata.location != location {
