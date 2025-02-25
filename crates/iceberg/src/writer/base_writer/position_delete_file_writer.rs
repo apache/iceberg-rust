@@ -16,6 +16,11 @@
 // under the License.
 
 //! Position delete file writer.
+//!
+//! This writer does not keep track of seen deletes and assumes all incoming records are ordered
+//! by file and position as required by the spec. If there is no external process to order the
+//! records, consider using SortingPositionDeleteWriter(WIP) instead.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,29 +31,30 @@ use arrow_array::RecordBatch;
 use once_cell::sync::Lazy;
 
 use crate::arrow::schema_to_arrow_schema;
-use crate::spec::{DataContentType, DataFile, NestedField, PrimitiveType, Schema, Struct, Type};
+use crate::spec::{
+    DataContentType, DataFile, NestedField, NestedFieldRef, PrimitiveType, Schema, Struct, Type,
+};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
-const POS_DELETE_FIELD1_NAME: &str = "file_path";
-const POS_DELETE_FIELD1_ID: i32 = 2147483546;
-const POS_DELETE_FIELD2_NAME: &str = "pos";
-const POS_DELETE_FIELD2_ID: i32 = 2147483545;
+static DELETE_FILE_PATH: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(NestedField::required(
+        2147483546,
+        "file_path",
+        Type::Primitive(PrimitiveType::String),
+    ))
+});
+static DELETE_FILE_POS: Lazy<NestedFieldRef> = Lazy::new(|| {
+    Arc::new(NestedField::required(
+        2147483545,
+        "pos",
+        Type::Primitive(PrimitiveType::Long),
+    ))
+});
 static POSITION_DELETE_SCHEMA: Lazy<Schema> = Lazy::new(|| {
     Schema::builder()
-        .with_fields(vec![
-            Arc::new(NestedField::required(
-                POS_DELETE_FIELD1_ID,
-                POS_DELETE_FIELD1_NAME,
-                Type::Primitive(PrimitiveType::String),
-            )),
-            Arc::new(NestedField::required(
-                POS_DELETE_FIELD2_ID,
-                POS_DELETE_FIELD2_NAME,
-                Type::Primitive(PrimitiveType::Long),
-            )),
-        ])
+        .with_fields(vec![DELETE_FILE_PATH.clone(), DELETE_FILE_POS.clone()])
         .build()
         .unwrap()
 });
