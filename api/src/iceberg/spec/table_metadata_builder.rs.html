@@ -2382,7 +2382,6 @@
 <a href="#2382" id="2382">2382</a>
 <a href="#2383" id="2383">2383</a>
 <a href="#2384" id="2384">2384</a>
-<a href="#2385" id="2385">2385</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2523,7 +2522,6 @@
     }
 
     <span class="doccomment">/// Creates a new table metadata builder from the given metadata to modify it.
-
     /// `current_file_location` is the location where the current version
     /// of the metadata file is stored. This is used to update the metadata log.
     /// If `current_file_location` is `None`, the metadata log will not be updated.
@@ -2697,7 +2695,7 @@
         <span class="prelude-val">Ok</span>(<span class="self">self</span>)
     }
 
-    <span class="doccomment">/// Set the location of the table metadata, stripping any trailing slashes.
+    <span class="doccomment">/// Set the location of the table, stripping any trailing slashes.
     </span><span class="kw">pub fn </span>set_location(<span class="kw-2">mut </span><span class="self">self</span>, location: String) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>location = location.trim_end_matches(<span class="string">'/'</span>).to_string();
         <span class="kw">if </span><span class="self">self</span>.metadata.location != location {

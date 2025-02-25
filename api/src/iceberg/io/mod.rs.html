@@ -183,7 +183,7 @@
 <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
 </span><span class="kw">pub use </span>storage_gcs::<span class="kw-2">*</span>;
 
-<span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
     [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value.to_lowercase().as_str())
 }
 </code></pre></div></section></main></body></html>
