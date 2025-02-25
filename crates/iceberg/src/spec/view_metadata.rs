@@ -29,15 +29,26 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
-use super::view_version::{ViewVersion, ViewVersionId, ViewVersionRef};
+pub use super::view_metadata_builder::ViewMetadataBuilder;
+use super::view_version::{ViewVersionId, ViewVersionRef};
 use super::{SchemaId, SchemaRef};
-use crate::catalog::ViewCreation;
 use crate::error::{timestamp_ms_to_utc, Result};
+use crate::{Error, ErrorKind};
 
 /// Reference to [`ViewMetadata`].
 pub type ViewMetadataRef = Arc<ViewMetadata>;
 
+// ID of the initial version of views
 pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 1;
+
+/// Property key for allowing to drop dialects when replacing a view.
+pub const VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED: &str = "replace.drop-dialect.allowed";
+/// Default value for the property key for allowing to drop dialects when replacing a view.
+pub const VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED_DEFAULT: bool = false;
+/// Property key for the number of history entries to keep.
+pub const VIEW_PROPERTY_VERSION_HISTORY_SIZE: &str = "version.history.num-entries";
+/// Default value for the property key for the number of history entries to keep.
+pub const VIEW_PROPERTY_VERSION_HISTORY_SIZE_DEFAULT: usize = 10;
 
 #[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
 #[serde(try_from = "ViewMetadataEnum", into = "ViewMetadataEnum")]
@@ -60,7 +71,7 @@ pub struct ViewMetadata {
     /// change to current-version-id
     pub(crate) version_log: Vec<ViewVersionLog>,
     /// A list of schemas, stored as objects with schema-id.
-    pub(crate) schemas: HashMap<i32, SchemaRef>,
+    pub(crate) schemas: HashMap<SchemaId, SchemaRef>,
     /// A string to string map of view properties.
     /// Properties are used for metadata such as comment and for settings that
     /// affect view maintenance. This is not intended to be used for arbitrary metadata.
@@ -68,6 +79,12 @@ pub struct ViewMetadata {
 }
 
 impl ViewMetadata {
+    /// Convert this View Metadata into a builder for modification.
+    #[must_use]
+    pub fn into_builder(self) -> ViewMetadataBuilder {
+        ViewMetadataBuilder::new_from_metadata(self)
+    }
+
     /// Returns format version of this metadata.
     #[inline]
     pub fn format_version(&self) -> ViewFormatVersion {
@@ -143,65 +160,36 @@ impl ViewMetadata {
     pub fn history(&self) -> &[ViewVersionLog] {
         &self.version_log
     }
-}
 
-/// Manipulating view metadata.
-pub struct ViewMetadataBuilder(ViewMetadata);
-
-impl ViewMetadataBuilder {
-    /// Creates a new view metadata builder from the given view metadata.
-    pub fn new(origin: ViewMetadata) -> Self {
-        Self(origin)
+    /// Validate the view metadata.
+    pub(super) fn validate(&self) -> Result<()> {
+        self.validate_current_version_id()?;
+        self.validate_current_schema_id()?;
+        Ok(())
     }
 
-    /// Creates a new view metadata builder from the given view creation.
-    pub fn from_view_creation(view_creation: ViewCreation) -> Result<Self> {
-        let ViewCreation {
-            location,
-            schema,
-            properties,
-            name: _,
-            representations,
-            default_catalog,
-            default_namespace,
-            summary,
-        } = view_creation;
-        let initial_version_id = super::INITIAL_VIEW_VERSION_ID;
-        let version = ViewVersion::builder()
-            .with_default_catalog(default_catalog)
-            .with_default_namespace(default_namespace)
-            .with_representations(representations)
-            .with_schema_id(schema.schema_id())
-            .with_summary(summary)
-            .with_timestamp_ms(Utc::now().timestamp_millis())
-            .with_version_id(initial_version_id)
-            .build();
-
-        let versions = HashMap::from_iter(vec![(initial_version_id, version.into())]);
-
-        let view_metadata = ViewMetadata {
-            format_version: ViewFormatVersion::V1,
-            view_uuid: Uuid::now_v7(),
-            location,
-            current_version_id: initial_version_id,
-            versions,
-            version_log: Vec::new(),
-            schemas: HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))]),
-            properties,
-        };
-
-        Ok(Self(view_metadata))
+    fn validate_current_version_id(&self) -> Result<()> {
+        if !self.versions.contains_key(&self.current_version_id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "No version exists with the current version id {}.",
+                    self.current_version_id
+                ),
+            ));
+        }
+        Ok(())
     }
 
-    /// Changes uuid of view metadata.
-    pub fn assign_uuid(mut self, uuid: Uuid) -> Result<Self> {
-        self.0.view_uuid = uuid;
-        Ok(self)
-    }
-
-    /// Returns the new view metadata after changes.
-    pub fn build(self) -> Result<ViewMetadata> {
-        Ok(self.0)
+    fn validate_current_schema_id(&self) -> Result<()> {
+        let schema_id = self.current_version().schema_id();
+        if !self.schemas.contains_key(&schema_id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("No schema exists with the schema id {}.", schema_id),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -258,7 +246,7 @@ pub(super) mod _serde {
     use crate::spec::table_metadata::_serde::VersionNumber;
     use crate::spec::view_version::_serde::ViewVersionV1;
     use crate::spec::{ViewMetadata, ViewVersion};
-    use crate::{Error, ErrorKind};
+    use crate::Error;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(untagged)]
@@ -326,28 +314,8 @@ pub(super) mod _serde {
                     .map(|x| Ok((x.version_id, Arc::new(ViewVersion::from(x)))))
                     .collect::<Result<Vec<_>, Error>>()?,
             );
-            // Make sure at least the current schema exists
-            let current_version =
-                versions
-                    .get(&value.current_version_id)
-                    .ok_or(self::Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "No version exists with the current version id {}.",
-                            value.current_version_id
-                        ),
-                    ))?;
-            if !schemas.contains_key(&current_version.schema_id()) {
-                return Err(self::Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "No schema exists with the schema id {}.",
-                        current_version.schema_id()
-                    ),
-                ));
-            }
 
-            Ok(ViewMetadata {
+            let view_metadata = ViewMetadata {
                 format_version: ViewFormatVersion::V1,
                 view_uuid: value.view_uuid,
                 location: value.location,
@@ -356,7 +324,9 @@ pub(super) mod _serde {
                 current_version_id: value.current_version_id,
                 versions,
                 version_log: value.version_log,
-            })
+            };
+            view_metadata.validate()?;
+            Ok(view_metadata)
         }
     }
 
@@ -423,7 +393,7 @@ impl Display for ViewFormatVersion {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
@@ -435,7 +405,7 @@ mod tests {
     use super::{ViewFormatVersion, ViewMetadataBuilder, ViewVersionLog};
     use crate::spec::{
         NestedField, PrimitiveType, Schema, SqlViewRepresentation, Type, ViewMetadata,
-        ViewRepresentations, ViewVersion,
+        ViewRepresentations, ViewVersion, INITIAL_VIEW_VERSION_ID,
     };
     use crate::{NamespaceIdent, ViewCreation};
 
@@ -449,7 +419,7 @@ mod tests {
         assert_eq!(parsed_json_value, desered_type);
     }
 
-    fn get_test_view_metadata(file_name: &str) -> ViewMetadata {
+    pub(crate) fn get_test_view_metadata(file_name: &str) -> ViewMetadata {
         let path = format!("testdata/view_metadata/{}", file_name);
         let metadata: String = fs::read_to_string(path).unwrap();
 
@@ -578,13 +548,14 @@ mod tests {
         let metadata = ViewMetadataBuilder::from_view_creation(creation)
             .unwrap()
             .build()
-            .unwrap();
+            .unwrap()
+            .metadata;
 
         assert_eq!(
             metadata.location(),
             "s3://bucket/warehouse/default.db/event_agg"
         );
-        assert_eq!(metadata.current_version_id(), 1);
+        assert_eq!(metadata.current_version_id(), INITIAL_VIEW_VERSION_ID);
         assert_eq!(metadata.versions().count(), 1);
         assert_eq!(metadata.schemas_iter().count(), 1);
         assert_eq!(metadata.properties().len(), 0);
@@ -652,9 +623,9 @@ mod tests {
     #[test]
     fn test_view_builder_assign_uuid() {
         let metadata = get_test_view_metadata("ViewMetadataV1Valid.json");
-        let metadata_builder = ViewMetadataBuilder::new(metadata);
+        let metadata_builder = metadata.into_builder();
         let uuid = Uuid::new_v4();
-        let metadata = metadata_builder.assign_uuid(uuid).unwrap().build().unwrap();
+        let metadata = metadata_builder.assign_uuid(uuid).build().unwrap().metadata;
         assert_eq!(metadata.uuid(), uuid);
     }
 
