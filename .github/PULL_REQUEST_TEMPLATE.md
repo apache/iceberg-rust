@@ -25,13 +25,6 @@ We generally require a GitHub issue to be filed for all bug fixes and enhancemen
 
 - Closes #.
 
-## Why is this change needed?
-
-<!--
- Describe the motivation behind this change. 
- Explain the problem that prompted this update and outline the benefits of the proposed solution. If the issue already provides context, feel free to keep this section brief.
--->
-
 ## What changes are included in this PR?
 
 <!--
