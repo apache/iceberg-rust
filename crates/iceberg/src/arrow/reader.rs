@@ -202,11 +202,7 @@ impl ArrowReader {
         // concurrently retrieve delete files and create RecordBatchStreamBuilder
         let (_, mut record_batch_stream_builder) = try_join!(
             delete_file_manager.load_deletes(
-                if delete_file_support_enabled {
-                    &task.deletes
-                } else {
-                    &[]
-                },
+                &task.deletes,
                 file_io.clone(),
                 concurrency_limit_data_files,
             ),
