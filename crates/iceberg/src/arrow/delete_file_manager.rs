@@ -17,11 +17,12 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::ops::BitAndAssign;
+use std::ops::BitOrAssign;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 
+use arrow_array::{Int64Array, StringArray};
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
@@ -296,7 +297,7 @@ impl DeleteFileManager {
         if let ParsedDeleteFileContext::DelVecs(del_vecs) = item {
             del_vecs.into_iter().for_each(|(key, val)| {
                 let entry = merged_delete_vectors.entry(key).or_default();
-                entry.bitand_assign(val);
+                entry.bitor_assign(val);
             });
         }
 
