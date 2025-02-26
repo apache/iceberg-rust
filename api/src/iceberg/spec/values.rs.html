@@ -3902,7 +3902,7 @@
 <span class="kw">const </span>LONG_MIN: i64 = -<span class="number">9223372036854775808</span>;
 
 <span class="doccomment">/// Values present in iceberg type
-</span><span class="attr">#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+</span><span class="attr">#[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 </span><span class="kw">pub enum </span>PrimitiveLiteral {
     <span class="doccomment">/// 0x00 for false, non-zero byte for true
     </span>Boolean(bool),
