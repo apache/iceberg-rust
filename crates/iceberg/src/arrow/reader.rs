@@ -352,7 +352,7 @@ impl ArrowReader {
         let mut selected_row_groups_idx = 0;
         let mut current_page_base_idx: u64 = 0;
 
-        'outer: for (idx, row_group_metadata) in row_group_metadata.iter().enumerate() {
+        for (idx, row_group_metadata) in row_group_metadata.iter().enumerate() {
             let page_num_rows = row_group_metadata.num_rows() as u64;
             let next_page_base_idx = current_page_base_idx + page_num_rows;
 
@@ -382,24 +382,25 @@ impl ArrowReader {
 
             let mut next_deleted_row_idx = match positional_deletes.min() {
                 Some(next_deleted_row_idx) => {
-                    // if the index of the next deleted row is beyond this page, skip to the next page
+                    // if the index of the next deleted row is beyond this page, add a selection for
+                    // the remainder of this page and skip to the next page
                     if next_deleted_row_idx >= next_page_base_idx {
+                        results.push(RowSelector::select(page_num_rows as usize));
                         continue;
                     }
 
                     next_deleted_row_idx
                 }
 
-                // If there are no more pos deletes, stop building row selections and return what we
-                // have. NB this depends on behavior of ParquetRecordBatchReader that appears to be
-                // undocumented (not that I can find!): if there are no further RowSelections
-                // then everything else is assumed to be selected.
-                // see https://github.com/apache/arrow-rs/blob/c245a45efef9d9453f121587365e56d53c39d28f/parquet/src/arrow/arrow_reader/mod.rs#L703
-                _ => break,
+                // If there are no more pos deletes, add a selector for the entirety of this page.
+                _ => {
+                    results.push(RowSelector::select(page_num_rows as usize));
+                    continue;
+                }
             };
 
             let mut current_idx = current_page_base_idx;
-            while next_deleted_row_idx < next_page_base_idx {
+            'chunks: while next_deleted_row_idx < next_page_base_idx {
                 // `select` all rows that precede the next delete index
                 if current_idx < next_deleted_row_idx {
                     let run_length = next_deleted_row_idx - current_idx;
@@ -419,20 +420,21 @@ impl ArrowReader {
                     next_deleted_row_idx = match positional_deletes.min() {
                         Some(next_deleted_row_idx) => next_deleted_row_idx,
                         _ => {
-                            // conclude the selection and break if this was the last positional delete
+                            // We've processed the final positional delete.
+                            // Conclude the skip and then break so that we select the remaining
+                            // rows in the page and move on to the next row group
                             results.push(RowSelector::skip(run_length));
-                            break 'outer;
+                            break 'chunks;
                         }
                     };
                 }
                 results.push(RowSelector::skip(run_length));
             }
 
-            // break if this was the final selected row group
-            if let Some(selected_row_groups) = selected_row_groups {
-                if selected_row_groups_idx == selected_row_groups.len() {
-                    break;
-                }
+            if current_idx < next_page_base_idx {
+                results.push(RowSelector::select(
+                    (next_page_base_idx - current_idx) as usize,
+                ));
             }
 
             current_page_base_idx += page_num_rows;
@@ -1615,6 +1617,7 @@ message schema {
             RowSelector::skip(3),
             RowSelector::select(796),
             RowSelector::skip(2),
+            RowSelector::select(499),
         ]);
 
         assert_eq!(result, expected);
