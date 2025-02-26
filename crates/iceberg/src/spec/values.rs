@@ -61,7 +61,7 @@ const LONG_MAX: i64 = 9223372036854775807;
 const LONG_MIN: i64 = -9223372036854775808;
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
