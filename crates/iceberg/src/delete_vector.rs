@@ -42,6 +42,15 @@ impl DeleteVector {
     pub(crate) fn intersect_assign(&mut self, other: &DeleteVector) {
         self.inner.bitor_assign(&other.inner);
     }
+
+    pub fn insert(&mut self, pos: u64) -> bool {
+        self.inner.insert(pos)
+    }
+
+    #[allow(unused)]
+    pub fn len(&self) -> u64 {
+        self.inner.len()
+    }
 }
 
 // Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
