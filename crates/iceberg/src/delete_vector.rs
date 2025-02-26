@@ -44,6 +44,14 @@ impl DeleteVector {
     pub fn intersect_assign(&mut self, other: &DeleteVector) {
         self.inner.bitor_assign(&other.inner);
     }
+
+    pub fn insert(&mut self, pos: u64) -> bool {
+        self.inner.insert(pos)
+    }
+
+    pub fn len(&self) -> u64 {
+        self.inner.len()
+    }
 }
 
 pub struct DeleteVectorIterator<'a> {
