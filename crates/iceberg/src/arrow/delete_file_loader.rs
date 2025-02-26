@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::{Int64Array, StringArray};
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
@@ -347,14 +348,44 @@ impl CachingDeleteFileLoader {
     ///
     /// Returns a map of data file path to a delete vector
     async fn parse_positional_deletes_record_batch_stream(
-        stream: ArrowRecordBatchStream,
+        mut stream: ArrowRecordBatchStream,
     ) -> Result<HashMap<String, DeleteVector>> {
-        // TODO
+        let mut result: HashMap<String, DeleteVector> = HashMap::default();
 
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "parsing of positional deletes is not yet supported",
-        ))
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            let schema = batch.schema();
+            let columns = batch.columns();
+
+            let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Could not downcast file paths array to StringArray",
+                ));
+            };
+            let Some(positions) = columns[1].as_any().downcast_ref::<Int64Array>() else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Could not downcast positions array to Int64Array",
+                ));
+            };
+
+            for (file_path, pos) in file_paths.iter().zip(positions.iter()) {
+                let (Some(file_path), Some(pos)) = (file_path, pos) else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "null values in delete file",
+                    ));
+                };
+
+                result
+                    .entry(file_path.to_string())
+                    .or_default()
+                    .insert(pos as u64);
+            }
+        }
+
+        Ok(result)
     }
 
     /// Parses record batch streams from individual equality delete files
@@ -395,7 +426,7 @@ mod tests {
     const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
 
     #[tokio::test]
-    async fn test_delete_file_manager_load_deletes() {
+    async fn test_delete_file_loader_load_deletes() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
         let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
@@ -405,37 +436,76 @@ mod tests {
 
         // Note that with the delete file parsing not yet in place, all we can test here is that
         // the call to the loader fails with the expected FeatureUnsupportedError.
-        let delete_file_manager = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
 
         let file_scan_tasks = setup(table_location);
 
-        let result = delete_file_manager
+        let delete_filter = delete_file_loader
             .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await
+            .unwrap()
             .unwrap();
 
-        assert!(result.is_err_and(|e| e.kind() == ErrorKind::FeatureUnsupported));
+        let result = delete_filter
+            .get_delete_vector(&file_scan_tasks[0])
+            .unwrap();
+        assert_eq!(result.lock().unwrap().len(), 3); // pos dels from pos del file 1 and 2
+
+        let result = delete_filter
+            .get_delete_vector(&file_scan_tasks[1])
+            .unwrap();
+        assert_eq!(result.lock().unwrap().len(), 3); // pos dels from pos del file 3
     }
 
     fn setup(table_location: &Path) -> Vec<FileScanTask> {
         let data_file_schema = Arc::new(Schema::builder().build().unwrap());
         let positional_delete_schema = create_pos_del_schema();
 
-        let file_path_values = vec![format!("{}/1.parquet", table_location.to_str().unwrap()); 8];
-        let pos_values = vec![0, 1, 3, 5, 6, 8, 1022, 1023];
+        let mut file_path_values = vec![];
+        let mut pos_values = vec![];
 
-        let file_path_col = Arc::new(StringArray::from_iter_values(file_path_values));
-        let pos_col = Arc::new(Int64Array::from_iter_values(pos_values));
+        file_path_values.push(vec![
+            format!(
+                "{}/1.parquet",
+                table_location.to_str().unwrap()
+            );
+            3
+        ]);
+        pos_values.push(vec![0, 1, 3]);
+
+        file_path_values.push(vec![
+            format!(
+                "{}/1.parquet",
+                table_location.to_str().unwrap()
+            );
+            3
+        ]);
+        pos_values.push(vec![5, 6, 8]);
+
+        file_path_values.push(vec![
+            format!(
+                "{}/2.parquet",
+                table_location.to_str().unwrap()
+            );
+            3
+        ]);
+        pos_values.push(vec![1022, 1023, 1024]);
+        // 9 rows in total pos deleted across 3 files
 
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
 
         for n in 1..=3 {
+            let file_path_col = Arc::new(StringArray::from_iter_values(
+                file_path_values.pop().unwrap(),
+            ));
+            let pos_col = Arc::new(Int64Array::from_iter_values(pos_values.pop().unwrap()));
+
             let positional_deletes_to_write =
                 RecordBatch::try_new(positional_delete_schema.clone(), vec![
                     file_path_col.clone(),
-                    pos_col.clone(),
+                    pos_col,
                 ])
                 .unwrap();
 
@@ -486,7 +556,7 @@ mod tests {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: "".to_string(),
+                data_file_path: format!("{}/1.parquet", table_location.to_str().unwrap()),
                 data_file_content: DataContentType::Data,
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
@@ -498,13 +568,13 @@ mod tests {
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: "".to_string(),
+                data_file_path: format!("{}/2.parquet", table_location.to_str().unwrap()),
                 data_file_content: DataContentType::Data,
                 data_file_format: DataFileFormat::Parquet,
                 schema: data_file_schema.clone(),
                 project_field_ids: vec![],
                 predicate: None,
-                deletes: vec![pos_del_2, pos_del_3],
+                deletes: vec![pos_del_3],
             },
         ];
 
