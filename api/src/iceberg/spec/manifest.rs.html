@@ -2906,6 +2906,31 @@
 <a href="#2906" id="2906">2906</a>
 <a href="#2907" id="2907">2907</a>
 <a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
+<a href="#2918" id="2918">2918</a>
+<a href="#2919" id="2919">2919</a>
+<a href="#2920" id="2920">2920</a>
+<a href="#2921" id="2921">2921</a>
+<a href="#2922" id="2922">2922</a>
+<a href="#2923" id="2923">2923</a>
+<a href="#2924" id="2924">2924</a>
+<a href="#2925" id="2925">2925</a>
+<a href="#2926" id="2926">2926</a>
+<a href="#2927" id="2927">2927</a>
+<a href="#2928" id="2928">2928</a>
+<a href="#2929" id="2929">2929</a>
+<a href="#2930" id="2930">2930</a>
+<a href="#2931" id="2931">2931</a>
+<a href="#2932" id="2932">2932</a>
+<a href="#2933" id="2933">2933</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3872,7 +3897,7 @@
     </span>schema: SchemaRef,
     <span class="doccomment">/// ID of the schema used to write the manifest as a string
     </span>schema_id: SchemaId,
-    <span class="doccomment">/// The partition spec used  to write the manifest
+    <span class="doccomment">/// The partition spec used to write the manifest
     </span>partition_spec: PartitionSpec,
     <span class="doccomment">/// Table format version number of the manifest as a string
     </span>format_version: FormatVersion,
@@ -3969,6 +3994,31 @@
             format_version,
             content,
         })
+    }
+
+    <span class="doccomment">/// Get the schema of table at the time manifest was written
+    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SchemaRef {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
+    }
+
+    <span class="doccomment">/// Get the ID of schema used to write the manifest
+    </span><span class="kw">pub fn </span>schema_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaId {
+        <span class="self">self</span>.schema_id
+    }
+
+    <span class="doccomment">/// Get the partition spec used to write manifest
+    </span><span class="kw">pub fn </span>partition_spec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PartitionSpec {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.partition_spec
+    }
+
+    <span class="doccomment">/// Get the table format version
+    </span><span class="kw">pub fn </span>format_version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>FormatVersion {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.format_version
+    }
+
+    <span class="doccomment">/// Get the type of content files tracked by manifest
+    </span><span class="kw">pub fn </span>content(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ManifestContentType {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.content
     }
 }
 
