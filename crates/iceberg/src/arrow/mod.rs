@@ -22,5 +22,6 @@ pub use schema::*;
 mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
-
+mod value;
 pub use reader::*;
+pub use value::*;
