@@ -21,8 +21,6 @@
 //! by file and position as required by the spec. If there is no external process to order the
 //! records, consider using SortingPositionDeleteWriter(WIP) instead.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_array::builder::{PrimitiveBuilder, StringBuilder};
@@ -61,16 +59,16 @@ static POSITION_DELETE_SCHEMA: Lazy<Schema> = Lazy::new(|| {
 
 /// Position delete input.
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Debug)]
-pub struct PositionDeleteInput<'a> {
+pub struct PositionDeleteInput {
     /// The path of the file.
-    pub path: &'a str,
+    pub path: Arc<str>,
     /// The row number in data file
     pub pos: i64,
 }
 
-impl<'a> PositionDeleteInput<'a> {
+impl PositionDeleteInput {
     /// Create a new `PositionDeleteInput`.
-    pub fn new(path: &'a str, row: i64) -> Self {
+    pub fn new(path: Arc<str>, row: i64) -> Self {
         Self { path, pos: row }
     }
 }
@@ -92,7 +90,7 @@ impl<B: FileWriterBuilder> PositionDeleteWriterBuilder<B> {
 }
 
 #[async_trait::async_trait]
-impl<'a, B: FileWriterBuilder> IcebergWriterBuilder<Vec<PositionDeleteInput<'a>>>
+impl<B: FileWriterBuilder> IcebergWriterBuilder<Vec<PositionDeleteInput>>
     for PositionDeleteWriterBuilder<B>
 {
     type R = PositionDeleteWriter<B>;
@@ -111,17 +109,9 @@ pub struct PositionDeleteWriter<B: FileWriterBuilder> {
     partition_value: Struct,
 }
 
-impl<'a, B: FileWriterBuilder> IcebergWriter<Vec<PositionDeleteInput<'a>>>
-    for PositionDeleteWriter<B>
-{
-    fn write<'life0, 'async_trait>(
-        &'life0 mut self,
-        input: Vec<PositionDeleteInput<'a>>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
+#[async_trait::async_trait]
+impl<B: FileWriterBuilder> IcebergWriter<Vec<PositionDeleteInput>> for PositionDeleteWriter<B> {
+    async fn write(&mut self, input: Vec<PositionDeleteInput>) -> Result<()> {
         let mut path_column_builder = StringBuilder::new();
         let mut offset_column_builder = PrimitiveBuilder::<Int64Type>::new();
         for pd_input in input.into_iter() {
@@ -137,36 +127,26 @@ impl<'a, B: FileWriterBuilder> IcebergWriter<Vec<PositionDeleteInput<'a>>>
         )
         .map_err(|e| Error::new(ErrorKind::DataInvalid, e.to_string()));
 
-        Box::pin(async move {
-            if let Some(inner_writer) = &mut self.inner_writer {
-                inner_writer.write(&record_batch?).await?;
-            } else {
-                return Err(Error::new(ErrorKind::Unexpected, "write has been closed"));
-            }
-            Ok(())
-        })
+        if let Some(inner_writer) = &mut self.inner_writer {
+            inner_writer.write(&record_batch?).await?;
+        } else {
+            return Err(Error::new(ErrorKind::Unexpected, "write has been closed"));
+        }
+        Ok(())
     }
 
-    fn close<'life0, 'async_trait>(
-        &'life0 mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<DataFile>>> + Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async move {
-            let writer = self.inner_writer.take().unwrap();
-            Ok(writer
-                .close()
-                .await?
-                .into_iter()
-                .map(|mut res| {
-                    res.content(DataContentType::PositionDeletes);
-                    res.partition(self.partition_value.clone());
-                    res.build().expect("Guaranteed to be valid")
-                })
-                .collect())
-        })
+    async fn close(&mut self) -> Result<Vec<DataFile>> {
+        let writer = self.inner_writer.take().unwrap();
+        Ok(writer
+            .close()
+            .await?
+            .into_iter()
+            .map(|mut res| {
+                res.content(DataContentType::PositionDeletes);
+                res.partition(self.partition_value.clone());
+                res.build().expect("Guaranteed to be valid")
+            })
+            .collect())
     }
 }
 
@@ -212,31 +192,31 @@ mod test {
         // Write some position delete inputs
         let inputs: Vec<PositionDeleteInput> = vec![
             PositionDeleteInput {
-                path: "file2.parquet",
+                path: "file2.parquet".into(),
                 pos: 2,
             },
             PositionDeleteInput {
-                path: "file2.parquet",
+                path: "file2.parquet".into(),
                 pos: 1,
             },
             PositionDeleteInput {
-                path: "file2.parquet",
+                path: "file2.parquet".into(),
                 pos: 3,
             },
             PositionDeleteInput {
-                path: "file3.parquet",
+                path: "file3.parquet".into(),
                 pos: 2,
             },
             PositionDeleteInput {
-                path: "file1.parquet",
+                path: "file1.parquet".into(),
                 pos: 5,
             },
             PositionDeleteInput {
-                path: "file1.parquet",
+                path: "file1.parquet".into(),
                 pos: 4,
             },
             PositionDeleteInput {
-                path: "file1.parquet",
+                path: "file1.parquet".into(),
                 pos: 1,
             },
         ];
