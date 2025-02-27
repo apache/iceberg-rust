@@ -725,12 +725,14 @@ pub(super) mod _serde {
         pub location: String,
         pub last_updated_ms: i64,
         pub last_column_id: i32,
-        pub schema: SchemaV1,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub schema: Option<SchemaV1>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schemas: Option<Vec<SchemaV1>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub current_schema_id: Option<i32>,
-        pub partition_spec: Vec<PartitionField>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub partition_spec: Option<Vec<PartitionField>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub partition_specs: Option<Vec<PartitionSpec>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -942,9 +944,11 @@ pub(super) mod _serde {
                     ))
                 })
                 .or_else(|| {
-                    Some(value.schema.try_into().map(|schema: Schema| {
-                        HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
-                    }))
+                    value.schema.map(|schema| {
+                        schema.try_into().map(|schema: Schema| {
+                            HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
+                        })
+                    })
                 })
                 .transpose()?
                 .unwrap_or_default();
@@ -966,10 +970,15 @@ pub(super) mod _serde {
 
             let partition_specs = match value.partition_specs {
                 Some(partition_specs) => partition_specs,
-                None => vec![PartitionSpec::builder(current_schema.clone())
-                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(value.partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?],
+                None => match value.partition_spec {
+                    Some(partition_spec) => vec![PartitionSpec::builder(current_schema.clone())
+                        .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
+                        .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
+                        .build()?],
+                    None => vec![PartitionSpec::builder(current_schema.clone())
+                        .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
+                        .build()?],
+                },
             }
             .into_iter()
             .map(|x| (x.spec_id(), Arc::new(x)))
@@ -1129,16 +1138,17 @@ pub(super) mod _serde {
                 location: v.location,
                 last_updated_ms: v.last_updated_ms,
                 last_column_id: v.last_column_id,
-                schema: v
-                    .schemas
-                    .get(&v.current_schema_id)
-                    .ok_or(Error::new(
-                        ErrorKind::Unexpected,
-                        "current_schema_id not found in schemas",
-                    ))?
-                    .as_ref()
-                    .clone()
-                    .into(),
+                schema: Some(
+                    v.schemas
+                        .get(&v.current_schema_id)
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "current_schema_id not found in schemas",
+                        ))?
+                        .as_ref()
+                        .clone()
+                        .into(),
+                ),
                 schemas: Some(
                     v.schemas
                         .into_values()
@@ -1150,7 +1160,7 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 current_schema_id: Some(v.current_schema_id),
-                partition_spec: v.default_spec.fields().to_vec(),
+                partition_spec: Some(v.default_spec.fields().to_vec()),
                 partition_specs: Some(
                     v.partition_specs
                         .into_values()
@@ -2611,6 +2621,29 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_compat() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Compat.json").unwrap();
+
+        // Deserialize the JSON to verify it works
+        let desered_type: TableMetadata = serde_json::from_str(&metadata)
+            .expect("Failed to deserialize TableMetadataV1Compat.json");
+
+        // Verify some key fields match
+        assert_eq!(desered_type.format_version(), FormatVersion::V1);
+        assert_eq!(
+            desered_type.uuid(),
+            Uuid::parse_str("3276010d-7b1d-488c-98d8-9025fc4fde6b").unwrap()
+        );
+        assert_eq!(
+            desered_type.location(),
+            "s3://bucket/warehouse/iceberg/glue.db/table_name"
+        );
+        assert_eq!(desered_type.last_updated_ms(), 1727773114005);
+        assert_eq!(desered_type.current_schema_id(), 0);
     }
 
     #[test]
