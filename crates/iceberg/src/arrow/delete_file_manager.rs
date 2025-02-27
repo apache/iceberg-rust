@@ -17,21 +17,27 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::ops::Not;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+};
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 
-use crate::arrow::ArrowReader;
+use crate::arrow::{arrow_schema_to_schema, ArrowReader};
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile};
-use crate::spec::DataContentType;
+use crate::spec::{DataContentType, Datum, NestedFieldRef, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 #[allow(unused)]
@@ -301,11 +307,46 @@ impl CachingDeleteFileManager {
     ///
     /// Returns an unbound Predicate for each batch stream
     async fn parse_equality_deletes_record_batch_stream(
-        streams: ArrowRecordBatchStream,
+        mut stream: ArrowRecordBatchStream,
     ) -> Result<Predicate> {
-        // TODO
+        let mut result_predicate = AlwaysTrue;
 
-        Ok(AlwaysTrue)
+        while let Some(record_batch) = stream.next().await {
+            let record_batch = record_batch?;
+
+            if record_batch.num_columns() == 0 {
+                return Ok(AlwaysTrue);
+            }
+
+            let batch_schema_arrow = record_batch.schema();
+            let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
+
+            let mut datum_columns_with_names: Vec<_> = record_batch
+                .columns()
+                .iter()
+                .zip(batch_schema_iceberg.as_struct().fields())
+                .map(|(column, field)| {
+                    let col_as_datum_vec = arrow_array_to_datum_iterator(column, field);
+                    col_as_datum_vec.map(|c| (c, field.name.to_string()))
+                })
+                .try_collect()?;
+
+            // consume all the iterators in lockstep, creating per-row predicates that get combined
+            // into a single final predicate
+            while datum_columns_with_names[0].0.len() > 0 {
+                let mut row_predicate = AlwaysTrue;
+                for (ref mut column, ref field_name) in &mut datum_columns_with_names {
+                    if let Some(item) = column.next() {
+                        if let Some(datum) = item? {
+                            row_predicate = row_predicate
+                                .and(Reference::new(field_name.clone()).equal_to(datum.clone()));
+                        }
+                    }
+                }
+                result_predicate = result_predicate.and(row_predicate.not());
+            }
+        }
+        Ok(result_predicate.rewrite_not())
     }
 
     /// Builds eq delete predicate for the provided task.
@@ -375,6 +416,83 @@ pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
     matches!(f.file_type, DataContentType::EqualityDeletes)
 }
 
+macro_rules! prim_to_datum {
+    ($column:ident, $arr:ty, $dat:path) => {{
+        let arr = $column.as_any().downcast_ref::<$arr>().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("could not downcast ArrayRef to {}", stringify!($arr)),
+        ))?;
+        Ok(Box::new(arr.iter().map(|val| Ok(val.map($dat)))))
+    }};
+}
+
+fn eq_col_unsupported(ty: &str) -> Error {
+    Error::new(
+        ErrorKind::FeatureUnsupported,
+        format!(
+            "Equality deletes where a predicate acts upon a {} column are not yet supported",
+            ty
+        ),
+    )
+}
+
+fn arrow_array_to_datum_iterator<'a>(
+    column: &'a ArrayRef,
+    field: &NestedFieldRef,
+) -> Result<Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>> + 'a>> {
+    match field.field_type.as_primitive_type() {
+        Some(primitive_type) => match primitive_type {
+            PrimitiveType::Int => prim_to_datum!(column, Int32Array, Datum::int),
+            PrimitiveType::Boolean => {
+                prim_to_datum!(column, BooleanArray, Datum::bool)
+            }
+            PrimitiveType::Long => prim_to_datum!(column, Int64Array, Datum::long),
+            PrimitiveType::Float => {
+                prim_to_datum!(column, Float32Array, Datum::float)
+            }
+            PrimitiveType::Double => {
+                prim_to_datum!(column, Float64Array, Datum::double)
+            }
+            PrimitiveType::String => {
+                prim_to_datum!(column, StringArray, Datum::string)
+            }
+            PrimitiveType::Date => prim_to_datum!(column, Date32Array, Datum::date),
+            PrimitiveType::Timestamp => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamp_micros)
+            }
+            PrimitiveType::Timestamptz => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamptz_micros)
+            }
+            PrimitiveType::TimestampNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamp_nanos)
+            }
+            PrimitiveType::TimestamptzNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamptz_nanos)
+            }
+            PrimitiveType::Time => {
+                let arr = column
+                    .as_any()
+                    .downcast_ref::<Time64MicrosecondArray>()
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "could not downcast ArrayRef to Time64MicrosecondArray",
+                    ))?;
+                Ok(Box::new(arr.iter().map(|val| match val {
+                    None => Ok(None),
+                    Some(val) => Datum::time_micros(val).map(Some),
+                })))
+            }
+            PrimitiveType::Decimal { .. } => Err(eq_col_unsupported("Decimal")),
+            PrimitiveType::Uuid => Err(eq_col_unsupported("Uuid")),
+            PrimitiveType::Fixed(_) => Err(eq_col_unsupported("Fixed")),
+            PrimitiveType::Binary => Err(eq_col_unsupported("Binary")),
+        },
+        None => Err(eq_col_unsupported(
+            "non-primitive (i.e. Struct, List, or Map)",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -409,7 +527,7 @@ mod tests {
         // the call to the loader does not fail.
         let delete_file_manager = CachingDeleteFileManager::new(file_io.clone(), 10);
 
-        let file_scan_tasks = setup(table_location);
+        let file_scan_tasks = setup_load_deletes_test_tasks(table_location);
 
         delete_file_manager
             .load_deletes(&file_scan_tasks[0].deletes)
@@ -417,7 +535,35 @@ mod tests {
             .unwrap();
     }
 
-    fn setup(table_location: &Path) -> Vec<FileScanTask> {
+    #[tokio::test]
+    async fn test_delete_file_manager_parse_equality_deletes() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
+
+        let record_batch_stream = CachingDeleteFileManager::parquet_to_batch_stream(
+            &eq_delete_file_path,
+            file_io.clone(),
+        )
+        .await
+        .expect("could not get batch stream");
+
+        let parsed_eq_delete =
+            CachingDeleteFileManager::parse_equality_deletes_record_batch_stream(
+                record_batch_stream,
+            )
+            .await
+            .expect("error parsing batch stream");
+        println!("{}", parsed_eq_delete);
+
+        let expected = "(((y != 1) OR (z != 100)) OR (a != \"HELP\")) AND (y != 2)".to_string();
+
+        assert_eq!(parsed_eq_delete.to_string(), expected);
+    }
+
+    fn setup_load_deletes_test_tasks(table_location: &Path) -> Vec<FileScanTask> {
         let data_file_schema = Arc::new(Schema::builder().build().unwrap());
         let positional_delete_schema = create_pos_del_schema();
 
@@ -523,5 +669,59 @@ mod tests {
             ),
         ];
         Arc::new(arrow_schema::Schema::new(fields))
+    }
+
+    fn setup_write_equality_delete_file_1(table_location: &str) -> String {
+        let col_y_vals = vec![1, 2];
+        let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
+
+        let col_z_vals = vec![Some(100), None];
+        let col_z = Arc::new(Int64Array::from(col_z_vals)) as ArrayRef;
+
+        let col_a_vals = vec![Some("HELP"), None];
+        let col_a = Arc::new(StringArray::from(col_a_vals)) as ArrayRef;
+
+        let equality_delete_schema = {
+            let fields = vec![
+                arrow_schema::Field::new("y", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+                ),
+                arrow_schema::Field::new("z", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+                ),
+                arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let equality_deletes_to_write =
+            RecordBatch::try_new(equality_delete_schema.clone(), vec![col_y, col_z, col_a])
+                .unwrap();
+
+        let path = format!("{}/equality-deletes-1.parquet", &table_location);
+
+        let file = File::create(&path).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file,
+            equality_deletes_to_write.schema(),
+            Some(props.clone()),
+        )
+        .unwrap();
+
+        writer
+            .write(&equality_deletes_to_write)
+            .expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        path
     }
 }
