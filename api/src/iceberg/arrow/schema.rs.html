@@ -1752,7 +1752,7 @@
 
 <span class="kw">const </span>ARROW_FIELD_DOC_KEY: <span class="kw-2">&amp;</span>str = <span class="string">"doc"</span>;
 
-<span class="kw">fn </span>get_field_id(field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
+<span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>get_field_id(field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
     <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         <span class="kw">return </span>value.parse::&lt;i32&gt;().map_err(|e| {
             Error::new(

@@ -3839,6 +3839,16 @@
 <a href="#3839" id="3839">3839</a>
 <a href="#3840" id="3840">3840</a>
 <a href="#3841" id="3841">3841</a>
+<a href="#3842" id="3842">3842</a>
+<a href="#3843" id="3843">3843</a>
+<a href="#3844" id="3844">3844</a>
+<a href="#3845" id="3845">3845</a>
+<a href="#3846" id="3846">3846</a>
+<a href="#3847" id="3847">3847</a>
+<a href="#3848" id="3848">3848</a>
+<a href="#3849" id="3849">3849</a>
+<a href="#3850" id="3850">3850</a>
+<a href="#3851" id="3851">3851</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -5402,6 +5412,16 @@
 
     <span class="doccomment">/// Creates a timestamp with timezone from unix epoch in microseconds.
     </span><span class="kw">pub fn </span>timestamptz(value: i64) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    <span class="doccomment">/// Creates a timestamp from unix epoch in nanoseconds.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>timestamp_nano(value: i64) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    <span class="doccomment">/// Creates a timestamp with timezone from unix epoch in nanoseconds.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>timestamptz_nano(value: i64) -&gt; <span class="self">Self </span>{
         <span class="self">Self</span>::Primitive(PrimitiveLiteral::Long(value))
     }
 

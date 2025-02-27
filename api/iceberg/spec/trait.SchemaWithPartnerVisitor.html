@@ -1,0 +1,150 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A post order schema visitor with partner."><title>SchemaWithPartnerVisitor in iceberg::spec - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0-nightly (a70b2ae57 2024-06-09)" data-channel="nightly" data-search-js="search-0fe7219eb170c82e.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc trait"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iceberg/index.html">iceberg</a><span class="version">0.4.0</span></h2></div><h2 class="location"><a href="#">SchemaWithPartnerVisitor</a></h2><div class="sidebar-elems"><section><h3><a href="#required-associated-types">Required Associated Types</a></h3><ul class="block"><li><a href="#associatedtype.T">T</a></li></ul><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.field">field</a></li><li><a href="#tymethod.list">list</a></li><li><a href="#tymethod.map">map</a></li><li><a href="#tymethod.primitive">primitive</a></li><li><a href="#tymethod.schema">schema</a></li><li><a href="#tymethod.struct">struct</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.after_list_element">after_list_element</a></li><li><a href="#method.after_map_key">after_map_key</a></li><li><a href="#method.after_map_value">after_map_value</a></li><li><a href="#method.after_struct_field">after_struct_field</a></li><li><a href="#method.before_list_element">before_list_element</a></li><li><a href="#method.before_map_key">before_map_key</a></li><li><a href="#method.before_map_value">before_map_value</a></li><li><a href="#method.before_struct_field">before_struct_field</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><h2><a href="index.html">In iceberg::spec</a></h2></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Trait <a href="../index.html">iceberg</a>::<wbr><a href="index.html">spec</a>::<wbr><a class="trait" href="#">SchemaWithPartnerVisitor</a><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><span class="out-of-band"><a class="src" href="../../src/iceberg/spec/schema/visitor.rs.html#128-188">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><pre class="rust item-decl"><code>pub trait SchemaWithPartnerVisitor&lt;P&gt; {
+    type <a href="#associatedtype.T" class="associatedtype">T</a>;
+
+<details class="toggle type-contents-toggle"><summary class="hideme"><span>Show 14 methods</span></summary>    // Required methods
+    fn <a href="#tymethod.schema" class="fn">schema</a>(
+        &amp;mut self,
+        schema: &amp;<a class="struct" href="struct.Schema.html" title="struct iceberg::spec::Schema">Schema</a>,
+        partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+        value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.field" class="fn">field</a>(
+        &amp;mut self,
+        field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+        value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.struct" class="fn">struct</a>(
+        &amp;mut self,
+        struct: &amp;<a class="struct" href="struct.StructType.html" title="struct iceberg::spec::StructType">StructType</a>,
+        partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+        results: <a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.list" class="fn">list</a>(
+        &amp;mut self,
+        list: &amp;<a class="struct" href="struct.ListType.html" title="struct iceberg::spec::ListType">ListType</a>,
+        partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+        value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.map" class="fn">map</a>(
+        &amp;mut self,
+        map: &amp;<a class="struct" href="struct.MapType.html" title="struct iceberg::spec::MapType">MapType</a>,
+        partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+        key_value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+        value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.primitive" class="fn">primitive</a>(&amp;mut self, p: &amp;<a class="enum" href="enum.PrimitiveType.html" title="enum iceberg::spec::PrimitiveType">PrimitiveType</a>, partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;;
+
+    // Provided methods
+    fn <a href="#method.before_struct_field" class="fn">before_struct_field</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.after_struct_field" class="fn">after_struct_field</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.before_list_element" class="fn">before_list_element</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.after_list_element" class="fn">after_list_element</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.before_map_key" class="fn">before_map_key</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.after_map_key" class="fn">after_map_key</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.before_map_value" class="fn">before_map_value</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.after_map_value" class="fn">after_map_value</a>(
+        &amp;mut self,
+        _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+        _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    ) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt; { ... }
+</details>}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A post order schema visitor with partner.</p>
+<p>For order of methods called, please refer to <a href="fn.visit_schema_with_partner.html" title="fn iceberg::spec::visit_schema_with_partner"><code>visit_schema_with_partner</code></a>.</p>
+</div></details><h2 id="required-associated-types" class="section-header">Required Associated Types<a href="#required-associated-types" class="anchor">§</a></h2><div class="methods"><details class="toggle" open><summary><section id="associatedtype.T" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#130">source</a><h4 class="code-header">type <a href="#associatedtype.T" class="associatedtype">T</a></h4></section></summary><div class="docblock"><p>Return type of this visitor.</p>
+</div></details></div><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.schema" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#166">source</a><h4 class="code-header">fn <a href="#tymethod.schema" class="fn">schema</a>(
+    &amp;mut self,
+    schema: &amp;<a class="struct" href="struct.Schema.html" title="struct iceberg::spec::Schema">Schema</a>,
+    partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called after schema’s type visited.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.field" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#168">source</a><h4 class="code-header">fn <a href="#tymethod.field" class="fn">field</a>(
+    &amp;mut self,
+    field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called after struct’s field type visited.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.struct" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#170-175">source</a><h4 class="code-header">fn <a href="#tymethod.struct" class="fn">struct</a>(
+    &amp;mut self,
+    struct: &amp;<a class="struct" href="struct.StructType.html" title="struct iceberg::spec::StructType">StructType</a>,
+    partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    results: <a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called after struct’s fields visited.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.list" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#177">source</a><h4 class="code-header">fn <a href="#tymethod.list" class="fn">list</a>(
+    &amp;mut self,
+    list: &amp;<a class="struct" href="struct.ListType.html" title="struct iceberg::spec::ListType">ListType</a>,
+    partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called after list fields visited.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.map" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#179-185">source</a><h4 class="code-header">fn <a href="#tymethod.map" class="fn">map</a>(
+    &amp;mut self,
+    map: &amp;<a class="struct" href="struct.MapType.html" title="struct iceberg::spec::MapType">MapType</a>,
+    partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+    key_value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+    value: Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called after map’s key and value fields visited.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.primitive" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#187">source</a><h4 class="code-header">fn <a href="#tymethod.primitive" class="fn">primitive</a>(&amp;mut self, p: &amp;<a class="enum" href="enum.PrimitiveType.html" title="enum iceberg::spec::PrimitiveType">PrimitiveType</a>, partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.SchemaWithPartnerVisitor.html#associatedtype.T" title="type iceberg::spec::SchemaWithPartnerVisitor::T">T</a>&gt;</h4></section></summary><div class="docblock"><p>Called when see a primitive type.</p>
+</div></details></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.before_struct_field" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#133-135">source</a><h4 class="code-header">fn <a href="#method.before_struct_field" class="fn">before_struct_field</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called before struct field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.after_struct_field" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#137-139">source</a><h4 class="code-header">fn <a href="#method.after_struct_field" class="fn">after_struct_field</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called after struct field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.before_list_element" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#141-143">source</a><h4 class="code-header">fn <a href="#method.before_list_element" class="fn">before_list_element</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called before list field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.after_list_element" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#145-147">source</a><h4 class="code-header">fn <a href="#method.after_list_element" class="fn">after_list_element</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called after list field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.before_map_key" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#149-151">source</a><h4 class="code-header">fn <a href="#method.before_map_key" class="fn">before_map_key</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called before map key field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.after_map_key" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#153-155">source</a><h4 class="code-header">fn <a href="#method.after_map_key" class="fn">after_map_key</a>(&amp;mut self, _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>, _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called after map key field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.before_map_value" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#157-159">source</a><h4 class="code-header">fn <a href="#method.before_map_value" class="fn">before_map_value</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called before map value field.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.after_map_value" class="method"><a class="src rightside" href="../../src/iceberg/spec/schema/visitor.rs.html#161-163">source</a><h4 class="code-header">fn <a href="#method.after_map_value" class="fn">after_map_value</a>(
+    &amp;mut self,
+    _field: &amp;<a class="type" href="type.NestedFieldRef.html" title="type iceberg::spec::NestedFieldRef">NestedFieldRef</a>,
+    _partner: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.reference.html">&amp;P</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Called after map value field.</p>
+</div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"></div><script src="../../trait.impl/iceberg/spec/schema/visitor/trait.SchemaWithPartnerVisitor.js" async></script></section></div></main></body></html>
