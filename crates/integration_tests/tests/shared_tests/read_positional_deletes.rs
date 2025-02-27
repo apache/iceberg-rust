@@ -58,7 +58,7 @@ async fn test_read_table_with_positional_deletes_with_delete_support_disabled() 
     // fail at the read phase after this.
     assert_eq!(plan[0].deletes.len(), 2);
 
-    // with delete_file_processing_enabled == false, we should fail when we 
+    // with delete_file_processing_enabled == false, we should fail when we
     // try to read a table that has positional deletes.
     let result = scan.to_arrow().await.unwrap().try_collect::<Vec<_>>().await;
 

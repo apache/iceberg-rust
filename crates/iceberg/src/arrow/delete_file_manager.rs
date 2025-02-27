@@ -22,18 +22,22 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 
-use arrow_array::{Int64Array, StringArray};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+};
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use roaring::RoaringTreemap;
 
-use crate::arrow::ArrowReader;
+use crate::arrow::{arrow_schema_to_schema, ArrowReader};
 use crate::expr::Predicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile};
-use crate::spec::DataContentType;
+use crate::spec::{DataContentType, Datum, NestedFieldRef, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 // Equality deletes may apply to more than one DataFile in a scan, and so
@@ -373,11 +377,46 @@ impl DeleteFileManager {
     ///
     /// Returns an unbound Predicate for each batch stream
     async fn parse_equality_deletes_record_batch_stream(
-        streams: ArrowRecordBatchStream,
+        mut stream: ArrowRecordBatchStream,
     ) -> Result<Predicate> {
-        // TODO
+        let mut result_predicate = AlwaysTrue;
 
-        Ok(AlwaysTrue)
+        while let Some(record_batch) = stream.next().await {
+            let record_batch = record_batch?;
+
+            if record_batch.num_columns() == 0 {
+                return Ok(AlwaysTrue);
+            }
+
+            let batch_schema_arrow = record_batch.schema();
+            let batch_schema_iceberg = arrow_schema_to_schema(batch_schema_arrow.as_ref())?;
+
+            let mut datum_columns_with_names: Vec<_> = record_batch
+                .columns()
+                .iter()
+                .zip(batch_schema_iceberg.as_struct().fields())
+                .map(|(column, field)| {
+                    let col_as_datum_vec = arrow_array_to_datum_iterator(column, field);
+                    col_as_datum_vec.map(|c| (c, field.name.to_string()))
+                })
+                .try_collect()?;
+
+            // consume all the iterators in lockstep, creating per-row predicates that get combined
+            // into a single final predicate
+            while datum_columns_with_names[0].0.len() > 0 {
+                let mut row_predicate = AlwaysTrue;
+                for (ref mut column, ref field_name) in &mut datum_columns_with_names {
+                    if let Some(item) = column.next() {
+                        if let Some(datum) = item? {
+                            row_predicate = row_predicate
+                                .and(Reference::new(field_name.clone()).equal_to(datum.clone()));
+                        }
+                    }
+                }
+                result_predicate = result_predicate.or(row_predicate);
+            }
+        }
+        Ok(result_predicate)
     }
 
     /// Builds eq delete predicate for the provided task.
@@ -444,6 +483,83 @@ impl DeleteFileManager {
 
 pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
     matches!(f.file_type, DataContentType::EqualityDeletes)
+}
+
+macro_rules! prim_to_datum {
+    ($column:ident, $arr:ty, $dat:path) => {{
+        let arr = $column.as_any().downcast_ref::<$arr>().ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("could not downcast ArrayRef to {}", stringify!($arr)),
+        ))?;
+        Ok(Box::new(arr.iter().map(|val| Ok(val.map($dat)))))
+    }};
+}
+
+fn eq_col_unsupported(ty: &str) -> Error {
+    Error::new(
+        ErrorKind::FeatureUnsupported,
+        format!(
+            "Equality deletes where a predicate acts upon a {} column are not yet supported",
+            ty
+        ),
+    )
+}
+
+fn arrow_array_to_datum_iterator<'a>(
+    column: &'a ArrayRef,
+    field: &NestedFieldRef,
+) -> Result<Box<dyn ExactSizeIterator<Item = Result<Option<Datum>>> + 'a>> {
+    match field.field_type.as_primitive_type() {
+        Some(primitive_type) => match primitive_type {
+            PrimitiveType::Int => prim_to_datum!(column, Int32Array, Datum::int),
+            PrimitiveType::Boolean => {
+                prim_to_datum!(column, BooleanArray, Datum::bool)
+            }
+            PrimitiveType::Long => prim_to_datum!(column, Int64Array, Datum::long),
+            PrimitiveType::Float => {
+                prim_to_datum!(column, Float32Array, Datum::float)
+            }
+            PrimitiveType::Double => {
+                prim_to_datum!(column, Float64Array, Datum::double)
+            }
+            PrimitiveType::String => {
+                prim_to_datum!(column, StringArray, Datum::string)
+            }
+            PrimitiveType::Date => prim_to_datum!(column, Date32Array, Datum::date),
+            PrimitiveType::Timestamp => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamp_micros)
+            }
+            PrimitiveType::Timestamptz => {
+                prim_to_datum!(column, TimestampMicrosecondArray, Datum::timestamptz_micros)
+            }
+            PrimitiveType::TimestampNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamp_nanos)
+            }
+            PrimitiveType::TimestamptzNs => {
+                prim_to_datum!(column, TimestampNanosecondArray, Datum::timestamptz_nanos)
+            }
+            PrimitiveType::Time => {
+                let arr = column
+                    .as_any()
+                    .downcast_ref::<Time64MicrosecondArray>()
+                    .ok_or(Error::new(
+                        ErrorKind::Unexpected,
+                        "could not downcast ArrayRef to Time64MicrosecondArray",
+                    ))?;
+                Ok(Box::new(arr.iter().map(|val| match val {
+                    None => Ok(None),
+                    Some(val) => Datum::time_micros(val).map(Some),
+                })))
+            }
+            PrimitiveType::Decimal { .. } => Err(eq_col_unsupported("Decimal")),
+            PrimitiveType::Uuid => Err(eq_col_unsupported("Uuid")),
+            PrimitiveType::Fixed(_) => Err(eq_col_unsupported("Fixed")),
+            PrimitiveType::Binary => Err(eq_col_unsupported("Binary")),
+        },
+        None => Err(eq_col_unsupported(
+            "non-primitive (i.e. Struct, List, or Map)",
+        )),
+    }
 }
 
 #[cfg(test)]
