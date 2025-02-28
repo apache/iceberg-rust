@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -26,15 +26,20 @@ use crate::Result;
 /// `TrackWriter` is used to track the written size.
 pub(crate) struct TrackWriter {
     inner: Box<dyn FileWrite>,
-    written_size: Arc<AtomicI64>,
+    written_size: Arc<AtomicU64>,
 }
 
 impl TrackWriter {
-    pub fn new(writer: Box<dyn FileWrite>, written_size: Arc<AtomicI64>) -> Self {
+    pub fn new(writer: Box<dyn FileWrite>, written_size: Arc<AtomicU64>) -> Self {
         Self {
             inner: writer,
             written_size,
         }
+    }
+
+    /// Number of bytes written so far
+    pub fn bytes_written(&self) -> u64 {
+        self.written_size.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -44,7 +49,7 @@ impl FileWrite for TrackWriter {
         let size = bs.len();
         self.inner.write(bs).await.map(|v| {
             self.written_size
-                .fetch_add(size as i64, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
             v
         })
     }
