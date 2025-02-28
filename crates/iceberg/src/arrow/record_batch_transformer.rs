@@ -15,18 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_schema::{FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef};
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 
 use super::get_field_id;
 use super::record_batch_projector::{DefaultValueGenerator, RecordBatchProjector};
 use crate::arrow::schema_to_arrow_schema;
 use crate::spec::Schema as IcebergSchema;
-use crate::{Error, ErrorKind, Result};
+use crate::Result;
 
 #[derive(Debug)]
 enum BatchTransform {
@@ -117,24 +115,8 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
     ) -> Result<BatchTransform> {
-        let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
-        let field_id_to_mapped_schema_map =
-            Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
-
-        // Create a new arrow schema by selecting fields from mapped_unprojected,
-        // in the order of the field ids in projected_iceberg_field_ids
-        let fields: Result<Vec<_>> = projected_iceberg_field_ids
-            .iter()
-            .map(|field_id| {
-                Ok(field_id_to_mapped_schema_map
-                    .get(field_id)
-                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                    .0
-                    .clone())
-            })
-            .collect();
-
-        let target_schema = Arc::new(ArrowSchema::new(fields?));
+        let projected_iceberg_schema = snapshot_schema.project(projected_iceberg_field_ids)?;
+        let target_schema = Arc::new(schema_to_arrow_schema(&projected_iceberg_schema)?);
 
         match Self::compare_schemas(source_schema, &target_schema) {
             SchemaComparison::Equivalent => Ok(BatchTransform::PassThrough),
@@ -197,35 +179,6 @@ impl RecordBatchTransformer {
             SchemaComparison::Equivalent
         }
     }
-
-    fn build_field_id_to_arrow_schema_map(
-        source_schema: &SchemaRef,
-    ) -> Result<HashMap<i32, (FieldRef, usize)>> {
-        let mut field_id_to_source_schema = HashMap::new();
-        for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
-            let this_field_id = source_field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "field ID not present in parquet metadata",
-                    )
-                })?
-                .parse()
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {}", e),
-                    )
-                })?;
-
-            field_id_to_source_schema
-                .insert(this_field_id, (source_field.clone(), source_field_idx));
-        }
-
-        Ok(field_id_to_source_schema)
-    }
 }
 
 #[cfg(test)]
@@ -241,24 +194,6 @@ mod test {
 
     use crate::arrow::record_batch_transformer::RecordBatchTransformer;
     use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Type};
-
-    #[test]
-    fn build_field_id_to_source_schema_map_works() {
-        let arrow_schema = arrow_schema_already_same_as_target();
-
-        let result =
-            RecordBatchTransformer::build_field_id_to_arrow_schema_map(&arrow_schema).unwrap();
-
-        let expected = HashMap::from_iter([
-            (10, (arrow_schema.fields()[0].clone(), 0)),
-            (11, (arrow_schema.fields()[1].clone(), 1)),
-            (12, (arrow_schema.fields()[2].clone(), 2)),
-            (14, (arrow_schema.fields()[3].clone(), 3)),
-            (15, (arrow_schema.fields()[4].clone(), 4)),
-        ]);
-
-        assert!(result.eq(&expected));
-    }
 
     #[test]
     fn processor_returns_properly_shaped_record_batch_when_no_schema_migration_required() {
