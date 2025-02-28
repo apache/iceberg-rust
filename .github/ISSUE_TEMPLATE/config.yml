@@ -19,6 +19,6 @@
 
 blank_issues_enabled: true
 contact_links:
-  - name: GitHub Community Support
+  - name: Ask questions about iceberg-rust
     url: https://github.com/apache/iceberg-rust/discussions
     about: Please ask and answer questions here.
