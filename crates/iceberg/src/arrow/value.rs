@@ -428,21 +428,17 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
-    fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn struct_parner(&self, schema_partner: &ArrayRef) -> Result<ArrayRef> {
         if !matches!(schema_partner.data_type(), DataType::Struct(_)) {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "The schema partner is not a struct type",
             ));
         }
-        Ok(schema_partner)
+        Ok(schema_partner.clone())
     }
 
-    fn field_partner<'a>(
-        &self,
-        struct_partner: &'a ArrayRef,
-        field: &NestedField,
-    ) -> Result<&'a ArrayRef> {
+    fn field_partner(&self, struct_partner: &ArrayRef, field: &NestedField) -> Result<ArrayRef> {
         let struct_array = struct_partner
             .as_any()
             .downcast_ref::<StructArray>()
@@ -466,10 +462,10 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     format!("Field id {} not found in struct array", field.id),
                 )
             })?;
-        Ok(struct_array.column(field_pos))
+        Ok(struct_array.column(field_pos).clone())
     }
 
-    fn list_element_partner<'a>(&self, list_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn list_element_partner(&self, list_partner: &ArrayRef) -> Result<ArrayRef> {
         match list_partner.data_type() {
             DataType::List(_) => {
                 let list_array = list_partner
@@ -481,7 +477,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                             "The list partner is not a list array",
                         )
                     })?;
-                Ok(list_array.values())
+                Ok(list_array.values().clone())
             }
             DataType::LargeList(_) => {
                 let list_array = list_partner
@@ -493,7 +489,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                             "The list partner is not a large list array",
                         )
                     })?;
-                Ok(list_array.values())
+                Ok(list_array.values().clone())
             }
             DataType::FixedSizeList(_, _) => {
                 let list_array = list_partner
@@ -505,7 +501,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                             "The list partner is not a fixed size list array",
                         )
                     })?;
-                Ok(list_array.values())
+                Ok(list_array.values().clone())
             }
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -514,24 +510,24 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
         }
     }
 
-    fn map_key_partner<'a>(&self, map_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn map_key_partner(&self, map_partner: &ArrayRef) -> Result<ArrayRef> {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
             .ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
             })?;
-        Ok(map_array.keys())
+        Ok(map_array.keys().clone())
     }
 
-    fn map_value_partner<'a>(&self, map_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
+    fn map_value_partner(&self, map_partner: &ArrayRef) -> Result<ArrayRef> {
         let map_array = map_partner
             .as_any()
             .downcast_ref::<MapArray>()
             .ok_or_else(|| {
                 Error::new(ErrorKind::DataInvalid, "The map partner is not a map array")
             })?;
-        Ok(map_array.values())
+        Ok(map_array.values().clone())
     }
 }
 
