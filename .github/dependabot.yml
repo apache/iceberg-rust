@@ -31,3 +31,7 @@ updates:
       interval: "weekly"
       day: "sunday"
     open-pull-requests-limit: 50
+    ignore:
+       # For all packages, ignore all patch updates
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
