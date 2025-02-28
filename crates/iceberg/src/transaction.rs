@@ -25,17 +25,14 @@ use std::ops::RangeFrom;
 
 use arrow_array::StringArray;
 use futures::TryStreamExt;
-use parquet::arrow::async_reader::AsyncFileReader;
 use uuid::Uuid;
 
-use crate::arrow::ArrowFileReader;
 use crate::error::Result;
-use crate::io::{FileIO, OutputFile};
+use crate::io::OutputFile;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
     ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SortDirection, SortField, SortOrder, Struct, StructType, Summary, TableMetadata, Transform,
-    MAIN_BRANCH,
+    SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::writer::file_writer::ParquetWriter;
@@ -45,7 +42,6 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 const META_ROOT_PATH: &str = "metadata";
 
 /// Table transaction.
-#[derive(Clone)]
 pub struct Transaction<'a> {
     table: &'a Table,
     updates: Vec<TableUpdate>,
@@ -138,7 +134,7 @@ impl<'a> Transaction<'a> {
 
     /// Creates a fast append action.
     pub fn fast_append(
-        &self,
+        self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
@@ -176,48 +172,6 @@ impl<'a> Transaction<'a> {
 
         catalog.update_table(table_commit).await
     }
-
-    async fn parquet_files_to_data_files(
-        &self,
-        file_io: &FileIO,
-        file_paths: Vec<String>,
-        table_metadata: &TableMetadata,
-    ) -> Result<Vec<DataFile>> {
-        // TODO: support adding to partitioned table
-        let mut data_files: Vec<DataFile> = Vec::new();
-
-        if !table_metadata.default_spec.fields().is_empty() {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Appending to partitioned tables is not supported",
-            ));
-        }
-
-        for file_path in file_paths {
-            let input_file = file_io.new_input(&file_path)?;
-            let file_metadata = input_file.metadata().await?;
-            let file_size_in_bytes = file_metadata.size as usize;
-            let reader = input_file.reader().await?;
-
-            let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            let parquet_metadata = parquet_reader.get_metadata().await.map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {}", err),
-                )
-            })?;
-            let builder = ParquetWriter::parquet_to_data_file_builder(
-                table_metadata.current_schema().clone(),
-                parquet_metadata,
-                file_size_in_bytes,
-                file_path,
-            )?;
-            let data_file = builder.build().unwrap();
-            data_files.push(data_file);
-        }
-
-        Ok(data_files)
-    }
 }
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
@@ -228,7 +182,7 @@ pub struct FastAppendAction<'a> {
 impl<'a> FastAppendAction<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        tx: &Transaction<'a>,
+        tx: Transaction<'a>,
         snapshot_id: i64,
         commit_uuid: Uuid,
         key_metadata: Vec<u8>,
@@ -255,29 +209,37 @@ impl<'a> FastAppendAction<'a> {
     }
 
     /// Adds existing parquet files
-    pub async fn add_parquet_files(
-        transaction: Transaction<'a>,
-        file_path: Vec<String>,
-    ) -> Result<Transaction<'a>> {
-        let table_metadata = transaction.table.metadata();
+    pub async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
+        if !self
+            .snapshot_produce_action
+            .tx
+            .table
+            .metadata()
+            .default_spec
+            .is_unpartitioned()
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Appending to partitioned tables is not supported",
+            ));
+        }
 
-        let data_file = Transaction::parquet_files_to_data_files(
-            &transaction,
-            transaction.table.file_io(),
+        let table_metadata = self.snapshot_produce_action.tx.table.metadata();
+
+        let data_files = ParquetWriter::parquet_files_to_data_files(
+            self.snapshot_produce_action.tx.table.file_io(),
             file_path,
             table_metadata,
         )
         .await?;
 
-        let mut fast_append_action =
-            Transaction::fast_append(&transaction, Some(Uuid::new_v4()), Vec::new())?;
-        fast_append_action.add_data_files(data_file)?;
+        self.add_data_files(data_files)?;
 
-        fast_append_action.apply(transaction).await
+        self.apply().await
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self, transaction: Transaction<'a>) -> Result<Transaction<'a>> {
+    pub async fn apply(self) -> Result<Transaction<'a>> {
         // Checks duplicate files
         let new_files: HashSet<&str> = self
             .snapshot_produce_action
@@ -286,7 +248,14 @@ impl<'a> FastAppendAction<'a> {
             .map(|df| df.file_path.as_str())
             .collect();
 
-        let mut manifest_stream = transaction.table.inspect().manifests().scan().await?;
+        let mut manifest_stream = self
+            .snapshot_produce_action
+            .tx
+            .table
+            .inspect()
+            .manifests()
+            .scan()
+            .await?;
         let mut referenced_files = Vec::new();
 
         while let Some(batch) = manifest_stream.try_next().await? {
@@ -403,14 +372,14 @@ struct SnapshotProduceAction<'a> {
 
 impl<'a> SnapshotProduceAction<'a> {
     pub(crate) fn new(
-        tx: &Transaction<'a>,
+        tx: Transaction<'a>,
         snapshot_id: i64,
         key_metadata: Vec<u8>,
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self {
-            tx: tx.clone(),
+            tx,
             snapshot_id,
             commit_uuid,
             snapshot_properties,
@@ -719,7 +688,6 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
-    use super::*;
     use crate::io::FileIOBuilder;
     use crate::scan::tests::TableTestFixture;
     use crate::spec::{
@@ -891,7 +859,7 @@ mod tests {
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let mut action = tx.clone().fast_append(None, vec![]).unwrap();
+        let mut action = tx.fast_append(None, vec![]).unwrap();
 
         // check add data file with incompatible partition value
         let data_file = DataFileBuilder::default()
@@ -915,7 +883,7 @@ mod tests {
             .build()
             .unwrap();
         action.add_data_files(vec![data_file.clone()]).unwrap();
-        let tx = action.apply(tx).await.unwrap();
+        let tx = action.apply().await.unwrap();
 
         // check updates and requirements
         assert!(
@@ -998,8 +966,11 @@ mod tests {
             format!("{}/3.parquet", &fixture.table_location),
         ];
 
+        let fast_append_action = tx.fast_append(None, vec![]).unwrap();
+
         // Attempt to add the existing Parquet files with fast append.
-        let new_tx = FastAppendAction::add_parquet_files(tx, file_paths.clone())
+        let new_tx = fast_append_action
+            .add_parquet_files(file_paths.clone())
             .await
             .expect("Adding existing Parquet files should succeed");
 

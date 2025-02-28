@@ -25,6 +25,7 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::file::metadata::ParquetMetaData;
@@ -36,14 +37,16 @@ use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, DEFAULT_MAP_FIELD_NAME,
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, ArrowFileReader,
+    DEFAULT_MAP_FIELD_NAME,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
-    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType, Type,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
+    TableMetadata, Type,
 };
-use crate::writer::CurrentFileStatus;
+use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
@@ -107,7 +110,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
 }
 
 /// A mapping from Parquet column path names to internal field id
-pub struct IndexByParquetPathName {
+struct IndexByParquetPathName {
     name_to_id: HashMap<String, i32>,
 
     field_names: Vec<String>,
@@ -237,7 +240,7 @@ struct MinMaxColAggregator {
 
 impl MinMaxColAggregator {
     /// Creates new and empty `MinMaxColAggregator`
-    pub fn new(schema: SchemaRef) -> Self {
+    fn new(schema: SchemaRef) -> Self {
         Self {
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
@@ -268,7 +271,7 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
-    pub fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -314,12 +317,47 @@ impl MinMaxColAggregator {
     }
 
     /// Returns lower and upper bounds
-    pub fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
+    fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
         (self.lower_bounds, self.upper_bounds)
     }
 }
 
 impl ParquetWriter {
+    /// Converts parquet files to data files
+    pub async fn parquet_files_to_data_files(
+        file_io: &FileIO,
+        file_paths: Vec<String>,
+        table_metadata: &TableMetadata,
+    ) -> Result<Vec<DataFile>> {
+        // TODO: support adding to partitioned table
+        let mut data_files: Vec<DataFile> = Vec::new();
+
+        for file_path in file_paths {
+            let input_file = file_io.new_input(&file_path)?;
+            let file_metadata = input_file.metadata().await?;
+            let file_size_in_bytes = file_metadata.size as usize;
+            let reader = input_file.reader().await?;
+
+            let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+            let parquet_metadata = parquet_reader.get_metadata().await.map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Error reading Parquet metadata: {}", err),
+                )
+            })?;
+            let builder = ParquetWriter::parquet_to_data_file_builder(
+                table_metadata.current_schema().clone(),
+                parquet_metadata,
+                file_size_in_bytes,
+                file_path,
+            )?;
+            let data_file = builder.build().unwrap();
+            data_files.push(data_file);
+        }
+
+        Ok(data_files)
+    }
+
     fn to_data_file_builder(
         schema: SchemaRef,
         metadata: FileMetaData,
