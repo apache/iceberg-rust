@@ -964,7 +964,7 @@ pub struct ManifestMetadata {
     schema: SchemaRef,
     /// ID of the schema used to write the manifest as a string
     schema_id: SchemaId,
-    /// The partition spec used  to write the manifest
+    /// The partition spec used to write the manifest
     partition_spec: PartitionSpec,
     /// Table format version number of the manifest as a string
     format_version: FormatVersion,
@@ -1061,6 +1061,31 @@ impl ManifestMetadata {
             format_version,
             content,
         })
+    }
+
+    /// Get the schema of table at the time manifest was written
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Get the ID of schema used to write the manifest
+    pub fn schema_id(&self) -> SchemaId {
+        self.schema_id
+    }
+
+    /// Get the partition spec used to write manifest
+    pub fn partition_spec(&self) -> &PartitionSpec {
+        &self.partition_spec
+    }
+
+    /// Get the table format version
+    pub fn format_version(&self) -> &FormatVersion {
+        &self.format_version
+    }
+
+    /// Get the type of content files tracked by manifest
+    pub fn content(&self) -> &ManifestContentType {
+        &self.content
     }
 }
 
