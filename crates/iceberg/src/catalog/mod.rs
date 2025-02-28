@@ -285,7 +285,7 @@ impl TableCommit {
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum TableRequirement {
     /// The table must not already exist; used for create transactions
