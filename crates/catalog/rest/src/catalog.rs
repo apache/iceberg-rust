@@ -160,22 +160,28 @@ impl RestCatalogConfig {
             // The unwrap here is same since we are filtering the keys
             .map(|(k, v)| (k.strip_prefix("header.").unwrap(), v))
         {
-            headers.insert(
-                HeaderName::from_str(key).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header name: {key}"),
-                    )
-                    .with_source(e)
-                })?,
-                HeaderValue::from_str(value).map_err(|e| {
+            let k = HeaderName::from_str(key).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header name: {key}"),
+                )
+                .with_source(e)
+            })?;
+            // Multiple values are allowed for headers
+            for (i, value) in value.split(',').enumerate() {
+                let v = HeaderValue::from_str(value.trim()).map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid header value: {value}"),
                     )
                     .with_source(e)
-                })?,
-            );
+                })?;
+                if i == 0 {
+                    headers.insert(k.clone(), v);
+                } else {
+                    headers.append(k.clone(), v);
+                }
+            }
         }
 
         Ok(headers)
@@ -890,6 +896,10 @@ mod tests {
             "header.customized-header".to_string(),
             "some/value".to_string(),
         );
+        props.insert(
+            "header.X-Iceberg-Access-Delegation".to_string(),
+            "vended-credentials,remote-signing".to_string(),
+        );
 
         let config = RestCatalogConfig::builder()
             .uri(server.url())
@@ -913,6 +923,14 @@ mod tests {
             (
                 HeaderName::from_static("customized-header"),
                 HeaderValue::from_static("some/value"),
+            ),
+            (
+                HeaderName::from_static("x-iceberg-access-delegation"),
+                HeaderValue::from_static("vended-credentials"),
+            ),
+            (
+                HeaderName::from_static("x-iceberg-access-delegation"),
+                HeaderValue::from_static("remote-signing"),
             ),
         ]);
         assert_eq!(headers, expected_headers);
