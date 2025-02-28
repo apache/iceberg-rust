@@ -190,15 +190,15 @@ pub trait SchemaWithPartnerVisitor<P> {
 /// Accessor used to get child partner from parent partner.
 pub trait PartnerAccessor<P> {
     /// Get the struct partner from schema partner.
-    fn struct_parner<'a>(&self, schema_partner: &'a P) -> Result<&'a P>;
+    fn struct_parner(&self, schema_partner: &P) -> Result<P>;
     /// Get the field partner from struct partner.
-    fn field_partner<'a>(&self, struct_partner: &'a P, field: &NestedField) -> Result<&'a P>;
+    fn field_partner(&self, struct_partner: &P, field: &NestedField) -> Result<P>;
     /// Get the list element partner from list partner.
-    fn list_element_partner<'a>(&self, list_partner: &'a P) -> Result<&'a P>;
+    fn list_element_partner(&self, list_partner: &P) -> Result<P>;
     /// Get the map key partner from map partner.
-    fn map_key_partner<'a>(&self, map_partner: &'a P) -> Result<&'a P>;
+    fn map_key_partner(&self, map_partner: &P) -> Result<P>;
     /// Get the map value partner from map partner.
-    fn map_value_partner<'a>(&self, map_partner: &'a P) -> Result<&'a P>;
+    fn map_value_partner(&self, map_partner: &P) -> Result<P>;
 }
 
 /// Visiting a type in post order.
@@ -212,32 +212,36 @@ pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: Part
         Type::Primitive(p) => visitor.primitive(p, partner),
         Type::List(list) => {
             let list_element_partner = accessor.list_element_partner(partner)?;
-            visitor.before_list_element(&list.element_field, list_element_partner)?;
+            visitor.before_list_element(&list.element_field, &list_element_partner)?;
             let element_results = visit_type_with_partner(
                 &list.element_field.field_type,
-                list_element_partner,
+                &list_element_partner,
                 visitor,
                 accessor,
             )?;
-            visitor.after_list_element(&list.element_field, list_element_partner)?;
+            visitor.after_list_element(&list.element_field, &list_element_partner)?;
             visitor.list(list, partner, element_results)
         }
         Type::Map(map) => {
             let key_partner = accessor.map_key_partner(partner)?;
-            visitor.before_map_key(&map.key_field, key_partner)?;
-            let key_result =
-                visit_type_with_partner(&map.key_field.field_type, key_partner, visitor, accessor)?;
-            visitor.after_map_key(&map.key_field, key_partner)?;
-
-            let value_partner = accessor.map_value_partner(partner)?;
-            visitor.before_map_value(&map.value_field, value_partner)?;
-            let value_result = visit_type_with_partner(
-                &map.value_field.field_type,
-                value_partner,
+            visitor.before_map_key(&map.key_field, &key_partner)?;
+            let key_result = visit_type_with_partner(
+                &map.key_field.field_type,
+                &key_partner,
                 visitor,
                 accessor,
             )?;
-            visitor.after_map_value(&map.value_field, value_partner)?;
+            visitor.after_map_key(&map.key_field, &key_partner)?;
+
+            let value_partner = accessor.map_value_partner(partner)?;
+            visitor.before_map_value(&map.value_field, &value_partner)?;
+            let value_result = visit_type_with_partner(
+                &map.value_field.field_type,
+                &value_partner,
+                visitor,
+                accessor,
+            )?;
+            visitor.after_map_value(&map.value_field, &value_partner)?;
 
             visitor.map(map, partner, key_result, value_result)
         }
@@ -255,10 +259,10 @@ pub fn visit_struct_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
     let mut results = Vec::with_capacity(s.fields().len());
     for field in s.fields() {
         let field_partner = accessor.field_partner(partner, field)?;
-        visitor.before_struct_field(field, field_partner)?;
-        let result = visit_type_with_partner(&field.field_type, field_partner, visitor, accessor)?;
-        visitor.after_struct_field(field, field_partner)?;
-        let result = visitor.field(field, field_partner, result)?;
+        visitor.before_struct_field(field, &field_partner)?;
+        let result = visit_type_with_partner(&field.field_type, &field_partner, visitor, accessor)?;
+        visitor.after_struct_field(field, &field_partner)?;
+        let result = visitor.field(field, &field_partner, result)?;
         results.push(result);
     }
 
@@ -274,7 +278,7 @@ pub fn visit_schema_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
 ) -> Result<V::T> {
     let result = visit_struct_with_partner(
         &schema.r#struct,
-        accessor.struct_parner(partner)?,
+        &accessor.struct_parner(partner)?,
         visitor,
         accessor,
     )?;
