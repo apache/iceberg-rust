@@ -17,16 +17,4 @@
 # under the License.
 #
 
-name: Iceberg Rust Question
-description: Questions around Apache Iceberg Rust
-labels: ["kind:question"]
-body:
-  - type: markdown
-    attributes:
-      value: >
-        **Notice:** For questions about Apache Iceberg Rust, please head over to our discussions page at [https://github.com/apache/iceberg-rust/discussions](https://github.com/apache/iceberg-rust/discussions). This issue template is not intended for general questions.
-  - type: textarea
-    attributes:
-      label: Question (if any additional context is needed)
-    validations:
-      required: false
+blank_issues_enabled: true
