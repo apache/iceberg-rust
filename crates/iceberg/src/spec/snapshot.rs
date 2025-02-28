@@ -66,14 +66,255 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-/// Summarises the changes in the snapshot.
-pub struct Summary {
+/// Summarizes the changes in the snapshot.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
+#[serde(default)]
+pub struct SnapshotSummary {
     /// The type of operation in the snapshot
     pub operation: Operation,
-    /// Other summary data.
+
+    /// Number of added data files
+    pub added_data_files: u64,
+    /// Number of deleted data files
+    pub deleted_data_files: u64,
+    /// Total data files
+    pub total_data_files: u64,
+
+    /// Added delete files
+    pub added_delete_files: u64,
+    /// Removed delete files
+    pub removed_delete_files: u64,
+    /// Total delete files
+    pub total_delete_files: u64,
+
+    /// Number of added records
+    pub added_records: u64,
+    /// Number of deleted records
+    pub deleted_records: u64,
+    /// Total number of records
+    pub total_records: u64,
+
+    /// Total size of added files in bytes
+    pub added_file_size: u64,
+    /// Total size of removed files in bytes
+    pub removed_file_size: u64,
+    /// Total file size (bytes)
+    pub total_file_size: u64,
+
+    /// Number of added equality delete files
+    pub added_eq_delete_files: u64,
+    /// Number of removed equality delete files
+    pub removed_eq_delete_files: u64,
+    /// Total equality delete files
+    pub total_eq_deletes: u64,
+
+    /// Number of added position delete files
+    pub added_pos_delete_files: u64,
+    /// Number of removed position delete files
+    pub removed_pos_delete_files: u64,
+    /// Total position delete files
+    pub total_pos_deletes: u64,
+
+    /// Number of deleted duplicate files
+    pub deleted_duplicate_files: u64,
+
+    /// Number of partitions changed
+    pub changed_partition_count: u64,
+    /// Tracks changes per partition (partition identifier -> summary of changes)
+    #[serde(default)]
+    pub partitions: HashMap<String, String>,
+
+    /// Other summary data (any custom properties)
     #[serde(flatten)]
     pub additional_properties: HashMap<String, String>,
+}
+
+// Update values macros
+macro_rules! update_counters {
+    (add, $self:ident, $files_field:ident, $total_files_field:ident,
+     $added_size_field:ident, $total_size_field:ident, $size:expr) => {
+        $self.$files_field = $self.$files_field.saturating_add(1);
+        $self.$total_files_field = $self.$total_files_field.saturating_add(1);
+        $self.$added_size_field = $self.$added_size_field.saturating_add($size);
+        $self.$total_size_field = $self.$total_size_field.saturating_add($size);
+    };
+
+    (remove, $self:ident, $files_field:ident, $total_files_field:ident,
+     $removed_size_field:ident, $total_size_field:ident, $size:expr) => {
+        $self.$files_field = $self.$files_field.saturating_add(1);
+        $self.$total_files_field = $self.$total_files_field.saturating_sub(1);
+        $self.$removed_size_field = $self.$removed_size_field.saturating_add($size);
+        $self.$total_size_field = $self.$total_size_field.saturating_sub($size);
+    };
+}
+
+impl SnapshotSummary {
+    /// Creates a new `SnapshotSummary` instance.
+    pub fn new(operation: Operation, properties: HashMap<String, String>) -> Self {
+        Self {
+            operation,
+            added_data_files: 0,
+            deleted_data_files: 0,
+            total_data_files: 0,
+            added_delete_files: 0,
+            removed_delete_files: 0,
+            total_delete_files: 0,
+            added_records: 0,
+            deleted_records: 0,
+            total_records: 0,
+            added_file_size: 0,
+            removed_file_size: 0,
+            total_file_size: 0,
+            added_eq_delete_files: 0,
+            removed_eq_delete_files: 0,
+            total_eq_deletes: 0,
+            added_pos_delete_files: 0,
+            removed_pos_delete_files: 0,
+            total_pos_deletes: 0,
+            deleted_duplicate_files: 0,
+            changed_partition_count: 0,
+            partitions: HashMap::new(),
+            additional_properties: properties,
+        }
+    }
+
+    /// Adds a new data file and updates relevant counters.
+    pub fn add_data_file(&mut self, size: u64) {
+        update_counters!(
+            add,
+            self,
+            added_data_files,
+            total_data_files,
+            added_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Deletes a data file and updates relevant counters.
+    pub fn delete_data_file(&mut self, size: u64) {
+        update_counters!(
+            remove,
+            self,
+            deleted_data_files,
+            total_data_files,
+            removed_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Adds a delete file and updates relevant counters.
+    pub fn add_delete_file(&mut self, size: u64) {
+        update_counters!(
+            add,
+            self,
+            added_delete_files,
+            total_delete_files,
+            added_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Removes a delete file and updates relevant counters.
+    pub fn remove_delete_file(&mut self, size: u64) {
+        update_counters!(
+            remove,
+            self,
+            removed_delete_files,
+            total_delete_files,
+            removed_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Adds an equality delete file and updates relevant counters.
+    pub fn add_eq_delete_file(&mut self, size: u64) {
+        update_counters!(
+            add,
+            self,
+            added_eq_delete_files,
+            total_eq_deletes,
+            added_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Removes an equality delete file and updates relevant counters.
+    pub fn remove_eq_delete_file(&mut self, size: u64) {
+        update_counters!(
+            remove,
+            self,
+            removed_eq_delete_files,
+            total_eq_deletes,
+            removed_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Adds a positional delete file and updates relevant counters.
+    pub fn add_pos_delete_file(&mut self, size: u64) {
+        update_counters!(
+            add,
+            self,
+            added_pos_delete_files,
+            total_pos_deletes,
+            added_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Removes a positional delete file and updates relevant counters.
+    pub fn remove_pos_delete_file(&mut self, size: u64) {
+        update_counters!(
+            remove,
+            self,
+            removed_pos_delete_files,
+            total_pos_deletes,
+            removed_file_size,
+            total_file_size,
+            size
+        );
+    }
+
+    /// Increments the counter for deleted duplicate files by one.
+    pub fn increment_deleted_duplicate_files(&mut self) {
+        self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(1);
+    }
+
+    /// Increments the counter for deleted duplicate files by the specified amount.
+    pub fn increment_deleted_duplicate_files_by(&mut self, count: u64) {
+        self.deleted_duplicate_files = self.deleted_duplicate_files.saturating_add(count);
+    }
+
+    /// Adds records.
+    pub fn add_records(&mut self, count: u64) {
+        self.added_records = self.added_records.saturating_add(count);
+        self.total_records = self.total_records.saturating_add(count);
+    }
+
+    /// Deletes records.
+    pub fn delete_records(&mut self, count: u64) {
+        self.deleted_records = self.deleted_records.saturating_add(count);
+        self.total_records = self.total_records.saturating_sub(count);
+    }
+
+    /// Sets an additional property.
+    pub fn set_property(&mut self, key: &str, value: &str) {
+        self.additional_properties
+            .insert(key.to_string(), value.to_string());
+    }
+
+    /// Tracks a partition change.
+    pub fn add_partition_change(&mut self, partition: String, summary: String) {
+        self.partitions.insert(partition, summary);
+        self.changed_partition_count = self.changed_partition_count.saturating_add(1);
+    }
 }
 
 impl Default for Operation {
@@ -105,7 +346,8 @@ pub struct Snapshot {
     #[builder(setter(into))]
     manifest_list: String,
     /// A string map that summarizes the snapshot changes, including operation.
-    summary: Summary,
+    summary: SnapshotSummary,
+
     /// ID of the table’s current schema when the snapshot was created.
     #[builder(setter(strip_option(fallback = schema_id_opt)), default = None)]
     schema_id: Option<SchemaId>,
@@ -137,7 +379,7 @@ impl Snapshot {
 
     /// Get summary of the snapshot
     #[inline]
-    pub fn summary(&self) -> &Summary {
+    pub fn summary(&self) -> &SnapshotSummary {
         &self.summary
     }
     /// Get the timestamp of when the snapshot was created
@@ -224,7 +466,7 @@ pub(super) mod _serde {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{Operation, Snapshot, Summary};
+    use super::{Operation, Snapshot, SnapshotSummary};
     use crate::spec::SchemaId;
     use crate::Error;
 
@@ -238,7 +480,8 @@ pub(super) mod _serde {
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,
-        pub summary: Summary,
+        #[serde(default)]
+        pub summary: SnapshotSummary,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schema_id: Option<SchemaId>,
     }
@@ -256,7 +499,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub manifests: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub summary: Option<Summary>,
+        pub summary: Option<SnapshotSummary>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schema_id: Option<SchemaId>,
     }
@@ -303,10 +546,7 @@ pub(super) mod _serde {
                     (Some(_), Some(_)) => "Invalid v1 snapshot, when manifest list provided, manifest files should be omitted".to_string(),
                     (None, _) => "Unsupported v1 snapshot, only manifest list is supported".to_string()
                    },
-                summary: v1.summary.unwrap_or(Summary {
-                    operation: Operation::default(),
-                    additional_properties: HashMap::new(),
-                }),
+                summary: v1.summary.unwrap_or(SnapshotSummary::new(Operation::default(), HashMap::new())),
                 schema_id: v1.schema_id,
             })
         }
@@ -408,7 +648,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use crate::spec::snapshot::_serde::SnapshotV1;
-    use crate::spec::snapshot::{Operation, Snapshot, Summary};
+    use crate::spec::snapshot::{Operation, Snapshot, SnapshotSummary};
 
     #[test]
     fn schema() {
@@ -435,12 +675,56 @@ mod tests {
         );
         assert_eq!(1515100955770, result.timestamp_ms());
         assert_eq!(
-            Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new()
-            },
+            SnapshotSummary::new(Operation::default(), HashMap::new()),
             *result.summary()
         );
         assert_eq!("s3://b/wh/.../s1.avro".to_string(), *result.manifest_list());
+    }
+
+    #[test]
+    fn test_add_remove_data_files() {
+        let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
+
+        assert_eq!(0, summary.added_data_files);
+        assert_eq!(0, summary.deleted_data_files);
+        assert_eq!(0, summary.total_data_files);
+
+        summary.add_data_file(100);
+        summary.add_data_file(200);
+
+        assert_eq!(2, summary.added_data_files);
+        assert_eq!(0, summary.deleted_data_files);
+        assert_eq!(2, summary.total_data_files);
+
+        assert_eq!(300, summary.added_file_size);
+        assert_eq!(0, summary.removed_file_size);
+        assert_eq!(300, summary.total_file_size);
+
+        summary.delete_data_file(100);
+
+        assert_eq!(1, summary.deleted_data_files);
+        assert_eq!(1, summary.total_data_files);
+        assert_eq!(100, summary.removed_file_size);
+        assert_eq!(200, summary.total_file_size);
+    }
+
+    #[test]
+    fn test_add_remove_delete_files() {
+        let mut summary = SnapshotSummary::new(Operation::Append, HashMap::new());
+
+        summary.add_delete_file(50);
+        summary.add_delete_file(75);
+
+        assert_eq!(2, summary.added_delete_files);
+        assert_eq!(2, summary.total_delete_files);
+        assert_eq!(125, summary.added_file_size);
+        assert_eq!(125, summary.total_file_size);
+
+        summary.remove_delete_file(50);
+
+        assert_eq!(1, summary.removed_delete_files);
+        assert_eq!(1, summary.total_delete_files);
+        assert_eq!(50, summary.removed_file_size);
+        assert_eq!(75, summary.total_file_size);
     }
 }
