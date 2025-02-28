@@ -89,6 +89,7 @@ async fn test_append_partition_data_file() {
         table.file_io().clone(),
         location_generator.clone(),
         file_name_generator.clone(),
+        false,
     );
 
     let mut data_file_writer_valid = DataFileWriterBuilder::new(
