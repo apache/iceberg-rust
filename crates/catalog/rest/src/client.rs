@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::future::Future;
 use std::sync::Mutex;
 
 use http::StatusCode;
@@ -218,25 +217,11 @@ impl HttpClient {
         self.client.request(method, url)
     }
 
-    // Queries the Iceberg REST catalog with the given `Request` and a provided handler.
-    pub async fn query_catalog<R, H, Fut>(&self, mut request: Request, handler: H) -> Result<R>
-    where
-        R: DeserializeOwned,
-        H: FnOnce(Response) -> Fut,
-        Fut: Future<Output = Result<R>>,
-    {
+    // Queries the Iceberg REST catalog after authentication with the given `Request` and
+    // returns a `Response`.
+    pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
         self.authenticate(&mut request).await?;
-
-        let method = request.method().to_string();
-        let url = request.url().to_string();
-        let response = self.client.execute(request).await?;
-        let status_code = response.status().to_string();
-
-        handler(response).await.map_err(|e| {
-            e.with_context("code", status_code)
-                .with_context("method", method)
-                .with_context("url", url)
-        })
+        Ok(self.client.execute(request).await?)
     }
 }
 

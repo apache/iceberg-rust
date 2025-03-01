@@ -31,7 +31,7 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Method, Response, StatusCode, Url};
+use reqwest::{Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -272,17 +272,12 @@ impl RestCatalog {
 
         let request = request_builder.build()?;
 
-        let handler = |response: Response| async move {
-            if response.status() == StatusCode::OK {
-                deserialize_catalog_response::<CatalogConfig>(response).await
-            } else {
-                Err(deserialize_unexpected_catalog_error(response).await)
-            }
-        };
+        let http_response = client.query_catalog(request).await?;
 
-        let response: CatalogConfig = client.query_catalog(request, handler).await?;
-
-        Ok(response)
+        match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response).await,
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn load_file_io(
@@ -336,27 +331,24 @@ impl Catalog for RestCatalog {
         }
         let request = request_builder.build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK => {
-                    Ok(deserialize_catalog_response::<ListNamespaceResponse>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "The parent parameter of the namespace provided does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<ListNamespaceResponse>(http_response).await?;
+                response
+                    .namespaces
+                    .into_iter()
+                    .map(NamespaceIdent::from_vec)
+                    .collect::<Result<Vec<NamespaceIdent>>>()
             }
-        };
-
-        let response: ListNamespaceResponse =
-            context.client.query_catalog(request, handler).await?;
-
-        response
-            .namespaces
-            .into_iter()
-            .map(NamespaceIdent::from_vec)
-            .collect::<Result<Vec<NamespaceIdent>>>()
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "The parent parameter of the namespace provided does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn create_namespace(
@@ -375,22 +367,20 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK => {
-                    Ok(deserialize_catalog_response::<NamespaceSerde>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to create a namespace that already exists",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
+                Namespace::try_from(response)
             }
-        };
-
-        let response: NamespaceSerde = context.client.query_catalog(request, handler).await?;
-
-        Namespace::try_from(response)
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to create a namespace that already exists",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
@@ -401,22 +391,37 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK => {
-                    Ok(deserialize_catalog_response::<NamespaceSerde>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to get a namespace that does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
+                Namespace::try_from(response)
             }
-        };
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to get a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
+    }
 
-        let response: NamespaceSerde = context.client.query_catalog(request, handler).await?;
+    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
+        let context = self.context().await?;
 
-        Namespace::try_from(response)
+        let request = context
+            .client
+            .request(Method::HEAD, context.config.namespace_endpoint(ns))
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn update_namespace(
@@ -430,28 +435,6 @@ impl Catalog for RestCatalog {
         ))
     }
 
-    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let context = self.context().await?;
-
-        let request = context
-            .client
-            .request(Method::HEAD, context.config.namespace_endpoint(ns))
-            .build()?;
-
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
-                StatusCode::NOT_FOUND => Ok(false),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
-
-        context
-            .client
-            .query_catalog::<bool, _, _>(request, handler)
-            .await
-    }
-
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
         let context = self.context().await?;
 
@@ -460,21 +443,16 @@ impl Catalog for RestCatalog {
             .request(Method::DELETE, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to drop a namespace that does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
+        let http_response = context.client.query_catalog(request).await?;
 
-        context
-            .client
-            .query_catalog::<(), _, _>(request, handler)
-            .await
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to drop a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -485,22 +463,20 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.tables_endpoint(namespace))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK => {
-                    Ok(deserialize_catalog_response::<ListTableResponse>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to list tables of a namespace that does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
+        let http_response = context.client.query_catalog(request).await?;
 
-        let response: ListTableResponse = context.client.query_catalog(request, handler).await?;
-
-        Ok(response.identifiers)
+        match http_response.status() {
+            StatusCode::OK => Ok(
+                deserialize_catalog_response::<ListTableResponse>(http_response)
+                    .await?
+                    .identifiers,
+            ),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to list tables of a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Create a new table inside the namespace.
@@ -527,7 +503,6 @@ impl Catalog for RestCatalog {
                 schema: creation.schema,
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
-                // We don't support stage create yet.
                 stage_create: Some(false),
                 properties: if creation.properties.is_empty() {
                     None
@@ -537,24 +512,26 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK => {
-                    Ok(deserialize_catalog_response::<LoadTableResponse>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response = match http_response.status() {
+            StatusCode::OK => {
+                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to create a table under a namespace that does not exist",
-                )),
-                StatusCode::CONFLICT => Err(Error::new(
+                ))
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
                     ErrorKind::Unexpected,
                     "The table already exists",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
+                ))
             }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
-
-        let response: LoadTableResponse = context.client.query_catalog(request, handler).await?;
 
         let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
             ErrorKind::DataInvalid,
@@ -589,6 +566,7 @@ impl Catalog for RestCatalog {
     /// If there are any config properties that are present in both the response from the REST
     /// server and the config provided when creating this `RestCatalog` instance, then the value
     /// provided locally to the `RestCatalog` will take precedence.
+
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let context = self.context().await?;
 
@@ -597,20 +575,20 @@ impl Catalog for RestCatalog {
             .request(Method::GET, context.config.table_endpoint(table_ident))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::OK | StatusCode::NOT_MODIFIED => {
-                    Ok(deserialize_catalog_response::<LoadTableResponse>(response).await?)
-                }
-                StatusCode::NOT_FOUND => Err(Error::new(
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response = match http_response.status() {
+            StatusCode::OK | StatusCode::NOT_MODIFIED => {
+                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
                     ErrorKind::Unexpected,
                     "Tried to load a table that does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
+                ))
             }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
-
-        let response: LoadTableResponse = context.client.query_catalog(request, handler).await?;
 
         let config = response
             .config
@@ -644,21 +622,16 @@ impl Catalog for RestCatalog {
             .request(Method::DELETE, context.config.table_endpoint(table))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to drop a table that does not exist",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
+        let http_response = context.client.query_catalog(request).await?;
 
-        context
-            .client
-            .query_catalog::<(), _, _>(request, handler)
-            .await
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to drop a table that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Check if a table exists in the catalog.
@@ -670,18 +643,13 @@ impl Catalog for RestCatalog {
             .request(Method::HEAD, context.config.table_endpoint(table))
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
-                StatusCode::NOT_FOUND => Ok(false),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
+        let http_response = context.client.query_catalog(request).await?;
 
-        context
-            .client
-            .query_catalog::<bool, _, _>(request, handler)
-            .await
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Rename a table in the catalog.
@@ -697,28 +665,22 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let handler = |response: Response| async move {
-            match response.status() {
-                StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-                StatusCode::NOT_FOUND => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to rename a table that does not exist (is the namespace correct?)",
-                )),
-                StatusCode::CONFLICT => Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Tried to rename a table to a name that already exists",
-                )),
-                _ => Err(deserialize_unexpected_catalog_error(response).await),
-            }
-        };
+        let http_response = context.client.query_catalog(request).await?;
 
-        context
-            .client
-            .query_catalog::<(), _, _>(request, handler)
-            .await
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to rename a table that does not exist (is the namespace correct?)",
+            )),
+            StatusCode::CONFLICT => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to rename a table to a name that already exists",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// Update table.
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
         let context = self.context().await?;
 
@@ -735,37 +697,44 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let handler = |response: Response| async move {
-            if response.status() == StatusCode::OK {
-                return deserialize_catalog_response::<CommitTableResponse>(response).await;
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response: CommitTableResponse = match http_response.status() {
+            StatusCode::OK => {
+                deserialize_catalog_response(http_response).await?
             }
-
-            let error_message = match response.status() {
-                StatusCode::NOT_FOUND => "Tried to update a table that does not exist",
-                StatusCode::CONFLICT => {
-                    "CommitFailedException, one or more requirements failed. The client may retry."
-                }
-                StatusCode::INTERNAL_SERVER_ERROR => {
-                    "An unknown server-side problem occurred; the commit state is unknown."
-                }
-                StatusCode::BAD_GATEWAY => {
-                    "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown."
-                }
-                StatusCode::GATEWAY_TIMEOUT => {
-                    "A server-side gateway timeout occurred; the commit state is unknown."
-                }
-                _ => {
-                    return Err(deserialize_unexpected_catalog_error(
-                        response,
-                    )
-                    .await);
-                }
-            };
-
-            Err(Error::new(ErrorKind::Unexpected, error_message))
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to update a table that does not exist",
+                ))
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "CommitFailedException, one or more requirements failed. The client may retry.",
+                ))
+            }
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "An unknown server-side problem occurred; the commit state is unknown.",
+                ))
+            }
+            StatusCode::BAD_GATEWAY => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
+                ))
+            }
+            StatusCode::GATEWAY_TIMEOUT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A server-side gateway timeout occurred; the commit state is unknown.",
+                ))
+            }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
         };
-
-        let response: CommitTableResponse = context.client.query_catalog(request, handler).await?;
 
         let file_io = self
             .load_file_io(Some(&response.metadata_location), None)
