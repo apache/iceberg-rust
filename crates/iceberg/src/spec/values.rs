@@ -61,7 +61,7 @@ const LONG_MAX: i64 = 9223372036854775807;
 const LONG_MIN: i64 = -9223372036854775808;
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -1561,6 +1561,16 @@ impl Literal {
 
     /// Creates a timestamp with timezone from unix epoch in microseconds.
     pub fn timestamptz(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    /// Creates a timestamp from unix epoch in nanoseconds.
+    pub(crate) fn timestamp_nano(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in nanoseconds.
+    pub(crate) fn timestamptz_nano(value: i64) -> Self {
         Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
