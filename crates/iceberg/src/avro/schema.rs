@@ -448,7 +448,8 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let mut field = NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
+            let mut field =
+                NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
