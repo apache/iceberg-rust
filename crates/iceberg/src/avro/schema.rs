@@ -442,13 +442,13 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         field_types: Vec<Option<Type>>,
     ) -> Result<Option<Type>> {
         let mut fields = Vec::with_capacity(field_types.len());
-        for (avro_field, typ) in record.fields.iter().zip_eq(field_types) {
+        for (avro_field, field_type) in record.fields.iter().zip_eq(field_types) {
             let field_id =
                 Self::get_element_id_from_attributes(&avro_field.custom_attributes, FILED_ID_PROP)?;
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let mut field = NestedField::new(field_id, &avro_field.name, typ.unwrap(), !optional);
+            let mut field = NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
