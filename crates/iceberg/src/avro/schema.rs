@@ -514,7 +514,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Option<Type>> {
-        let typ = match schema {
+        let schema_type = match schema {
             AvroSchema::Decimal(decimal) => {
                 Type::decimal(decimal.precision as u32, decimal.scale as u32)?
             }
@@ -561,7 +561,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             }
         };
 
-        Ok(Some(typ))
+        Ok(Some(schema_type))
     }
 
     fn map_array(
@@ -610,15 +610,16 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
     if let AvroSchema::Record(_) = avro_schema {
         let mut converter = AvroSchemaToSchema;
-        let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
-        if let Type::Struct(s) = typ {
+        let schema_type =
+            visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
+        if let Type::Struct(s) = schema_type {
             Schema::builder()
                 .with_fields(s.fields().iter().cloned())
                 .build()
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("Expected to convert avro record schema to struct type, but {typ}"),
+                format!("Expected to convert avro record schema to struct type, but {schema_type}"),
             ))
         }
     } else {
