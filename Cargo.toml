@@ -46,7 +46,7 @@ arrow-array = { version = "54.1.0" }
 arrow-buffer = { version = "54.1.0" }
 arrow-cast = { version = "54.1.0" }
 arrow-ord = { version = "54.1.0" }
-arrow-schema = { version = "54.1.0" }
+arrow-schema = { version = "54.2.1" }
 arrow-select = { version = "54.1.0" }
 arrow-string = { version = "54.1.0" }
 async-stream = "0.3.5"
