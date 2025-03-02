@@ -2098,17 +2098,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derivative"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "derive_builder"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4286,15 +4275,14 @@ dependencies = [
 
 [[package]]
 name = "pilota"
-version = "0.11.8"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d18f400b02a75df232f315ad31c6d15b1b649237151ebe8b242eee1657330137"
+checksum = "520e32b295867834617b8a352b6fd4837e578f328f4e48813db4904ebc0d70b2"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
  "async-recursion",
  "bytes",
- "derivative",
  "faststr",
  "integer-encoding 4.0.2",
  "lazy_static",
