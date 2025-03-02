@@ -32,7 +32,7 @@ keywords = ["iceberg", "sql", "catalog"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-s3tables = "1.10.0"
+aws-sdk-s3tables = "1.11.0"
 iceberg = { workspace = true }
 serde_json = { workspace = true }
 typed-builder = { workspace = true }
