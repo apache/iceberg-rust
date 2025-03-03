@@ -18,11 +18,13 @@
 //! This module contains transaction api.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem::discriminant;
 use std::ops::RangeFrom;
 
+use arrow_array::StringArray;
+use futures::TryStreamExt;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -33,6 +35,7 @@ use crate::spec::{
     SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
+use crate::writer::file_writer::ParquetWriter;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
@@ -205,8 +208,87 @@ impl<'a> FastAppendAction<'a> {
         Ok(self)
     }
 
+    /// Adds existing parquet files
+    #[allow(dead_code)]
+    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
+        if !self
+            .snapshot_produce_action
+            .tx
+            .table
+            .metadata()
+            .default_spec
+            .is_unpartitioned()
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Appending to partitioned tables is not supported",
+            ));
+        }
+
+        let table_metadata = self.snapshot_produce_action.tx.table.metadata();
+
+        let data_files = ParquetWriter::parquet_files_to_data_files(
+            self.snapshot_produce_action.tx.table.file_io(),
+            file_path,
+            table_metadata,
+        )
+        .await?;
+
+        self.add_data_files(data_files)?;
+
+        self.apply().await
+    }
+
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(self) -> Result<Transaction<'a>> {
+        // Checks duplicate files
+        let new_files: HashSet<&str> = self
+            .snapshot_produce_action
+            .added_data_files
+            .iter()
+            .map(|df| df.file_path.as_str())
+            .collect();
+
+        let mut manifest_stream = self
+            .snapshot_produce_action
+            .tx
+            .table
+            .inspect()
+            .manifests()
+            .scan()
+            .await?;
+        let mut referenced_files = Vec::new();
+
+        while let Some(batch) = manifest_stream.try_next().await? {
+            let file_path_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Failed to downcast file_path column to StringArray",
+                    )
+                })?;
+
+            for i in 0..batch.num_rows() {
+                let file_path = file_path_array.value(i);
+                if new_files.contains(file_path) {
+                    referenced_files.push(file_path.to_string());
+                }
+            }
+        }
+
+        if !referenced_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add files that are already referenced by table, files: {}",
+                    referenced_files.join(", ")
+                ),
+            ));
+        }
+
         self.snapshot_produce_action
             .apply(FastAppendOperation, DefaultManifestProcess)
             .await
@@ -319,6 +401,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 "Partition value is not compatible with partition type",
             ));
         }
+
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
             if !field
                 .field_type
@@ -607,6 +690,7 @@ mod tests {
     use std::io::BufReader;
 
     use crate::io::FileIOBuilder;
+    use crate::scan::tests::TableTestFixture;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Struct,
         TableMetadata,
@@ -847,6 +931,7 @@ mod tests {
                 .sequence_number()
                 .expect("Inherit sequence number by load manifest")
         );
+
         assert_eq!(
             new_snapshot.snapshot_id(),
             manifest.entries()[0].snapshot_id().unwrap()
@@ -868,5 +953,84 @@ mod tests {
             tx.is_err(),
             "Should not allow to do same kinds update in same transaction"
         );
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_parquet_files_to_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+        let tx = crate::transaction::Transaction::new(&fixture.table);
+
+        let file_paths = vec![
+            format!("{}/1.parquet", &fixture.table_location),
+            format!("{}/2.parquet", &fixture.table_location),
+            format!("{}/3.parquet", &fixture.table_location),
+        ];
+
+        let fast_append_action = tx.fast_append(None, vec![]).unwrap();
+
+        // Attempt to add the existing Parquet files with fast append.
+        let new_tx = fast_append_action
+            .add_parquet_files(file_paths.clone())
+            .await
+            .expect("Adding existing Parquet files should succeed");
+
+        let mut found_add_snapshot = false;
+        let mut found_set_snapshot_ref = false;
+        for update in new_tx.updates.iter() {
+            match update {
+                TableUpdate::AddSnapshot { .. } => {
+                    found_add_snapshot = true;
+                }
+                TableUpdate::SetSnapshotRef {
+                    ref_name,
+                    reference,
+                } => {
+                    found_set_snapshot_ref = true;
+                    assert_eq!(ref_name, crate::transaction::MAIN_BRANCH);
+                    assert!(reference.snapshot_id > 0);
+                }
+                _ => {}
+            }
+        }
+        assert!(found_add_snapshot);
+        assert!(found_set_snapshot_ref);
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &new_tx.updates[0] {
+            snapshot
+        } else {
+            panic!("Expected the first update to be an AddSnapshot update");
+        };
+
+        let manifest_list = new_snapshot
+            .load_manifest_list(fixture.table.file_io(), fixture.table.metadata())
+            .await
+            .expect("Failed to load manifest list");
+
+        assert_eq!(
+            manifest_list.entries().len(),
+            2,
+            "Expected 2 manifest list entries, got {}",
+            manifest_list.entries().len()
+        );
+
+        // Load the manifest from the manifest list
+        let manifest = manifest_list.entries()[0]
+            .load_manifest(fixture.table.file_io())
+            .await
+            .expect("Failed to load manifest");
+
+        // Check that the manifest contains three entries.
+        assert_eq!(manifest.entries().len(), 3);
+
+        // Verify each file path appears in manifest.
+        let manifest_paths: Vec<String> = manifest
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().file_path.clone())
+            .collect();
+        for path in file_paths {
+            assert!(manifest_paths.contains(&path));
+        }
     }
 }
