@@ -25,7 +25,7 @@ pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_glue::error::SdkError<T>) -> 
 where T: Debug {
     Error::new(
         ErrorKind::Unexpected,
-        "Operation failed for hitting aws skd error".to_string(),
+        "Operation failed for hitting aws sdk error".to_string(),
     )
     .with_source(anyhow!("aws sdk error: {:?}", error))
 }
