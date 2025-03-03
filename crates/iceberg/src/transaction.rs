@@ -209,7 +209,7 @@ impl<'a> FastAppendAction<'a> {
     }
 
     /// Adds existing parquet files
-    pub async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
+    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
         if !self
             .snapshot_produce_action
             .tx
