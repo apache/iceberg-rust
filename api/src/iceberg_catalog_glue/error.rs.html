@@ -65,7 +65,7 @@
 <span class="kw">where </span>T: Debug {
     Error::new(
         ErrorKind::Unexpected,
-        <span class="string">"Operation failed for hitting aws skd error"</span>.to_string(),
+        <span class="string">"Operation failed for hitting aws sdk error"</span>.to_string(),
     )
     .with_source(<span class="macro">anyhow!</span>(<span class="string">"aws sdk error: {:?}"</span>, error))
 }
