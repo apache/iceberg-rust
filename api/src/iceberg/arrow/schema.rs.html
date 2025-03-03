@@ -2203,11 +2203,11 @@
                 .with_timezone(<span class="string">"UTC"</span>),
         ))),
 
-        (typ, <span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::new(
+        (primitive_type, <span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::new(
             ErrorKind::FeatureUnsupported,
             <span class="macro">format!</span>(
                 <span class="string">"Converting datum from type {:?} to arrow not supported yet."</span>,
-                typ
+                primitive_type
             ),
         )),
     }
