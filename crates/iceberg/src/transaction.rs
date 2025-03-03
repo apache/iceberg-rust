@@ -210,7 +210,11 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     #[allow(dead_code)]
-    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
+    async fn add_parquet_files(
+        mut self,
+        file_path: Vec<String>,
+        check_duplicate: bool,
+    ) -> Result<Transaction<'a>> {
         if !self
             .snapshot_produce_action
             .tx
@@ -236,57 +240,59 @@ impl<'a> FastAppendAction<'a> {
 
         self.add_data_files(data_files)?;
 
-        self.apply().await
+        self.apply(check_duplicate).await
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self) -> Result<Transaction<'a>> {
+    pub async fn apply(self, check_duplicate: bool) -> Result<Transaction<'a>> {
         // Checks duplicate files
-        let new_files: HashSet<&str> = self
-            .snapshot_produce_action
-            .added_data_files
-            .iter()
-            .map(|df| df.file_path.as_str())
-            .collect();
+        if check_duplicate {
+            let new_files: HashSet<&str> = self
+                .snapshot_produce_action
+                .added_data_files
+                .iter()
+                .map(|df| df.file_path.as_str())
+                .collect();
 
-        let mut manifest_stream = self
-            .snapshot_produce_action
-            .tx
-            .table
-            .inspect()
-            .manifests()
-            .scan()
-            .await?;
-        let mut referenced_files = Vec::new();
+            let mut manifest_stream = self
+                .snapshot_produce_action
+                .tx
+                .table
+                .inspect()
+                .manifests()
+                .scan()
+                .await?;
+            let mut referenced_files = Vec::new();
 
-        while let Some(batch) = manifest_stream.try_next().await? {
-            let file_path_array = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to downcast file_path column to StringArray",
-                    )
-                })?;
+            while let Some(batch) = manifest_stream.try_next().await? {
+                let file_path_array = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Failed to downcast file_path column to StringArray",
+                        )
+                    })?;
 
-            for i in 0..batch.num_rows() {
-                let file_path = file_path_array.value(i);
-                if new_files.contains(file_path) {
-                    referenced_files.push(file_path.to_string());
+                for i in 0..batch.num_rows() {
+                    let file_path = file_path_array.value(i);
+                    if new_files.contains(file_path) {
+                        referenced_files.push(file_path.to_string());
+                    }
                 }
             }
-        }
 
-        if !referenced_files.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add files that are already referenced by table, files: {}",
-                    referenced_files.join(", ")
-                ),
-            ));
+            if !referenced_files.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot add files that are already referenced by table, files: {}",
+                        referenced_files.join(", ")
+                    ),
+                ));
+            }
         }
 
         self.snapshot_produce_action
@@ -884,7 +890,7 @@ mod tests {
             .build()
             .unwrap();
         action.add_data_files(vec![data_file.clone()]).unwrap();
-        let tx = action.apply().await.unwrap();
+        let tx = action.apply(true).await.unwrap();
 
         // check updates and requirements
         assert!(
@@ -971,7 +977,7 @@ mod tests {
 
         // Attempt to add the existing Parquet files with fast append.
         let new_tx = fast_append_action
-            .add_parquet_files(file_paths.clone())
+            .add_parquet_files(file_paths.clone(), true)
             .await
             .expect("Adding existing Parquet files should succeed");
 
