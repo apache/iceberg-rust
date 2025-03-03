@@ -226,7 +226,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-fn get_field_id(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -677,11 +677,11 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
                 .with_timezone("UTC"),
         ))),
 
-        (typ, _) => Err(Error::new(
+        (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
                 "Converting datum from type {:?} to arrow not supported yet.",
-                typ
+                primitive_type
             ),
         )),
     }

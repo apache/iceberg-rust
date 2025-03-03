@@ -442,13 +442,14 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         field_types: Vec<Option<Type>>,
     ) -> Result<Option<Type>> {
         let mut fields = Vec::with_capacity(field_types.len());
-        for (avro_field, typ) in record.fields.iter().zip_eq(field_types) {
+        for (avro_field, field_type) in record.fields.iter().zip_eq(field_types) {
             let field_id =
                 Self::get_element_id_from_attributes(&avro_field.custom_attributes, FILED_ID_PROP)?;
 
             let optional = is_avro_optional(&avro_field.schema);
 
-            let mut field = NestedField::new(field_id, &avro_field.name, typ.unwrap(), !optional);
+            let mut field =
+                NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
@@ -514,7 +515,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
     }
 
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Option<Type>> {
-        let typ = match schema {
+        let schema_type = match schema {
             AvroSchema::Decimal(decimal) => {
                 Type::decimal(decimal.precision as u32, decimal.scale as u32)?
             }
@@ -561,7 +562,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             }
         };
 
-        Ok(Some(typ))
+        Ok(Some(schema_type))
     }
 
     fn map_array(
@@ -610,15 +611,16 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 pub(crate) fn avro_schema_to_schema(avro_schema: &AvroSchema) -> Result<Schema> {
     if let AvroSchema::Record(_) = avro_schema {
         let mut converter = AvroSchemaToSchema;
-        let typ = visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
-        if let Type::Struct(s) = typ {
+        let schema_type =
+            visit(avro_schema, &mut converter)?.expect("Iceberg schema should not be none.");
+        if let Type::Struct(s) = schema_type {
             Schema::builder()
                 .with_fields(s.fields().iter().cloned())
                 .build()
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("Expected to convert avro record schema to struct type, but {typ}"),
+                format!("Expected to convert avro record schema to struct type, but {schema_type}"),
             ))
         }
     } else {
