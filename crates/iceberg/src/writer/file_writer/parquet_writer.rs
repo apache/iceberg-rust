@@ -444,7 +444,7 @@ impl ParquetWriter {
     }
 
     /// `ParquetMetadata` to data file builder
-    pub fn parquet_to_data_file_builder(
+    pub(crate) fn parquet_to_data_file_builder(
         schema: SchemaRef,
         metadata: Arc<ParquetMetaData>,
         written_size: usize,
