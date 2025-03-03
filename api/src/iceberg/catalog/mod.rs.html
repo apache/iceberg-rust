@@ -2323,7 +2323,7 @@
 }
 
 <span class="doccomment">/// TableRequirement represents a requirement for a table in the catalog.
-</span><span class="attr">#[derive(Debug, Serialize, Deserialize, PartialEq)]
+</span><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = <span class="string">"type"</span>)]
 </span><span class="kw">pub enum </span>TableRequirement {
     <span class="doccomment">/// The table must not already exist; used for create transactions

@@ -2468,14 +2468,14 @@
 /// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
 /// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
 /// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
-</span><span class="kw">struct </span>ArrowFileReader&lt;R: FileRead&gt; {
+</span><span class="kw">pub struct </span>ArrowFileReader&lt;R: FileRead&gt; {
     meta: FileMetadata,
     r: R,
 }
 
 <span class="kw">impl</span>&lt;R: FileRead&gt; ArrowFileReader&lt;R&gt; {
     <span class="doccomment">/// Create a new ArrowFileReader
-    </span><span class="kw">fn </span>new(meta: FileMetadata, r: R) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(meta: FileMetadata, r: R) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ meta, r }
     }
 }
