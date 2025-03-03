@@ -324,7 +324,7 @@ impl MinMaxColAggregator {
 
 impl ParquetWriter {
     /// Converts parquet files to data files
-    pub async fn parquet_files_to_data_files(
+    pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,
         file_paths: Vec<String>,
         table_metadata: &TableMetadata,
