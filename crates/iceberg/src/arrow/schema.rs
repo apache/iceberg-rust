@@ -677,11 +677,11 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
                 .with_timezone("UTC"),
         ))),
 
-        (typ, _) => Err(Error::new(
+        (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
                 "Converting datum from type {:?} to arrow not supported yet.",
-                typ
+                primitive_type
             ),
         )),
     }
