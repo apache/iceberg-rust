@@ -40,7 +40,7 @@ use crate::arrow::{
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, ArrowFileReader,
     DEFAULT_MAP_FIELD_NAME,
 };
-use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::io::{FileIO, FileWrite, OutputFile, OutputFileWrite};
 use crate::spec::{
     visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
     NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
@@ -226,7 +226,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
+    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter<OutputFileWrite>>>,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
 }
