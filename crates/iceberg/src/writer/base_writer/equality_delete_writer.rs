@@ -20,12 +20,11 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, SchemaRef as ArrowSchemaRef};
+use arrow_schema::SchemaRef as ArrowSchemaRef;
 use itertools::Itertools;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
-use crate::arrow::schema_to_arrow_schema;
+use crate::arrow::{get_field_id, schema_to_arrow_schema};
 use crate::spec::{DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
@@ -53,6 +52,7 @@ pub struct EqualityDeleteWriterConfig {
     // Projector used to project the data chunk into specific fields.
     projector: RecordBatchProjector,
     partition_value: Struct,
+    project_arrow_schema: ArrowSchemaRef,
 }
 
 impl EqualityDeleteWriterConfig {
@@ -62,47 +62,40 @@ impl EqualityDeleteWriterConfig {
         original_schema: SchemaRef,
         partition_value: Option<Struct>,
     ) -> Result<Self> {
-        let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
+        let projected_iceberg_schema = original_schema.project(&equality_ids)?;
+        // Check invalid field ids, The following rule comes from https://iceberg.apache.org/spec/#identifier-field-ids
+        // and https://iceberg.apache.org/spec/#equality-delete-files
+        // - The identifier field ids must be used for primitive types.
+        // - The identifier field ids must not be used for floating point types or nullable fields.
+        for field in projected_iceberg_schema.as_struct().fields() {
+            if !field.field_type.is_primitive() || field.field_type.is_floating_type() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Field {}(id: {}) is not allowed to be used for equality delete.",
+                        field.name, field.id
+                    ),
+                ));
+            }
+        }
+        let original_arrow_schema = schema_to_arrow_schema(&original_schema)?;
         let projector = RecordBatchProjector::new(
-            original_arrow_schema,
-            &equality_ids,
-            // The following rule comes from https://iceberg.apache.org/spec/#identifier-field-ids
-            // and https://iceberg.apache.org/spec/#equality-delete-files
-            // - The identifier field ids must be used for primitive types.
-            // - The identifier field ids must not be used for floating point types or nullable fields.
-            |field| {
-                // Only primitive type is allowed to be used for identifier field ids
-                if field.data_type().is_nested()
-                    || matches!(
-                        field.data_type(),
-                        DataType::Float16 | DataType::Float32 | DataType::Float64
-                    )
-                {
-                    return Ok(None);
-                }
-                Ok(Some(
-                    field
-                        .metadata()
-                        .get(PARQUET_FIELD_ID_META_KEY)
-                        .ok_or_else(|| {
-                            Error::new(ErrorKind::Unexpected, "Field metadata is missing.")
-                        })?
-                        .parse::<i64>()
-                        .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?,
-                ))
-            },
-            |_field: &Field| true,
+            &projected_iceberg_schema,
+            &original_arrow_schema,
+            get_field_id,
+            None,
         )?;
         Ok(Self {
             equality_ids,
             projector,
             partition_value: partition_value.unwrap_or(Struct::empty()),
+            project_arrow_schema: Arc::new(schema_to_arrow_schema(&projected_iceberg_schema)?),
         })
     }
 
     /// Return projected Schema
     pub fn projected_arrow_schema_ref(&self) -> &ArrowSchemaRef {
-        self.projector.projected_schema_ref()
+        &self.project_arrow_schema
     }
 }
 
@@ -390,7 +383,7 @@ mod test {
             EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
         let delete_schema =
             arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
-        let projector = equality_config.projector.clone();
+        let mut projector = equality_config.projector.clone();
 
         // prepare writer
         let pb = ParquetWriterBuilder::new(
@@ -741,7 +734,7 @@ mod test {
         let equality_ids = vec![0_i32, 2, 5];
         let equality_config =
             EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
-        let projector = equality_config.projector.clone();
+        let mut projector = equality_config.projector.clone();
 
         // check
         let to_write_projected = projector.project_batch(to_write)?;
