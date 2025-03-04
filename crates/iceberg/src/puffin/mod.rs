@@ -26,6 +26,7 @@ mod compression;
 mod metadata;
 #[cfg(feature = "tokio")]
 mod reader;
+mod writer;
 
 #[cfg(test)]
 mod test_utils;
