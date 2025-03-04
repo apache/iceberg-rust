@@ -387,7 +387,7 @@ impl TableMetadataBuilder {
 
         // Mutation happens in next line - must be infallible from here
         self.changes.push(TableUpdate::AddSnapshot {
-            snapshot: snapshot.clone(),
+            snapshot: Box::new(snapshot.clone()),
         });
 
         self.last_updated_ms = Some(snapshot.timestamp_ms());
@@ -1225,7 +1225,7 @@ mod tests {
     use super::*;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
+        SnapshotRetention, SnapshotSummary, SortDirection, SortField, StructType, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -1914,9 +1914,9 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::from_iter(vec![
+            .with_summary(SnapshotSummary::new(
+                Operation::Append,
+                HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -1925,7 +1925,7 @@ mod tests {
                     ("added-records".to_string(), "4".to_string()),
                     ("added-files-size".to_string(), "6001".to_string()),
                 ]),
-            })
+            ))
             .build();
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
@@ -1977,9 +1977,9 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::from_iter(vec![
+            .with_summary(SnapshotSummary::new(
+                Operation::Append,
+                HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -1988,7 +1988,7 @@ mod tests {
                     ("added-records".to_string(), "4".to_string()),
                     ("added-files-size".to_string(), "6001".to_string()),
                 ]),
-            })
+            ))
             .build();
 
         let snapshot_2 = Snapshot::builder()
@@ -1997,9 +1997,9 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::from_iter(vec![
+            .with_summary(SnapshotSummary::new(
+                Operation::Append,
+                HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -2008,7 +2008,7 @@ mod tests {
                     ("added-records".to_string(), "4".to_string()),
                     ("added-files-size".to_string(), "6001".to_string()),
                 ]),
-            })
+            ))
             .build();
 
         let result = builder
@@ -2045,10 +2045,7 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
+            .with_summary(SnapshotSummary::new(Operation::Append, HashMap::new()))
             .build();
 
         let build_result = builder
@@ -2072,7 +2069,9 @@ mod tests {
             Some(&reference)
         );
         assert_eq!(build_result.changes, vec![
-            TableUpdate::AddSnapshot { snapshot },
+            TableUpdate::AddSnapshot {
+                snapshot: Box::new(snapshot)
+            },
             TableUpdate::SetSnapshotRef {
                 ref_name: "new_branch".to_string(),
                 reference
@@ -2090,9 +2089,9 @@ mod tests {
             .with_sequence_number(0)
             .with_schema_id(0)
             .with_manifest_list("/snap-1.avro")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::from_iter(vec![
+            .with_summary(SnapshotSummary::new(
+                Operation::Append,
+                HashMap::from_iter(vec![
                     (
                         "spark.app.id".to_string(),
                         "local-1662532784305".to_string(),
@@ -2101,7 +2100,7 @@ mod tests {
                     ("added-records".to_string(), "4".to_string()),
                     ("added-files-size".to_string(), "6001".to_string()),
                 ]),
-            })
+            ))
             .build();
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
@@ -2210,10 +2209,7 @@ mod tests {
             .with_sequence_number(1)
             .with_schema_id(0)
             .with_manifest_list("/snap-1")
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
+            .with_summary(SnapshotSummary::new(Operation::Append, HashMap::new()))
             .build();
 
         let builder = builder
@@ -2236,10 +2232,7 @@ mod tests {
             .with_schema_id(0)
             .with_manifest_list("/snap-0")
             .with_parent_snapshot_id(Some(1))
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
+            .with_summary(SnapshotSummary::new(Operation::Append, HashMap::new()))
             .build();
 
         let err = builder

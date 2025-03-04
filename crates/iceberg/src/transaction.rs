@@ -32,7 +32,8 @@ use crate::io::OutputFile;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
     ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
+    SnapshotSummary, SortDirection, SortField, SortOrder, Struct, StructType, Transform,
+    MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::writer::file_writer::ParquetWriter;
@@ -516,11 +517,14 @@ impl<'a> SnapshotProduceAction<'a> {
 
     // # TODO
     // Fulfill this function
-    fn summary<OP: SnapshotProduceOperation>(&self, snapshot_produce_operation: &OP) -> Summary {
-        Summary {
-            operation: snapshot_produce_operation.operation(),
-            additional_properties: self.snapshot_properties.clone(),
-        }
+    fn summary<OP: SnapshotProduceOperation>(
+        &self,
+        snapshot_produce_operation: &OP,
+    ) -> SnapshotSummary {
+        SnapshotSummary::new(
+            snapshot_produce_operation.operation(),
+            self.snapshot_properties.clone(),
+        )
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
@@ -585,7 +589,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
         self.tx.append_updates(vec![
             TableUpdate::AddSnapshot {
-                snapshot: new_snapshot,
+                snapshot: Box::new(new_snapshot),
             },
             TableUpdate::SetSnapshotRef {
                 ref_name: MAIN_BRANCH.to_string(),
