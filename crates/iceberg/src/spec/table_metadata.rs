@@ -425,6 +425,22 @@ impl TableMetadata {
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
     }
 
+    fn construct_refs(&mut self) {
+        if let Some(current_snapshot_id) = self.current_snapshot_id {
+            if !self.refs.contains_key(MAIN_BRANCH) {
+                self.refs
+                    .insert(MAIN_BRANCH.to_string(), SnapshotReference {
+                        snapshot_id: current_snapshot_id,
+                        retention: SnapshotRetention::Branch {
+                            min_snapshots_to_keep: None,
+                            max_snapshot_age_ms: None,
+                            max_ref_age_ms: None,
+                        },
+                    });
+            }
+        }
+    }
+
     /// Normalize this partition spec.
     ///
     /// This is an internal method
@@ -435,6 +451,7 @@ impl TableMetadata {
     pub(super) fn try_normalize(&mut self) -> Result<&mut Self> {
         self.validate_current_schema()?;
         self.normalize_current_snapshot()?;
+        self.construct_refs();
         self.validate_refs()?;
         self.validate_chronological_snapshot_logs()?;
         self.validate_chronological_metadata_logs()?;
