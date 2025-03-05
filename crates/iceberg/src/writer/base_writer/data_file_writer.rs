@@ -144,6 +144,16 @@ mod test {
 
         let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await.unwrap();
 
+        let arrow_schema = arrow_schema::Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Utf8, false),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+        ])?;
+        data_file_writer.write(batch).await?;
+
         let data_files = data_file_writer.close().await.unwrap();
         assert_eq!(data_files.len(), 1);
 

@@ -84,24 +84,16 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
     type R = ParquetWriter;
 
     async fn build(self) -> crate::Result<Self::R> {
-        let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
         let written_size = Arc::new(AtomicI64::new(0));
         let out_file = self.file_io.new_output(
             self.location_generator
                 .generate_location(&self.file_name_generator.generate_file_name()),
         )?;
-        let inner_writer = TrackWriter::new(out_file.writer().await?, written_size.clone());
-        let async_writer = AsyncFileWriter::new(inner_writer);
-        let writer =
-            AsyncArrowWriter::try_new(async_writer, arrow_schema.clone(), Some(self.props))
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
-                        .with_source(err)
-                })?;
 
         Ok(ParquetWriter {
             schema: self.schema.clone(),
-            writer,
+            inner_writer: None,
+            writer_properties: self.props,
             written_size,
             current_row_num: 0,
             out_file,
@@ -226,7 +218,8 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    writer: AsyncArrowWriter<AsyncFileWriter<TrackWriter>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<TrackWriter>>>,
+    writer_properties: WriterProperties,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
 }
@@ -520,8 +513,35 @@ impl ParquetWriter {
 
 impl FileWriter for ParquetWriter {
     async fn write(&mut self, batch: &arrow_array::RecordBatch) -> crate::Result<()> {
+        // Skip empty batch
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
         self.current_row_num += batch.num_rows();
-        self.writer.write(batch).await.map_err(|err| {
+
+        // Lazy initialize the writer
+        let writer = if let Some(writer) = &mut self.inner_writer {
+            writer
+        } else {
+            let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
+            let inner_writer =
+                TrackWriter::new(self.out_file.writer().await?, self.written_size.clone());
+            let async_writer = AsyncFileWriter::new(inner_writer);
+            let writer = AsyncArrowWriter::try_new(
+                async_writer,
+                arrow_schema.clone(),
+                Some(self.writer_properties.clone()),
+            )
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
+                    .with_source(err)
+            })?;
+            self.inner_writer = Some(writer);
+            self.inner_writer.as_mut().unwrap()
+        };
+
+        writer.write(batch).await.map_err(|err| {
             Error::new(
                 ErrorKind::Unexpected,
                 "Failed to write using parquet writer.",
@@ -532,7 +552,10 @@ impl FileWriter for ParquetWriter {
     }
 
     async fn close(self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
-        let metadata = self.writer.close().await.map_err(|err| {
+        let Some(writer) = self.inner_writer else {
+            return Ok(vec![]);
+        };
+        let metadata = writer.close().await.map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
         })?;
 
@@ -1535,6 +1558,59 @@ mod tests {
         //     ))
         //     .as_ref()
         // );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_write() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // Test that file will create if data to write
+        let schema = {
+            let fields = vec![
+                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
+        let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen.clone(),
+            file_name_gen,
+        )
+        .build()
+        .await?;
+        pw.write(&to_write).await?;
+        let file_path = pw.out_file.location().to_string();
+        pw.close().await.unwrap();
+        assert!(file_io.exists(file_path).await.unwrap());
+
+        // Test that file will not create if no data to write
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test_empty".to_string(), None, DataFileFormat::Parquet);
+        let pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+        let file_path = pw.out_file.location().to_string();
+        pw.close().await.unwrap();
+        assert!(!file_io.exists(file_path).await.unwrap());
 
         Ok(())
     }
