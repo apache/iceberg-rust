@@ -37,7 +37,8 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 
 /// Table transaction.
 pub struct Transaction<'a> {
-    table: &'a Table,
+    base_table: &'a Table,
+    current_metadata: TableMetadata,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -46,38 +47,59 @@ impl<'a> Transaction<'a> {
     /// Creates a new transaction.
     pub fn new(table: &'a Table) -> Self {
         Self {
-            table,
+            base_table: table,
+            current_metadata: table.metadata().clone(),
             updates: vec![],
             requirements: vec![],
         }
     }
 
-    fn append_updates(&mut self, updates: Vec<TableUpdate>) -> Result<()> {
-        for update in &updates {
-            for up in &self.updates {
-                if discriminant(up) == discriminant(update) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot apply update with same type at same time: {:?}",
-                            update
-                        ),
-                    ));
-                }
-            }
+    fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
+        let mut metadata_builder = self.current_metadata.clone().into_builder(None);
+        for update in updates {
+            metadata_builder = update.clone().apply(metadata_builder)?;
         }
-        self.updates.extend(updates);
+
+        self.current_metadata = metadata_builder.build()?.metadata;
+
         Ok(())
     }
 
-    fn append_requirements(&mut self, requirements: Vec<TableRequirement>) -> Result<()> {
-        self.requirements.extend(requirements);
+    fn apply(
+        &mut self,
+        updates: Vec<TableUpdate>,
+        requirements: Vec<TableRequirement>,
+    ) -> Result<()> {
+        for requirement in &requirements {
+            requirement.check(Some(&self.current_metadata))?;
+        }
+
+        self.update_table_metadata(&updates)?;
+
+        self.updates.extend(updates);
+
+        // For the requirements, it does not make sense to add a requirement more than once
+        // For example, you cannot assert that the current schema has two different IDs
+        for new_requirement in requirements {
+            if self
+                .requirements
+                .iter()
+                .map(discriminant)
+                .all(|d| d != discriminant(&new_requirement))
+            {
+                self.requirements.push(new_requirement);
+            }
+        }
+
+        // # TODO
+        // Support auto commit later.
+
         Ok(())
     }
 
     /// Sets table to a new version.
     pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
-        let current_version = self.table.metadata().format_version();
+        let current_version = self.current_metadata.format_version();
         match current_version.cmp(&format_version) {
             Ordering::Greater => {
                 return Err(Error::new(
@@ -89,7 +111,7 @@ impl<'a> Transaction<'a> {
                 ));
             }
             Ordering::Less => {
-                self.append_updates(vec![UpgradeFormatVersion { format_version }])?;
+                self.apply(vec![UpgradeFormatVersion { format_version }], vec![])?;
             }
             Ordering::Equal => {
                 // Do nothing.
@@ -100,7 +122,7 @@ impl<'a> Transaction<'a> {
 
     /// Update table's property.
     pub fn set_properties(mut self, props: HashMap<String, String>) -> Result<Self> {
-        self.append_updates(vec![TableUpdate::SetProperties { updates: props }])?;
+        self.apply(vec![TableUpdate::SetProperties { updates: props }], vec![])?;
         Ok(self)
     }
 
@@ -116,8 +138,7 @@ impl<'a> Transaction<'a> {
         };
         let mut snapshot_id = generate_random_id();
         while self
-            .table
-            .metadata()
+            .current_metadata
             .snapshots()
             .any(|s| s.snapshot_id() == snapshot_id)
         {
@@ -152,14 +173,17 @@ impl<'a> Transaction<'a> {
 
     /// Remove properties in table.
     pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
-        self.append_updates(vec![TableUpdate::RemoveProperties { removals: keys }])?;
+        self.apply(
+            vec![TableUpdate::RemoveProperties { removals: keys }],
+            vec![],
+        )?;
         Ok(self)
     }
 
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         let table_commit = TableCommit::builder()
-            .ident(self.table.identifier().clone())
+            .ident(self.base_table.identifier().clone())
             .updates(self.updates)
             .requirements(self.requirements)
             .build();
@@ -322,5 +346,23 @@ mod tests {
             tx.is_err(),
             "Should not allow to do same kinds update in same transaction"
         );
+    }
+
+    #[tokio::test]
+    async fn test_transaction_apply_upgrade() {
+        let table = make_v1_table();
+        let tx = Transaction::new(&table);
+        // Upgrade v1 to v1, do nothing.
+        let tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
+        // Upgrade v1 to v2, success.
+        let tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
+        assert_eq!(
+            vec![TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V2
+            }],
+            tx.updates
+        );
+        // Upgrade v2 to v1, return error.
+        assert!(tx.upgrade_table_version(FormatVersion::V1).is_err());
     }
 }
