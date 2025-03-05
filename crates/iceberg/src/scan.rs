@@ -375,12 +375,7 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        let delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<DeleteFileContext>)> =
-            if self.delete_file_processing_enabled {
-                Some(DeleteFileIndex::new())
-            } else {
-                None
-            };
+        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
 
         let manifest_list = self.plan_context.get_manifest_list().await?;
 
@@ -390,9 +385,8 @@ impl TableScan {
         let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
-            delete_file_idx_and_tx.as_ref().map(|(delete_file_idx, _)| {
-                (delete_file_idx.clone(), manifest_entry_delete_ctx_tx)
-            }),
+            delete_file_idx.clone(),
+            manifest_entry_delete_ctx_tx,
         )?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
@@ -411,34 +405,30 @@ impl TableScan {
         });
 
         let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
-        if let Some((_, delete_file_tx)) = delete_file_idx_and_tx {
-            let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
+        // Process the delete file [`ManifestEntry`] stream in parallel
+        spawn(async move {
+            let result = manifest_entry_delete_ctx_rx
+                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                .try_for_each_concurrent(
+                    concurrency_limit_manifest_entries,
+                    |(manifest_entry_context, tx)| async move {
+                        spawn(async move {
+                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
+                        })
+                        .await
+                    },
+                )
+                .await;
 
-            // Process the delete file [`ManifestEntry`] stream in parallel
-            spawn(async move {
-                let result = manifest_entry_delete_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| async move {
-                            spawn(async move {
-                                Self::process_delete_manifest_entry(manifest_entry_context, tx)
-                                    .await
-                            })
-                            .await
-                        },
-                    )
+            if let Err(error) = result {
+                let _ = channel_for_delete_manifest_entry_error
+                    .send(Err(error))
                     .await;
-
-                if let Err(error) = result {
-                    let _ = channel_for_delete_manifest_entry_error
-                        .send(Err(error))
-                        .await;
-                }
-            })
-            .await;
-        }
+            }
+        })
+        .await;
 
         // Process the data file [`ManifestEntry`] stream in parallel
         spawn(async move {
@@ -460,7 +450,7 @@ impl TableScan {
             }
         });
 
-        return Ok(file_scan_task_rx.boxed());
+        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -468,7 +458,8 @@ impl TableScan {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
             .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
             .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-            .with_row_selection_enabled(self.row_selection_enabled);
+            .with_row_selection_enabled(self.row_selection_enabled)
+            .with_delete_file_support_enabled(self.delete_file_processing_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -608,7 +599,7 @@ struct ManifestFileContext {
     object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: Option<DeleteFileIndex>,
+    delete_file_index: DeleteFileIndex,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -621,7 +612,7 @@ struct ManifestEntryContext {
     bound_predicates: Option<Arc<BoundPredicates>>,
     partition_spec_id: i32,
     snapshot_schema: SchemaRef,
-    delete_file_index: Option<DeleteFileIndex>,
+    delete_file_index: DeleteFileIndex,
 }
 
 impl ManifestFileContext {
@@ -668,16 +659,13 @@ impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
     async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        let deletes = if let Some(delete_file_index) = self.delete_file_index {
-            delete_file_index
-                .get_deletes_for_data_file(
-                    self.manifest_entry.data_file(),
-                    self.manifest_entry.sequence_number(),
-                )
-                .await?
-        } else {
-            vec![]
-        };
+        let deletes = self
+            .delete_file_index
+            .get_deletes_for_data_file(
+                self.manifest_entry.data_file(),
+                self.manifest_entry.sequence_number(),
+            )
+            .await?;
 
         Ok(FileScanTask {
             start: 0,
@@ -732,7 +720,8 @@ impl PlanContext {
         &self,
         manifest_list: Arc<ManifestList>,
         tx_data: Sender<ManifestEntryContext>,
-        delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
+        delete_file_idx: DeleteFileIndex,
+        delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let manifest_files = manifest_list.entries().iter();
 
@@ -740,16 +729,10 @@ impl PlanContext {
         let mut filtered_mfcs = vec![];
 
         for manifest_file in manifest_files {
-            let (delete_file_idx, tx) = if manifest_file.content == ManifestContentType::Deletes {
-                let Some((delete_file_idx, tx)) = delete_file_idx_and_tx.as_ref() else {
-                    continue;
-                };
-                (Some(delete_file_idx.clone()), tx.clone())
+            let tx = if manifest_file.content == ManifestContentType::Deletes {
+                delete_file_tx.clone()
             } else {
-                (
-                    delete_file_idx_and_tx.as_ref().map(|x| x.0.clone()),
-                    tx_data.clone(),
-                )
+                tx_data.clone()
             };
 
             let partition_bound_predicate = if self.predicate.is_some() {
@@ -777,7 +760,7 @@ impl PlanContext {
                 manifest_file,
                 partition_bound_predicate,
                 tx,
-                delete_file_idx,
+                delete_file_idx.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -791,7 +774,7 @@ impl PlanContext {
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
-        delete_file_index: Option<DeleteFileIndex>,
+        delete_file_index: DeleteFileIndex,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -1003,23 +986,18 @@ impl ExpressionEvaluatorCache {
                     ErrorKind::Unexpected,
                     "ManifestEvaluatorCache RwLock was poisoned",
                 )
-            })
-            .unwrap()
+            })?
             .insert(
                 spec_id,
                 Arc::new(ExpressionEvaluator::new(partition_filter.clone())),
             );
 
-        let read = self
-            .0
-            .read()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "ManifestEvaluatorCache RwLock was poisoned",
-                )
-            })
-            .unwrap();
+        let read = self.0.read().map_err(|_| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "ManifestEvaluatorCache RwLock was poisoned",
+            )
+        })?;
 
         Ok(read.get(&spec_id).unwrap().clone())
     }
