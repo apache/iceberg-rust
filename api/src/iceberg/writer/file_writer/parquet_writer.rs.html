@@ -1539,6 +1539,82 @@
 <a href="#1539" id="1539">1539</a>
 <a href="#1540" id="1540">1540</a>
 <a href="#1541" id="1541">1541</a>
+<a href="#1542" id="1542">1542</a>
+<a href="#1543" id="1543">1543</a>
+<a href="#1544" id="1544">1544</a>
+<a href="#1545" id="1545">1545</a>
+<a href="#1546" id="1546">1546</a>
+<a href="#1547" id="1547">1547</a>
+<a href="#1548" id="1548">1548</a>
+<a href="#1549" id="1549">1549</a>
+<a href="#1550" id="1550">1550</a>
+<a href="#1551" id="1551">1551</a>
+<a href="#1552" id="1552">1552</a>
+<a href="#1553" id="1553">1553</a>
+<a href="#1554" id="1554">1554</a>
+<a href="#1555" id="1555">1555</a>
+<a href="#1556" id="1556">1556</a>
+<a href="#1557" id="1557">1557</a>
+<a href="#1558" id="1558">1558</a>
+<a href="#1559" id="1559">1559</a>
+<a href="#1560" id="1560">1560</a>
+<a href="#1561" id="1561">1561</a>
+<a href="#1562" id="1562">1562</a>
+<a href="#1563" id="1563">1563</a>
+<a href="#1564" id="1564">1564</a>
+<a href="#1565" id="1565">1565</a>
+<a href="#1566" id="1566">1566</a>
+<a href="#1567" id="1567">1567</a>
+<a href="#1568" id="1568">1568</a>
+<a href="#1569" id="1569">1569</a>
+<a href="#1570" id="1570">1570</a>
+<a href="#1571" id="1571">1571</a>
+<a href="#1572" id="1572">1572</a>
+<a href="#1573" id="1573">1573</a>
+<a href="#1574" id="1574">1574</a>
+<a href="#1575" id="1575">1575</a>
+<a href="#1576" id="1576">1576</a>
+<a href="#1577" id="1577">1577</a>
+<a href="#1578" id="1578">1578</a>
+<a href="#1579" id="1579">1579</a>
+<a href="#1580" id="1580">1580</a>
+<a href="#1581" id="1581">1581</a>
+<a href="#1582" id="1582">1582</a>
+<a href="#1583" id="1583">1583</a>
+<a href="#1584" id="1584">1584</a>
+<a href="#1585" id="1585">1585</a>
+<a href="#1586" id="1586">1586</a>
+<a href="#1587" id="1587">1587</a>
+<a href="#1588" id="1588">1588</a>
+<a href="#1589" id="1589">1589</a>
+<a href="#1590" id="1590">1590</a>
+<a href="#1591" id="1591">1591</a>
+<a href="#1592" id="1592">1592</a>
+<a href="#1593" id="1593">1593</a>
+<a href="#1594" id="1594">1594</a>
+<a href="#1595" id="1595">1595</a>
+<a href="#1596" id="1596">1596</a>
+<a href="#1597" id="1597">1597</a>
+<a href="#1598" id="1598">1598</a>
+<a href="#1599" id="1599">1599</a>
+<a href="#1600" id="1600">1600</a>
+<a href="#1601" id="1601">1601</a>
+<a href="#1602" id="1602">1602</a>
+<a href="#1603" id="1603">1603</a>
+<a href="#1604" id="1604">1604</a>
+<a href="#1605" id="1605">1605</a>
+<a href="#1606" id="1606">1606</a>
+<a href="#1607" id="1607">1607</a>
+<a href="#1608" id="1608">1608</a>
+<a href="#1609" id="1609">1609</a>
+<a href="#1610" id="1610">1610</a>
+<a href="#1611" id="1611">1611</a>
+<a href="#1612" id="1612">1612</a>
+<a href="#1613" id="1613">1613</a>
+<a href="#1614" id="1614">1614</a>
+<a href="#1615" id="1615">1615</a>
+<a href="#1616" id="1616">1616</a>
+<a href="#1617" id="1617">1617</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1625,24 +1701,16 @@
     <span class="kw">type </span>R = ParquetWriter;
 
     <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;<span class="self">Self</span>::R&gt; {
-        <span class="kw">let </span>arrow_schema: ArrowSchemaRef = Arc::new(<span class="self">self</span>.schema.as_ref().try_into()<span class="question-mark">?</span>);
         <span class="kw">let </span>written_size = Arc::new(AtomicI64::new(<span class="number">0</span>));
         <span class="kw">let </span>out_file = <span class="self">self</span>.file_io.new_output(
             <span class="self">self</span>.location_generator
                 .generate_location(<span class="kw-2">&amp;</span><span class="self">self</span>.file_name_generator.generate_file_name()),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner_writer = TrackWriter::new(out_file.writer().<span class="kw">await</span><span class="question-mark">?</span>, written_size.clone());
-        <span class="kw">let </span>async_writer = AsyncFileWriter::new(inner_writer);
-        <span class="kw">let </span>writer =
-            AsyncArrowWriter::try_new(async_writer, arrow_schema.clone(), <span class="prelude-val">Some</span>(<span class="self">self</span>.props))
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, <span class="string">"Failed to build parquet writer."</span>)
-                        .with_source(err)
-                })<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(ParquetWriter {
             schema: <span class="self">self</span>.schema.clone(),
-            writer,
+            inner_writer: <span class="prelude-val">None</span>,
+            writer_properties: <span class="self">self</span>.props,
             written_size,
             current_row_num: <span class="number">0</span>,
             out_file,
@@ -1767,7 +1835,8 @@
 </span><span class="kw">pub struct </span>ParquetWriter {
     schema: SchemaRef,
     out_file: OutputFile,
-    writer: AsyncArrowWriter&lt;AsyncFileWriter&lt;TrackWriter&gt;&gt;,
+    inner_writer: <span class="prelude-ty">Option</span>&lt;AsyncArrowWriter&lt;AsyncFileWriter&lt;TrackWriter&gt;&gt;&gt;,
+    writer_properties: WriterProperties,
     written_size: Arc&lt;AtomicI64&gt;,
     current_row_num: usize,
 }
@@ -2061,8 +2130,35 @@
 
 <span class="kw">impl </span>FileWriter <span class="kw">for </span>ParquetWriter {
     <span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: <span class="kw-2">&amp;</span>arrow_array::RecordBatch) -&gt; <span class="kw">crate</span>::Result&lt;()&gt; {
+        <span class="comment">// Skip empty batch
+        </span><span class="kw">if </span>batch.num_rows() == <span class="number">0 </span>{
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+        }
+
         <span class="self">self</span>.current_row_num += batch.num_rows();
-        <span class="self">self</span>.writer.write(batch).<span class="kw">await</span>.map_err(|err| {
+
+        <span class="comment">// Lazy initialize the writer
+        </span><span class="kw">let </span>writer = <span class="kw">if let </span><span class="prelude-val">Some</span>(writer) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner_writer {
+            writer
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>arrow_schema: ArrowSchemaRef = Arc::new(<span class="self">self</span>.schema.as_ref().try_into()<span class="question-mark">?</span>);
+            <span class="kw">let </span>inner_writer =
+                TrackWriter::new(<span class="self">self</span>.out_file.writer().<span class="kw">await</span><span class="question-mark">?</span>, <span class="self">self</span>.written_size.clone());
+            <span class="kw">let </span>async_writer = AsyncFileWriter::new(inner_writer);
+            <span class="kw">let </span>writer = AsyncArrowWriter::try_new(
+                async_writer,
+                arrow_schema.clone(),
+                <span class="prelude-val">Some</span>(<span class="self">self</span>.writer_properties.clone()),
+            )
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, <span class="string">"Failed to build parquet writer."</span>)
+                    .with_source(err)
+            })<span class="question-mark">?</span>;
+            <span class="self">self</span>.inner_writer = <span class="prelude-val">Some</span>(writer);
+            <span class="self">self</span>.inner_writer.as_mut().unwrap()
+        };
+
+        writer.write(batch).<span class="kw">await</span>.map_err(|err| {
             Error::new(
                 ErrorKind::Unexpected,
                 <span class="string">"Failed to write using parquet writer."</span>,
@@ -2073,7 +2169,10 @@
     }
 
     <span class="kw">async fn </span>close(<span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Vec&lt;<span class="kw">crate</span>::spec::DataFileBuilder&gt;&gt; {
-        <span class="kw">let </span>metadata = <span class="self">self</span>.writer.close().<span class="kw">await</span>.map_err(|err| {
+        <span class="kw">let </span><span class="prelude-val">Some</span>(writer) = <span class="self">self</span>.inner_writer <span class="kw">else </span>{
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[]);
+        };
+        <span class="kw">let </span>metadata = writer.close().<span class="kw">await</span>.map_err(|err| {
             Error::new(ErrorKind::Unexpected, <span class="string">"Failed to close parquet writer."</span>).with_source(err)
         })<span class="question-mark">?</span>;
 
@@ -3078,6 +3177,59 @@
         // );
 
         </span><span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_empty_write() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        <span class="kw">let </span>location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        <span class="kw">let </span>file_name_gen =
+            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
+
+        <span class="comment">// Test that file will create if data to write
+        </span><span class="kw">let </span>schema = {
+            <span class="kw">let </span>fields = <span class="macro">vec!</span>[
+                arrow_schema::Field::new(<span class="string">"col"</span>, arrow_schema::DataType::Int64, <span class="bool-val">true</span>).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"0"</span>.to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        <span class="kw">let </span>col = Arc::new(Int64Array::from_iter_values(<span class="number">0</span>..<span class="number">1024</span>)) <span class="kw">as </span>ArrayRef;
+        <span class="kw">let </span>to_write = RecordBatch::try_new(schema.clone(), <span class="macro">vec!</span>[col]).unwrap();
+        <span class="kw">let </span><span class="kw-2">mut </span>pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen.clone(),
+            file_name_gen,
+        )
+        .build()
+        .<span class="kw">await</span><span class="question-mark">?</span>;
+        pw.write(<span class="kw-2">&amp;</span>to_write).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>file_path = pw.out_file.location().to_string();
+        pw.close().<span class="kw">await</span>.unwrap();
+        <span class="macro">assert!</span>(file_io.exists(file_path).<span class="kw">await</span>.unwrap());
+
+        <span class="comment">// Test that file will not create if no data to write
+        </span><span class="kw">let </span>file_name_gen =
+            DefaultFileNameGenerator::new(<span class="string">"test_empty"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
+        <span class="kw">let </span>pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>file_path = pw.out_file.location().to_string();
+        pw.close().<span class="kw">await</span>.unwrap();
+        <span class="macro">assert!</span>(!file_io.exists(file_path).<span class="kw">await</span>.unwrap());
+
+        <span class="prelude-val">Ok</span>(())
     }
 }
 </code></pre></div></section></main></body></html>

@@ -248,6 +248,16 @@
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -393,6 +403,16 @@
         );
 
         <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = DataFileWriterBuilder::new(pw, <span class="prelude-val">None</span>).build().<span class="kw">await</span>.unwrap();
+
+        <span class="kw">let </span>arrow_schema = arrow_schema::Schema::new(<span class="macro">vec!</span>[
+            Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">false</span>),
+            Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+        ]);
+        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), <span class="macro">vec!</span>[
+            Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
+            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>])),
+        ])<span class="question-mark">?</span>;
+        data_file_writer.write(batch).<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>data_files = data_file_writer.close().<span class="kw">await</span>.unwrap();
         <span class="macro">assert_eq!</span>(data_files.len(), <span class="number">1</span>);
