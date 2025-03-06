@@ -43,7 +43,7 @@ message(NOTICE "-- Iceberg C shared lib: ${ICEBERG_SHARED_LIB}")
 
 # custom target for cargo build
 add_custom_target(cargo_build
-    COMMAND sh -c "cargo build ${CARGO_BUILD_TYPE}"
+    COMMAND cargo build ${CARGO_BUILD_TYPE}
     BYPRODUCTS  ${ICEBERG_STATIC_LIB} ${ICEBERG_SHARED_LIB}
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
