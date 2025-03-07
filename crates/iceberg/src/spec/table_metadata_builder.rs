@@ -1220,14 +1220,19 @@ impl From<TableMetadataBuildResult> for TableMetadata {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::BufReader;
     use std::thread::sleep;
 
     use super::*;
+    use crate::io::FileIOBuilder;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
         UnboundPartitionField,
     };
+    use crate::table::Table;
+    use crate::TableIdent;
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
     const LAST_ASSIGNED_COLUMN_ID: i32 = 3;
@@ -2379,6 +2384,32 @@ mod tests {
             "{} > {}",
             build_result.metadata.last_updated_ms,
             last_updated_ms
+        );
+    }
+
+    #[test]
+    fn test_construct_default_main_branch() {
+        // Load the table without ref
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let table = Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
+            table.metadata().current_snapshot_id().unwrap()
         );
     }
 }
