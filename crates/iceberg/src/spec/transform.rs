@@ -341,107 +341,85 @@ impl Transform {
                 }
                 _ => Ok(None),
             },
-            Transform::Truncate(width) => {
-                match predicate {
-                    BoundPredicate::Unary(expr) => {
-                        if matches!(
-                            expr.term().field().field_type.as_primitive_type(),
-                            Some(&PrimitiveType::Int)
-                                | Some(&PrimitiveType::Long)
-                                | Some(&PrimitiveType::Decimal { .. })
-                        ) {
-                            Self::project_unary(expr.op(), name)
-                        } else {
-                            // #TODO: Why other type is not supported?
-                            Ok(None)
-                        }
-                    }
-                    BoundPredicate::Binary(expr) => {
-                        if matches!(
-                            expr.term().field().field_type.as_primitive_type(),
-                            Some(&PrimitiveType::Int)
-                                | Some(&PrimitiveType::Long)
-                                | Some(&PrimitiveType::Decimal { .. })
-                        ) {
-                            self.truncate_number_strict(name, expr, &func)
-                        } else if expr.op() == PredicateOperator::StartsWith {
-                            let len = match expr.literal().literal() {
-                                PrimitiveLiteral::String(s) => s.len(),
-                                PrimitiveLiteral::Binary(b) => b.len(),
-                                _ => {
-                                    return Err(Error::new(
-                                        ErrorKind::DataInvalid,
-                                        format!(
-                                            "Expected a string or binary literal, got: {:?}",
-                                            expr.literal()
-                                        ),
-                                    ))
-                                }
-                            };
-                            match len.cmp(&(*width as usize)) {
-                                Ordering::Less => {
-                                    Ok(Some(Predicate::Binary(BinaryExpression::new(
-                                        PredicateOperator::StartsWith,
-                                        Reference::new(name),
-                                        expr.literal().to_owned(),
-                                    ))))
-                                }
-                                Ordering::Equal => {
-                                    Ok(Some(Predicate::Binary(BinaryExpression::new(
-                                        PredicateOperator::Eq,
-                                        Reference::new(name),
-                                        expr.literal().to_owned(),
-                                    ))))
-                                }
-                                Ordering::Greater => Ok(None),
+            Transform::Truncate(width) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => {
+                    if matches!(
+                        expr.term().field().field_type.as_primitive_type(),
+                        Some(&PrimitiveType::Int)
+                            | Some(&PrimitiveType::Long)
+                            | Some(&PrimitiveType::Decimal { .. })
+                    ) {
+                        self.truncate_number_strict(name, expr, &func)
+                    } else if expr.op() == PredicateOperator::StartsWith {
+                        let len = match expr.literal().literal() {
+                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::Binary(b) => b.len(),
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Expected a string or binary literal, got: {:?}",
+                                        expr.literal()
+                                    ),
+                                ))
                             }
-                        } else if expr.op() == PredicateOperator::NotStartsWith {
-                            let len = match expr.literal().literal() {
-                                PrimitiveLiteral::String(s) => s.len(),
-                                PrimitiveLiteral::Binary(b) => b.len(),
-                                _ => {
-                                    return Err(Error::new(
-                                        ErrorKind::DataInvalid,
-                                        format!(
-                                            "Expected a string or binary literal, got: {:?}",
-                                            expr.literal()
-                                        ),
-                                    ))
-                                }
-                            };
-                            match len.cmp(&(*width as usize)) {
-                                Ordering::Less => {
-                                    Ok(Some(Predicate::Binary(BinaryExpression::new(
-                                        PredicateOperator::NotStartsWith,
-                                        Reference::new(name),
-                                        expr.literal().to_owned(),
-                                    ))))
-                                }
-                                Ordering::Equal => {
-                                    Ok(Some(Predicate::Binary(BinaryExpression::new(
-                                        PredicateOperator::NotEq,
-                                        Reference::new(name),
-                                        expr.literal().to_owned(),
-                                    ))))
-                                }
-                                Ordering::Greater => {
-                                    Ok(Some(Predicate::Binary(BinaryExpression::new(
-                                        expr.op(),
-                                        Reference::new(name),
-                                        func.transform_literal_result(expr.literal())?,
-                                    ))))
-                                }
-                            }
-                        } else {
-                            self.truncate_array_strict(name, expr, &func)
+                        };
+                        match len.cmp(&(*width as usize)) {
+                            Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::StartsWith,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::Eq,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Greater => Ok(None),
                         }
+                    } else if expr.op() == PredicateOperator::NotStartsWith {
+                        let len = match expr.literal().literal() {
+                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::Binary(b) => b.len(),
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Expected a string or binary literal, got: {:?}",
+                                        expr.literal()
+                                    ),
+                                ))
+                            }
+                        };
+                        match len.cmp(&(*width as usize)) {
+                            Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::NotStartsWith,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::NotEq,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Greater => {
+                                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                    expr.op(),
+                                    Reference::new(name),
+                                    func.transform_literal_result(expr.literal())?,
+                                ))))
+                            }
+                        }
+                    } else {
+                        self.truncate_array_strict(name, expr, &func)
                     }
-                    BoundPredicate::Set(expr) => {
-                        self.project_set_expr(expr, PredicateOperator::NotIn, name, &func)
-                    }
-                    _ => Ok(None),
                 }
-            }
+                BoundPredicate::Set(expr) => {
+                    self.project_set_expr(expr, PredicateOperator::NotIn, name, &func)
+                }
+                _ => Ok(None),
+            },
             Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
                 match predicate {
                     BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
