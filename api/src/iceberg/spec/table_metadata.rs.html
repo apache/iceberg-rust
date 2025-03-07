@@ -2775,6 +2775,23 @@
 <a href="#2775" id="2775">2775</a>
 <a href="#2776" id="2776">2776</a>
 <a href="#2777" id="2777">2777</a>
+<a href="#2778" id="2778">2778</a>
+<a href="#2779" id="2779">2779</a>
+<a href="#2780" id="2780">2780</a>
+<a href="#2781" id="2781">2781</a>
+<a href="#2782" id="2782">2782</a>
+<a href="#2783" id="2783">2783</a>
+<a href="#2784" id="2784">2784</a>
+<a href="#2785" id="2785">2785</a>
+<a href="#2786" id="2786">2786</a>
+<a href="#2787" id="2787">2787</a>
+<a href="#2788" id="2788">2788</a>
+<a href="#2789" id="2789">2789</a>
+<a href="#2790" id="2790">2790</a>
+<a href="#2791" id="2791">2791</a>
+<a href="#2792" id="2792">2792</a>
+<a href="#2793" id="2793">2793</a>
+<a href="#2794" id="2794">2794</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3202,6 +3219,22 @@
             .insert(snapshot.snapshot_id(), Arc::new(snapshot));
     }
 
+    <span class="kw">fn </span>construct_refs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(current_snapshot_id) = <span class="self">self</span>.current_snapshot_id {
+            <span class="kw">if </span>!<span class="self">self</span>.refs.contains_key(MAIN_BRANCH) {
+                <span class="self">self</span>.refs
+                    .insert(MAIN_BRANCH.to_string(), SnapshotReference {
+                        snapshot_id: current_snapshot_id,
+                        retention: SnapshotRetention::Branch {
+                            min_snapshots_to_keep: <span class="prelude-val">None</span>,
+                            max_snapshot_age_ms: <span class="prelude-val">None</span>,
+                            max_ref_age_ms: <span class="prelude-val">None</span>,
+                        },
+                    });
+            }
+        }
+    }
+
     <span class="doccomment">/// Normalize this partition spec.
     ///
     /// This is an internal method
@@ -3212,6 +3245,7 @@
     </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>try_normalize(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt; {
         <span class="self">self</span>.validate_current_schema()<span class="question-mark">?</span>;
         <span class="self">self</span>.normalize_current_snapshot()<span class="question-mark">?</span>;
+        <span class="self">self</span>.construct_refs();
         <span class="self">self</span>.validate_refs()<span class="question-mark">?</span>;
         <span class="self">self</span>.validate_chronological_snapshot_logs()<span class="question-mark">?</span>;
         <span class="self">self</span>.validate_chronological_metadata_logs()<span class="question-mark">?</span>;

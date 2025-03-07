@@ -2382,6 +2382,37 @@
 <a href="#2382" id="2382">2382</a>
 <a href="#2383" id="2383">2383</a>
 <a href="#2384" id="2384">2384</a>
+<a href="#2385" id="2385">2385</a>
+<a href="#2386" id="2386">2386</a>
+<a href="#2387" id="2387">2387</a>
+<a href="#2388" id="2388">2388</a>
+<a href="#2389" id="2389">2389</a>
+<a href="#2390" id="2390">2390</a>
+<a href="#2391" id="2391">2391</a>
+<a href="#2392" id="2392">2392</a>
+<a href="#2393" id="2393">2393</a>
+<a href="#2394" id="2394">2394</a>
+<a href="#2395" id="2395">2395</a>
+<a href="#2396" id="2396">2396</a>
+<a href="#2397" id="2397">2397</a>
+<a href="#2398" id="2398">2398</a>
+<a href="#2399" id="2399">2399</a>
+<a href="#2400" id="2400">2400</a>
+<a href="#2401" id="2401">2401</a>
+<a href="#2402" id="2402">2402</a>
+<a href="#2403" id="2403">2403</a>
+<a href="#2404" id="2404">2404</a>
+<a href="#2405" id="2405">2405</a>
+<a href="#2406" id="2406">2406</a>
+<a href="#2407" id="2407">2407</a>
+<a href="#2408" id="2408">2408</a>
+<a href="#2409" id="2409">2409</a>
+<a href="#2410" id="2410">2410</a>
+<a href="#2411" id="2411">2411</a>
+<a href="#2412" id="2412">2412</a>
+<a href="#2413" id="2413">2413</a>
+<a href="#2414" id="2414">2414</a>
+<a href="#2415" id="2415">2415</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3604,14 +3635,19 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
+    <span class="kw">use </span>std::fs::File;
+    <span class="kw">use </span>std::io::BufReader;
     <span class="kw">use </span>std::thread::sleep;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
+    <span class="kw">use </span><span class="kw">crate</span>::io::FileIOBuilder;
     <span class="kw">use </span><span class="kw">crate</span>::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         SnapshotRetention, SortDirection, SortField, StructType, Summary, Transform, Type,
         UnboundPartitionField,
     };
+    <span class="kw">use </span><span class="kw">crate</span>::table::Table;
+    <span class="kw">use </span><span class="kw">crate</span>::TableIdent;
 
     <span class="kw">const </span>TEST_LOCATION: <span class="kw-2">&amp;</span>str = <span class="string">"s3://bucket/test/location"</span>;
     <span class="kw">const </span>LAST_ASSIGNED_COLUMN_ID: i32 = <span class="number">3</span>;
@@ -4763,6 +4799,32 @@
             <span class="string">"{} &gt; {}"</span>,
             build_result.metadata.last_updated_ms,
             last_updated_ms
+        );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_construct_default_main_branch() {
+        <span class="comment">// Load the table without ref
+        </span><span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
+            <span class="string">"{}/testdata/table_metadata/{}"</span>,
+            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+            <span class="string">"TableMetadataV2Valid.json"
+        </span>))
+        .unwrap();
+        <span class="kw">let </span>reader = BufReader::new(file);
+        <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, TableMetadata&gt;(reader).unwrap();
+
+        <span class="kw">let </span>table = Table::builder()
+            .metadata(resp)
+            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
+            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
+            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+            .build()
+            .unwrap();
+
+        <span class="macro">assert_eq!</span>(
+            table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
+            table.metadata().current_snapshot_id().unwrap()
         );
     }
 }
