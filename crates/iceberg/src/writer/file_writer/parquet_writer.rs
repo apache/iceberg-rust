@@ -1354,7 +1354,7 @@ mod tests {
             ListArray::new(
                 {
                     if let DataType::List(field) = struct_list_fields_schema
-                        .get(0)
+                        .first()
                         .expect("could not find first list field")
                         .data_type()
                     {
