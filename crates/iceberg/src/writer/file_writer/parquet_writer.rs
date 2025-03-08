@@ -499,8 +499,8 @@ impl ParquetWriter {
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
             .nan_value_counts(nan_value_counts)
-            // # TODO(#417)
-            // - distinct_counts
+            // # NOTE:
+            // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .key_metadata(metadata.footer_signing_key_metadata)
             .split_offsets(
                 metadata
@@ -639,17 +639,6 @@ impl ParquetWriter {
                     };
                 }
             }
-            DataType::List(arrow_field) => {
-                handle_list_type!(ListArray, col, self, field, arrow_field);
-            }
-            // NOTE: iceberg to arrow schema conversion does not form these types,
-            // meaning these branches never get called right now.
-            DataType::LargeList(_) => {
-                // handle_list_type!(LargeListArray, col, self, field, arrow_field);
-            }
-            DataType::FixedSizeList(_, _) => {
-                // handle_list_type!(FixedSizeList, col, self, field, arrow_field);
-            }
             DataType::Map(_, _) => {
                 let map_arr = col.as_any().downcast_ref::<MapArray>().unwrap();
 
@@ -663,6 +652,17 @@ impl ParquetWriter {
 
                 let values_col = map_arr.values();
                 self.transverse_batch(values_col, &map_ty.value_field);
+            }
+            DataType::List(arrow_field) => {
+                handle_list_type!(ListArray, col, self, field, arrow_field);
+            }
+            // NOTE: iceberg to arrow schema conversion does not form these types,
+            // meaning these branches never get called right now.
+            DataType::LargeList(_) => {
+                // handle_list_type!(LargeListArray, col, self, field, arrow_field);
+            }
+            DataType::FixedSizeList(_, _) => {
+                // handle_list_type!(FixedSizeList, col, self, field, arrow_field);
             }
             _ => {}
         };
@@ -972,12 +972,6 @@ mod tests {
         // prepare data
         let schema = {
             let fields = vec![
-                // TODO(feniljain):
-                // Types:
-                // [X] Primitive
-                // [ ] Struct
-                // [ ] List
-                // [ ] Map
                 arrow_schema::Field::new("col", arrow_schema::DataType::Float32, true)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
@@ -1629,6 +1623,73 @@ mod tests {
 
         // check the written file
         let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // prepare data
+        let schema = {
+            let fields = vec![
+                arrow_schema::Field::new("col", arrow_schema::DataType::Int64, true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        let col = Arc::new(Int64Array::from_iter_values(0..1024)) as ArrayRef;
+        let null_col = Arc::new(Int64Array::new_null(1024)) as ArrayRef;
+        let to_write = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+        let to_write_null = RecordBatch::try_new(schema.clone(), vec![null_col]).unwrap();
+
+        // write data
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+        pw.write(&to_write).await?;
+        pw.write(&to_write_null).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            // Put dummy field for build successfully.
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .build()
+            .unwrap();
+
+        // check data file
+        assert_eq!(data_file.record_count(), 2048);
+        assert_eq!(*data_file.value_counts(), HashMap::from([(0, 2048)]));
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([(0, Datum::long(0))])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([(0, Datum::long(1023))])
+        );
+        assert_eq!(*data_file.null_value_counts(), HashMap::from([(0, 1024)]));
+
+        // check the written file
+        let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
 
         Ok(())
