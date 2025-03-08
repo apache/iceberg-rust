@@ -345,17 +345,17 @@ macro_rules! count_float_nans {
 macro_rules! handle_list_type {
     ($t:ty, $col:ident, $self:ident, $field:ident, $arrow_field:ident) => {
         let list_arr = $col.as_any().downcast_ref::<$t>().unwrap();
-        let field_data_typ = $arrow_field.data_type();
+        let field_data_type = $arrow_field.data_type();
 
         let n_vals = list_arr.offsets().len() - 1;
 
         let field = match $field.clone().field_type.deref() {
-            Type::List(list_typ) => list_typ.element_field.clone(),
+            Type::List(list_type) => list_type.element_field.clone(),
             _ => unreachable!(),
         };
         let field_id = field.id;
 
-        match field_data_typ {
+        match field_data_type {
             DataType::Float32 => {
                 for idx in 0..n_vals {
                     let arr_ref = list_arr.value(idx);
