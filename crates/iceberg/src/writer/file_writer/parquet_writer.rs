@@ -19,11 +19,11 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
-use std::ops::Deref;
 
-use arrow_array::{Float32Array, Float64Array, ArrayRef, StructArray, ListArray, MapArray};
+use arrow_array::{ArrayRef, Float32Array, Float64Array, ListArray, MapArray, StructArray};
 use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -791,12 +791,12 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use arrow_array::types::{Int64Type, Float32Type};
+    use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
+    use arrow_array::types::{Float32Type, Int64Type};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Int32Array, Int64Array,
         ListArray, RecordBatch, StructArray,
     };
-    use arrow_array::builder::{MapBuilder, Int32Builder, Float32Builder};
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -1088,11 +1088,8 @@ mod tests {
             None,
         )) as ArrayRef;
 
-        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
-            float_32_col,
-            float_64_col,
-        ])
-        .unwrap();
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![float_32_col, float_64_col]).unwrap();
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
@@ -1120,23 +1117,14 @@ mod tests {
 
         // check data file
         assert_eq!(data_file.record_count(), 4);
-        assert_eq!(
-            *data_file.value_counts(),
-            HashMap::from([(0, 4), (1, 4)])
-        );
+        assert_eq!(*data_file.value_counts(), HashMap::from([(0, 4), (1, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([
-                (0, Datum::float(1.0)),
-                (1, Datum::double(1.0)),
-            ])
+            HashMap::from([(0, Datum::float(1.0)), (1, Datum::double(1.0)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([
-                (0, Datum::float(2.0)),
-                (1, Datum::double(2.0)),
-            ])
+            HashMap::from([(0, Datum::float(2.0)), (1, Datum::double(2.0)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -1265,23 +1253,14 @@ mod tests {
 
         // check data file
         assert_eq!(data_file.record_count(), 4);
-        assert_eq!(
-            *data_file.value_counts(),
-            HashMap::from([(4, 4), (7, 4)])
-        );
+        assert_eq!(*data_file.value_counts(), HashMap::from([(4, 4), (7, 4)]));
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([
-                (4, Datum::float(1.0)),
-                (7, Datum::float(1.0)),
-            ])
+            HashMap::from([(4, Datum::float(1.0)), (7, Datum::float(1.0)),])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([
-                (4, Datum::float(2.0)),
-                (7, Datum::float(2.0)),
-            ])
+            HashMap::from([(4, Datum::float(2.0)), (7, Datum::float(2.0)),])
         );
         assert_eq!(
             *data_file.null_value_counts(),
@@ -1580,8 +1559,11 @@ mod tests {
             None,
         )) as ArrayRef;
 
-        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![map_array, struct_list_float_field_col])
-            .expect("Could not form record batch");
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            map_array,
+            struct_list_float_field_col,
+        ])
+        .expect("Could not form record batch");
 
         // write data
         let mut pw = ParquetWriterBuilder::new(
@@ -1614,20 +1596,36 @@ mod tests {
 
         // check data file
         assert_eq!(data_file.record_count(), 4);
-        assert_eq!(*data_file.value_counts(), HashMap::from([(1, 4), (2, 4), (6, 4), (7, 4)]));
+        assert_eq!(
+            *data_file.value_counts(),
+            HashMap::from([(1, 4), (2, 4), (6, 4), (7, 4)])
+        );
         assert_eq!(
             *data_file.lower_bounds(),
-            HashMap::from([(1, Datum::int(1)), (2, Datum::float(1.0)), (6, Datum::int(1)), (7, Datum::float(1.0))])
+            HashMap::from([
+                (1, Datum::int(1)),
+                (2, Datum::float(1.0)),
+                (6, Datum::int(1)),
+                (7, Datum::float(1.0))
+            ])
         );
         assert_eq!(
             *data_file.upper_bounds(),
-            HashMap::from([(1, Datum::int(4)), (2, Datum::float(2.0)), (6, Datum::int(4)), (7, Datum::float(2.0))])
+            HashMap::from([
+                (1, Datum::int(4)),
+                (2, Datum::float(2.0)),
+                (6, Datum::int(4)),
+                (7, Datum::float(2.0))
+            ])
         );
         assert_eq!(
             *data_file.null_value_counts(),
             HashMap::from([(1, 0), (2, 0), (6, 0), (7, 0)])
         );
-        assert_eq!(*data_file.nan_value_counts(), HashMap::from([(2, 1), (7, 1)]));
+        assert_eq!(
+            *data_file.nan_value_counts(),
+            HashMap::from([(2, 1), (7, 1)])
+        );
 
         // check the written file
         let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
