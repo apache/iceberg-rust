@@ -1199,7 +1199,7 @@
     }
 
     <span class="doccomment">/// Commit transaction.
-    </span><span class="kw">pub async fn </span>commit(<span class="self">self</span>, catalog: <span class="kw-2">&amp;</span><span class="kw">impl </span>Catalog) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+    </span><span class="kw">pub async fn </span>commit(<span class="self">self</span>, catalog: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Catalog) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
         <span class="kw">let </span>table_commit = TableCommit::builder()
             .ident(<span class="self">self</span>.table.identifier().clone())
             .updates(<span class="self">self</span>.updates)
