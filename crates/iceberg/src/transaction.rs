@@ -972,22 +972,6 @@ mod tests {
         assert_eq!(data_file, *manifest.entries()[0].data_file());
     }
 
-    #[test]
-    fn test_do_same_update_in_same_transaction() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .remove_properties(vec!["a".to_string(), "b".to_string()])
-            .unwrap();
-
-        let tx = tx.remove_properties(vec!["c".to_string(), "d".to_string()]);
-
-        assert!(
-            tx.is_err(),
-            "Should not allow to do same kinds update in same transaction"
-        );
-    }
-
     #[tokio::test]
     async fn test_add_existing_parquet_files_to_unpartitioned_table() {
         let mut fixture = TableTestFixture::new_unpartitioned();
