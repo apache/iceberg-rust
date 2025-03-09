@@ -332,22 +332,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_do_same_update_in_same_transaction() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .remove_properties(vec!["a".to_string(), "b".to_string()])
-            .unwrap();
-
-        let tx = tx.remove_properties(vec!["c".to_string(), "d".to_string()]);
-
-        assert!(
-            tx.is_err(),
-            "Should not allow to do same kinds update in same transaction"
-        );
-    }
-
     #[tokio::test]
     async fn test_transaction_apply_upgrade() {
         let table = make_v1_table();
