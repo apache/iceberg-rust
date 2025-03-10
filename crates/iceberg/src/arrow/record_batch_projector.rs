@@ -43,7 +43,7 @@ impl RecordBatchProjector {
     /// This function will iterate through the nested fields if the field is a struct, `searchable_field_func` can be used to control whether
     /// iterate into the nested fields.
     pub(crate) fn new<F1, F2>(
-        original_schema: SchemaRef,
+        original_schema: &Schema,
         field_ids: &[i32],
         field_id_fetch_func: F1,
         searchable_field_func: F2,
@@ -192,8 +192,7 @@ mod test {
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
         let projector =
-            RecordBatchProjector::new(schema.clone(), &[1, 3], field_id_fetch_func, |_| true)
-                .unwrap();
+            RecordBatchProjector::new(&schema, &[1, 3], field_id_fetch_func, |_| true).unwrap();
 
         assert_eq!(projector.field_indices.len(), 2);
         assert_eq!(projector.field_indices[0], vec![0]);
@@ -255,8 +254,7 @@ mod test {
             "inner_field2" => Ok(Some(4)),
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[1, 5], field_id_fetch_func, |_| true);
+        let projector = RecordBatchProjector::new(&schema, &[1, 5], field_id_fetch_func, |_| true);
 
         assert!(projector.is_err());
     }
@@ -285,12 +283,10 @@ mod test {
             "inner_field2" => Ok(Some(4)),
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| false);
+        let projector = RecordBatchProjector::new(&schema, &[3], field_id_fetch_func, |_| false);
         assert!(projector.is_err());
 
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| true);
+        let projector = RecordBatchProjector::new(&schema, &[3], field_id_fetch_func, |_| true);
         assert!(projector.is_ok());
     }
 }

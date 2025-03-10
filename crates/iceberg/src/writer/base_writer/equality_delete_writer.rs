@@ -66,7 +66,7 @@ impl EqualityDeleteWriterConfig {
     ) -> Result<Self> {
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
-            original_arrow_schema,
+            &original_arrow_schema,
             &equality_ids,
             // The following rule comes from https://iceberg.apache.org/spec/#identifier-field-ids
             // and https://iceberg.apache.org/spec/#equality-delete-files

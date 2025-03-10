@@ -235,6 +235,10 @@ impl DataFile {
     pub fn sort_order_id(&self) -> Option<i32> {
         self.sort_order_id
     }
+
+    pub(crate) fn rewrite_partition(&mut self, partition: Struct) {
+        self.partition = partition;
+    }
 }
 
 /// Convert data files to avro bytes and write to writer.
