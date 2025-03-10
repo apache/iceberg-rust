@@ -1795,6 +1795,62 @@
 <a href="#1795" id="1795">1795</a>
 <a href="#1796" id="1796">1796</a>
 <a href="#1797" id="1797">1797</a>
+<a href="#1798" id="1798">1798</a>
+<a href="#1799" id="1799">1799</a>
+<a href="#1800" id="1800">1800</a>
+<a href="#1801" id="1801">1801</a>
+<a href="#1802" id="1802">1802</a>
+<a href="#1803" id="1803">1803</a>
+<a href="#1804" id="1804">1804</a>
+<a href="#1805" id="1805">1805</a>
+<a href="#1806" id="1806">1806</a>
+<a href="#1807" id="1807">1807</a>
+<a href="#1808" id="1808">1808</a>
+<a href="#1809" id="1809">1809</a>
+<a href="#1810" id="1810">1810</a>
+<a href="#1811" id="1811">1811</a>
+<a href="#1812" id="1812">1812</a>
+<a href="#1813" id="1813">1813</a>
+<a href="#1814" id="1814">1814</a>
+<a href="#1815" id="1815">1815</a>
+<a href="#1816" id="1816">1816</a>
+<a href="#1817" id="1817">1817</a>
+<a href="#1818" id="1818">1818</a>
+<a href="#1819" id="1819">1819</a>
+<a href="#1820" id="1820">1820</a>
+<a href="#1821" id="1821">1821</a>
+<a href="#1822" id="1822">1822</a>
+<a href="#1823" id="1823">1823</a>
+<a href="#1824" id="1824">1824</a>
+<a href="#1825" id="1825">1825</a>
+<a href="#1826" id="1826">1826</a>
+<a href="#1827" id="1827">1827</a>
+<a href="#1828" id="1828">1828</a>
+<a href="#1829" id="1829">1829</a>
+<a href="#1830" id="1830">1830</a>
+<a href="#1831" id="1831">1831</a>
+<a href="#1832" id="1832">1832</a>
+<a href="#1833" id="1833">1833</a>
+<a href="#1834" id="1834">1834</a>
+<a href="#1835" id="1835">1835</a>
+<a href="#1836" id="1836">1836</a>
+<a href="#1837" id="1837">1837</a>
+<a href="#1838" id="1838">1838</a>
+<a href="#1839" id="1839">1839</a>
+<a href="#1840" id="1840">1840</a>
+<a href="#1841" id="1841">1841</a>
+<a href="#1842" id="1842">1842</a>
+<a href="#1843" id="1843">1843</a>
+<a href="#1844" id="1844">1844</a>
+<a href="#1845" id="1845">1845</a>
+<a href="#1846" id="1846">1846</a>
+<a href="#1847" id="1847">1847</a>
+<a href="#1848" id="1848">1848</a>
+<a href="#1849" id="1849">1849</a>
+<a href="#1850" id="1850">1850</a>
+<a href="#1851" id="1851">1851</a>
+<a href="#1852" id="1852">1852</a>
+<a href="#1853" id="1853">1853</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1812,7 +1868,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="doccomment">//! This module contains rest catalog implementation.
+</span><span class="doccomment">//! This module contains the iceberg REST catalog implementation.
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::str::FromStr;
@@ -1832,9 +1888,11 @@
 <span class="kw">use </span>tokio::sync::OnceCell;
 <span class="kw">use </span>typed_builder::TypedBuilder;
 
-<span class="kw">use </span><span class="kw">crate</span>::client::HttpClient;
+<span class="kw">use </span><span class="kw">crate</span>::client::{
+    deserialize_catalog_response, deserialize_unexpected_catalog_error, HttpClient,
+};
 <span class="kw">use </span><span class="kw">crate</span>::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
     RenameTableRequest,
 };
@@ -1847,6 +1905,7 @@
 </span><span class="attr">#[derive(Clone, Debug, TypedBuilder)]
 </span><span class="kw">pub struct </span>RestCatalogConfig {
     uri: String,
+
     <span class="attr">#[builder(default, setter(strip_option(fallback = warehouse_opt)))]
     </span>warehouse: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -1902,13 +1961,13 @@
 
     <span class="doccomment">/// Get the token from the config.
     ///
-    /// Client will use `token` to send requests if exists.
+    /// The client can use this token to send requests.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>token(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
         <span class="self">self</span>.props.get(<span class="string">"token"</span>).cloned()
     }
 
-    <span class="doccomment">/// Get the credentials from the config. Client will use `credential`
-    /// to fetch a new token if exists.
+    <span class="doccomment">/// Get the credentials from the config. The client can use these credentials to fetch a new
+    /// token.
     ///
     /// ## Output
     ///
@@ -1926,14 +1985,12 @@
         }
     }
 
-    <span class="doccomment">/// Get the extra headers from config.
-    ///
-    /// We will include:
+    <span class="doccomment">/// Get the extra headers from config, which includes:
     ///
     /// - `content-type`
     /// - `x-client-version`
-    /// - `user-agnet`
-    /// - all headers specified by `header.xxx` in props.
+    /// - `user-agent`
+    /// - All headers specified by `header.xxx` in props.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>extra_headers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;HeaderMap&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>headers = HeaderMap::from_iter([
             (
@@ -1953,9 +2010,7 @@
         <span class="kw">for </span>(key, value) <span class="kw">in </span><span class="self">self
             </span>.props
             .iter()
-            .filter(|(k, <span class="kw">_</span>)| k.starts_with(<span class="string">"header."</span>))
-            <span class="comment">// The unwrap here is same since we are filtering the keys
-            </span>.map(|(k, v)| (k.strip_prefix(<span class="string">"header."</span>).unwrap(), v))
+            .filter_map(|(k, v)| k.strip_prefix(<span class="string">"header."</span>).map(|k| (k, v)))
         {
             headers.insert(
                 HeaderName::from_str(key).map_err(|e| {
@@ -1978,7 +2033,7 @@
         <span class="prelude-val">Ok</span>(headers)
     }
 
-    <span class="doccomment">/// Get the optional oauth headers from the config.
+    <span class="doccomment">/// Get the optional OAuth headers from the config.
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>extra_oauth_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, String&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>params = HashMap::new();
 
@@ -1994,10 +2049,11 @@
                 params.insert(param_name.to_string(), value.to_string());
             }
         }
+
         params
     }
 
-    <span class="doccomment">/// Merge the config with the given config fetched from rest server.
+    <span class="doccomment">/// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>merge_with_config(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>config: CatalogConfig) -&gt; <span class="self">Self </span>{
         <span class="kw">if let </span><span class="prelude-val">Some</span>(uri) = config.overrides.remove(<span class="string">"uri"</span>) {
             <span class="self">self</span>.uri = uri;
@@ -2015,14 +2071,11 @@
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">struct </span>RestContext {
     client: HttpClient,
-
     <span class="doccomment">/// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
     </span>config: RestCatalogConfig,
 }
-
-<span class="kw">impl </span>RestContext {}
 
 <span class="doccomment">/// Rest catalog implementation.
 </span><span class="attr">#[derive(Debug)]
@@ -2035,7 +2088,7 @@
 }
 
 <span class="kw">impl </span>RestCatalog {
-    <span class="doccomment">/// Creates a rest catalog from config.
+    <span class="doccomment">/// Creates a `RestCatalog` from a [`RestCatalogConfig`].
     </span><span class="kw">pub fn </span>new(config: RestCatalogConfig) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             user_config: config,
@@ -2043,7 +2096,7 @@
         }
     }
 
-    <span class="doccomment">/// Get the context from the catalog.
+    <span class="doccomment">/// Gets the [`RestContext`] from the catalog.
     </span><span class="kw">async fn </span>context(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span>RestContext&gt; {
         <span class="self">self</span>.ctx
             .get_or_try_init(|| <span class="kw">async </span>{
@@ -2057,24 +2110,27 @@
             .<span class="kw">await
     </span>}
 
-    <span class="doccomment">/// Load the runtime config from the server by user_config.
+    <span class="doccomment">/// Load the runtime config from the server by `user_config`.
     ///
-    /// It's required for a rest catalog to update it's config after creation.
+    /// It's required for a REST catalog to update its config after creation.
     </span><span class="kw">async fn </span>load_config(
         client: <span class="kw-2">&amp;</span>HttpClient,
         user_config: <span class="kw-2">&amp;</span>RestCatalogConfig,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;CatalogConfig&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>request = client.request(Method::GET, user_config.config_endpoint());
+        <span class="kw">let </span><span class="kw-2">mut </span>request_builder = client.request(Method::GET, user_config.config_endpoint());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(warehouse_location) = <span class="kw-2">&amp;</span>user_config.warehouse {
-            request = request.query(<span class="kw-2">&amp;</span>[(<span class="string">"warehouse"</span>, warehouse_location)]);
+            request_builder = request_builder.query(<span class="kw-2">&amp;</span>[(<span class="string">"warehouse"</span>, warehouse_location)]);
         }
 
-        <span class="kw">let </span>config = client
-            .query::&lt;CatalogConfig, ErrorResponse&gt;(request.build()<span class="question-mark">?</span>)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>request = request_builder.build()<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(config)
+        <span class="kw">let </span>http_response = client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; deserialize_catalog_response(http_response).<span class="kw">await</span>,
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
     }
 
     <span class="kw">async fn </span>load_file_io(
@@ -2109,91 +2165,119 @@
     }
 }
 
-<span class="attr">#[async_trait]
+<span class="doccomment">/// All requests and expected responses are derived from the REST catalog API spec:
+/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
+</span><span class="attr">#[async_trait]
 </span><span class="kw">impl </span>Catalog <span class="kw">for </span>RestCatalog {
-    <span class="doccomment">/// List namespaces from table.
-    </span><span class="kw">async fn </span>list_namespaces(
+    <span class="kw">async fn </span>list_namespaces(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         parent: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>NamespaceIdent&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;NamespaceIdent&gt;&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>request = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.client.request(
-            Method::GET,
-            <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.namespaces_endpoint(),
-        );
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(ns) = parent {
-            request = request.query(<span class="kw-2">&amp;</span>[(<span class="string">"parent"</span>, ns.to_url_string())]);
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span><span class="kw-2">mut </span>request_builder = context
+            .client
+            .request(Method::GET, context.config.namespaces_endpoint());
+        <span class="comment">// Filter on `parent={namespace}` if a parent namespace exists.
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(namespace) = parent {
+            request_builder = request_builder.query(<span class="kw-2">&amp;</span>[(<span class="string">"parent"</span>, namespace.to_url_string())]);
         }
+        <span class="kw">let </span>request = request_builder.build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;ListNamespaceResponse, ErrorResponse&gt;(request.build()<span class="question-mark">?</span>)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        resp.namespaces
-            .into_iter()
-            .map(NamespaceIdent::from_vec)
-            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;NamespaceIdent&gt;&gt;&gt;()
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; {
+                <span class="kw">let </span>response =
+                    deserialize_catalog_response::&lt;ListNamespaceResponse&gt;(http_response).<span class="kw">await</span><span class="question-mark">?</span>;
+                response
+                    .namespaces
+                    .into_iter()
+                    .map(NamespaceIdent::from_vec)
+                    .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;NamespaceIdent&gt;&gt;&gt;()
+            }
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"The parent parameter of the namespace provided does not exist"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
     }
 
-    <span class="doccomment">/// Create a new namespace inside the catalog.
-    </span><span class="kw">async fn </span>create_namespace(
+    <span class="kw">async fn </span>create_namespace(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
         properties: HashMap&lt;String, String&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Namespace&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::POST,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.namespaces_endpoint(),
-            )
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::POST, context.config.namespaces_endpoint())
             .json(<span class="kw-2">&amp;</span>NamespaceSerde {
                 namespace: namespace.as_ref().clone(),
                 properties: <span class="prelude-val">Some</span>(properties),
             })
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;NamespaceSerde, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        Namespace::try_from(resp)
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; {
+                <span class="kw">let </span>response =
+                    deserialize_catalog_response::&lt;NamespaceSerde&gt;(http_response).<span class="kw">await</span><span class="question-mark">?</span>;
+                Namespace::try_from(response)
+            }
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to create a namespace that already exists"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
     }
 
-    <span class="doccomment">/// Get a namespace information from the catalog.
-    </span><span class="kw">async fn </span>get_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Namespace&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::GET,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.namespace_endpoint(namespace),
-            )
+    <span class="kw">async fn </span>get_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Namespace&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::GET, context.config.namespace_endpoint(namespace))
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;NamespaceSerde, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
-        Namespace::try_from(resp)
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; {
+                <span class="kw">let </span>response =
+                    deserialize_catalog_response::&lt;NamespaceSerde&gt;(http_response).<span class="kw">await</span><span class="question-mark">?</span>;
+                Namespace::try_from(response)
+            }
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to get a namespace that does not exist"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
     }
 
-    <span class="doccomment">/// Update a namespace inside the catalog.
-    ///
-    /// # Behavior
-    ///
-    /// The properties must be the full set of namespace.
-    </span><span class="kw">async fn </span>update_namespace(
+    <span class="kw">async fn </span>namespace_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, ns: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::HEAD, context.config.namespace_endpoint(ns))
+            .build()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
+    }
+
+    <span class="kw">async fn </span>update_namespace(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
         _properties: HashMap&lt;String, String&gt;,
@@ -2204,67 +2288,48 @@
         ))
     }
 
-    <span class="kw">async fn </span>namespace_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, ns: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::HEAD,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.namespace_endpoint(ns),
-            )
+    <span class="kw">async fn </span>drop_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::DELETE, context.config.namespace_endpoint(namespace))
             .build()<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .do_execute::&lt;bool, ErrorResponse&gt;(request, |resp| <span class="kw">match </span>resp.status() {
-                StatusCode::OK | StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
-                StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
-                <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-            })
-            .<span class="kw">await
-    </span>}
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-    <span class="doccomment">/// Drop a namespace from the catalog.
-    </span><span class="kw">async fn </span>drop_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::DELETE,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.namespace_endpoint(namespace),
-            )
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to drop a namespace that does not exist"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
+    }
+
+    <span class="kw">async fn </span>list_tables(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TableIdent&gt;&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::GET, context.config.tables_endpoint(namespace))
             .build()<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .execute::&lt;ErrorResponse&gt;(request)
-            .<span class="kw">await
-    </span>}
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-    <span class="doccomment">/// List tables from namespace.
-    </span><span class="kw">async fn </span>list_tables(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TableIdent&gt;&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::GET,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.tables_endpoint(namespace),
-            )
-            .build()<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;ListTableResponse, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
-
-        <span class="prelude-val">Ok</span>(resp.identifiers)
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(
+                deserialize_catalog_response::&lt;ListTableResponse&gt;(http_response)
+                    .<span class="kw">await</span><span class="question-mark">?
+                    </span>.identifiers,
+            ),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to list tables of a namespace that does not exist"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
     }
 
     <span class="doccomment">/// Create a new table inside the namespace.
@@ -2278,24 +2343,20 @@
         namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
         creation: TableCreation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
         <span class="kw">let </span>table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::POST,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.tables_endpoint(namespace),
-            )
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::POST, context.config.tables_endpoint(namespace))
             .json(<span class="kw-2">&amp;</span>CreateTableRequest {
                 name: creation.name,
                 location: creation.location,
                 schema: creation.schema,
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
-                <span class="comment">// We don't support stage create yet.
-                </span>stage_create: <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
+                stage_create: <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
                 properties: <span class="kw">if </span>creation.properties.is_empty() {
                     <span class="prelude-val">None
                 </span>} <span class="kw">else </span>{
@@ -2304,14 +2365,33 @@
             })
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;LoadTableResponse, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>config = resp
+        <span class="kw">let </span>response = <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; {
+                deserialize_catalog_response::&lt;LoadTableResponse&gt;(http_response).<span class="kw">await</span><span class="question-mark">?
+            </span>}
+            StatusCode::NOT_FOUND =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Tried to create a table under a namespace that does not exist"</span>,
+                ))
+            }
+            StatusCode::CONFLICT =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"The table already exists"</span>,
+                ))
+            }
+            <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        };
+
+        <span class="kw">let </span>metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            <span class="string">"Metadata location missing in `create_table` response!"</span>,
+        ))<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>config = response
             .config
             .unwrap_or_default()
             .into_iter()
@@ -2319,47 +2399,51 @@
             .collect();
 
         <span class="kw">let </span>file_io = <span class="self">self
-            </span>.load_file_io(resp.metadata_location.as_deref(), <span class="prelude-val">Some</span>(config))
+            </span>.load_file_io(<span class="prelude-val">Some</span>(metadata_location), <span class="prelude-val">Some</span>(config))
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
-        Table::builder()
-            .identifier(table_ident)
+        <span class="kw">let </span>table_builder = Table::builder()
+            .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(resp.metadata)
-            .metadata_location(resp.metadata_location.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    <span class="string">"Metadata location missing in create table response!"</span>,
-                )
-            })<span class="question-mark">?</span>)
-            .build()
+            .metadata(response.metadata);
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(metadata_location) = response.metadata_location {
+            table_builder.metadata_location(metadata_location).build()
+        } <span class="kw">else </span>{
+            table_builder.build()
+        }
     }
 
     <span class="doccomment">/// Load table from the catalog.
     ///
-    /// If there are any config properties that are present in
-    /// both the response from the REST server and the config provided
-    /// when creating this `RestCatalog` instance then the value
+    /// If there are any config properties that are present in both the response from the REST
+    /// server and the config provided when creating this `RestCatalog` instance, then the value
     /// provided locally to the `RestCatalog` will take precedence.
-    </span><span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::GET,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.table_endpoint(table),
-            )
+
+    </span><span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::GET, context.config.table_endpoint(table_ident))
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;LoadTableResponse, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>config = resp
+        <span class="kw">let </span>response = <span class="kw">match </span>http_response.status() {
+            StatusCode::OK | StatusCode::NOT_MODIFIED =&gt; {
+                deserialize_catalog_response::&lt;LoadTableResponse&gt;(http_response).<span class="kw">await</span><span class="question-mark">?
+            </span>}
+            StatusCode::NOT_FOUND =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Tried to load a table that does not exist"</span>,
+                ))
+            }
+            <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        };
+
+        <span class="kw">let </span>config = response
             .config
             .unwrap_or_default()
             .into_iter()
@@ -2367,15 +2451,15 @@
             .collect();
 
         <span class="kw">let </span>file_io = <span class="self">self
-            </span>.load_file_io(resp.metadata_location.as_deref(), <span class="prelude-val">Some</span>(config))
+            </span>.load_file_io(response.metadata_location.as_deref(), <span class="prelude-val">Some</span>(config))
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>table_builder = Table::builder()
-            .identifier(table.clone())
+            .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(resp.metadata);
+            .metadata(response.metadata);
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(metadata_location) = resp.metadata_location {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
         } <span class="kw">else </span>{
             table_builder.build()
@@ -2384,81 +2468,80 @@
 
     <span class="doccomment">/// Drop a table from the catalog.
     </span><span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::DELETE,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.table_endpoint(table),
-            )
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::DELETE, context.config.table_endpoint(table))
             .build()<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .execute::&lt;ErrorResponse&gt;(request)
-            .<span class="kw">await
-    </span>}
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to drop a table that does not exist"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
+    }
 
     <span class="doccomment">/// Check if a table exists in the catalog.
     </span><span class="kw">async fn </span>table_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::HEAD,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.table_endpoint(table),
-            )
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::HEAD, context.config.table_endpoint(table))
             .build()<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .do_execute::&lt;bool, ErrorResponse&gt;(request, |resp| <span class="kw">match </span>resp.status() {
-                StatusCode::OK | StatusCode::NO_CONTENT =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">true</span>),
-                StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Some</span>(<span class="bool-val">false</span>),
-                <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-            })
-            .<span class="kw">await
-    </span>}
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
+    }
 
     <span class="doccomment">/// Rename a table in the catalog.
     </span><span class="kw">async fn </span>rename_table(<span class="kw-2">&amp;</span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>TableIdent, dest: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .request(
-                Method::POST,
-                <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>.config.rename_table_endpoint(),
-            )
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
+            .request(Method::POST, context.config.rename_table_endpoint())
             .json(<span class="kw-2">&amp;</span>RenameTableRequest {
                 source: src.clone(),
                 destination: dest.clone(),
             })
             .build()<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .execute::&lt;ErrorResponse&gt;(request)
-            .<span class="kw">await
-    </span>}
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
 
-    <span class="doccomment">/// Update table.
-    </span><span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-        <span class="kw">let </span>request = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
+        <span class="kw">match </span>http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK =&gt; <span class="prelude-val">Ok</span>(()),
+            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to rename a table that does not exist (is the namespace correct?)"</span>,
+            )),
+            StatusCode::CONFLICT =&gt; <span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::Unexpected,
+                <span class="string">"Tried to rename a table to a name that already exists"</span>,
+            )),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        }
+    }
+
+    <span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+        <span class="kw">let </span>context = <span class="self">self</span>.context().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>request = context
+            .client
             .request(
                 Method::POST,
-                <span class="self">self</span>.context()
-                    .<span class="kw">await</span><span class="question-mark">?
-                    </span>.config
-                    .table_endpoint(commit.identifier()),
+                context.config.table_endpoint(commit.identifier()),
             )
             .json(<span class="kw-2">&amp;</span>CommitTableRequest {
                 identifier: commit.identifier().clone(),
@@ -2467,21 +2550,54 @@
             })
             .build()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>resp = <span class="self">self
-            </span>.context()
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>.client
-            .query::&lt;CommitTableResponse, ErrorResponse&gt;(request)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>http_response = context.client.query_catalog(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>response: CommitTableResponse = <span class="kw">match </span>http_response.status() {
+            StatusCode::OK =&gt; {
+                deserialize_catalog_response(http_response).<span class="kw">await</span><span class="question-mark">?
+            </span>}
+            StatusCode::NOT_FOUND =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Tried to update a table that does not exist"</span>,
+                ))
+            }
+            StatusCode::CONFLICT =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"CommitFailedException, one or more requirements failed. The client may retry."</span>,
+                ))
+            }
+            StatusCode::INTERNAL_SERVER_ERROR =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"An unknown server-side problem occurred; the commit state is unknown."</span>,
+                ))
+            }
+            StatusCode::BAD_GATEWAY =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"A gateway or proxy received an invalid response from the upstream server; the commit state is unknown."</span>,
+                ))
+            }
+            StatusCode::GATEWAY_TIMEOUT =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"A server-side gateway timeout occurred; the commit state is unknown."</span>,
+                ))
+            }
+            <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(deserialize_unexpected_catalog_error(http_response).<span class="kw">await</span>),
+        };
 
         <span class="kw">let </span>file_io = <span class="self">self
-            </span>.load_file_io(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>resp.metadata_location), <span class="prelude-val">None</span>)
+            </span>.load_file_io(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>response.metadata_location), <span class="prelude-val">None</span>)
             .<span class="kw">await</span><span class="question-mark">?</span>;
+
         Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
-            .metadata(resp.metadata)
-            .metadata_location(resp.metadata_location)
+            .metadata(response.metadata)
+            .metadata_location(response.metadata_location)
             .build()
     }
 }
@@ -3205,11 +3321,7 @@
             .<span class="kw">await</span>;
 
         <span class="macro">assert!</span>(table.is_err());
-        <span class="macro">assert!</span>(table
-            .err()
-            .unwrap()
-            .message()
-            .contains(<span class="string">"Table does not exist"</span>));
+        <span class="macro">assert!</span>(table.err().unwrap().message().contains(<span class="string">"does not exist"</span>));
 
         config_mock.assert_async().<span class="kw">await</span>;
         rename_table_mock.assert_async().<span class="kw">await</span>;
@@ -3406,7 +3518,7 @@
             .err()
             .unwrap()
             .message()
-            .contains(<span class="string">"Table already exists"</span>));
+            .contains(<span class="string">"already exists"</span>));
 
         config_mock.assert_async().<span class="kw">await</span>;
         create_table_mock.assert_async().<span class="kw">await</span>;
@@ -3586,7 +3698,7 @@
             .err()
             .unwrap()
             .message()
-            .contains(<span class="string">"The given table does not exist"</span>));
+            .contains(<span class="string">"does not exist"</span>));
 
         config_mock.assert_async().<span class="kw">await</span>;
         update_table_mock.assert_async().<span class="kw">await</span>;

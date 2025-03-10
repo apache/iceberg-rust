@@ -227,36 +227,52 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
-</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
-</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
-</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestCatalog`] to create namespaces.
 </span><span class="boring">///
-</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
+</span><span class="boring">/// The demo creates a namespace and prints it out.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+</span><span class="boring">/// the iceberg-rest catalog with `docker compose` in the official
+</span><span class="boring">/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
-</span>    // Create catalog
-    let config = RestCatalogConfig::builder()
-        .uri(&quot;http://localhost:8181&quot;.to_string())
-        .build();
-
-    let catalog = RestCatalog::new(config);
-<span class="boring">
-</span><span class="boring">    // List all namespaces
-</span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
-</span><span class="boring">    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
+</span><span class="boring">    // Create the REST iceberg catalog.
+</span><span class="boring">    let config = RestCatalogConfig::builder()
+</span><span class="boring">        .uri(REST_URI.to_string())
+</span><span class="boring">        .build();
+</span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
-</span><span class="boring">    let namespace_id =
+</span><span class="boring">    // List all namespaces already in the catalog.
+</span><span class="boring">    let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
+</span><span class="boring">    println!(
+</span><span class="boring">        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
+</span><span class="boring">        existing_namespaces
+</span><span class="boring">    );
+</span><span class="boring">
+</span><span class="boring">    // Create a new namespace identifier.
+</span><span class="boring">    let namespace_ident =
 </span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
-</span><span class="boring">    // Create namespace
-</span><span class="boring">    let ns = catalog
+</span><span class="boring">
+</span><span class="boring">    // Drop the namespace if it already exists.
+</span><span class="boring">    if catalog.namespace_exists(&amp;namespace_ident).await.unwrap() {
+</span><span class="boring">        println!(&quot;Namespace already exists, dropping now.&quot;,);
+</span><span class="boring">        catalog.drop_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Create the new namespace in the catalog.
+</span><span class="boring">    let _created_namespace = catalog
 </span><span class="boring">        .create_namespace(
-</span><span class="boring">            &amp;namespace_id,
+</span><span class="boring">            &amp;namespace_ident,
 </span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
 </span><span class="boring">        )
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
 </span><span class="boring">
-</span><span class="boring">    println!(&quot;Namespace created: {:?}&quot;, ns);
+</span><span class="boring">    let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
 </span><span class="boring">}</span></code></pre>
 <p>You can run following code to list all root namespaces:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -281,36 +297,52 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
-</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
-</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
-</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestCatalog`] to create namespaces.
 </span><span class="boring">///
-</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
+</span><span class="boring">/// The demo creates a namespace and prints it out.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+</span><span class="boring">/// the iceberg-rest catalog with `docker compose` in the official
+</span><span class="boring">/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
-</span><span class="boring">    // Create catalog
+</span><span class="boring">    // Create the REST iceberg catalog.
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
+</span><span class="boring">        .uri(REST_URI.to_string())
 </span><span class="boring">        .build();
-</span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
-</span>    // List all namespaces
-    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
-    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
-<span class="boring">
-</span><span class="boring">    let namespace_id =
+</span><span class="boring">    // List all namespaces already in the catalog.
+</span><span class="boring">    let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
+</span><span class="boring">    println!(
+</span><span class="boring">        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
+</span><span class="boring">        existing_namespaces
+</span><span class="boring">    );
+</span><span class="boring">
+</span><span class="boring">    // Create a new namespace identifier.
+</span><span class="boring">    let namespace_ident =
 </span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
-</span><span class="boring">    // Create namespace
-</span><span class="boring">    let ns = catalog
+</span><span class="boring">
+</span><span class="boring">    // Drop the namespace if it already exists.
+</span><span class="boring">    if catalog.namespace_exists(&amp;namespace_ident).await.unwrap() {
+</span><span class="boring">        println!(&quot;Namespace already exists, dropping now.&quot;,);
+</span><span class="boring">        catalog.drop_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Create the new namespace in the catalog.
+</span><span class="boring">    let _created_namespace = catalog
 </span><span class="boring">        .create_namespace(
-</span><span class="boring">            &amp;namespace_id,
+</span><span class="boring">            &amp;namespace_ident,
 </span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
 </span><span class="boring">        )
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
 </span><span class="boring">
-</span><span class="boring">    println!(&quot;Namespace created: {:?}&quot;, ns);
+</span><span class="boring">    let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
 </span><span class="boring">}</span></code></pre>
 <p>Then you can run following code to create namespace:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -335,37 +367,53 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use iceberg::{Catalog, NamespaceIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
-</span><span class="boring">/// It a simple example that demonstrates how to create a namespace in a REST catalog.
-</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8181.
-</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestCatalog`] to create namespaces.
 </span><span class="boring">///
-</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
+</span><span class="boring">/// The demo creates a namespace and prints it out.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+</span><span class="boring">/// the iceberg-rest catalog with `docker compose` in the official
+</span><span class="boring">/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
-</span><span class="boring">    // Create catalog
+</span><span class="boring">    // Create the REST iceberg catalog.
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
+</span><span class="boring">        .uri(REST_URI.to_string())
 </span><span class="boring">        .build();
-</span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
-</span><span class="boring">    // List all namespaces
-</span><span class="boring">    let all_namespaces = catalog.list_namespaces(None).await.unwrap();
-</span><span class="boring">    println!(&quot;Namespaces in current catalog: {:?}&quot;, all_namespaces);
+</span><span class="boring">    // List all namespaces already in the catalog.
+</span><span class="boring">    let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
+</span><span class="boring">    println!(
+</span><span class="boring">        &quot;Namespaces alreading in the existing catalog: {:?}&quot;,
+</span><span class="boring">        existing_namespaces
+</span><span class="boring">    );
 </span><span class="boring">
-</span>    let namespace_id =
-        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
-    // Create namespace
-    let ns = catalog
-        .create_namespace(
-            &amp;namespace_id,
-            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
-        )
-        .await
-        .unwrap();
-
-    println!(&quot;Namespace created: {:?}&quot;, ns);
-<span class="boring">}</span></code></pre>
+</span><span class="boring">    // Create a new namespace identifier.
+</span><span class="boring">    let namespace_ident =
+</span><span class="boring">        NamespaceIdent::from_vec(vec![&quot;ns1&quot;.to_string(), &quot;ns11&quot;.to_string()]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Drop the namespace if it already exists.
+</span><span class="boring">    if catalog.namespace_exists(&amp;namespace_ident).await.unwrap() {
+</span><span class="boring">        println!(&quot;Namespace already exists, dropping now.&quot;,);
+</span><span class="boring">        catalog.drop_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Create the new namespace in the catalog.
+</span><span class="boring">    let _created_namespace = catalog
+</span><span class="boring">        .create_namespace(
+</span><span class="boring">            &amp;namespace_ident,
+</span><span class="boring">            HashMap::from([(&quot;key1&quot;.to_string(), &quot;value1&quot;.to_string())]),
+</span><span class="boring">        )
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Namespace {:?} created!&quot;, namespace_ident);
+</span><span class="boring">
+</span><span class="boring">    let loaded_namespace = catalog.get_namespace(&amp;namespace_ident).await.unwrap();
+</span><span class="boring">    println!(&quot;Namespace loaded!\n\nNamespace: {:#?}&quot;, loaded_namespace,);
+</span><span class="boring">}</span></code></pre>
 <h1 id="table"><a class="header" href="#table">Table</a></h1>
 <p>After creating <code>Catalog</code>, we can manipulate tables through <code>Catalog</code>.</p>
 <p>You can use following code to create a table:</p>
@@ -389,55 +437,77 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-</span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
+</span><span class="boring">use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
-</span><span class="boring">/// This is a simple example that demonstrates how to create a table in a REST catalog and get it back.
-</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8080.
-</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">static NAMESPACE: &amp;str = &quot;default&quot;;
+</span><span class="boring">static TABLE_NAME: &amp;str = &quot;t1&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestCatalog`] to create tables.
 </span><span class="boring">///
-</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
+</span><span class="boring">/// The demo creates a table creates a table and then later retrieves the same table.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+</span><span class="boring">/// the iceberg-rest catalog with `docker compose` in the official
+</span><span class="boring">/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
-</span><span class="boring">    // Create catalog
+</span><span class="boring">    // Create the REST iceberg catalog.
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
+</span><span class="boring">        .uri(REST_URI.to_string())
 </span><span class="boring">        .build();
-</span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
-</span>    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
-
-    let table_schema = Schema::builder()
-        .with_fields(vec![
-            NestedField::optional(1, &quot;foo&quot;, Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::required(2, &quot;bar&quot;, Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, &quot;baz&quot;, Type::Primitive(PrimitiveType::Boolean)).into(),
-        ])
-        .with_schema_id(1)
-        .with_identifier_field_ids(vec![2])
-        .build()
-        .unwrap();
-
-    // Create table
-    let table_creation = TableCreation::builder()
-        .name(table_id.name.clone())
-        .schema(table_schema.clone())
-        .properties(HashMap::from([(&quot;owner&quot;.to_string(), &quot;testx&quot;.to_string())]))
-        .build();
-
-    let table = catalog
-        .create_table(&amp;table_id.namespace, table_creation)
-        .await
-        .unwrap();
-
-    println!(&quot;Table created: {:?}&quot;, table.metadata());
-<span class="boring">
-</span><span class="boring">    let table_created = catalog
-</span><span class="boring">        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap())
+</span><span class="boring">    // Create the table identifier.
+</span><span class="boring">    let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
+</span><span class="boring">    let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
+</span><span class="boring">
+</span><span class="boring">    // You can also use the `from_strs` method on `TableIdent` to create the table identifier.
+</span><span class="boring">    // let table_ident = TableIdent::from_strs([NAMESPACE, TABLE_NAME]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Drop the table if it already exists.
+</span><span class="boring">    if catalog.table_exists(&amp;table_ident).await.unwrap() {
+</span><span class="boring">        println!(&quot;Table {TABLE_NAME} already exists, dropping now.&quot;);
+</span><span class="boring">        catalog.drop_table(&amp;table_ident).await.unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Build the table schema.
+</span><span class="boring">    let table_schema = Schema::builder()
+</span><span class="boring">        .with_fields(vec![
+</span><span class="boring">            NestedField::optional(1, &quot;foo&quot;, Type::Primitive(PrimitiveType::String)).into(),
+</span><span class="boring">            NestedField::required(2, &quot;bar&quot;, Type::Primitive(PrimitiveType::Int)).into(),
+</span><span class="boring">            NestedField::optional(3, &quot;baz&quot;, Type::Primitive(PrimitiveType::Boolean)).into(),
+</span><span class="boring">        ])
+</span><span class="boring">        .with_schema_id(1)
+</span><span class="boring">        .with_identifier_field_ids(vec![2])
+</span><span class="boring">        .build()
+</span><span class="boring">        .unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Build the table creation parameters.
+</span><span class="boring">    let table_creation = TableCreation::builder()
+</span><span class="boring">        .name(table_ident.name.clone())
+</span><span class="boring">        .schema(table_schema.clone())
+</span><span class="boring">        .properties(HashMap::from([(&quot;owner&quot;.to_string(), &quot;testx&quot;.to_string())]))
+</span><span class="boring">        .build();
+</span><span class="boring">
+</span><span class="boring">    // Create the table.
+</span><span class="boring">    let _created_table = catalog
+</span><span class="boring">        .create_table(&amp;table_ident.namespace, table_creation)
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
-</span><span class="boring">    println!(&quot;{:?}&quot;, table_created.metadata());
+</span><span class="boring">    println!(&quot;Table {TABLE_NAME} created!&quot;);
+</span><span class="boring">
+</span><span class="boring">    // Ensure that the table is under the correct namespace.
+</span><span class="boring">    assert!(catalog
+</span><span class="boring">        .list_tables(&amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap()
+</span><span class="boring">        .contains(&amp;table_ident));
+</span><span class="boring">
+</span><span class="boring">    // Load the table back from the catalog. It should be identical to the created table.
+</span><span class="boring">    let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
+</span><span class="boring">    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {:?}&quot;, loaded_table);
 </span><span class="boring">}</span></code></pre>
 <p>Also, you can load a table directly:</p>
 <pre><code class="language-rust no_run noplayground"><span class="boring">// Licensed to the Apache Software Foundation (ASF) under one
@@ -460,25 +530,42 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">use std::collections::HashMap;
 </span><span class="boring">
 </span><span class="boring">use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
-</span><span class="boring">use iceberg::{Catalog, TableCreation, TableIdent};
+</span><span class="boring">use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 </span><span class="boring">use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 </span><span class="boring">
-</span><span class="boring">/// This is a simple example that demonstrates how to create a table in a REST catalog and get it back.
-</span><span class="boring">/// It requires a running instance of the iceberg-rest catalog for the port 8080.
-</span><span class="boring">/// You can find how to run the iceberg-rest catalog in the official documentation.
+</span><span class="boring">static REST_URI: &amp;str = &quot;http://localhost:8181&quot;;
+</span><span class="boring">static NAMESPACE: &amp;str = &quot;default&quot;;
+</span><span class="boring">static TABLE_NAME: &amp;str = &quot;t1&quot;;
+</span><span class="boring">
+</span><span class="boring">/// This is a simple example that demonstrates how to use [`RestCatalog`] to create tables.
 </span><span class="boring">///
-</span><span class="boring">/// [Quickstart](https://iceberg.apache.org/spark-quickstart/)
+</span><span class="boring">/// The demo creates a table creates a table and then later retrieves the same table.
+</span><span class="boring">///
+</span><span class="boring">/// A running instance of the iceberg-rest catalog on port 8181 is required. You can find how to run
+</span><span class="boring">/// the iceberg-rest catalog with `docker compose` in the official
+</span><span class="boring">/// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 </span><span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() {
-</span><span class="boring">    // Create catalog
+</span><span class="boring">    // Create the REST iceberg catalog.
 </span><span class="boring">    let config = RestCatalogConfig::builder()
-</span><span class="boring">        .uri(&quot;http://localhost:8181&quot;.to_string())
+</span><span class="boring">        .uri(REST_URI.to_string())
 </span><span class="boring">        .build();
-</span><span class="boring">
 </span><span class="boring">    let catalog = RestCatalog::new(config);
 </span><span class="boring">
-</span><span class="boring">    let table_id = TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap();
+</span><span class="boring">    // Create the table identifier.
+</span><span class="boring">    let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
+</span><span class="boring">    let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
 </span><span class="boring">
+</span><span class="boring">    // You can also use the `from_strs` method on `TableIdent` to create the table identifier.
+</span><span class="boring">    // let table_ident = TableIdent::from_strs([NAMESPACE, TABLE_NAME]).unwrap();
+</span><span class="boring">
+</span><span class="boring">    // Drop the table if it already exists.
+</span><span class="boring">    if catalog.table_exists(&amp;table_ident).await.unwrap() {
+</span><span class="boring">        println!(&quot;Table {TABLE_NAME} already exists, dropping now.&quot;);
+</span><span class="boring">        catalog.drop_table(&amp;table_ident).await.unwrap();
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    // Build the table schema.
 </span><span class="boring">    let table_schema = Schema::builder()
 </span><span class="boring">        .with_fields(vec![
 </span><span class="boring">            NestedField::optional(1, &quot;foo&quot;, Type::Primitive(PrimitiveType::String)).into(),
@@ -490,26 +577,31 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">        .build()
 </span><span class="boring">        .unwrap();
 </span><span class="boring">
-</span><span class="boring">    // Create table
+</span><span class="boring">    // Build the table creation parameters.
 </span><span class="boring">    let table_creation = TableCreation::builder()
-</span><span class="boring">        .name(table_id.name.clone())
+</span><span class="boring">        .name(table_ident.name.clone())
 </span><span class="boring">        .schema(table_schema.clone())
 </span><span class="boring">        .properties(HashMap::from([(&quot;owner&quot;.to_string(), &quot;testx&quot;.to_string())]))
 </span><span class="boring">        .build();
 </span><span class="boring">
-</span><span class="boring">    let table = catalog
-</span><span class="boring">        .create_table(&amp;table_id.namespace, table_creation)
+</span><span class="boring">    // Create the table.
+</span><span class="boring">    let _created_table = catalog
+</span><span class="boring">        .create_table(&amp;table_ident.namespace, table_creation)
 </span><span class="boring">        .await
 </span><span class="boring">        .unwrap();
+</span><span class="boring">    println!(&quot;Table {TABLE_NAME} created!&quot;);
 </span><span class="boring">
-</span><span class="boring">    println!(&quot;Table created: {:?}&quot;, table.metadata());
+</span><span class="boring">    // Ensure that the table is under the correct namespace.
+</span><span class="boring">    assert!(catalog
+</span><span class="boring">        .list_tables(&amp;namespace_ident)
+</span><span class="boring">        .await
+</span><span class="boring">        .unwrap()
+</span><span class="boring">        .contains(&amp;table_ident));
 </span><span class="boring">
-</span>    let table_created = catalog
-        .load_table(&amp;TableIdent::from_strs([&quot;default&quot;, &quot;t1&quot;]).unwrap())
-        .await
-        .unwrap();
-    println!(&quot;{:?}&quot;, table_created.metadata());
-<span class="boring">}</span></code></pre>
+</span><span class="boring">    // Load the table back from the catalog. It should be identical to the created table.
+</span><span class="boring">    let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
+</span><span class="boring">    println!(&quot;Table {TABLE_NAME} loaded!\n\nTable: {:?}&quot;, loaded_table);
+</span><span class="boring">}</span></code></pre>
 
                     </main>
 
