@@ -24,9 +24,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention, Struct,
-    StructType, Summary, MAIN_BRANCH,
+    DataContentType, DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, Struct, StructType, Summary, MAIN_BRANCH,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -65,6 +65,7 @@ pub(crate) struct SnapshotProduceAction<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -85,6 +86,7 @@ impl<'a> SnapshotProduceAction<'a> {
             commit_uuid,
             snapshot_properties,
             added_data_files: vec![],
+            added_delete_files: vec![],
             manifest_counter: (0..),
             key_metadata,
         })
@@ -129,13 +131,7 @@ impl<'a> SnapshotProduceAction<'a> {
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
         let data_files: Vec<DataFile> = data_files.into_iter().collect();
-        for data_file in &data_files {
-            if data_file.content_type() != crate::spec::DataContentType::Data {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Only data content type is allowed for fast append",
-                ));
-            }
+        for data_file in data_files {
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.tx.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
                 return Err(Error::new(
@@ -147,8 +143,12 @@ impl<'a> SnapshotProduceAction<'a> {
                 data_file.partition(),
                 self.tx.table.metadata().default_partition_type(),
             )?;
+            if data_file.content_type() == DataContentType::Data {
+                self.added_data_files.push(data_file);
+            } else {
+                self.added_delete_files.push(data_file);
+            }
         }
-        self.added_data_files.extend(data_files);
         Ok(self)
     }
 
@@ -165,9 +165,32 @@ impl<'a> SnapshotProduceAction<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
+    async fn write_added_manifest(
+        &mut self,
+        added_data_files: Vec<DataFile>,
+    ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
+        let content_type = {
+            let mut data_num = 0;
+            let mut delete_num = 0;
+            for f in &added_data_files {
+                match f.content_type() {
+                    DataContentType::Data => data_num += 1,
+                    DataContentType::PositionDeletes => delete_num += 1,
+                    DataContentType::EqualityDeletes => delete_num += 1,
+                }
+            }
+            if data_num == added_data_files.len() {
+                ManifestContentType::Data
+            } else if delete_num == added_data_files.len() {
+                ManifestContentType::Deletes
+            } else {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "added DataFile for a ManifestFile should be same type (Data or Delete)",
+                ));
+            }
+        };
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
@@ -196,7 +219,10 @@ impl<'a> SnapshotProduceAction<'a> {
             if self.tx.table.metadata().format_version() == FormatVersion::V1 {
                 builder.build_v1()
             } else {
-                builder.build_v2_data()
+                match content_type {
+                    ManifestContentType::Data => builder.build_v2_data(),
+                    ManifestContentType::Deletes => builder.build_v2_deletes(),
+                }
             }
         };
         for entry in manifest_entries {
@@ -210,12 +236,19 @@ impl<'a> SnapshotProduceAction<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        let added_manifest = self.write_added_manifest().await?;
+        let mut manifest_files = vec![];
+        let data_files = std::mem::take(&mut self.added_data_files);
+        let delete_files = std::mem::take(&mut self.added_delete_files);
+        if !data_files.is_empty() {
+            let added_manifest = self.write_added_manifest(data_files).await?;
+            manifest_files.push(added_manifest);
+        }
+        if !delete_files.is_empty() {
+            let added_delete_manifest = self.write_added_manifest(delete_files).await?;
+            manifest_files.push(added_delete_manifest);
+        }
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
-        // # TODO
-        // Support process delete entries.
 
-        let mut manifest_files = vec![added_manifest];
         manifest_files.extend(existing_manifests);
         let manifest_files = manifest_process.process_manifeset(manifest_files);
         Ok(manifest_files)
