@@ -425,7 +425,8 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     }
 }
 
-struct ArrowArrayAccessor;
+/// TODO(feniljain)
+pub struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
