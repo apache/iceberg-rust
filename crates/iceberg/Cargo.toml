@@ -94,3 +94,4 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
+tempdir = "0.3.7"
