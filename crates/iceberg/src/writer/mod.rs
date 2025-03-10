@@ -41,11 +41,10 @@
 //! # };
 //! # use iceberg_catalog_memory::MemoryCatalog;
 //! # use parquet::{arrow::PARQUET_FIELD_ID_META_KEY, file::properties::WriterProperties};
-//! # use tempdir::TempDir;
 //! #
 //! # #[tokio::main]
 //! # async fn main() {
-//! # let tmp_dir = TempDir::new("test_writer").unwrap();
+//! # let tmp_dir = tempfile::tempdir().unwrap();
 //! # let arrow_schema = Arc::new(Schema::new(vec![
 //! #       Field::new("id", DataType::Int32, false).with_metadata(HashMap::from_iter([(PARQUET_FIELD_ID_META_KEY.to_owned(), "1".to_owned())])),
 //! #       Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from_iter([(PARQUET_FIELD_ID_META_KEY.to_owned(), "2".to_owned())])),
