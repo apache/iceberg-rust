@@ -20,7 +20,7 @@
 use arrow_array::RecordBatch;
 use itertools::Itertools;
 
-use crate::spec::{DataContentType, DataFile, Struct};
+use crate::spec::{DataContentType, DataFile, SchemaRef, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::Result;
@@ -98,6 +98,10 @@ impl<B: FileWriterBuilder> CurrentFileStatus for DataFileWriter<B> {
 
     fn current_written_size(&self) -> usize {
         self.inner_writer.as_ref().unwrap().current_written_size()
+    }
+
+    fn current_schema(&self) -> SchemaRef {
+        self.inner_writer.as_ref().unwrap().current_schema()
     }
 }
 

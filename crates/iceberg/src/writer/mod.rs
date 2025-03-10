@@ -199,7 +199,7 @@ pub mod function_writer;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::DataFile;
+use crate::spec::{DataFile, SchemaRef};
 use crate::Result;
 
 type DefaultInput = RecordBatch;
@@ -237,6 +237,8 @@ pub trait CurrentFileStatus {
     fn current_row_num(&self) -> usize;
     /// Get the current file written size.
     fn current_written_size(&self) -> usize;
+    /// Get the schema of the current file.
+    fn current_schema(&self) -> SchemaRef;
 }
 
 #[cfg(test)]

@@ -548,6 +548,10 @@ impl CurrentFileStatus for ParquetWriter {
     fn current_written_size(&self) -> usize {
         self.written_size.load(std::sync::atomic::Ordering::Relaxed) as usize
     }
+
+    fn current_schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
 }
 
 /// AsyncFileWriter is a wrapper of FileWrite to make it compatible with tokio::io::AsyncWrite.
