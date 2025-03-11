@@ -69,15 +69,15 @@ impl MappedField {
 
 impl NameMapping {
     /// Parses name_mapping from JSON.
-    pub fn parse_name_mapping(name_mapping: &String) -> Result<Self> {
+    pub fn parse_name_mapping(name_mapping: &str) -> Result<Self> {
         let parsed_name_mapping: NameMapping = serde_json::from_str(name_mapping)?;
-
         Ok(parsed_name_mapping)
     }
 
     /// Creates a mapping from a schema
     pub fn create_mapping_from_schema(schema: &Schema) -> NameMapping {
         let mapped_fields = visit_schema(schema, &mut CreateMapping).unwrap();
+       
         NameMapping {
             root: mapped_fields,
         }
@@ -91,10 +91,11 @@ impl NameMapping {
     ) -> NameMapping {
         let visitor = UpdateMapping::new(updates, adds);
         let updated_root = visit_name_mapping(&mapping, &visitor);
+
         NameMapping { root: updated_root }
     }
 
-    /// Returns an index mapping names to MappedField by visiting the schema.
+    /// Returns an index mapping names to `MappedField`` by visiting the schema.
     pub fn index_by_name(schema: &Schema) -> HashMap<String, MappedField> {
         let mapping = Self::create_mapping_from_schema(schema);
         visit_name_mapping(&mapping, &IndexByName)
@@ -104,7 +105,7 @@ impl NameMapping {
     pub fn apply_name_mapping(schema: &Schema, mapping: &NameMapping) -> Result<Type> {
         let partner = mapping
             .root
-            .get(0)
+            .first()
             .ok_or_else(|| {
                 Box::new(Error::new(
                     ErrorKind::DataInvalid,
@@ -222,7 +223,7 @@ impl SchemaVisitor for CreateMapping {
         let mapped_fields = struct_type
             .fields()
             .iter()
-            .zip(results.into_iter())
+            .zip(results)
             .map(|(field, result)| {
                 MappedField::new(vec![field.name.clone()], result, Some(field.id))
             })
@@ -323,7 +324,7 @@ impl UpdateMapping {
 
             let reassignments: HashMap<String, i32> = fields_to_add
                 .iter()
-                .filter_map(|f| Some((f.name.clone(), f.id)))
+                .map(|f| (f.name.clone(), f.id))
                 .collect();
 
             let updated_fields: Vec<MappedField> = mapped_fields
@@ -342,15 +343,15 @@ impl NameMappingVisitor for UpdateMapping {
     type S = Vec<MappedField>;
     type T = MappedField;
 
-    // mapping: For the whole mapping, simply call add_new_fields with parent_id -1.
+    // For the whole mapping, simply call add_new_fields with parent_id -1.
     fn mapping(&self, field_result: Self::S) -> Self::S {
         self.add_new_fields(field_result, -1)
     }
 
-    // fields: For multiple fields, build reassignments and update each field.
+    // Build reassignments and update each field.
     fn fields(&self, field_results: Vec<Self::T>) -> Self::S {
         // Build a reassignment map: for each field in field_results with a field_id,
-        // if there's an update in _updates, map update.name to that field_id.
+        // if there's an update in updates, map update.name to that field_id.
         let mut reassignments = HashMap::new();
         for f in &field_results {
             if let Some(field_id) = f.field_id {
@@ -359,14 +360,14 @@ impl NameMappingVisitor for UpdateMapping {
                 }
             }
         }
-        // Filter and update each field using remove_reassigned_names.
+
         field_results
             .into_iter()
             .filter_map(|field| Self::remove_reassigned_names(&field, &reassignments))
             .collect()
     }
 
-    // For a single field, update its names if needed and then update its child fields
+    // Update its names if needed and then update its child fields
     fn field(&self, field: &MappedField, field_result: Self::S) -> Self::T {
         if field.field_id.is_none() {
             return field.clone();
@@ -380,7 +381,7 @@ impl NameMappingVisitor for UpdateMapping {
             }
         }
 
-        // Update the child fields 
+        // Update the child fields
         let updated_child_fields = self.add_new_fields(field_result, field.field_id.unwrap());
         MappedField::new(field_names, updated_child_fields, field.field_id)
     }
@@ -399,54 +400,43 @@ impl PartnerAccessor<MappedField> for NameMappingAccessor {
         struct_partner: &'a MappedField,
         field: &NestedField,
     ) -> Result<&'a MappedField> {
-        for candidate in &struct_partner.fields {
-            if candidate.names.contains(&field.name) {
-                return Ok(candidate);
-            }
-        }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Field partner not found for field name: {}", field.name),
-        ))
+        struct_partner
+            .fields
+            .iter()
+            .find(|candidate| candidate.names.contains(&field.name))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Field partner not found for field name: {}", field.name),
+                )
+            })
     }
 
     /// Look for name which contains "element"
     fn list_element_partner<'a>(&self, list_partner: &'a MappedField) -> Result<&'a MappedField> {
-        for candidate in &list_partner.fields {
-            if candidate.names.contains(&"element".to_string()) {
-                return Ok(candidate);
-            }
-        }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "List element partner not found",
-        ))
+        list_partner
+            .fields
+            .iter()
+            .find(|candidate| candidate.names.contains(&"element".to_string()))
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "List element partner not found"))
     }
 
     /// Look for name which contains "key"
     fn map_key_partner<'a>(&self, map_partner: &'a MappedField) -> Result<&'a MappedField> {
-        for candidate in &map_partner.fields {
-            if candidate.names.contains(&"key".to_string()) {
-                return Ok(candidate);
-            }
-        }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Map key partner not found",
-        ))
+        map_partner
+            .fields
+            .iter()
+            .find(|candidate| candidate.names.contains(&"key".to_string()))
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Map key partner not found"))
     }
 
     /// For a map value partner, iterate over the nested fields and look for one whose names contain "value".
     fn map_value_partner<'a>(&self, map_partner: &'a MappedField) -> Result<&'a MappedField> {
-        for candidate in &map_partner.fields {
-            if candidate.names.contains(&"value".to_string()) {
-                return Ok(candidate);
-            }
-        }
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Map value partner not found",
-        ))
+        map_partner
+            .fields
+            .iter()
+            .find(|candidate| candidate.names.contains(&"value".to_string()))
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "Map value partner not found"))
     }
 }
 
