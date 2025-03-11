@@ -1,28 +1,172 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Iceberg writer module."><title>iceberg::writer - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0-nightly (a70b2ae57 2024-06-09)" data-channel="nightly" data-search-js="search-0fe7219eb170c82e.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iceberg/index.html">iceberg</a><span class="version">0.4.0</span></h2></div><h2 class="location"><a href="#">Module writer</a></h2><div class="sidebar-elems"><section><ul class="block"><li><a href="#modules">Modules</a></li><li><a href="#traits">Traits</a></li></ul></section><h2><a href="../index.html">In crate iceberg</a></h2></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Module <a href="../index.html">iceberg</a>::<wbr><a class="mod" href="#">writer</a><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><span class="out-of-band"><a class="src" href="../../src/iceberg/writer/mod.rs.html#18-134">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Iceberg writer module.</p>
-<p>The writer API is designed to be extensible and flexible. Each writer is decoupled and can be create and config independently. User can:
-1.Customize the writer using the writer trait.
-2.Combine different writer to build a writer which have complex write logic.</p>
-<p>There are two kinds of writer:</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Iceberg writer module."><title>iceberg::writer - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0-nightly (a70b2ae57 2024-06-09)" data-channel="nightly" data-search-js="search-0fe7219eb170c82e.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iceberg/index.html">iceberg</a><span class="version">0.4.0</span></h2></div><h2 class="location"><a href="#">Module writer</a></h2><div class="sidebar-elems"><section><ul class="block"><li><a href="#modules">Modules</a></li><li><a href="#traits">Traits</a></li></ul></section><h2><a href="../index.html">In crate iceberg</a></h2></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Module <a href="../index.html">iceberg</a>::<wbr><a class="mod" href="#">writer</a><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><span class="out-of-band"><a class="src" href="../../src/iceberg/writer/mod.rs.html#18-282">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Iceberg writer module.</p>
+<p>This module contains the generic writer trait and specific writer implementation. We categorize the writer into two types:</p>
 <ol>
-<li>FileWriter: Focus on writing record batch to different physical file format.(Such as parquet. orc)</li>
-<li>IcebergWriter: Focus on the logical format of iceberg table. It will write the data using the FileWriter finally.</li>
+<li>FileWriter: writer for physical file format (Such as parquet, orc).</li>
+<li>IcebergWriter: writer for logical format provided by iceberg table (Such as data file, equality delete file, position delete file)
+or other function (Such as partition writer, delta writer).</li>
 </ol>
-<h2 id="simple-example-for-data-file-writer"><a class="doc-anchor" href="#simple-example-for-data-file-writer">§</a>Simple example for data file writer:</h2>
-<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="comment">// Create a parquet file writer builder. The parameter can get from table.
-</span><span class="kw">let </span>file_writer_builder = ParquetWriterBuilder::new(
-   <span class="number">0</span>,
-   WriterProperties::builder().build(),
-   schema,
-   file_io.clone(),
-   loccation_gen,
-   file_name_gen,
-)
-<span class="comment">// Create a data file writer using parquet file writer builder.
-</span><span class="kw">let </span>data_file_builder = DataFileBuilder::new(file_writer_builder);
-<span class="comment">// Build the data file writer.
-</span><span class="kw">let </span>data_file_writer = data_file_builder.build().<span class="kw">await</span>.unwrap();
+<p>The IcebergWriter will use FileWriter to write underly physical file.</p>
+<p>We hope the writer interface can be extensible and flexible. Each writer can be create config independently
+and combined together to build a writer which have complex write logic. E.g. combine <code>FanoutPartitionWriter</code>, <code>DataFileWriter</code>, <code>ParquetWriter</code> to get
+a writer can split the data automatelly according to partition and write down as parquet physical format.</p>
+<p>For this purpose, there are four trait corresponding to these writer:</p>
+<ul>
+<li>IcebergWriterBuilder</li>
+<li>IcebergWriter</li>
+<li>FileWriterBuilder</li>
+<li>FileWriter</li>
+</ul>
+<p>User can create specific writer builder, combine them and build the writer finally. Also user can custom
+own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)</p>
+<h2 id="simple-example-for-the-data-file-writer-used-parquet-physical-format"><a class="doc-anchor" href="#simple-example-for-the-data-file-writer-used-parquet-physical-format">§</a>Simple example for the data file writer used parquet physical format:</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
 
-data_file_writer.write(<span class="kw-2">&amp;</span>record_batch).<span class="kw">await</span>.unwrap();
-<span class="kw">let </span>data_files = data_file_writer.flush().<span class="kw">await</span>.unwrap();</code></pre></div>
+<span class="kw">use </span>arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
+<span class="kw">use </span>async_trait::async_trait;
+<span class="kw">use </span>iceberg::io::{FileIO, FileIOBuilder};
+<span class="kw">use </span>iceberg::spec::DataFile;
+<span class="kw">use </span>iceberg::transaction::Transaction;
+<span class="kw">use </span>iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+<span class="kw">use </span>iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+<span class="kw">use </span>iceberg::writer::file_writer::ParquetWriterBuilder;
+<span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+<span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
+<span class="kw">use </span>iceberg_catalog_memory::MemoryCatalog;
+<span class="kw">use </span>parquet::file::properties::WriterProperties;
+<span class="attr">#[tokio::main]
+</span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="comment">// Build your file IO.
+    </span><span class="kw">let </span>file_io = FileIOBuilder::new(<span class="string">"memory"</span>).build()<span class="question-mark">?</span>;
+    <span class="comment">// Connect to a catalog.
+    </span><span class="kw">let </span>catalog = MemoryCatalog::new(file_io, <span class="prelude-val">None</span>);
+    <span class="comment">// Load table from catalog.
+    </span><span class="kw">let </span>table = catalog
+        .load_table(<span class="kw-2">&amp;</span>TableIdent::from_strs([<span class="string">"hello"</span>, <span class="string">"world"</span>])<span class="question-mark">?</span>)
+        .<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    <span class="kw">let </span>file_name_generator = DefaultFileNameGenerator::new(
+        <span class="string">"test"</span>.to_string(),
+        <span class="prelude-val">None</span>,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+
+    <span class="comment">// Create a parquet file writer builder. The parameter can get from table.
+    </span><span class="kw">let </span>parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    <span class="comment">// Create a data file writer using parquet file writer builder.
+    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>);
+    <span class="comment">// Build the data file writer
+    </span><span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = data_file_writer_builder.build().<span class="kw">await</span>.unwrap();
+
+    <span class="comment">// Write the data using data_file_writer...
+
+    // Close the write and it will return data files back
+    </span><span class="kw">let </span>data_files = data_file_writer.close().<span class="kw">await</span>.unwrap();
+
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div>
+<h2 id="custom-writer-to-record-latency"><a class="doc-anchor" href="#custom-writer-to-record-latency">§</a>Custom writer to record latency</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::time::Instant;
+
+<span class="kw">use </span>arrow_array::RecordBatch;
+<span class="kw">use </span>iceberg::io::FileIOBuilder;
+<span class="kw">use </span>iceberg::spec::DataFile;
+<span class="kw">use </span>iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+<span class="kw">use </span>iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+<span class="kw">use </span>iceberg::writer::file_writer::ParquetWriterBuilder;
+<span class="kw">use </span>iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+<span class="kw">use </span>iceberg::{Catalog, <span class="prelude-ty">Result</span>, TableIdent};
+<span class="kw">use </span>iceberg_catalog_memory::MemoryCatalog;
+<span class="kw">use </span>parquet::file::properties::WriterProperties;
+
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">struct </span>LatencyRecordWriterBuilder&lt;B&gt; {
+    inner_writer_builder: B,
+}
+
+<span class="kw">impl</span>&lt;B: IcebergWriterBuilder&gt; LatencyRecordWriterBuilder&lt;B&gt; {
+    <span class="kw">pub fn </span>new(inner_writer_builder: B) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            inner_writer_builder,
+        }
+    }
+}
+
+<span class="attr">#[async_trait::async_trait]
+</span><span class="kw">impl</span>&lt;B: IcebergWriterBuilder&gt; IcebergWriterBuilder <span class="kw">for </span>LatencyRecordWriterBuilder&lt;B&gt; {
+    <span class="kw">type </span>R = LatencyRecordWriter&lt;B::R&gt;;
+
+    <span class="kw">async fn </span>build(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::R&gt; {
+        <span class="prelude-val">Ok</span>(LatencyRecordWriter {
+            inner_writer: <span class="self">self</span>.inner_writer_builder.build().<span class="kw">await</span><span class="question-mark">?</span>,
+        })
+    }
+}
+<span class="kw">struct </span>LatencyRecordWriter&lt;W&gt; {
+    inner_writer: W,
+}
+
+<span class="attr">#[async_trait::async_trait]
+</span><span class="kw">impl</span>&lt;W: IcebergWriter&gt; IcebergWriter <span class="kw">for </span>LatencyRecordWriter&lt;W&gt; {
+    <span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input: RecordBatch) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>start = Instant::now();
+        <span class="self">self</span>.inner_writer.write(input).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>_latency = start.elapsed();
+        <span class="comment">// record latency...
+        </span><span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">async fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFile&gt;&gt; {
+        <span class="kw">let </span>start = Instant::now();
+        <span class="kw">let </span>res = <span class="self">self</span>.inner_writer.close().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>_latency = start.elapsed();
+        <span class="comment">// record latency...
+        </span><span class="prelude-val">Ok</span>(res)
+    }
+}
+
+<span class="attr">#[tokio::main]
+</span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="comment">// Build your file IO.
+    </span><span class="kw">let </span>file_io = FileIOBuilder::new(<span class="string">"memory"</span>).build()<span class="question-mark">?</span>;
+    <span class="comment">// Connect to a catalog.
+    </span><span class="kw">let </span>catalog = MemoryCatalog::new(file_io, <span class="prelude-val">None</span>);
+    <span class="comment">// Load table from catalog.
+    </span><span class="kw">let </span>table = catalog
+        .load_table(<span class="kw-2">&amp;</span>TableIdent::from_strs([<span class="string">"hello"</span>, <span class="string">"world"</span>])<span class="question-mark">?</span>)
+        .<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    <span class="kw">let </span>file_name_generator = DefaultFileNameGenerator::new(
+        <span class="string">"test"</span>.to_string(),
+        <span class="prelude-val">None</span>,
+        iceberg::spec::DataFileFormat::Parquet,
+    );
+
+    <span class="comment">// Create a parquet file writer builder. The parameter can get from table.
+    </span><span class="kw">let </span>parquet_writer_builder = ParquetWriterBuilder::new(
+        WriterProperties::default(),
+        table.metadata().current_schema().clone(),
+        table.file_io().clone(),
+        location_generator.clone(),
+        file_name_generator.clone(),
+    );
+    <span class="comment">// Create a data file writer builder using parquet file writer builder.
+    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>);
+    <span class="comment">// Create latency record writer using data file writer builder.
+    </span><span class="kw">let </span>latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
+    <span class="comment">// Build the final writer
+    </span><span class="kw">let </span><span class="kw-2">mut </span>latency_record_data_file_writer = latency_record_builder.build().<span class="kw">await</span>.unwrap();
+
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div>
 </div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="mod" href="base_writer/index.html" title="mod iceberg::writer::base_writer">base_writer</a></div><div class="desc docblock-short">Base writer module contains the basic writer provide by iceberg: <code>DataFileWriter</code>, <code>PositionDeleteFileWriter</code>, <code>EqualityDeleteFileWriter</code>.</div></li><li><div class="item-name"><a class="mod" href="file_writer/index.html" title="mod iceberg::writer::file_writer">file_writer</a></div><div class="desc docblock-short">This module contains the writer for data file format supported by iceberg: parquet, orc.</div></li></ul><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="trait" href="trait.CurrentFileStatus.html" title="trait iceberg::writer::CurrentFileStatus">CurrentFileStatus</a></div><div class="desc docblock-short">The current file status of iceberg writer. It implement for the writer which write a single
 file.</div></li><li><div class="item-name"><a class="trait" href="trait.IcebergWriter.html" title="trait iceberg::writer::IcebergWriter">IcebergWriter</a></div><div class="desc docblock-short">The iceberg writer used to write data to iceberg table.</div></li><li><div class="item-name"><a class="trait" href="trait.IcebergWriterBuilder.html" title="trait iceberg::writer::IcebergWriterBuilder">IcebergWriterBuilder</a></div><div class="desc docblock-short">The builder for iceberg writer.</div></li></ul></section></div></main></body></html>
