@@ -77,7 +77,7 @@ impl NameMapping {
     /// Creates a mapping from a schema
     pub fn create_mapping_from_schema(schema: &Schema) -> NameMapping {
         let mapped_fields = visit_schema(schema, &mut CreateMapping).unwrap();
-       
+
         NameMapping {
             root: mapped_fields,
         }
