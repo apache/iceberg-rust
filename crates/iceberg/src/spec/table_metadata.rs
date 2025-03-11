@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use uuid::Uuid;
 
+use super::name_mapping::NameMapping;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
@@ -398,6 +399,14 @@ impl TableMetadata {
         self.partition_statistics.get(&snapshot_id)
     }
 
+    /// Get default name_mapping.
+    pub fn name_mapping(&self) -> Result<Option<NameMapping>> {
+        if let Some(nm) = self.properties().get("schema.name-mapping.default") {
+            Ok(Some(NameMapping::parse_name_mapping(nm)?))
+        } else {
+            Ok(None)
+        }
+    }
     /// Append snapshot to table
     #[deprecated(
         since = "0.4.0",

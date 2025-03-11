@@ -37,6 +37,7 @@ mod view_version;
 pub use datatypes::*;
 pub use manifest::*;
 pub use manifest_list::*;
+pub use name_mapping::*;
 pub use partition::*;
 pub use schema::*;
 pub use snapshot::*;

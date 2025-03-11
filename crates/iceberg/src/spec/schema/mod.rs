@@ -36,7 +36,7 @@ use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{index_by_id, index_parents, IndexByName};
 pub use self::prune_columns::prune_columns;
-use super::NestedField;
+use super::{NameMapping, NestedField};
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
@@ -389,6 +389,11 @@ impl Schema {
     /// Get an accessor for retrieving data in a struct
     pub fn accessor_by_field_id(&self, field_id: i32) -> Option<Arc<StructAccessor>> {
         self.field_id_to_accessor.get(&field_id).cloned()
+    }
+
+    /// Create `NameMapping` from schema
+    pub fn name_mapping(&self) -> Option<NameMapping> {
+        Some(NameMapping::create_mapping_from_schema(self))
     }
 
     /// Check if this schema is identical to another schema semantically - excluding schema id.
