@@ -482,6 +482,12 @@ pub enum TableUpdate {
         /// Snapshot id to remove partition statistics for.
         snapshot_id: i64,
     },
+    /// Remove schemas
+    #[serde(rename_all = "kebab-case")]
+    RemoveSchemas {
+        /// Schema IDs to remove.
+        schema_ids: Vec<i32>,
+    },
 }
 
 impl TableUpdate {
@@ -525,6 +531,7 @@ impl TableUpdate {
             TableUpdate::RemovePartitionStatistics { snapshot_id } => {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
+            TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
         }
     }
 }
@@ -2046,5 +2053,20 @@ mod tests {
                 snapshot_id: 1940541653261589030,
             },
         )
+    }
+
+    #[test]
+    fn test_remove_schema_update() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-schemas",
+    "schema-ids": [1, 2]
+}        
+        "#,
+            TableUpdate::RemoveSchemas {
+                schema_ids: vec![1, 2],
+            },
+        );
     }
 }

@@ -1210,6 +1210,35 @@ impl TableMetadataBuilder {
     fn highest_sort_order_id(&self) -> Option<i64> {
         self.metadata.sort_orders.keys().max().copied()
     }
+
+    /// Remove schemas by their ids from the table metadata.
+    /// Does nothing if a schema id is not present. Active schemas should not be removed.
+    pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
+        if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot remove current schema",
+            ));
+        }
+
+        if !schema_id_to_remove.is_empty() {
+            let mut removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
+            self.metadata.schemas.retain(|id, _schema| {
+                if schema_id_to_remove.contains(id) {
+                    removed_schemas.push(*id);
+                    false
+                } else {
+                    true
+                }
+            });
+
+            self.changes.push(TableUpdate::RemoveSchemas {
+                schema_ids: removed_schemas,
+            });
+        }
+
+        Ok(self)
+    }
 }
 
 impl From<TableMetadataBuildResult> for TableMetadata {
@@ -2411,5 +2440,11 @@ mod tests {
             table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
             table.metadata().current_snapshot_id().unwrap()
         );
+    }
+
+    #[test]
+    fn test_active_schema_cannot_be_removed() {
+        let builder = builder_without_changes(FormatVersion::V2);
+        builder.remove_schemas(&[0]).unwrap_err();
     }
 }
