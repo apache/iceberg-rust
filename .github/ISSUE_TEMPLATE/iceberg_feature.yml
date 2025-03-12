@@ -33,12 +33,12 @@ body:
       label: Describe the solution you'd like
       placeholder: >
         A clear and concise description of what you want to happen.
-  - type: checkboxes
+  - type: dropdown
     attributes:
       label: Willingness to contribute
       description: >
         The Apache Iceberg community encourages feature contributions. Would you or another member of your organization be willing to contribute to this feature for the Apache Iceberg Rust codebase?
       options:
-        - label: I can contribute to this feature independently
-        - label: I would be willing to contribute to this feature with guidance from the Iceberg Rust community
-        - label: I cannot contribute to this feature at this time
+        - I can contribute to this feature independently
+        - I would be willing to contribute to this feature with guidance from the Iceberg Rust community
+        - I cannot contribute to this feature at this time
