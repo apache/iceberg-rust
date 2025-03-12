@@ -92,12 +92,12 @@ async fn test_append_data_file_conflict() {
     let tx1 = Transaction::new(&table);
     let mut append_action = tx1.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx1 = append_action.apply(true).await.unwrap();
+    let tx1 = append_action.apply().await.unwrap();
 
     let tx2 = Transaction::new(&table);
     let mut append_action = tx2.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
-    let tx2 = append_action.apply(true).await.unwrap();
+    let tx2 = append_action.apply().await.unwrap();
     let table = tx2
         .commit(&rest_catalog)
         .await

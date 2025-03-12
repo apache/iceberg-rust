@@ -123,7 +123,7 @@ async fn test_append_partition_data_file() {
     append_action
         .add_data_files(data_file_valid.clone())
         .unwrap();
-    let tx = append_action.apply(true).await.unwrap();
+    let tx = append_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
 
     // check result

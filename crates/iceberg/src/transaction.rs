@@ -177,6 +177,7 @@ impl<'a> Transaction<'a> {
 /// FastAppendAction is a transaction action for fast append data files to the table.
 pub struct FastAppendAction<'a> {
     snapshot_produce_action: SnapshotProduceAction<'a>,
+    check_duplicate: bool,
 }
 
 impl<'a> FastAppendAction<'a> {
@@ -196,7 +197,14 @@ impl<'a> FastAppendAction<'a> {
                 commit_uuid,
                 snapshot_properties,
             )?,
+            check_duplicate: true,
         })
+    }
+
+    /// Set whether to check duplicate files
+    pub fn with_check_duplicate(mut self, v: bool) -> Self {
+        self.check_duplicate = v;
+        self
     }
 
     /// Add data files to the snapshot.
@@ -210,11 +218,7 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     #[allow(dead_code)]
-    async fn add_parquet_files(
-        mut self,
-        file_path: Vec<String>,
-        check_duplicate: bool,
-    ) -> Result<Transaction<'a>> {
+    async fn add_parquet_files(mut self, file_path: Vec<String>) -> Result<Transaction<'a>> {
         if !self
             .snapshot_produce_action
             .tx
@@ -240,13 +244,13 @@ impl<'a> FastAppendAction<'a> {
 
         self.add_data_files(data_files)?;
 
-        self.apply(check_duplicate).await
+        self.apply().await
     }
 
     /// Finished building the action and apply it to the transaction.
-    pub async fn apply(self, check_duplicate: bool) -> Result<Transaction<'a>> {
+    pub async fn apply(self) -> Result<Transaction<'a>> {
         // Checks duplicate files
-        if check_duplicate {
+        if self.check_duplicate {
             let new_files: HashSet<&str> = self
                 .snapshot_produce_action
                 .added_data_files
@@ -890,7 +894,7 @@ mod tests {
             .build()
             .unwrap();
         action.add_data_files(vec![data_file.clone()]).unwrap();
-        let tx = action.apply(true).await.unwrap();
+        let tx = action.apply().await.unwrap();
 
         // check updates and requirements
         assert!(
@@ -977,7 +981,7 @@ mod tests {
 
         // Attempt to add the existing Parquet files with fast append.
         let new_tx = fast_append_action
-            .add_parquet_files(file_paths.clone(), true)
+            .add_parquet_files(file_paths.clone())
             .await
             .expect("Adding existing Parquet files should succeed");
 
