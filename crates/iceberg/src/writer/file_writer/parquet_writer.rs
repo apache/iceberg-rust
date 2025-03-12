@@ -224,6 +224,17 @@ pub struct ParquetWriter {
     current_row_num: usize,
 }
 
+impl std::fmt::Debug for ParquetWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetWriter")
+            .field("schema", &self.schema)
+            .field("out_file", &self.out_file)
+            .field("written_size", &self.written_size)
+            .field("current_row_num", &self.current_row_num)
+            .finish()
+    }
+}
+
 /// Used to aggregate min and max value of each column.
 struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
@@ -589,6 +600,7 @@ impl CurrentFileStatus for ParquetWriter {
 /// # NOTES
 ///
 /// We keep this wrapper been used inside only.
+#[derive(Debug)]
 struct AsyncFileWriter<W: FileWrite>(W);
 
 impl<W: FileWrite> AsyncFileWriter<W> {
