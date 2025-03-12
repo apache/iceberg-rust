@@ -38,7 +38,7 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 /// Table transaction.
 pub struct Transaction<'a> {
     base_table: &'a Table,
-    current_metadata: TableMetadata,
+    current_table: Table,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
@@ -48,19 +48,20 @@ impl<'a> Transaction<'a> {
     pub fn new(table: &'a Table) -> Self {
         Self {
             base_table: table,
-            current_metadata: table.metadata().clone(),
+            current_table: table.clone(),
             updates: vec![],
             requirements: vec![],
         }
     }
 
     fn update_table_metadata(&mut self, updates: &[TableUpdate]) -> Result<()> {
-        let mut metadata_builder = self.current_metadata.clone().into_builder(None);
+        let mut metadata_builder = self.current_table.metadata().clone().into_builder(None);
         for update in updates {
             metadata_builder = update.clone().apply(metadata_builder)?;
         }
 
-        self.current_metadata = metadata_builder.build()?.metadata;
+        self.current_table
+            .with_metadata(Arc::new(metadata_builder.build()?.metadata));
 
         Ok(())
     }
@@ -71,7 +72,7 @@ impl<'a> Transaction<'a> {
         requirements: Vec<TableRequirement>,
     ) -> Result<()> {
         for requirement in &requirements {
-            requirement.check(Some(&self.current_metadata))?;
+            requirement.check(Some(self.current_table.metadata()))?;
         }
 
         self.update_table_metadata(&updates)?;
@@ -99,7 +100,7 @@ impl<'a> Transaction<'a> {
 
     /// Sets table to a new version.
     pub fn upgrade_table_version(mut self, format_version: FormatVersion) -> Result<Self> {
-        let current_version = self.current_metadata.format_version();
+        let current_version = self.current_table.metadata().format_version();
         match current_version.cmp(&format_version) {
             Ordering::Greater => {
                 return Err(Error::new(
@@ -138,7 +139,8 @@ impl<'a> Transaction<'a> {
         };
         let mut snapshot_id = generate_random_id();
         while self
-            .current_metadata
+            .current_table
+            .metadata()
             .snapshots()
             .any(|s| s.snapshot_id() == snapshot_id)
         {
