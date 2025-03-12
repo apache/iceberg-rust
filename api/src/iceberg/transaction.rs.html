@@ -1034,6 +1034,16 @@
 <a href="#1034" id="1034">1034</a>
 <a href="#1035" id="1035">1035</a>
 <a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1213,6 +1223,7 @@
 <span class="doccomment">/// FastAppendAction is a transaction action for fast append data files to the table.
 </span><span class="kw">pub struct </span>FastAppendAction&lt;<span class="lifetime">'a</span>&gt; {
     snapshot_produce_action: SnapshotProduceAction&lt;<span class="lifetime">'a</span>&gt;,
+    check_duplicate: bool,
 }
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; FastAppendAction&lt;<span class="lifetime">'a</span>&gt; {
@@ -1232,8 +1243,15 @@
                 commit_uuid,
                 snapshot_properties,
             )<span class="question-mark">?</span>,
+            check_duplicate: <span class="bool-val">true</span>,
         })
     }
+
+    <span class="doccomment">/// Set whether to check duplicate files
+    </span><span class="kw">pub fn </span>with_check_duplicate(<span class="kw-2">mut </span><span class="self">self</span>, v: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.check_duplicate = v;
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Add data files to the snapshot.
     </span><span class="kw">pub fn </span>add_data_files(
@@ -1278,51 +1296,53 @@
     <span class="doccomment">/// Finished building the action and apply it to the transaction.
     </span><span class="kw">pub async fn </span>apply(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Transaction&lt;<span class="lifetime">'a</span>&gt;&gt; {
         <span class="comment">// Checks duplicate files
-        </span><span class="kw">let </span>new_files: HashSet&lt;<span class="kw-2">&amp;</span>str&gt; = <span class="self">self
-            </span>.snapshot_produce_action
-            .added_data_files
-            .iter()
-            .map(|df| df.file_path.as_str())
-            .collect();
+        </span><span class="kw">if </span><span class="self">self</span>.check_duplicate {
+            <span class="kw">let </span>new_files: HashSet&lt;<span class="kw-2">&amp;</span>str&gt; = <span class="self">self
+                </span>.snapshot_produce_action
+                .added_data_files
+                .iter()
+                .map(|df| df.file_path.as_str())
+                .collect();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>manifest_stream = <span class="self">self
-            </span>.snapshot_produce_action
-            .tx
-            .table
-            .inspect()
-            .manifests()
-            .scan()
-            .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>referenced_files = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>manifest_stream = <span class="self">self
+                </span>.snapshot_produce_action
+                .tx
+                .table
+                .inspect()
+                .manifests()
+                .scan()
+                .<span class="kw">await</span><span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>referenced_files = Vec::new();
 
-        <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = manifest_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
-            <span class="kw">let </span>file_path_array = batch
-                .column(<span class="number">1</span>)
-                .as_any()
-                .downcast_ref::&lt;StringArray&gt;()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        <span class="string">"Failed to downcast file_path column to StringArray"</span>,
-                    )
-                })<span class="question-mark">?</span>;
+            <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = manifest_stream.try_next().<span class="kw">await</span><span class="question-mark">? </span>{
+                <span class="kw">let </span>file_path_array = batch
+                    .column(<span class="number">1</span>)
+                    .as_any()
+                    .downcast_ref::&lt;StringArray&gt;()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            <span class="string">"Failed to downcast file_path column to StringArray"</span>,
+                        )
+                    })<span class="question-mark">?</span>;
 
-            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..batch.num_rows() {
-                <span class="kw">let </span>file_path = file_path_array.value(i);
-                <span class="kw">if </span>new_files.contains(file_path) {
-                    referenced_files.push(file_path.to_string());
+                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..batch.num_rows() {
+                    <span class="kw">let </span>file_path = file_path_array.value(i);
+                    <span class="kw">if </span>new_files.contains(file_path) {
+                        referenced_files.push(file_path.to_string());
+                    }
                 }
             }
-        }
 
-        <span class="kw">if </span>!referenced_files.is_empty() {
-            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                ErrorKind::DataInvalid,
-                <span class="macro">format!</span>(
-                    <span class="string">"Cannot add files that are already referenced by table, files: {}"</span>,
-                    referenced_files.join(<span class="string">", "</span>)
-                ),
-            ));
+            <span class="kw">if </span>!referenced_files.is_empty() {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::DataInvalid,
+                    <span class="macro">format!</span>(
+                        <span class="string">"Cannot add files that are already referenced by table, files: {}"</span>,
+                        referenced_files.join(<span class="string">", "</span>)
+                    ),
+                ));
+            }
         }
 
         <span class="self">self</span>.snapshot_produce_action
