@@ -52,15 +52,24 @@ impl<'a> ReplaceSortOrderAction<'a> {
 
         let requirements = vec![
             TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: self.tx.table.metadata().current_schema().schema_id(),
+                current_schema_id: self
+                    .tx
+                    .current_table
+                    .metadata()
+                    .current_schema()
+                    .schema_id(),
             },
             TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: self.tx.table.metadata().default_sort_order().order_id,
+                default_sort_order_id: self
+                    .tx
+                    .current_table
+                    .metadata()
+                    .default_sort_order()
+                    .order_id,
             },
         ];
 
-        self.tx.append_requirements(requirements)?;
-        self.tx.append_updates(updates)?;
+        self.tx.apply(updates, requirements)?;
         Ok(self.tx)
     }
 
@@ -72,7 +81,7 @@ impl<'a> ReplaceSortOrderAction<'a> {
     ) -> Result<Self> {
         let field_id = self
             .tx
-            .table
+            .current_table
             .metadata()
             .current_schema()
             .field_id_by_name(name)

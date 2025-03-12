@@ -65,7 +65,7 @@ pub(crate) struct SnapshotProduceAction<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
-    added_delete_files: Vec<DataFile>,
+    pub added_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -141,7 +141,7 @@ impl<'a> SnapshotProduceAction<'a> {
             }
             Self::validate_partition_value(
                 data_file.partition(),
-                self.tx.table.metadata().default_partition_type(),
+                self.tx.current_table.metadata().default_partition_type(),
             )?;
             if data_file.content_type() == DataContentType::Data {
                 self.added_data_files.push(data_file);
@@ -155,13 +155,16 @@ impl<'a> SnapshotProduceAction<'a> {
     fn new_manifest_output(&mut self) -> Result<OutputFile> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
-            self.tx.table.metadata().location(),
+            self.tx.current_table.metadata().location(),
             META_ROOT_PATH,
             self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
-        self.tx.table.file_io().new_output(new_manifest_path)
+        self.tx
+            .current_table
+            .file_io()
+            .new_output(new_manifest_path)
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
@@ -170,6 +173,7 @@ impl<'a> SnapshotProduceAction<'a> {
         added_data_files: Vec<DataFile>,
     ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
+        let format_version = self.tx.current_table.metadata().format_version();
         let content_type = {
             let mut data_num = 0;
             let mut delete_num = 0;
@@ -195,7 +199,7 @@ impl<'a> SnapshotProduceAction<'a> {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
-            if self.tx.table.metadata().format_version() == FormatVersion::V1 {
+            if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
             } else {
                 // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
@@ -208,15 +212,15 @@ impl<'a> SnapshotProduceAction<'a> {
                 self.new_manifest_output()?,
                 Some(self.snapshot_id),
                 self.key_metadata.clone(),
-                self.tx.table.metadata().current_schema().clone(),
+                self.tx.current_table.metadata().current_schema().clone(),
                 self.tx
-                    .table
+                    .current_table
                     .metadata()
                     .default_partition_spec()
                     .as_ref()
                     .clone(),
             );
-            if self.tx.table.metadata().format_version() == FormatVersion::V1 {
+            if self.tx.current_table.metadata().format_version() == FormatVersion::V1 {
                 builder.build_v1()
             } else {
                 match content_type {
@@ -266,7 +270,7 @@ impl<'a> SnapshotProduceAction<'a> {
     fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
         format!(
             "{}/{}/snap-{}-{}-{}.{}",
-            self.tx.table.metadata().location(),
+            self.tx.current_table.metadata().location(),
             META_ROOT_PATH,
             self.snapshot_id,
             attempt,
@@ -284,28 +288,28 @@ impl<'a> SnapshotProduceAction<'a> {
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
-        let next_seq_num = self.tx.table.metadata().next_sequence_number();
+        let next_seq_num = self.tx.current_table.metadata().next_sequence_number();
 
         let summary = self.summary(&snapshot_produce_operation);
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
 
-        let mut manifest_list_writer = match self.tx.table.metadata().format_version() {
+        let mut manifest_list_writer = match self.tx.current_table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.tx
-                    .table
+                    .current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.tx.table.metadata().current_snapshot_id(),
+                self.tx.current_table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.tx
-                    .table
+                    .current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
-                self.tx.table.metadata().current_snapshot_id(),
+                self.tx.current_table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
         };
@@ -316,34 +320,36 @@ impl<'a> SnapshotProduceAction<'a> {
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(self.snapshot_id)
-            .with_parent_snapshot_id(self.tx.table.metadata().current_snapshot_id())
+            .with_parent_snapshot_id(self.tx.current_table.metadata().current_snapshot_id())
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
-            .with_schema_id(self.tx.table.metadata().current_schema_id())
+            .with_schema_id(self.tx.current_table.metadata().current_schema_id())
             .with_timestamp_ms(commit_ts)
             .build();
 
-        self.tx.append_updates(vec![
-            TableUpdate::AddSnapshot {
-                snapshot: new_snapshot,
-            },
-            TableUpdate::SetSnapshotRef {
-                ref_name: MAIN_BRANCH.to_string(),
-                reference: SnapshotReference::new(
-                    self.snapshot_id,
-                    SnapshotRetention::branch(None, None, None),
-                ),
-            },
-        ])?;
-        self.tx.append_requirements(vec![
-            TableRequirement::UuidMatch {
-                uuid: self.tx.table.metadata().uuid(),
-            },
-            TableRequirement::RefSnapshotIdMatch {
-                r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: self.tx.table.metadata().current_snapshot_id(),
-            },
-        ])?;
+        self.tx.apply(
+            vec![
+                TableUpdate::AddSnapshot {
+                    snapshot: new_snapshot,
+                },
+                TableUpdate::SetSnapshotRef {
+                    ref_name: MAIN_BRANCH.to_string(),
+                    reference: SnapshotReference::new(
+                        self.snapshot_id,
+                        SnapshotRetention::branch(None, None, None),
+                    ),
+                },
+            ],
+            vec![
+                TableRequirement::UuidMatch {
+                    uuid: self.tx.current_table.metadata().uuid(),
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: MAIN_BRANCH.to_string(),
+                    snapshot_id: self.tx.current_table.metadata().current_snapshot_id(),
+                },
+            ],
+        )?;
         Ok(self.tx)
     }
 }
