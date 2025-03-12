@@ -163,7 +163,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Commit transaction.
-    pub async fn commit(self, catalog: &impl Catalog) -> Result<Table> {
+    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().clone())
             .updates(self.updates)

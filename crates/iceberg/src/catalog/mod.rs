@@ -18,7 +18,7 @@
 //! Catalog API for Apache Iceberg
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::ops::Deref;
 
@@ -192,6 +192,12 @@ impl Namespace {
     }
 }
 
+impl Display for NamespaceIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.join("."))
+    }
+}
+
 /// TableIdent represents the identifier of a table in the catalog.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableIdent {
@@ -229,6 +235,12 @@ impl TableIdent {
             namespace: namespace_ident,
             name: table_name,
         })
+    }
+}
+
+impl Display for TableIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.namespace, self.name)
     }
 }
 
