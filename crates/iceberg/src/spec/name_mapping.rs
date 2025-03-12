@@ -124,7 +124,7 @@ impl NameMapping {
 }
 
 /// A trait for visiting and transforming a name mapping
-pub trait NameMappingVisitor {
+trait NameMappingVisitor {
     /// Aggregated result of `MappedField`s
     type S;
     /// Result type for processing one `MappedField`
@@ -141,14 +141,14 @@ pub trait NameMappingVisitor {
 }
 
 /// Recursively visits the entire name mapping using visitor
-pub fn visit_name_mapping<V>(nm: &NameMapping, visitor: &V) -> V::S
+fn visit_name_mapping<V>(nm: &NameMapping, visitor: &V) -> V::S
 where V: NameMappingVisitor {
     let root_result = visit_fields(&nm.root, visitor);
     visitor.mapping(root_result)
 }
 
 /// Recursively visits a slice of mapped fields using visitor
-pub fn visit_fields<V>(fields: &[MappedField], visitor: &V) -> V::S
+fn visit_fields<V>(fields: &[MappedField], visitor: &V) -> V::S
 where V: NameMappingVisitor {
     let mut results: Vec<V::T> = Vec::new();
 
@@ -183,7 +183,6 @@ impl NameMappingVisitor for IndexByName {
             })
     }
 
-    // Create
     fn field(
         &self,
         field: &MappedField,
@@ -262,11 +261,10 @@ impl UpdateMapping {
         Self { updates, adds }
     }
 
-    pub fn remove_reassigned_names(
+    fn remove_reassigned_names(
         field: &MappedField,
         assignments: &HashMap<String, i32>,
     ) -> Option<MappedField> {
-        // Collect names to remove.
         let removed_names: HashSet<String> = field
             .names
             .iter()
@@ -303,11 +301,7 @@ impl UpdateMapping {
     }
 
     /// Adds new fields to the existing mapping for a given parent ID.
-    pub fn add_new_fields(
-        &self,
-        mapped_fields: Vec<MappedField>,
-        parent_id: i32,
-    ) -> Vec<MappedField> {
+    fn add_new_fields(&self, mapped_fields: Vec<MappedField>, parent_id: i32) -> Vec<MappedField> {
         if let Some(fields_to_add) = self.adds.get(&parent_id) {
             let new_fields: Vec<MappedField> = fields_to_add
                 .iter()
@@ -343,7 +337,7 @@ impl NameMappingVisitor for UpdateMapping {
     type S = Vec<MappedField>;
     type T = MappedField;
 
-    // For the whole mapping, simply call add_new_fields with parent_id -1.
+    // Call add_new_fields with parent_id -1 for whole mapping
     fn mapping(&self, field_result: Self::S) -> Self::S {
         self.add_new_fields(field_result, -1)
     }
@@ -445,7 +439,7 @@ struct NameMappingProjectionVisitor {
 }
 
 impl NameMappingProjectionVisitor {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             current_path: Vec::new(),
         }
@@ -516,7 +510,7 @@ impl SchemaWithPartnerVisitor<MappedField> for NameMappingProjectionVisitor {
         Ok(())
     }
 
-    // TODO: implement schema and field functions
+    // TODO: implement schema, field, and struct functions
     fn schema(
         &mut self,
         _schema: &Schema,
