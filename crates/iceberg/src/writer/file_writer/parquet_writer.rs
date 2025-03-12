@@ -525,7 +525,9 @@ impl FileWriter for ParquetWriter {
 
         self.current_row_num += batch.num_rows();
 
-        self.nan_value_count_visitor.compute(self.schema.clone(), batch)?;
+        // TODO(feniljain): Confirm if this `clone` is okay to perform
+        let batch_c = batch.clone();
+        self.nan_value_count_visitor.compute(self.schema.clone(), batch_c)?;
 
         // Lazy initialize the writer
         let writer = if let Some(writer) = &mut self.inner_writer {
@@ -1633,7 +1635,7 @@ mod tests {
             MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
-        //
+
         // prepare data
         let arrow_schema = {
             let fields = vec![
