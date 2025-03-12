@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains rest catalog implementation.
+//! This module contains the iceberg REST catalog implementation.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -35,11 +35,13 @@ use reqwest::{Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
-use crate::client::HttpClient;
+use crate::client::{
+    deserialize_catalog_response, deserialize_unexpected_catalog_error, HttpClient,
+};
 use crate::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest, ErrorResponse,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateTableRequest,
     ListNamespaceResponse, ListTableResponse, LoadTableResponse, NamespaceSerde,
-    RenameTableRequest, NO_CONTENT, OK,
+    RenameTableRequest,
 };
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
@@ -50,6 +52,7 @@ const PATH_V1: &str = "v1";
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RestCatalogConfig {
     uri: String,
+
     #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
     warehouse: Option<String>,
 
@@ -105,13 +108,13 @@ impl RestCatalogConfig {
 
     /// Get the token from the config.
     ///
-    /// Client will use `token` to send requests if exists.
+    /// The client can use this token to send requests.
     pub(crate) fn token(&self) -> Option<String> {
         self.props.get("token").cloned()
     }
 
-    /// Get the credentials from the config. Client will use `credential`
-    /// to fetch a new token if exists.
+    /// Get the credentials from the config. The client can use these credentials to fetch a new
+    /// token.
     ///
     /// ## Output
     ///
@@ -129,14 +132,12 @@ impl RestCatalogConfig {
         }
     }
 
-    /// Get the extra headers from config.
-    ///
-    /// We will include:
+    /// Get the extra headers from config, which includes:
     ///
     /// - `content-type`
     /// - `x-client-version`
-    /// - `user-agnet`
-    /// - all headers specified by `header.xxx` in props.
+    /// - `user-agent`
+    /// - All headers specified by `header.xxx` in props.
     pub(crate) fn extra_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::from_iter([
             (
@@ -156,9 +157,7 @@ impl RestCatalogConfig {
         for (key, value) in self
             .props
             .iter()
-            .filter(|(k, _)| k.starts_with("header."))
-            // The unwrap here is same since we are filtering the keys
-            .map(|(k, v)| (k.strip_prefix("header.").unwrap(), v))
+            .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
         {
             headers.insert(
                 HeaderName::from_str(key).map_err(|e| {
@@ -181,7 +180,7 @@ impl RestCatalogConfig {
         Ok(headers)
     }
 
-    /// Get the optional oauth headers from the config.
+    /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
         let mut params = HashMap::new();
 
@@ -197,10 +196,11 @@ impl RestCatalogConfig {
                 params.insert(param_name.to_string(), value.to_string());
             }
         }
+
         params
     }
 
-    /// Merge the config with the given config fetched from rest server.
+    /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
         if let Some(uri) = config.overrides.remove("uri") {
             self.uri = uri;
@@ -218,14 +218,11 @@ impl RestCatalogConfig {
 #[derive(Debug)]
 struct RestContext {
     client: HttpClient,
-
     /// Runtime config is fetched from rest server and stored here.
     ///
     /// It's could be different from the user config.
     config: RestCatalogConfig,
 }
-
-impl RestContext {}
 
 /// Rest catalog implementation.
 #[derive(Debug)]
@@ -238,7 +235,7 @@ pub struct RestCatalog {
 }
 
 impl RestCatalog {
-    /// Creates a rest catalog from config.
+    /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
     pub fn new(config: RestCatalogConfig) -> Self {
         Self {
             user_config: config,
@@ -246,7 +243,7 @@ impl RestCatalog {
         }
     }
 
-    /// Get the context from the catalog.
+    /// Gets the [`RestContext`] from the catalog.
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
@@ -260,24 +257,27 @@ impl RestCatalog {
             .await
     }
 
-    /// Load the runtime config from the server by user_config.
+    /// Load the runtime config from the server by `user_config`.
     ///
-    /// It's required for a rest catalog to update it's config after creation.
+    /// It's required for a REST catalog to update its config after creation.
     async fn load_config(
         client: &HttpClient,
         user_config: &RestCatalogConfig,
     ) -> Result<CatalogConfig> {
-        let mut request = client.request(Method::GET, user_config.config_endpoint());
+        let mut request_builder = client.request(Method::GET, user_config.config_endpoint());
 
         if let Some(warehouse_location) = &user_config.warehouse {
-            request = request.query(&[("warehouse", warehouse_location)]);
+            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
         }
 
-        let config = client
-            .query::<CatalogConfig, ErrorResponse, OK>(request.build()?)
-            .await?;
+        let request = request_builder.build()?;
 
-        Ok(config)
+        let http_response = client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response).await,
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     async fn load_file_io(
@@ -312,90 +312,118 @@ impl RestCatalog {
     }
 }
 
+/// All requests and expected responses are derived from the REST catalog API spec:
+/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
 #[async_trait]
 impl Catalog for RestCatalog {
-    /// List namespaces from table.
     async fn list_namespaces(
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let mut request = self.context().await?.client.request(
-            Method::GET,
-            self.context().await?.config.namespaces_endpoint(),
-        );
-        if let Some(ns) = parent {
-            request = request.query(&[("parent", ns.to_url_string())]);
-        }
+        let context = self.context().await?;
 
-        let resp = self
-            .context()
-            .await?
+        let mut request_builder = context
             .client
-            .query::<ListNamespaceResponse, ErrorResponse, OK>(request.build()?)
-            .await?;
+            .request(Method::GET, context.config.namespaces_endpoint());
+        // Filter on `parent={namespace}` if a parent namespace exists.
+        if let Some(namespace) = parent {
+            request_builder = request_builder.query(&[("parent", namespace.to_url_string())]);
+        }
+        let request = request_builder.build()?;
 
-        resp.namespaces
-            .into_iter()
-            .map(NamespaceIdent::from_vec)
-            .collect::<Result<Vec<NamespaceIdent>>>()
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<ListNamespaceResponse>(http_response).await?;
+                response
+                    .namespaces
+                    .into_iter()
+                    .map(NamespaceIdent::from_vec)
+                    .collect::<Result<Vec<NamespaceIdent>>>()
+            }
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "The parent parameter of the namespace provided does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// Create a new namespace inside the catalog.
     async fn create_namespace(
         &self,
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::POST,
-                self.context().await?.config.namespaces_endpoint(),
-            )
+            .request(Method::POST, context.config.namespaces_endpoint())
             .json(&NamespaceSerde {
                 namespace: namespace.as_ref().clone(),
                 properties: Some(properties),
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<NamespaceSerde, ErrorResponse, OK>(request)
-            .await?;
+        let http_response = context.client.query_catalog(request).await?;
 
-        Namespace::try_from(resp)
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
+                Namespace::try_from(response)
+            }
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to create a namespace that already exists",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// Get a namespace information from the catalog.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::GET,
-                self.context().await?.config.namespace_endpoint(namespace),
-            )
+            .request(Method::GET, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<NamespaceSerde, ErrorResponse, OK>(request)
-            .await?;
-        Namespace::try_from(resp)
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => {
+                let response =
+                    deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
+                Namespace::try_from(response)
+            }
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to get a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// Update a namespace inside the catalog.
-    ///
-    /// # Behavior
-    ///
-    /// The properties must be the full set of namespace.
+    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(Method::HEAD, context.config.namespace_endpoint(ns))
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
+    }
+
     async fn update_namespace(
         &self,
         _namespace: &NamespaceIdent,
@@ -407,67 +435,48 @@ impl Catalog for RestCatalog {
         ))
     }
 
-    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let request = self
-            .context()
-            .await?
-            .client
-            .request(
-                Method::HEAD,
-                self.context().await?.config.namespace_endpoint(ns),
-            )
-            .build()?;
-
-        self.context()
-            .await?
-            .client
-            .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
-                StatusCode::NO_CONTENT => Some(true),
-                StatusCode::NOT_FOUND => Some(false),
-                _ => None,
-            })
-            .await
-    }
-
-    /// Drop a namespace from the catalog.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::DELETE,
-                self.context().await?.config.namespace_endpoint(namespace),
-            )
+            .request(Method::DELETE, context.config.namespace_endpoint(namespace))
             .build()?;
 
-        self.context()
-            .await?
-            .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
-            .await
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to drop a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// List tables from namespace.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::GET,
-                self.context().await?.config.tables_endpoint(namespace),
-            )
+            .request(Method::GET, context.config.tables_endpoint(namespace))
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<ListTableResponse, ErrorResponse, OK>(request)
-            .await?;
+        let http_response = context.client.query_catalog(request).await?;
 
-        Ok(resp.identifiers)
+        match http_response.status() {
+            StatusCode::OK => Ok(
+                deserialize_catalog_response::<ListTableResponse>(http_response)
+                    .await?
+                    .identifiers,
+            ),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to list tables of a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Create a new table inside the namespace.
@@ -481,23 +490,19 @@ impl Catalog for RestCatalog {
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
+        let context = self.context().await?;
+
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
-        let request = self
-            .context()
-            .await?
+        let request = context
             .client
-            .request(
-                Method::POST,
-                self.context().await?.config.tables_endpoint(namespace),
-            )
+            .request(Method::POST, context.config.tables_endpoint(namespace))
             .json(&CreateTableRequest {
                 name: creation.name,
                 location: creation.location,
                 schema: creation.schema,
                 partition_spec: creation.partition_spec,
                 write_order: creation.sort_order,
-                // We don't support stage create yet.
                 stage_create: Some(false),
                 properties: if creation.properties.is_empty() {
                     None
@@ -507,14 +512,33 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<LoadTableResponse, ErrorResponse, OK>(request)
-            .await?;
+        let http_response = context.client.query_catalog(request).await?;
 
-        let config = resp
+        let response = match http_response.status() {
+            StatusCode::OK => {
+                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to create a table under a namespace that does not exist",
+                ))
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "The table already exists",
+                ))
+            }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+        };
+
+        let metadata_location = response.metadata_location.as_ref().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            "Metadata location missing in `create_table` response!",
+        ))?;
+
+        let config = response
             .config
             .unwrap_or_default()
             .into_iter()
@@ -522,47 +546,51 @@ impl Catalog for RestCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), Some(config))
+            .load_file_io(Some(metadata_location), Some(config))
             .await?;
 
-        Table::builder()
-            .identifier(table_ident)
+        let table_builder = Table::builder()
+            .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(resp.metadata)
-            .metadata_location(resp.metadata_location.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Metadata location missing in create table response!",
-                )
-            })?)
-            .build()
+            .metadata(response.metadata);
+
+        if let Some(metadata_location) = response.metadata_location {
+            table_builder.metadata_location(metadata_location).build()
+        } else {
+            table_builder.build()
+        }
     }
 
     /// Load table from the catalog.
     ///
-    /// If there are any config properties that are present in
-    /// both the response from the REST server and the config provided
-    /// when creating this `RestCatalog` instance then the value
+    /// If there are any config properties that are present in both the response from the REST
+    /// server and the config provided when creating this `RestCatalog` instance, then the value
     /// provided locally to the `RestCatalog` will take precedence.
-    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
-        let request = self
-            .context()
-            .await?
+
+    async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::GET,
-                self.context().await?.config.table_endpoint(table),
-            )
+            .request(Method::GET, context.config.table_endpoint(table_ident))
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<LoadTableResponse, ErrorResponse, OK>(request)
-            .await?;
+        let http_response = context.client.query_catalog(request).await?;
 
-        let config = resp
+        let response = match http_response.status() {
+            StatusCode::OK | StatusCode::NOT_MODIFIED => {
+                deserialize_catalog_response::<LoadTableResponse>(http_response).await?
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to load a table that does not exist",
+                ))
+            }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+        };
+
+        let config = response
             .config
             .unwrap_or_default()
             .into_iter()
@@ -570,15 +598,15 @@ impl Catalog for RestCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(resp.metadata_location.as_deref(), Some(config))
+            .load_file_io(response.metadata_location.as_deref(), Some(config))
             .await?;
 
         let table_builder = Table::builder()
-            .identifier(table.clone())
+            .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(resp.metadata);
+            .metadata(response.metadata);
 
-        if let Some(metadata_location) = resp.metadata_location {
+        if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
         } else {
             table_builder.build()
@@ -587,81 +615,80 @@ impl Catalog for RestCatalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::DELETE,
-                self.context().await?.config.table_endpoint(table),
-            )
+            .request(Method::DELETE, context.config.table_endpoint(table))
             .build()?;
 
-        self.context()
-            .await?
-            .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
-            .await
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to drop a table that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::HEAD,
-                self.context().await?.config.table_endpoint(table),
-            )
+            .request(Method::HEAD, context.config.table_endpoint(table))
             .build()?;
 
-        self.context()
-            .await?
-            .client
-            .do_execute::<bool, ErrorResponse>(request, |resp| match resp.status() {
-                StatusCode::NO_CONTENT => Some(true),
-                StatusCode::NOT_FOUND => Some(false),
-                _ => None,
-            })
-            .await
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
     /// Rename a table in the catalog.
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
-            .request(
-                Method::POST,
-                self.context().await?.config.rename_table_endpoint(),
-            )
+            .request(Method::POST, context.config.rename_table_endpoint())
             .json(&RenameTableRequest {
                 source: src.clone(),
                 destination: dest.clone(),
             })
             .build()?;
 
-        self.context()
-            .await?
-            .client
-            .execute::<ErrorResponse, NO_CONTENT>(request)
-            .await
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to rename a table that does not exist (is the namespace correct?)",
+            )),
+            StatusCode::CONFLICT => Err(Error::new(
+                ErrorKind::Unexpected,
+                "Tried to rename a table to a name that already exists",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(http_response).await),
+        }
     }
 
-    /// Update table.
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
-        let request = self
-            .context()
-            .await?
+        let context = self.context().await?;
+
+        let request = context
             .client
             .request(
                 Method::POST,
-                self.context()
-                    .await?
-                    .config
-                    .table_endpoint(commit.identifier()),
+                context.config.table_endpoint(commit.identifier()),
             )
             .json(&CommitTableRequest {
                 identifier: commit.identifier().clone(),
@@ -670,21 +697,54 @@ impl Catalog for RestCatalog {
             })
             .build()?;
 
-        let resp = self
-            .context()
-            .await?
-            .client
-            .query::<CommitTableResponse, ErrorResponse, OK>(request)
-            .await?;
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response: CommitTableResponse = match http_response.status() {
+            StatusCode::OK => {
+                deserialize_catalog_response(http_response).await?
+            }
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Tried to update a table that does not exist",
+                ))
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "CommitFailedException, one or more requirements failed. The client may retry.",
+                ))
+            }
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "An unknown server-side problem occurred; the commit state is unknown.",
+                ))
+            }
+            StatusCode::BAD_GATEWAY => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
+                ))
+            }
+            StatusCode::GATEWAY_TIMEOUT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A server-side gateway timeout occurred; the commit state is unknown.",
+                ))
+            }
+            _ => return Err(deserialize_unexpected_catalog_error(http_response).await),
+        };
 
         let file_io = self
-            .load_file_io(Some(&resp.metadata_location), None)
+            .load_file_io(Some(&response.metadata_location), None)
             .await?;
+
         Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
-            .metadata(resp.metadata)
-            .metadata_location(resp.metadata_location)
+            .metadata(response.metadata)
+            .metadata_location(response.metadata_location)
             .build()
     }
 }
@@ -1418,11 +1478,7 @@ mod tests {
             .await;
 
         assert!(table.is_err());
-        assert!(table
-            .err()
-            .unwrap()
-            .message()
-            .contains("Table does not exist"));
+        assert!(table.err().unwrap().message().contains("does not exist"));
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
@@ -1619,7 +1675,7 @@ mod tests {
             .err()
             .unwrap()
             .message()
-            .contains("Table already exists"));
+            .contains("already exists"));
 
         config_mock.assert_async().await;
         create_table_mock.assert_async().await;
@@ -1799,7 +1855,7 @@ mod tests {
             .err()
             .unwrap()
             .message()
-            .contains("The given table does not exist"));
+            .contains("does not exist"));
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;

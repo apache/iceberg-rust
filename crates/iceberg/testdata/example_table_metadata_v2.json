@@ -7,7 +7,12 @@
   "last-column-id": 3,
   "current-schema-id": 1,
   "schemas": [
-    {"type": "struct", "schema-id": 0, "fields": [{"id": 1, "name": "x", "required": true, "type": "long"}]},
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {"id": 1, "name": "x", "required": true, "type": "long"}
+      ]},
     {
       "type": "struct",
       "schema-id": 1,
@@ -25,7 +30,14 @@
     }
   ],
   "default-spec-id": 0,
-  "partition-specs": [{"spec-id": 0, "fields": [{"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000}]}],
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000}
+      ]
+    }
+  ],
   "last-partition-id": 1000,
   "default-sort-order-id": 3,
   "sort-orders": [

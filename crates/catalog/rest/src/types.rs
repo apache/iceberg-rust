@@ -23,9 +23,6 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
-pub(super) const OK: u16 = 200u16;
-pub(super) const NO_CONTENT: u16 = 204u16;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,

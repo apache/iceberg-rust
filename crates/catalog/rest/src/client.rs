@@ -19,12 +19,13 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Mutex;
 
+use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 
-use crate::types::{ErrorResponse, TokenResponse, OK};
+use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
 
 pub(crate) struct HttpClient {
@@ -58,7 +59,6 @@ impl HttpClient {
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
             client: Client::new(),
-
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -74,7 +74,6 @@ impl HttpClient {
     pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
         Ok(HttpClient {
             client: self.client,
-
             token: Mutex::new(
                 cfg.token()
                     .or_else(|| self.token.into_inner().ok().flatten()),
@@ -164,7 +163,7 @@ impl HttpClient {
         let auth_url = auth_req.url().clone();
         let auth_resp = self.client.execute(auth_req).await?;
 
-        let auth_res: TokenResponse = if auth_resp.status().as_u16() == OK {
+        let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
             let text = auth_resp
                 .bytes()
                 .await
@@ -186,15 +185,12 @@ impl HttpClient {
                 .await
                 .map_err(|err| err.with_url(auth_url.clone()))?;
             let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("code", code.to_string())
-                .with_context("operation", "auth")
-                .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
+                Error::new(ErrorKind::Unexpected, "Received unexpected response")
+                    .with_context("code", code.to_string())
+                    .with_context("operation", "auth")
+                    .with_context("url", auth_url.to_string())
+                    .with_context("json", String::from_utf8_lossy(&text))
+                    .with_source(e)
             })?;
             Err(Error::from(e))
         }?;
@@ -221,124 +217,42 @@ impl HttpClient {
         self.client.request(method, url)
     }
 
-    pub async fn query<
-        R: DeserializeOwned,
-        E: DeserializeOwned + Into<Error>,
-        const SUCCESS_CODE: u16,
-    >(
-        &self,
-        mut request: Request,
-    ) -> Result<R> {
+    // Queries the Iceberg REST catalog after authentication with the given `Request` and
+    // returns a `Response`.
+    pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
         self.authenticate(&mut request).await?;
-
-        let method = request.method().clone();
-        let url = request.url().clone();
-
-        let resp = self.client.execute(request).await?;
-
-        if resp.status().as_u16() == SUCCESS_CODE {
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            Ok(serde_json::from_slice::<R>(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("method", method.to_string())
-                .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?)
-        } else {
-            let code = resp.status();
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("code", code.to_string())
-                .with_context("method", method.to_string())
-                .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?;
-            Err(e.into())
-        }
+        Ok(self.client.execute(request).await?)
     }
+}
 
-    pub async fn execute<E: DeserializeOwned + Into<Error>, const SUCCESS_CODE: u16>(
-        &self,
-        mut request: Request,
-    ) -> Result<()> {
-        self.authenticate(&mut request).await?;
+/// Deserializes a catalog response into the given [`DeserializedOwned`] type.
+///
+/// Returns an error if unable to parse the response bytes.
+pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
+    response: Response,
+) -> Result<R> {
+    let bytes = response.bytes().await?;
 
-        let method = request.method().clone();
-        let url = request.url().clone();
+    serde_json::from_slice::<R>(&bytes).map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Failed to parse response from rest catalog server",
+        )
+        .with_context("json", String::from_utf8_lossy(&bytes))
+        .with_source(e)
+    })
+}
 
-        let resp = self.client.execute(request).await?;
+/// Deserializes a unexpected catalog response into an error.
+///
+/// TODO: Eventually, this function should return an error response that is custom to the error
+/// codes that all endpoints share (400, 404, etc.).
+pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => return err.into(),
+    };
 
-        if resp.status().as_u16() == SUCCESS_CODE {
-            Ok(())
-        } else {
-            let code = resp.status();
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("code", code.to_string())
-                .with_context("method", method.to_string())
-                .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?;
-            Err(e.into())
-        }
-    }
-
-    /// More generic logic handling for special cases like head.
-    pub async fn do_execute<R, E: DeserializeOwned + Into<Error>>(
-        &self,
-        mut request: Request,
-        handler: impl FnOnce(&Response) -> Option<R>,
-    ) -> Result<R> {
-        self.authenticate(&mut request).await?;
-
-        let method = request.method().clone();
-        let url = request.url().clone();
-
-        let resp = self.client.execute(request).await?;
-
-        if let Some(ret) = handler(&resp) {
-            Ok(ret)
-        } else {
-            let code = resp.status();
-            let text = resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(url.clone()))?;
-            let e = serde_json::from_slice::<E>(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("code", code.to_string())
-                .with_context("method", method.to_string())
-                .with_context("url", url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?;
-            Err(e.into())
-        }
-    }
+    Error::new(ErrorKind::Unexpected, "Received unexpected response")
+        .with_context("json", String::from_utf8_lossy(&bytes))
 }
