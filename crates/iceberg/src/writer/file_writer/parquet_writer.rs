@@ -317,8 +317,6 @@ impl MinMaxColAggregator {
     }
 }
 
-// TODO(feniljain): Think do we need to add nan_value_counts to `parquet_files_to_data_files` and
-// `parquet_to_data_file_builder` too?
 impl ParquetWriter {
     /// Converts parquet files to data files
     #[allow(dead_code)]
@@ -525,7 +523,6 @@ impl FileWriter for ParquetWriter {
 
         self.current_row_num += batch.num_rows();
 
-        // TODO(feniljain): Confirm if this `clone` is okay to perform
         let batch_c = batch.clone();
         self.nan_value_count_visitor.compute(self.schema.clone(), batch_c)?;
 

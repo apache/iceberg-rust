@@ -425,7 +425,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     }
 }
 
-/// TODO(feniljain)
+/// Partner type representing accessing and walking arrow arrays alongside iceberg schema
 pub struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
