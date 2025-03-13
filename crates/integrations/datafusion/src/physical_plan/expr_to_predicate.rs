@@ -220,20 +220,31 @@ fn scalar_value_to_datum(value: &ScalarValue) -> Option<Datum> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::DFSchema;
     use datafusion::logical_expr::utils::split_conjunction;
     use datafusion::prelude::{Expr, SessionContext};
     use iceberg::expr::{Predicate, Reference};
     use iceberg::spec::Datum;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::convert_filters_to_predicate;
 
     fn create_test_schema() -> DFSchema {
         let arrow_schema = Schema::new(vec![
-            Field::new("foo", DataType::Int32, true),
-            Field::new("bar", DataType::Utf8, true),
-            Field::new("ts", DataType::Timestamp(TimeUnit::Second, None), true),
+            Field::new("foo", DataType::Int32, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("bar", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Second, None), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+            ),
         ]);
         DFSchema::try_from_qualified_schema("my_table", &arrow_schema).unwrap()
     }
