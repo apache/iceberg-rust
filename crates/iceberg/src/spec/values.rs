@@ -2231,6 +2231,8 @@ mod timestamptz {
 }
 
 mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -2241,7 +2243,7 @@ mod _serde {
     use crate::spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME};
     use crate::{Error, ErrorKind};
 
-    #[derive(SerializeDerive, DeserializeDerive, Debug)]
+    #[derive(SerializeDerive, DeserializeDerive, Debug, Clone)]
     #[serde(transparent)]
     /// Raw literal representation used for serde. The serialize way is used for Avro serializer.
     pub struct RawLiteral(RawLiteralEnum);
@@ -2826,22 +2828,24 @@ mod _serde {
                     optional: _,
                 }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<Option<Literal>> = required
-                            .into_iter()
-                            .map(|(field_name, value)| {
-                                let field = struct_ty
-                                    .field_by_name(field_name.as_str())
-                                    .ok_or_else(|| {
-                                        invalid_err_with_reason(
-                                            "record",
-                                            &format!("field {} is not exist", &field_name),
-                                        )
-                                    })?;
-                                let value = value.try_into(&field.field_type)?;
-                                Ok(value)
+                        let mut value_map: HashMap<String, RawLiteralEnum> =
+                            required.into_iter().collect();
+                        let values = struct_ty
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                if let Some(raw_value) = value_map.remove(&f.name) {
+                                    let value = raw_value.try_into(&f.field_type)?;
+                                    Ok(value)
+                                } else {
+                                    Err(invalid_err_with_reason(
+                                        "record",
+                                        &format!("field {} is not exist", &f.name),
+                                    ))
+                                }
                             })
-                            .collect::<Result<_, Error>>()?;
-                        Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
+                            .collect::<Result<Vec<_>, Error>>()?;
+                        Ok(Some(Literal::Struct(super::Struct::from_iter(values))))
                     }
                     Type::Map(map_ty) => {
                         if *map_ty.key_field.field_type != Type::Primitive(PrimitiveType::String) {

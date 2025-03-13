@@ -98,7 +98,8 @@ impl ManifestEntryV1 {
 
 #[serde_as]
 #[derive(Serialize, Deserialize)]
-pub(super) struct DataFileSerde {
+/// Data file
+pub struct DataFileSerde {
     #[serde(default)]
     content: i32,
     file_path: String,
@@ -122,6 +123,7 @@ pub(super) struct DataFileSerde {
 }
 
 impl DataFileSerde {
+    /// Try to convert a `super::DataFile` to a `DataFileSerde`.
     pub fn try_from(
         value: super::DataFile,
         partition_type: &StructType,
@@ -152,6 +154,7 @@ impl DataFileSerde {
         })
     }
 
+    /// Try to convert a `DataFileSerde` to a `super::DataFile`.
     pub fn try_into(
         self,
         partition_spec_id: i32,
@@ -220,7 +223,7 @@ impl DataFileSerde {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 struct BytesEntry {
     key: i32,
@@ -261,7 +264,7 @@ fn to_bytes_entry(v: impl IntoIterator<Item = (i32, Datum)>) -> Result<Vec<Bytes
     Ok(bs)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 struct I64Entry {
     key: i32,
