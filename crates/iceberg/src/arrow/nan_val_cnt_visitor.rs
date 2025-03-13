@@ -31,7 +31,7 @@ macro_rules! cast_and_update_cnt_map {
                 v.insert(nan_val_cnt);
             }
         };
-    }
+    };
 }
 
 macro_rules! count_float_nans {
@@ -141,12 +141,18 @@ impl NanValueCountVisitor {
 
         let struct_arr = Arc::new(StructArray::from(batch)) as ArrayRef;
         visit_struct_with_partner(
-            &schema.as_struct(),
+            schema.as_struct(),
             &struct_arr,
             self,
             &arrow_arr_partner_accessor,
         )?;
 
         Ok(())
+    }
+}
+
+impl Default for NanValueCountVisitor {
+    fn default() -> Self {
+        Self::new()
     }
 }

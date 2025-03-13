@@ -38,7 +38,7 @@ use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, ArrowFileReader,
-    DEFAULT_MAP_FIELD_NAME, NanValueCountVisitor,
+    NanValueCountVisitor, DEFAULT_MAP_FIELD_NAME,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
@@ -524,7 +524,8 @@ impl FileWriter for ParquetWriter {
         self.current_row_num += batch.num_rows();
 
         let batch_c = batch.clone();
-        self.nan_value_count_visitor.compute(self.schema.clone(), batch_c)?;
+        self.nan_value_count_visitor
+            .compute(self.schema.clone(), batch_c)?;
 
         // Lazy initialize the writer
         let writer = if let Some(writer) = &mut self.inner_writer {
@@ -635,8 +636,8 @@ mod tests {
     use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
     use arrow_array::types::{Float32Type, Int64Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Int32Array, Int64Array,
-        ListArray, RecordBatch, StructArray, MapArray, Float64Array,
+        Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
+        Int64Array, ListArray, MapArray, RecordBatch, StructArray,
     };
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
