@@ -33,7 +33,7 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
-pub trait SnapshotProduceOperation: Send + Sync {
+pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
     #[allow(unused)]
     fn delete_entries(
@@ -46,7 +46,7 @@ pub trait SnapshotProduceOperation: Send + Sync {
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
-pub struct DefaultManifestProcess;
+pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
     fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile> {
@@ -54,11 +54,11 @@ impl ManifestProcess for DefaultManifestProcess {
     }
 }
 
-pub trait ManifestProcess: Send + Sync {
+pub(crate) trait ManifestProcess: Send + Sync {
     fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
 }
 
-pub struct SnapshotProduceAction<'a> {
+pub(crate) struct SnapshotProduceAction<'a> {
     pub tx: Transaction<'a>,
     snapshot_id: i64,
     key_metadata: Vec<u8>,
