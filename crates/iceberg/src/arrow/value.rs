@@ -436,6 +436,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 "The schema partner is not a struct type",
             ));
         }
+
         Ok(schema_partner)
     }
 
@@ -453,6 +454,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     "The struct partner is not a struct array",
                 )
             })?;
+
         let field_pos = struct_array
             .fields()
             .iter()
@@ -467,6 +469,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     format!("Field id {} not found in struct array", field.id),
                 )
             })?;
+
         Ok(struct_array.column(field_pos))
     }
 
