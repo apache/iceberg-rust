@@ -19,6 +19,8 @@
 
 mod schema;
 pub use schema::*;
+mod nan_val_cnt_visitor;
+pub use nan_val_cnt_visitor::*;
 mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
