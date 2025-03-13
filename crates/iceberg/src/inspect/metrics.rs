@@ -416,7 +416,7 @@ impl ReadableColumnMetricsStructBuilder {
     }
 }
 
-/// Helper to serve increment field ids.
+/// Helper to serve incrementing field ids.
 struct IncrementingFieldId(i32);
 
 impl IncrementingFieldId {

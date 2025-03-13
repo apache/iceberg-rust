@@ -1287,10 +1287,9 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([Some(Literal::long(100))]))
                                 .key_metadata(None)
-                                // Note:
-                                // The bounds below need to agree with the test data written below
-                                // into the Parquet file. If not, tests that rely on filter scans
-                                // fail because of wrong bounds.
+                                // Note: The bounds below need to agree with the test data written
+                                // into the Parquet file below. If not, tests that rely on filter
+                                // scans will fail because of wrong bounds.
                                 .lower_bounds(HashMap::from([
                                     (1, Datum::long(1)),
                                     (2, Datum::long(2)),
