@@ -31,10 +31,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::FileIO;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestStatus, ManifestWriter, ManifestWriterBuilder, NullOrder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType,
-    Summary, Transform, MAIN_BRANCH,
+    DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
+    ManifestListWriter, ManifestStatus, ManifestWriter, ManifestWriterBuilder, NullOrder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+    Struct, StructType, Summary, Transform, MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::utils::bin::ListPacker;
@@ -477,16 +477,22 @@ impl ManifestProcess for DefaultManifestProcess {
     }
 }
 
-struct MergeManifestProcess {
+struct MergeManifestManager {
     target_size_bytes: u32,
     min_count_to_merge: u32,
+    content: ManifestContentType,
 }
 
-impl MergeManifestProcess {
-    pub fn new(target_size_bytes: u32, min_count_to_merge: u32) -> Self {
+impl MergeManifestManager {
+    pub fn new(
+        target_size_bytes: u32,
+        min_count_to_merge: u32,
+        content: ManifestContentType,
+    ) -> Self {
         Self {
             target_size_bytes,
             min_count_to_merge,
+            content,
         }
     }
 
@@ -567,7 +573,7 @@ impl MergeManifestProcess {
                             Box<dyn Future<Output = Result<Vec<ManifestFile>>> + Send>,
                         >)
                 } else {
-                    let writer = snapshot_produce.new_manifest_writer()?;
+                    let writer = snapshot_produce.new_manifest_writer(&self.content)?;
                     let snapshot_id = snapshot_produce.snapshot_id;
                     let file_io = snapshot_produce.tx.table.file_io().clone();
                     Ok((Box::pin(async move {
@@ -620,13 +626,41 @@ impl MergeManifestProcess {
     }
 }
 
+struct MergeManifestProcess {
+    target_size_bytes: u32,
+    min_count_to_merge: u32,
+}
+
+impl MergeManifestProcess {
+    pub fn new(target_size_bytes: u32, min_count_to_merge: u32) -> Self {
+        Self {
+            target_size_bytes,
+            min_count_to_merge,
+        }
+    }
+}
+
 impl ManifestProcess for MergeManifestProcess {
     async fn process_manifest<'a>(
         &self,
         snapshot_produce: &mut SnapshotProduceAction<'a>,
         manifests: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
-        self.merge_manifest(snapshot_produce, manifests).await
+        let (unmerg_data_manifests, unmerge_delete_manifest) = manifests
+            .into_iter()
+            .partition(|m| m.content == ManifestContentType::Data);
+        let mut data_manifests = {
+            let merge_manifest_manager = MergeManifestManager::new(
+                self.target_size_bytes,
+                self.min_count_to_merge,
+                ManifestContentType::Data,
+            );
+            merge_manifest_manager
+                .merge_manifest(snapshot_produce, unmerg_data_manifests)
+                .await?
+        };
+        data_manifests.extend(unmerge_delete_manifest);
+        Ok(data_manifests)
     }
 }
 
@@ -725,7 +759,7 @@ impl<'a> SnapshotProduceAction<'a> {
         Ok(self)
     }
 
-    fn new_manifest_writer(&mut self) -> Result<ManifestWriter> {
+    fn new_manifest_writer(&mut self, content: &ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.tx.table.metadata().location(),
@@ -750,7 +784,10 @@ impl<'a> SnapshotProduceAction<'a> {
         if self.tx.table.metadata().format_version() == FormatVersion::V1 {
             Ok(builder.build_v1())
         } else {
-            Ok(builder.build_v2_data())
+            match content {
+                ManifestContentType::Data => Ok(builder.build_v2_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
+            }
         }
     }
 
@@ -770,7 +807,9 @@ impl<'a> SnapshotProduceAction<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer()?;
+        // # TODO
+        // Fix this when we support append delete type data file
+        let mut writer = self.new_manifest_writer(&ManifestContentType::Data)?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
