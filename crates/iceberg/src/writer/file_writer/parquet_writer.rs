@@ -455,7 +455,7 @@ impl ParquetWriter {
             let mut per_col_size: HashMap<i32, u64> = HashMap::new();
             let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
             let mut per_col_null_val_num: HashMap<i32, u64> = HashMap::new();
-            let mut min_max_agg = MinMaxColAggregator::new(schema.clone());
+            let mut min_max_agg = MinMaxColAggregator::new(schema);
 
             for row_group in metadata.row_groups() {
                 for column_chunk_metadata in row_group.columns() {
@@ -511,6 +511,7 @@ impl ParquetWriter {
         Ok(builder)
     }
 
+    #[allow(dead_code)]
     fn partition_value_from_statistics(
         table_spec: Arc<PartitionSpec>,
         lower_bounds: &HashMap<i32, Datum>,
@@ -545,7 +546,7 @@ impl ParquetWriter {
 
                 let transform_fn = create_transform_function(&field.transform)?;
                 let transform_literal =
-                    Literal::from(transform_fn.transform_literal_result(&lower)?);
+                    Literal::from(transform_fn.transform_literal_result(lower)?);
 
                 partition_literals.push(Some(transform_literal));
             } else {
