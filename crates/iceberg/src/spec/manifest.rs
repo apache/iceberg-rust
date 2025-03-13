@@ -1208,7 +1208,7 @@ impl ManifestEntry {
         &self.data_file
     }
 
-    /// get file sequence number
+    /// File sequence number indicating when the file was added. Inherited when null and status is 1 (added).
     #[inline]
     pub fn file_sequence_number(&self) -> Option<i64> {
         self.file_sequence_number

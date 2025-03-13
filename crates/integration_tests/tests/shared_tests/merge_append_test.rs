@@ -25,16 +25,21 @@ use iceberg::spec::{
     DataFile, ManifestEntry, ManifestStatus, NestedField, PrimitiveType, Schema, Type,
 };
 use iceberg::table::Table;
-use iceberg::transaction::{Transaction, MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT};
+use iceberg::transaction::{
+    Transaction, MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES,
+};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, Namespace, NamespaceIdent, TableCreation};
-use iceberg_integration_tests::set_test_fixture;
+use iceberg::{Catalog, TableCreation};
+use iceberg_catalog_rest::RestCatalog;
 use parquet::file::properties::WriterProperties;
+
+use crate::get_shared_containers;
+use crate::shared_tests::random_ns;
 
 async fn write_new_data_file(table: &Table) -> Vec<DataFile> {
     let schema: Arc<arrow_schema::Schema> = Arc::new(
@@ -60,9 +65,9 @@ async fn write_new_data_file(table: &Table) -> Vec<DataFile> {
     );
     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
-    let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
-    let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
-    let col3 = BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]);
+    let col1 = StringArray::from(vec![Some("foo"); 100]);
+    let col2 = Int32Array::from(vec![Some(1); 100]);
+    let col3 = BooleanArray::from(vec![Some(true); 100]);
     let batch = RecordBatch::try_new(schema.clone(), vec![
         Arc::new(col1) as ArrayRef,
         Arc::new(col2) as ArrayRef,
@@ -75,21 +80,10 @@ async fn write_new_data_file(table: &Table) -> Vec<DataFile> {
 
 #[tokio::test]
 async fn test_append_data_file() {
-    let fixture = set_test_fixture("test_create_table").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+    let ns = random_ns().await;
 
-    // Create table
-    let ns = Namespace::with_properties(
-        NamespaceIdent::from_strs(["apple", "ios"]).unwrap(),
-        HashMap::from([
-            ("owner".to_string(), "ray".to_string()),
-            ("community".to_string(), "apache".to_string()),
-        ]),
-    );
-    fixture
-        .rest_catalog
-        .create_namespace(ns.name(), ns.properties().clone())
-        .await
-        .unwrap();
     let schema = Schema::builder()
         .with_schema_id(1)
         .with_identifier_field_ids(vec![2])
@@ -104,8 +98,7 @@ async fn test_append_data_file() {
         .name("t1".to_string())
         .schema(schema.clone())
         .build();
-    let mut table = fixture
-        .rest_catalog
+    let mut table = rest_catalog
         .create_table(ns.name(), table_creation)
         .await
         .unwrap();
@@ -116,9 +109,10 @@ async fn test_append_data_file() {
         .set_properties(HashMap::from([
             (MANIFEST_MERGE_ENABLED.to_string(), "true".to_string()),
             (MANIFEST_MIN_MERGE_COUNT.to_string(), "4".to_string()),
+            (MANIFEST_TARGET_SIZE_BYTES.to_string(), "7000".to_string()),
         ]))
         .unwrap()
-        .commit(&fixture.rest_catalog)
+        .commit(&rest_catalog)
         .await
         .unwrap();
 
@@ -130,7 +124,7 @@ async fn test_append_data_file() {
         let mut append_action = tx.fast_append(None, vec![]).unwrap();
         append_action.add_data_files(data_file.clone()).unwrap();
         let tx = append_action.apply().await.unwrap();
-        table = tx.commit(&fixture.rest_catalog).await.unwrap()
+        table = tx.commit(&rest_catalog).await.unwrap()
     }
     let manifest_list = table
         .metadata()
@@ -140,22 +134,39 @@ async fn test_append_data_file() {
         .await
         .unwrap();
     assert_eq!(manifest_list.entries().len(), 3);
-    for entry in manifest_list.entries() {
+
+    // construct test data
+    for (idx, entry) in manifest_list.entries().iter().enumerate() {
         let manifest = entry.load_manifest(table.file_io()).await.unwrap();
         assert!(manifest.entries().len() == 1);
 
-        original_manifest_entries.push(Arc::new(
-            ManifestEntry::builder()
-                .status(ManifestStatus::Existing)
-                .snapshot_id(manifest.entries()[0].snapshot_id().unwrap())
-                .sequence_number(manifest.entries()[0].sequence_number().unwrap())
-                .file_sequence_number(manifest.entries()[0].file_sequence_number().unwrap())
-                .data_file(manifest.entries()[0].data_file().clone())
-                .build(),
-        ));
+        // For this first manifest, it will be pack with the first additional manifest and
+        // the count(2) is less than the min merge count(4), so these two will not merge.
+        // See detail: `MergeManifestProcess::merge_group`
+        if idx == 0 {
+            original_manifest_entries.push(Arc::new(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .snapshot_id(manifest.entries()[0].snapshot_id().unwrap())
+                    .sequence_number(manifest.entries()[0].sequence_number().unwrap())
+                    .file_sequence_number(manifest.entries()[0].file_sequence_number().unwrap())
+                    .data_file(manifest.entries()[0].data_file().clone())
+                    .build(),
+            ));
+        } else {
+            original_manifest_entries.push(Arc::new(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Existing)
+                    .snapshot_id(manifest.entries()[0].snapshot_id().unwrap())
+                    .sequence_number(manifest.entries()[0].sequence_number().unwrap())
+                    .file_sequence_number(manifest.entries()[0].file_sequence_number().unwrap())
+                    .data_file(manifest.entries()[0].data_file().clone())
+                    .build(),
+            ));
+        }
     }
 
-    // append data file with merge append, 4 data file will be merged to one manifest
+    // append data file with merge append, 4 data file will be merged to two manifest
     let data_file = write_new_data_file(&table).await;
     let tx = Transaction::new(&table);
     let mut merge_append_action = tx.merge_append(None, vec![]).unwrap();
@@ -163,7 +174,8 @@ async fn test_append_data_file() {
         .add_data_files(data_file.clone())
         .unwrap();
     let tx = merge_append_action.apply().await.unwrap();
-    table = tx.commit(&fixture.rest_catalog).await.unwrap();
+    table = tx.commit(&rest_catalog).await.unwrap();
+    // Check manifest file
     let manifest_list = table
         .metadata()
         .current_snapshot()
@@ -171,13 +183,24 @@ async fn test_append_data_file() {
         .load_manifest_list(table.file_io(), table.metadata())
         .await
         .unwrap();
-    assert_eq!(manifest_list.entries().len(), 1);
-    let manifest = manifest_list.entries()[0]
-        .load_manifest(table.file_io())
-        .await
-        .unwrap();
-    assert!(manifest.entries().len() == 4);
-    for original_entry in original_manifest_entries.iter() {
-        assert!(manifest.entries().contains(original_entry));
+    assert_eq!(manifest_list.entries().len(), 3);
+    {
+        let manifest = manifest_list.entries()[1]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
+        assert!(manifest.entries().len() == 1);
+        original_manifest_entries.retain(|entry| !manifest.entries().contains(entry));
+        assert!(original_manifest_entries.len() == 2);
+    }
+    {
+        let manifest = manifest_list.entries()[2]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
+        assert!(manifest.entries().len() == 2);
+        for original_entry in original_manifest_entries.iter() {
+            assert!(manifest.entries().contains(original_entry));
+        }
     }
 }

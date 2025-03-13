@@ -399,7 +399,7 @@ impl<'a> MergeAppendAction<'a> {
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(self) -> Result<Transaction<'a>> {
         if self.merge_enabled {
-            let process = MergeManifsetProcess {
+            let process = MergeManifestProcess {
                 target_size_bytes: self.target_size_bytes,
                 min_count_to_merge: self.min_count_to_merge,
             };
@@ -468,7 +468,7 @@ trait SnapshotProduceOperation: Send + Sync {
 struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    async fn process_manifeset<'a>(
+    async fn process_manifest<'a>(
         &self,
         _snapshot_producer: &mut SnapshotProduceAction<'a>,
         manifests: Vec<ManifestFile>,
@@ -477,12 +477,12 @@ impl ManifestProcess for DefaultManifestProcess {
     }
 }
 
-struct MergeManifsetProcess {
+struct MergeManifestProcess {
     target_size_bytes: u32,
     min_count_to_merge: u32,
 }
 
-impl MergeManifsetProcess {
+impl MergeManifestProcess {
     pub fn new(target_size_bytes: u32, min_count_to_merge: u32) -> Self {
         Self {
             target_size_bytes,
@@ -508,8 +508,8 @@ impl MergeManifsetProcess {
         manifest_bin: Vec<ManifestFile>,
         mut writer: ManifestWriter,
     ) -> Result<ManifestFile> {
-        for manifset_file in manifest_bin {
-            let manifest_file = manifset_file.load_manifest(&file_io).await?;
+        for manifest_file in manifest_bin {
+            let manifest_file = manifest_file.load_manifest(&file_io).await?;
             for manifest_entry in manifest_file.entries() {
                 if manifest_entry.status() == ManifestStatus::Deleted
                     && manifest_entry
@@ -595,7 +595,7 @@ impl MergeManifsetProcess {
         Ok(merged_bins.into_iter().flatten().collect())
     }
 
-    async fn merge_manifeset<'a>(
+    async fn merge_manifest<'a>(
         &self,
         snapshot_produce: &mut SnapshotProduceAction<'a>,
         manifests: Vec<ManifestFile>,
@@ -620,18 +620,18 @@ impl MergeManifsetProcess {
     }
 }
 
-impl ManifestProcess for MergeManifsetProcess {
-    async fn process_manifeset<'a>(
+impl ManifestProcess for MergeManifestProcess {
+    async fn process_manifest<'a>(
         &self,
         snapshot_produce: &mut SnapshotProduceAction<'a>,
         manifests: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
-        self.merge_manifeset(snapshot_produce, manifests).await
+        self.merge_manifest(snapshot_produce, manifests).await
     }
 }
 
 trait ManifestProcess: Send + Sync {
-    fn process_manifeset<'a>(
+    fn process_manifest<'a>(
         &self,
         snapshot_produce: &mut SnapshotProduceAction<'a>,
         manifests: Vec<ManifestFile>,
@@ -790,7 +790,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let mut manifest_files = vec![added_manifest];
         manifest_files.extend(existing_manifests);
         manifest_process
-            .process_manifeset(self, manifest_files)
+            .process_manifest(self, manifest_files)
             .await
     }
 
