@@ -147,6 +147,12 @@ impl ManifestEntry {
     pub fn data_file(&self) -> &DataFile {
         &self.data_file
     }
+
+    /// File sequence number indicating when the file was added. Inherited when null and status is 1 (added).
+    #[inline]
+    pub fn file_sequence_number(&self) -> Option<i64> {
+        self.file_sequence_number
+    }
 }
 
 /// Used to track additions and deletions in ManifestEntry.

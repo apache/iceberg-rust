@@ -18,7 +18,7 @@
 //! This module contains transaction api.
 
 mod append;
-pub mod remove_snapshots;
+mod remove_snapshots;
 mod snapshot;
 mod sort_order;
 
@@ -27,13 +27,14 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
 
+pub use append::{MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES};
 use remove_snapshots::RemoveSnapshotAction;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::FormatVersion;
 use crate::table::Table;
-use crate::transaction::append::FastAppendAction;
+use crate::transaction::append::{FastAppendAction, MergeAppendAction};
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
@@ -176,6 +177,22 @@ impl<'a> Transaction<'a> {
             self.generate_unique_snapshot_id()
         };
         FastAppendAction::new(
+            self,
+            snapshot_id,
+            commit_uuid.unwrap_or_else(Uuid::now_v7),
+            key_metadata,
+            HashMap::new(),
+        )
+    }
+
+    /// Creates a merge append action.
+    pub fn merge_append(
+        self,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> Result<MergeAppendAction<'a>> {
+        let snapshot_id = self.generate_unique_snapshot_id();
+        MergeAppendAction::new(
             self,
             snapshot_id,
             commit_uuid.unwrap_or_else(Uuid::now_v7),
