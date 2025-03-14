@@ -357,4 +357,35 @@ async fn test_scan_all_type() {
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], batch);
+
+    // scan nested field
+    let batch_stream = table
+        .scan()
+        .select(vec!["struct.int", "struct.string"])
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap();
+    let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+    let expect_batch: RecordBatch = {
+        let array =
+            StructArray::from(vec![
+                (
+                    Arc::new(Field::new("int", DataType::Int32, false).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), 18.to_string())]),
+                    )),
+                    Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("string", DataType::Utf8, false).with_metadata(
+                        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), 19.to_string())]),
+                    )),
+                    Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef,
+                ),
+            ]);
+        array.into()
+    };
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0], expect_batch);
 }

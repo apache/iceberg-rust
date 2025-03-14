@@ -322,6 +322,36 @@ impl Schema {
         }
     }
 
+    /// Project the schema to a new schema with only the specified field ids.
+    pub fn project(&self, field_ids: &[i32]) -> Result<Schema> {
+        let mut fields = vec![];
+        let mut alias_to_id = BiHashMap::new();
+        let mut identifier_field_ids = HashSet::new();
+
+        for field_id in field_ids {
+            let field = self.field_by_id(*field_id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Field id {} does not exist in schema", field_id),
+                )
+            })?;
+            fields.push(field.clone());
+            if let Some(alias) = self.id_to_name.get(field_id) {
+                alias_to_id.insert(alias.clone(), *field_id);
+            }
+            if self.identifier_field_ids.contains(field_id) {
+                identifier_field_ids.insert(*field_id);
+            }
+        }
+
+        Schema::builder()
+            .with_schema_id(self.schema_id)
+            .with_fields(fields)
+            .with_alias(alias_to_id)
+            .with_identifier_field_ids(identifier_field_ids)
+            .build()
+    }
+
     /// Get field by field id.
     pub fn field_by_id(&self, field_id: i32) -> Option<&NestedFieldRef> {
         self.id_to_field.get(&field_id)
