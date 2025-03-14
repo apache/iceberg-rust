@@ -20,11 +20,13 @@
  */
 use std::sync::Arc;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
 use super::{NestedField, Schema, SchemaRef, StructType};
+use crate::spec::Struct;
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
@@ -151,6 +153,30 @@ impl PartitionSpec {
         }
 
         true
+    }
+
+    pub(crate) fn partition_to_path(&self, data: &Struct, schema: SchemaRef) -> String {
+        let partition_type = self.partition_type(&schema).unwrap();
+        let field_types = partition_type.fields();
+
+        self.fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let value = if data.is_null_at_index(i) {
+                    None
+                } else {
+                    Some(&data.fields()[i])
+                };
+                format!(
+                    "{}={}",
+                    field.name,
+                    field
+                        .transform
+                        .to_human_string(&field_types[i].field_type, value)
+                )
+            })
+            .join("/")
     }
 }
 
