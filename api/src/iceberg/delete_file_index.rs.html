@@ -209,6 +209,14 @@
 <a href="#209" id="209">209</a>
 <a href="#210" id="210">210</a>
 <a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -305,7 +313,15 @@
 }
 
 <span class="kw">impl </span>PopulatedDeleteFileIndex {
-    <span class="kw">fn </span>new(files: Vec&lt;DeleteFileContext&gt;) -&gt; PopulatedDeleteFileIndex {
+    <span class="doccomment">/// Creates a new populated delete file index from a list of delete file contexts, which
+    /// allows for fast lookup when determining which delete files apply to a given data file.
+    ///
+    /// 1. The partition information is extracted from each delete file's manifest entry.
+    /// 2. If the partition is empty and the delete file is not a positional delete,
+    ///    it is added to the `global_delees` vector
+    /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
+
+    </span><span class="kw">fn </span>new(files: Vec&lt;DeleteFileContext&gt;) -&gt; PopulatedDeleteFileIndex {
         <span class="kw">let </span><span class="kw-2">mut </span>eq_deletes_by_partition: HashMap&lt;Struct, Vec&lt;Arc&lt;DeleteFileContext&gt;&gt;&gt; =
             HashMap::default();
         <span class="kw">let </span><span class="kw-2">mut </span>pos_deletes_by_partition: HashMap&lt;Struct, Vec&lt;Arc&lt;DeleteFileContext&gt;&gt;&gt; =
