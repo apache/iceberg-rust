@@ -95,7 +95,7 @@ impl DeleteFileIndex {
 
 impl PopulatedDeleteFileIndex {
     /// Creates a new populated delete file index from a list of delete file contexts
-    /// 
+    ///
     /// 1. The partition information is extracted from each delete file's manifest entry.
     /// 2. If the partition is empty and the delete file is not a positional delete,
     ///    it is added to the `global_delees` vector
