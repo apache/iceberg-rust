@@ -1566,55 +1566,6 @@
 <a href="#1566" id="1566">1566</a>
 <a href="#1567" id="1567">1567</a>
 <a href="#1568" id="1568">1568</a>
-<a href="#1569" id="1569">1569</a>
-<a href="#1570" id="1570">1570</a>
-<a href="#1571" id="1571">1571</a>
-<a href="#1572" id="1572">1572</a>
-<a href="#1573" id="1573">1573</a>
-<a href="#1574" id="1574">1574</a>
-<a href="#1575" id="1575">1575</a>
-<a href="#1576" id="1576">1576</a>
-<a href="#1577" id="1577">1577</a>
-<a href="#1578" id="1578">1578</a>
-<a href="#1579" id="1579">1579</a>
-<a href="#1580" id="1580">1580</a>
-<a href="#1581" id="1581">1581</a>
-<a href="#1582" id="1582">1582</a>
-<a href="#1583" id="1583">1583</a>
-<a href="#1584" id="1584">1584</a>
-<a href="#1585" id="1585">1585</a>
-<a href="#1586" id="1586">1586</a>
-<a href="#1587" id="1587">1587</a>
-<a href="#1588" id="1588">1588</a>
-<a href="#1589" id="1589">1589</a>
-<a href="#1590" id="1590">1590</a>
-<a href="#1591" id="1591">1591</a>
-<a href="#1592" id="1592">1592</a>
-<a href="#1593" id="1593">1593</a>
-<a href="#1594" id="1594">1594</a>
-<a href="#1595" id="1595">1595</a>
-<a href="#1596" id="1596">1596</a>
-<a href="#1597" id="1597">1597</a>
-<a href="#1598" id="1598">1598</a>
-<a href="#1599" id="1599">1599</a>
-<a href="#1600" id="1600">1600</a>
-<a href="#1601" id="1601">1601</a>
-<a href="#1602" id="1602">1602</a>
-<a href="#1603" id="1603">1603</a>
-<a href="#1604" id="1604">1604</a>
-<a href="#1605" id="1605">1605</a>
-<a href="#1606" id="1606">1606</a>
-<a href="#1607" id="1607">1607</a>
-<a href="#1608" id="1608">1608</a>
-<a href="#1609" id="1609">1609</a>
-<a href="#1610" id="1610">1610</a>
-<a href="#1611" id="1611">1611</a>
-<a href="#1612" id="1612">1612</a>
-<a href="#1613" id="1613">1613</a>
-<a href="#1614" id="1614">1614</a>
-<a href="#1615" id="1615">1615</a>
-<a href="#1616" id="1616">1616</a>
-<a href="#1617" id="1617">1617</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1645,10 +1596,12 @@
 <span class="kw">use </span>parquet::arrow::async_reader::AsyncFileReader;
 <span class="kw">use </span>parquet::arrow::async_writer::AsyncFileWriter <span class="kw">as </span>ArrowAsyncFileWriter;
 <span class="kw">use </span>parquet::arrow::AsyncArrowWriter;
-<span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
+<span class="kw">use </span>parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 <span class="kw">use </span>parquet::file::properties::WriterProperties;
-<span class="kw">use </span>parquet::file::statistics::{from_thrift, Statistics};
+<span class="kw">use </span>parquet::file::statistics::Statistics;
 <span class="kw">use </span>parquet::format::FileMetaData;
+<span class="kw">use </span>parquet::thrift::{TCompactOutputProtocol, TSerializable};
+<span class="kw">use </span>thrift::protocol::TOutputProtocol;
 
 <span class="kw">use </span><span class="kw">super</span>::location_generator::{FileNameGenerator, LocationGenerator};
 <span class="kw">use </span><span class="kw">super</span>::track_writer::TrackWriter;
@@ -1969,89 +1922,27 @@
         <span class="prelude-val">Ok</span>(data_files)
     }
 
-    <span class="kw">fn </span>to_data_file_builder(
-        schema: SchemaRef,
-        metadata: FileMetaData,
-        written_size: usize,
-        file_path: String,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;DataFileBuilder&gt; {
-        <span class="kw">let </span>index_by_parquet_path = {
-            <span class="kw">let </span><span class="kw-2">mut </span>visitor = IndexByParquetPathName::new();
-            visit_schema(<span class="kw-2">&amp;</span>schema, <span class="kw-2">&amp;mut </span>visitor)<span class="question-mark">?</span>;
-            visitor
-        };
+    <span class="kw">fn </span>thrift_to_parquet_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>, file_metadata: FileMetaData) -&gt; <span class="prelude-ty">Result</span>&lt;ParquetMetaData&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
+        {
+            <span class="kw">let </span><span class="kw-2">mut </span>protocol = TCompactOutputProtocol::new(<span class="kw-2">&amp;mut </span>buffer);
+            file_metadata
+                .write_to_out_protocol(<span class="kw-2">&amp;mut </span>protocol)
+                .map_err(|err| {
+                    Error::new(ErrorKind::Unexpected, <span class="string">"Failed to write parquet metadata"</span>)
+                        .with_source(err)
+                })<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
-            <span class="kw">let </span><span class="kw-2">mut </span>per_col_size: HashMap&lt;i32, u64&gt; = HashMap::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>per_col_val_num: HashMap&lt;i32, u64&gt; = HashMap::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>per_col_null_val_num: HashMap&lt;i32, u64&gt; = HashMap::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>min_max_agg = MinMaxColAggregator::new(schema);
+            protocol.flush().map_err(|err| {
+                Error::new(ErrorKind::Unexpected, <span class="string">"Failed to flush protocol"</span>).with_source(err)
+            })<span class="question-mark">?</span>;
+        }
 
-            <span class="kw">for </span>row_group <span class="kw">in </span><span class="kw-2">&amp;</span>metadata.row_groups {
-                <span class="kw">for </span>column_chunk <span class="kw">in </span>row_group.columns.iter() {
-                    <span class="kw">let </span><span class="prelude-val">Some</span>(column_chunk_metadata) = <span class="kw-2">&amp;</span>column_chunk.meta_data <span class="kw">else </span>{
-                        <span class="kw">continue</span>;
-                    };
-                    <span class="kw">let </span>physical_type = column_chunk_metadata.type_;
-                    <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>field_id) =
-                        index_by_parquet_path.get(<span class="kw-2">&amp;</span>column_chunk_metadata.path_in_schema.join(<span class="string">"."</span>))
-                    <span class="kw">else </span>{
-                        <span class="comment">// Following java implementation: https://github.com/apache/iceberg/blob/29a2c456353a6120b8c882ed2ab544975b168d7b/parquet/src/main/java/org/apache/iceberg/parquet/ParquetUtil.java#L163
-                        // Ignore the field if it is not in schema.
-                        </span><span class="kw">continue</span>;
-                    };
-                    <span class="kw-2">*</span>per_col_size.entry(field_id).or_insert(<span class="number">0</span>) +=
-                        column_chunk_metadata.total_compressed_size <span class="kw">as </span>u64;
-                    <span class="kw-2">*</span>per_col_val_num.entry(field_id).or_insert(<span class="number">0</span>) +=
-                        column_chunk_metadata.num_values <span class="kw">as </span>u64;
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(null_count) = column_chunk_metadata
-                        .statistics
-                        .as_ref()
-                        .and_then(|s| s.null_count)
-                    {
-                        <span class="kw-2">*</span>per_col_null_val_num.entry(field_id).or_insert(<span class="number">0_u64</span>) += null_count <span class="kw">as </span>u64;
-                    }
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(statistics) = <span class="kw-2">&amp;</span>column_chunk_metadata.statistics {
-                        min_max_agg.update(
-                            field_id,
-                            from_thrift(physical_type.try_into()<span class="question-mark">?</span>, <span class="prelude-val">Some</span>(statistics.clone()))<span class="question-mark">?
-                                </span>.unwrap(),
-                        )<span class="question-mark">?</span>;
-                    }
-                }
-            }
+        <span class="kw">let </span>parquet_metadata = ParquetMetaDataReader::decode_metadata(<span class="kw-2">&amp;</span>buffer).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, <span class="string">"Failed to decode parquet metadata"</span>).with_source(err)
+        })<span class="question-mark">?</span>;
 
-            (
-                per_col_size,
-                per_col_val_num,
-                per_col_null_val_num,
-                min_max_agg.produce(),
-            )
-        };
-
-        <span class="kw">let </span><span class="kw-2">mut </span>builder = DataFileBuilder::default();
-        builder
-            .file_path(file_path)
-            .file_format(DataFileFormat::Parquet)
-            .record_count(metadata.num_rows <span class="kw">as </span>u64)
-            .file_size_in_bytes(written_size <span class="kw">as </span>u64)
-            .column_sizes(column_sizes)
-            .value_counts(value_counts)
-            .null_value_counts(null_value_counts)
-            .lower_bounds(lower_bounds)
-            .upper_bounds(upper_bounds)
-            <span class="comment">// # TODO(#417)
-            // - nan_value_counts
-            // - distinct_counts
-            </span>.key_metadata(metadata.footer_signing_key_metadata)
-            .split_offsets(
-                metadata
-                    .row_groups
-                    .iter()
-                    .filter_map(|group| group.file_offset)
-                    .collect(),
-            );
-        <span class="prelude-val">Ok</span>(builder)
+        <span class="prelude-val">Ok</span>(parquet_metadata)
     }
 
     <span class="doccomment">/// `ParquetMetadata` to data file builder
@@ -2168,19 +2059,30 @@
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">async fn </span>close(<span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Vec&lt;<span class="kw">crate</span>::spec::DataFileBuilder&gt;&gt; {
-        <span class="kw">let </span><span class="prelude-val">Some</span>(writer) = <span class="self">self</span>.inner_writer <span class="kw">else </span>{
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[]);
+    <span class="kw">async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Vec&lt;<span class="kw">crate</span>::spec::DataFileBuilder&gt;&gt; {
+        <span class="kw">let </span>writer = <span class="kw">match </span><span class="self">self</span>.inner_writer.take() {
+            <span class="prelude-val">Some</span>(writer) =&gt; writer,
+            <span class="prelude-val">None </span>=&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[]),
         };
+
         <span class="kw">let </span>metadata = writer.close().<span class="kw">await</span>.map_err(|err| {
             Error::new(ErrorKind::Unexpected, <span class="string">"Failed to close parquet writer."</span>).with_source(err)
         })<span class="question-mark">?</span>;
 
         <span class="kw">let </span>written_size = <span class="self">self</span>.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
-        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="self">Self</span>::to_data_file_builder(
+        <span class="kw">let </span>parquet_metadata =
+            Arc::new(<span class="self">self</span>.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Failed to convert metadata from thrift to parquet."</span>,
+                )
+                .with_source(err)
+            })<span class="question-mark">?</span>);
+
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="self">Self</span>::parquet_to_data_file_builder(
             <span class="self">self</span>.schema,
-            metadata,
+            parquet_metadata,
             written_size <span class="kw">as </span>usize,
             <span class="self">self</span>.out_file.location().to_string(),
         )<span class="question-mark">?</span>])
