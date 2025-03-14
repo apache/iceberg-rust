@@ -22,9 +22,11 @@ use arrow_schema::TimeUnit;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::catalog::TableProvider;
-use datafusion::error::DataFusionError;
+use datafusion::common::stats::Precision;
+use datafusion::common::{ColumnStatistics, ScalarValue, Statistics};
+use datafusion::logical_expr::{col, lit};
 use datafusion::prelude::SessionContext;
-use iceberg::{Catalog, TableIdent};
+use iceberg::{Catalog, Result, TableIdent};
 use iceberg_catalog_rest::RestCatalog;
 use iceberg_datafusion::IcebergTableProvider;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -32,22 +34,17 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use crate::get_shared_containers;
 
 #[tokio::test]
-async fn test_basic_queries() -> Result<(), DataFusionError> {
+async fn test_basic_queries() -> Result<()> {
     let fixture = get_shared_containers();
     let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
     let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "types_test"]).unwrap())
-        .await
-        .unwrap();
+        .await?;
 
     let ctx = SessionContext::new();
 
-    let table_provider = Arc::new(
-        IcebergTableProvider::try_new_from_table(table)
-            .await
-            .unwrap(),
-    );
+    let table_provider = Arc::new(IcebergTableProvider::try_new_from_table(table).await?);
 
     let schema = table_provider.schema();
 
@@ -118,13 +115,15 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
         ])
     );
 
-    ctx.register_table("types_table", table_provider)?;
+    ctx.register_table("types_table", table_provider).unwrap();
 
     let batches = ctx
         .sql("SELECT * FROM types_table ORDER BY cbigint LIMIT 3")
-        .await?
+        .await
+        .unwrap()
         .collect()
-        .await?;
+        .await
+        .unwrap();
     let expected = [
         "+----------+----------+-----------+------+---------+--------+---------+----------+------------+---------------------+----------------------+---------+----------+",
         "| cboolean | ctinyint | csmallint | cint | cbigint | cfloat | cdouble | cdecimal | cdate      | ctimestamp_ntz      | ctimestamp           | cstring | cbinary  |",
@@ -135,5 +134,83 @@ async fn test_basic_queries() -> Result<(), DataFusionError> {
         "+----------+----------+-----------+------+---------+--------+---------+----------+------------+---------------------+----------------------+---------+----------+",
     ];
     assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_statistics() -> Result<()> {
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
+
+    // Test table statistics
+    let table = rest_catalog
+        .load_table(&TableIdent::from_strs([
+            "default",
+            "test_positional_merge_on_read_double_deletes",
+        ])?)
+        .await?;
+
+    let table_provider = IcebergTableProvider::try_new_from_table(table)
+        .await?
+        .with_computed_statistics()
+        .await;
+
+    let table_stats = table_provider.statistics();
+
+    assert_eq!(
+        table_stats,
+        Some(Statistics {
+            num_rows: Precision::Inexact(12),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Date32(Some(19428))),
+                    min_value: Precision::Inexact(ScalarValue::Date32(Some(19417))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(12))),
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Inexact(0),
+                    max_value: Precision::Inexact(ScalarValue::Utf8View(Some("l".to_string()))),
+                    min_value: Precision::Inexact(ScalarValue::Utf8View(Some("a".to_string()))),
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        })
+    );
+
+    // Test plan statistics with filtering
+    let ctx = SessionContext::new();
+    let scan = table_provider
+        .scan(
+            &ctx.state(),
+            Some(&vec![1]),
+            &[col("number").gt(lit(4))],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let plan_stats = scan.statistics().unwrap();
+
+    // The estimate for the number of rows and the min value for the column are changed in response
+    // to the filtration
+    assert_eq!(plan_stats, Statistics {
+        num_rows: Precision::Inexact(8),
+        total_byte_size: Precision::Absent,
+        column_statistics: vec![ColumnStatistics {
+            null_count: Precision::Inexact(0),
+            max_value: Precision::Inexact(ScalarValue::Int32(Some(12))),
+            min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+            distinct_count: Precision::Absent,
+        },],
+    });
+
     Ok(())
 }

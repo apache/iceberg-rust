@@ -3116,6 +3116,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg-catalog-memory",
+ "log",
  "tempfile",
  "tokio",
 ]
