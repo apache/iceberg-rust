@@ -130,59 +130,14 @@ mod tests {
                 Field { name: "manifest_list", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
                 Field { name: "summary", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
             expect![[r#"
-                committed_at: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
-                [
-                  2018-01-04T21:22:35.770+00:00,
-                  2019-04-12T20:29:15.770+00:00,
-                ],
-                snapshot_id: PrimitiveArray<Int64>
-                [
-                  3051729675574597004,
-                  3055729675574597004,
-                ],
-                parent_id: PrimitiveArray<Int64>
-                [
-                  null,
-                  3051729675574597004,
-                ],
-                operation: StringArray
-                [
-                  "append",
-                  "append",
-                ],
-                manifest_list: (skipped),
-                summary: MapArray
-                [
-                  StructArray
-                -- validity: 
-                [
-                ]
-                [
-                -- child 0: "keys" (Utf8)
-                StringArray
-                [
-                ]
-                -- child 1: "values" (Utf8)
-                StringArray
-                [
-                ]
-                ],
-                  StructArray
-                -- validity: 
-                [
-                ]
-                [
-                -- child 0: "keys" (Utf8)
-                StringArray
-                [
-                ]
-                -- child 1: "values" (Utf8)
-                StringArray
-                [
-                ]
-                ],
-                ]"#]],
+                +--------------------------+---------------------+---------------------+-----------+---------+
+                | committed_at             | snapshot_id         | parent_id           | operation | summary |
+                +--------------------------+---------------------+---------------------+-----------+---------+
+                | 2018-01-04T21:22:35.770Z | 3051729675574597004 |                     | append    | {}      |
+                | 2019-04-12T20:29:15.770Z | 3055729675574597004 | 3051729675574597004 | append    | {}      |
+                +--------------------------+---------------------+---------------------+-----------+---------+"#]],
             &["manifest_list"],
+            &[],
             Some("committed_at"),
         ).await;
     }
