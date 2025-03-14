@@ -18,6 +18,7 @@
 //! This module contains transaction api.
 
 mod append;
+pub mod remove_snapshots;
 mod snapshot;
 mod sort_order;
 
@@ -26,6 +27,7 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
 
+use remove_snapshots::RemoveSnapshotAction;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -188,6 +190,11 @@ impl<'a> Transaction<'a> {
             tx: self,
             sort_fields: vec![],
         }
+    }
+
+    /// Creates remove snapshot action.
+    pub fn expire_snapshot(self) -> RemoveSnapshotAction<'a> {
+        RemoveSnapshotAction::new(self)
     }
 
     /// Remove properties in table.

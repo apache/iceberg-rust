@@ -78,6 +78,19 @@ pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str = "write.metadata.previo
 /// Default value for max number of previous versions to keep.
 pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
 
+/// Property key for max snapshot age in milliseconds.
+pub const MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
+/// Default value for max snapshot age in milliseconds.
+pub const MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000; // 5 days
+/// Property key for min snapshots to keep.
+pub const MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
+/// Default value for min snapshots to keep.
+pub const MIN_SNAPSHOTS_TO_KEEP_DEFAULT: i32 = 1;
+/// Property key for max reference age in milliseconds.
+pub const MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
+/// Default value for max reference age in milliseconds.
+pub const MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
+
 /// Reserved Iceberg table properties list.
 ///
 /// Reserved table properties are only used to control behaviors when creating or updating a
