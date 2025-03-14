@@ -370,7 +370,9 @@ impl ParquetWriter {
             })?;
         }
 
-        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).unwrap();
+        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
+        })?;
 
         Ok(parquet_metadata)
     }
@@ -501,7 +503,14 @@ impl FileWriter for ParquetWriter {
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
-        let parquet_metadata = Arc::new(self.thrift_to_parquet_metadata(metadata).unwrap());
+        let parquet_metadata =
+            Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to convert metadata from thrift to parquet.",
+                )
+                .with_source(err)
+            })?);
 
         Ok(vec![Self::parquet_to_data_file_builder(
             self.schema,
