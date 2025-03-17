@@ -19,7 +19,8 @@ use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{DataFile, Datum, PrimitiveLiteral};
+use crate::spec::data_file::DataFile;
+use crate::spec::{Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind};
 
 const IN_PREDICATE_LIMIT: usize = 200;
@@ -494,10 +495,10 @@ mod test {
         BinaryExpression, Bind, BoundPredicate, Predicate, Reference, SetExpression,
         UnaryExpression,
     };
+    use crate::spec::data_file::{DataContentType, DataFile, DataFileFormat};
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PartitionSpec,
-        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
-        UnboundPartitionField,
+        Datum, NestedField, PartitionSpec, PartitionSpecRef, PrimitiveType, Schema, SchemaRef,
+        Struct, Transform, Type, UnboundPartitionField,
     };
 
     const INT_MIN_VALUE: i32 = 30;

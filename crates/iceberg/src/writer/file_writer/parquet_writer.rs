@@ -43,12 +43,12 @@ use crate::arrow::{
     DEFAULT_MAP_FIELD_NAME,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::spec::data_file::{DataContentType, DataFile, DataFileBuilder, DataFileFormat};
 use crate::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
-    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
-    TableMetadata, Type,
+    visit_schema, Datum, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, Type,
 };
-use crate::writer::{CurrentFileStatus, DataFile};
+use crate::writer::CurrentFileStatus;
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
@@ -491,7 +491,7 @@ impl FileWriter for ParquetWriter {
         Ok(())
     }
 
-    async fn close(mut self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
+    async fn close(mut self) -> crate::Result<Vec<DataFileBuilder>> {
         let writer = match self.inner_writer.take() {
             Some(writer) => writer,
             None => return Ok(vec![]),
@@ -785,7 +785,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();
@@ -980,7 +980,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();
@@ -1170,7 +1170,7 @@ mod tests {
             .next()
             .unwrap()
             // Put dummy field for build successfully.
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();
@@ -1318,7 +1318,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();
@@ -1370,7 +1370,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();
@@ -1428,7 +1428,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .content(crate::spec::DataContentType::Data)
+            .content(DataContentType::Data)
             .partition(Struct::empty())
             .build()
             .unwrap();

@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
+use iceberg::spec::data_file::DataFileFormat;
 use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
@@ -77,11 +78,8 @@ async fn test_append_partition_data_file() {
     let first_partition_id_value = 100;
 
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
-    let file_name_generator = DefaultFileNameGenerator::new(
-        "test".to_string(),
-        None,
-        iceberg::spec::DataFileFormat::Parquet,
-    );
+    let file_name_generator =
+        DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),

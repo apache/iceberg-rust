@@ -29,6 +29,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Fields};
 use futures::TryStreamExt;
 use iceberg::arrow::{DEFAULT_MAP_FIELD_NAME, UTC_TIME_ZONE};
+use iceberg::spec::data_file::DataFileFormat;
 use iceberg::spec::{
     ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, LIST_FIELD_NAME,
     MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
@@ -144,11 +145,8 @@ async fn test_scan_all_type() {
             .unwrap(),
     );
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
-    let file_name_generator = DefaultFileNameGenerator::new(
-        "test".to_string(),
-        None,
-        iceberg::spec::DataFileFormat::Parquet,
-    );
+    let file_name_generator =
+        DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
         table.metadata().current_schema().clone(),

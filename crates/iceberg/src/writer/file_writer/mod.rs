@@ -21,7 +21,7 @@ use arrow_array::RecordBatch;
 use futures::Future;
 
 use super::CurrentFileStatus;
-use crate::spec::DataFileBuilder;
+use crate::spec::data_file::DataFileBuilder;
 use crate::Result;
 
 mod parquet_writer;

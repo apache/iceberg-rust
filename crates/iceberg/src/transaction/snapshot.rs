@@ -23,10 +23,12 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::io::OutputFile;
+use crate::spec::data_file::{DataContentType, DataFile, DataFileFormat};
+use crate::spec::entry::{ManifestEntry, ManifestStatus};
+use crate::spec::writer::ManifestWriterBuilder;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention, Struct,
-    StructType, Summary, MAIN_BRANCH,
+    FormatVersion, ManifestFile, ManifestListWriter, Operation, Snapshot, SnapshotReference,
+    SnapshotRetention, Struct, StructType, Summary, MAIN_BRANCH,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -130,7 +132,7 @@ impl<'a> SnapshotProduceAction<'a> {
     ) -> Result<&mut Self> {
         let data_files: Vec<DataFile> = data_files.into_iter().collect();
         for data_file in &data_files {
-            if data_file.content_type() != crate::spec::DataContentType::Data {
+            if data_file.content_type() != DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed for fast append",
@@ -163,7 +165,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let snapshot_id = self.snapshot_id;
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
-                .status(crate::spec::ManifestStatus::Added)
+                .status(ManifestStatus::Added)
                 .data_file(data_file);
             if self.tx.table.metadata().format_version() == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()

@@ -20,7 +20,8 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use crate::spec::{DataFileFormat, TableMetadata};
+use crate::spec::data_file::DataFileFormat;
+use crate::spec::TableMetadata;
 use crate::{Error, ErrorKind, Result};
 
 /// `LocationGenerator` used to generate the location of data file.
@@ -132,6 +133,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
+    use crate::spec::data_file::DataFileFormat;
     use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
@@ -184,7 +186,7 @@ pub(crate) mod test {
         let file_name_genertaor = super::DefaultFileNameGenerator::new(
             "part".to_string(),
             Some("test".to_string()),
-            crate::spec::DataFileFormat::Parquet,
+            DataFileFormat::Parquet,
         );
 
         // test default data location

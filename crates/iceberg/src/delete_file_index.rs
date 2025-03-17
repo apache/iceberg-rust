@@ -27,7 +27,8 @@ use futures::StreamExt;
 
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, DataFile, Struct};
+use crate::spec::data_file::{DataContentType, DataFile};
+use crate::spec::Struct;
 use crate::{Error, ErrorKind, Result};
 
 /// Index of delete files

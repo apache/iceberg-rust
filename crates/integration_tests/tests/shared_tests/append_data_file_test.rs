@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
+use iceberg::spec::data_file::DataFileFormat;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
@@ -63,11 +64,8 @@ async fn test_append_data_file() {
             .unwrap(),
     );
     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
-    let file_name_generator = DefaultFileNameGenerator::new(
-        "test".to_string(),
-        None,
-        iceberg::spec::DataFileFormat::Parquet,
-    );
+    let file_name_generator =
+        DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
     let parquet_writer_builder = ParquetWriterBuilder::new(
         WriterProperties::default(),
         table.metadata().current_schema().clone(),

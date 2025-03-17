@@ -36,9 +36,11 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
+use crate::spec::data_file::{DataContentType, DataFileFormat};
+use crate::spec::entry::ManifestEntryRef;
 use crate::spec::{
-    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
-    ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
+    ManifestContentType, ManifestFile, ManifestList, Schema, SchemaRef, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -1137,10 +1139,12 @@ pub mod tests {
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::scan::FileScanTask;
+    use crate::spec::data_file::{DataContentType, DataFileBuilder, DataFileFormat};
+    use crate::spec::entry::{ManifestEntry, ManifestStatus};
+    use crate::spec::writer::ManifestWriterBuilder;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        Datum, Literal, ManifestListWriter, NestedField, PartitionSpec, PrimitiveType, Schema,
+        Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::TableIdent;
