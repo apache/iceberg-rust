@@ -328,6 +328,7 @@ impl Catalog for RestCatalog {
         loop {
             let mut request = context.client.request(Method::GET, endpoint.clone());
 
+            // Filter on `parent={namespace}` if a parent namespace exists.
             if let Some(ns) = parent {
                 request = request.query(&[("parent", ns.to_url_string())]);
             }
