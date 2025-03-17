@@ -371,6 +371,8 @@
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -595,6 +597,7 @@
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(<span class="number">100</span>)
             .record_count(<span class="number">1</span>)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::string(<span class="string">"test"</span>))]))
             .build()
             .unwrap();
@@ -606,6 +609,7 @@
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(<span class="number">100</span>)
             .record_count(<span class="number">1</span>)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">300</span>))]))
             .build()
             .unwrap();

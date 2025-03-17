@@ -61,7 +61,7 @@ own writer and implement writer trait for them so that the custom writer can int
         file_name_generator.clone(),
     );
     <span class="comment">// Create a data file writer using parquet file writer builder.
-    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>);
+    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>, <span class="number">0</span>);
     <span class="comment">// Build the data file writer
     </span><span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = data_file_writer_builder.build().<span class="kw">await</span>.unwrap();
 
@@ -160,7 +160,7 @@ own writer and implement writer trait for them so that the custom writer can int
         file_name_generator.clone(),
     );
     <span class="comment">// Create a data file writer builder using parquet file writer builder.
-    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>);
+    </span><span class="kw">let </span>data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">None</span>, <span class="number">0</span>);
     <span class="comment">// Create latency record writer using data file writer builder.
     </span><span class="kw">let </span>latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
     <span class="comment">// Build the final writer

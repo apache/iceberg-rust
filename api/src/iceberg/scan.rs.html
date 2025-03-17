@@ -2302,6 +2302,12 @@
 <a href="#2302" id="2302">2302</a>
 <a href="#2303" id="2303">2303</a>
 <a href="#2304" id="2304">2304</a>
+<a href="#2305" id="2305">2305</a>
+<a href="#2306" id="2306">2306</a>
+<a href="#2307" id="2307">2307</a>
+<a href="#2308" id="2308">2308</a>
+<a href="#2309" id="2309">2309</a>
+<a href="#2310" id="2310">2310</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3581,6 +3587,7 @@
                         .status(ManifestStatus::Added)
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)
@@ -3603,6 +3610,7 @@
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)
@@ -3624,6 +3632,7 @@
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/3.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)
@@ -3794,6 +3803,7 @@
                         .status(ManifestStatus::Added)
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)
@@ -3817,6 +3827,7 @@
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/2.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)
@@ -3839,6 +3850,7 @@
                         .file_sequence_number(parent_snapshot.sequence_number())
                         .data_file(
                             DataFileBuilder::default()
+                                .partition_spec_id(<span class="number">0</span>)
                                 .content(DataContentType::Data)
                                 .file_path(<span class="macro">format!</span>(<span class="string">"{}/3.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
                                 .file_format(DataFileFormat::Parquet)

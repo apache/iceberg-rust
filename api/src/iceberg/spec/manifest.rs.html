@@ -2931,6 +2931,27 @@
 <a href="#2931" id="2931">2931</a>
 <a href="#2932" id="2932">2932</a>
 <a href="#2933" id="2933">2933</a>
+<a href="#2934" id="2934">2934</a>
+<a href="#2935" id="2935">2935</a>
+<a href="#2936" id="2936">2936</a>
+<a href="#2937" id="2937">2937</a>
+<a href="#2938" id="2938">2938</a>
+<a href="#2939" id="2939">2939</a>
+<a href="#2940" id="2940">2940</a>
+<a href="#2941" id="2941">2941</a>
+<a href="#2942" id="2942">2942</a>
+<a href="#2943" id="2943">2943</a>
+<a href="#2944" id="2944">2944</a>
+<a href="#2945" id="2945">2945</a>
+<a href="#2946" id="2946">2946</a>
+<a href="#2947" id="2947">2947</a>
+<a href="#2948" id="2948">2948</a>
+<a href="#2949" id="2949">2949</a>
+<a href="#2950" id="2950">2950</a>
+<a href="#2951" id="2951">2951</a>
+<a href="#2952" id="2952">2952</a>
+<a href="#2953" id="2953">2953</a>
+<a href="#2954" id="2954">2954</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3000,8 +3021,11 @@
                 reader
                     .into_iter()
                     .map(|value| {
-                        from_value::&lt;_serde::ManifestEntryV1&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                        from_value::&lt;_serde::ManifestEntryV1&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(
+                            metadata.partition_spec.spec_id(),
+                            <span class="kw-2">&amp;</span>partition_type,
+                            <span class="kw-2">&amp;</span>metadata.schema,
+                        )
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -3011,8 +3035,11 @@
                 reader
                     .into_iter()
                     .map(|value| {
-                        from_value::&lt;_serde::ManifestEntryV2&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?
-                            </span>.try_into(<span class="kw-2">&amp;</span>partition_type, <span class="kw-2">&amp;</span>metadata.schema)
+                        from_value::&lt;_serde::ManifestEntryV2&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(
+                            metadata.partition_spec.spec_id(),
+                            <span class="kw-2">&amp;</span>partition_type,
+                            <span class="kw-2">&amp;</span>metadata.schema,
+                        )
                     })
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
             </span>}
@@ -4290,6 +4317,9 @@
     /// delete files.
     </span><span class="attr">#[builder(default, setter(strip_option))]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) sort_order_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
+    <span class="doccomment">/// This field is not included in spec. It is just store in memory representation used
+    /// in process.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) partition_spec_id: i32,
 }
 
 <span class="kw">impl </span>DataFile {
@@ -4403,6 +4433,7 @@
 </span><span class="kw">pub fn </span>read_data_files_from_avro&lt;R: Read&gt;(
     reader: <span class="kw-2">&amp;mut </span>R,
     schema: <span class="kw-2">&amp;</span>Schema,
+    partition_spec_id: i32,
     partition_type: <span class="kw-2">&amp;</span>StructType,
     version: FormatVersion,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFile&gt;&gt; {
@@ -4414,7 +4445,13 @@
     <span class="kw">let </span>reader = AvroReader::with_schema(<span class="kw-2">&amp;</span>avro_schema, reader)<span class="question-mark">?</span>;
     reader
         .into_iter()
-        .map(|value| from_value::&lt;_serde::DataFile&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(partition_type, schema))
+        .map(|value| {
+            from_value::&lt;_serde::DataFile&gt;(<span class="kw-2">&amp;</span>value<span class="question-mark">?</span>)<span class="question-mark">?</span>.try_into(
+                partition_spec_id,
+                partition_type,
+                schema,
+            )
+        })
         .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
 }
 
@@ -4515,6 +4552,7 @@
 
         <span class="kw">pub fn </span>try_into(
             <span class="self">self</span>,
+            partition_spec_id: i32,
             partition_type: <span class="kw-2">&amp;</span>StructType,
             schema: <span class="kw-2">&amp;</span>Schema,
         ) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestEntry, Error&gt; {
@@ -4523,7 +4561,9 @@
                 snapshot_id: <span class="self">self</span>.snapshot_id,
                 sequence_number: <span class="self">self</span>.sequence_number,
                 file_sequence_number: <span class="self">self</span>.file_sequence_number,
-                data_file: <span class="self">self</span>.data_file.try_into(partition_type, schema)<span class="question-mark">?</span>,
+                data_file: <span class="self">self
+                    </span>.data_file
+                    .try_into(partition_spec_id, partition_type, schema)<span class="question-mark">?</span>,
             })
         }
     }
@@ -4546,6 +4586,7 @@
 
         <span class="kw">pub fn </span>try_into(
             <span class="self">self</span>,
+            partition_spec_id: i32,
             partition_type: <span class="kw-2">&amp;</span>StructType,
             schema: <span class="kw-2">&amp;</span>Schema,
         ) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestEntry, Error&gt; {
@@ -4554,7 +4595,9 @@
                 snapshot_id: <span class="prelude-val">Some</span>(<span class="self">self</span>.snapshot_id),
                 sequence_number: <span class="prelude-val">Some</span>(<span class="number">0</span>),
                 file_sequence_number: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-                data_file: <span class="self">self</span>.data_file.try_into(partition_type, schema)<span class="question-mark">?</span>,
+                data_file: <span class="self">self
+                    </span>.data_file
+                    .try_into(partition_spec_id, partition_type, schema)<span class="question-mark">?</span>,
             })
         }
     }
@@ -4617,6 +4660,7 @@
 
         <span class="kw">pub fn </span>try_into(
             <span class="self">self</span>,
+            partition_spec_id: i32,
             partition_type: <span class="kw-2">&amp;</span>StructType,
             schema: <span class="kw-2">&amp;</span>Schema,
         ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw">super</span>::DataFile, Error&gt; {
@@ -4676,6 +4720,7 @@
                 split_offsets: <span class="self">self</span>.split_offsets.unwrap_or_default(),
                 equality_ids: <span class="self">self</span>.equality_ids.unwrap_or_default(),
                 sort_order_id: <span class="self">self</span>.sort_order_id,
+                partition_spec_id,
             })
         }
     }
@@ -4878,24 +4923,7 @@
                     snapshot_id: <span class="prelude-val">None</span>,
                     sequence_number: <span class="prelude-val">None</span>,
                     file_sequence_number: <span class="prelude-val">None</span>,
-                    data_file: DataFile {
-                        content: DataContentType::Data,
-                        file_path: <span class="string">"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet"</span>.to_string(),
-                        file_format: DataFileFormat::Parquet,
-                        partition: Struct::empty(),
-                        record_count: <span class="number">1</span>,
-                        file_size_in_bytes: <span class="number">5442</span>,
-                        column_sizes: HashMap::from([(<span class="number">0</span>,<span class="number">73</span>),(<span class="number">6</span>,<span class="number">34</span>),(<span class="number">2</span>,<span class="number">73</span>),(<span class="number">7</span>,<span class="number">61</span>),(<span class="number">3</span>,<span class="number">61</span>),(<span class="number">5</span>,<span class="number">62</span>),(<span class="number">9</span>,<span class="number">79</span>),(<span class="number">10</span>,<span class="number">73</span>),(<span class="number">1</span>,<span class="number">61</span>),(<span class="number">4</span>,<span class="number">73</span>),(<span class="number">8</span>,<span class="number">73</span>)]),
-                        value_counts: HashMap::from([(<span class="number">4</span>,<span class="number">1</span>),(<span class="number">5</span>,<span class="number">1</span>),(<span class="number">2</span>,<span class="number">1</span>),(<span class="number">0</span>,<span class="number">1</span>),(<span class="number">3</span>,<span class="number">1</span>),(<span class="number">6</span>,<span class="number">1</span>),(<span class="number">8</span>,<span class="number">1</span>),(<span class="number">1</span>,<span class="number">1</span>),(<span class="number">10</span>,<span class="number">1</span>),(<span class="number">7</span>,<span class="number">1</span>),(<span class="number">9</span>,<span class="number">1</span>)]),
-                        null_value_counts: HashMap::from([(<span class="number">1</span>,<span class="number">0</span>),(<span class="number">6</span>,<span class="number">0</span>),(<span class="number">2</span>,<span class="number">0</span>),(<span class="number">8</span>,<span class="number">0</span>),(<span class="number">0</span>,<span class="number">0</span>),(<span class="number">3</span>,<span class="number">0</span>),(<span class="number">5</span>,<span class="number">0</span>),(<span class="number">9</span>,<span class="number">0</span>),(<span class="number">7</span>,<span class="number">0</span>),(<span class="number">4</span>,<span class="number">0</span>),(<span class="number">10</span>,<span class="number">0</span>)]),
-                        nan_value_counts: HashMap::new(),
-                        lower_bounds: HashMap::new(),
-                        upper_bounds: HashMap::new(),
-                        key_metadata: <span class="prelude-val">None</span>,
-                        split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
-                        equality_ids: Vec::new(),
-                        sort_order_id: <span class="prelude-val">None</span>,
-                    }
+                    data_file: DataFile {content:DataContentType::Data,file_path:<span class="string">"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet"</span>.to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:<span class="number">1</span>,file_size_in_bytes:<span class="number">5442</span>,column_sizes:HashMap::from([(<span class="number">0</span>,<span class="number">73</span>),(<span class="number">6</span>,<span class="number">34</span>),(<span class="number">2</span>,<span class="number">73</span>),(<span class="number">7</span>,<span class="number">61</span>),(<span class="number">3</span>,<span class="number">61</span>),(<span class="number">5</span>,<span class="number">62</span>),(<span class="number">9</span>,<span class="number">79</span>),(<span class="number">10</span>,<span class="number">73</span>),(<span class="number">1</span>,<span class="number">61</span>),(<span class="number">4</span>,<span class="number">73</span>),(<span class="number">8</span>,<span class="number">73</span>)]),value_counts:HashMap::from([(<span class="number">4</span>,<span class="number">1</span>),(<span class="number">5</span>,<span class="number">1</span>),(<span class="number">2</span>,<span class="number">1</span>),(<span class="number">0</span>,<span class="number">1</span>),(<span class="number">3</span>,<span class="number">1</span>),(<span class="number">6</span>,<span class="number">1</span>),(<span class="number">8</span>,<span class="number">1</span>),(<span class="number">1</span>,<span class="number">1</span>),(<span class="number">10</span>,<span class="number">1</span>),(<span class="number">7</span>,<span class="number">1</span>),(<span class="number">9</span>,<span class="number">1</span>)]),null_value_counts:HashMap::from([(<span class="number">1</span>,<span class="number">0</span>),(<span class="number">6</span>,<span class="number">0</span>),(<span class="number">2</span>,<span class="number">0</span>),(<span class="number">8</span>,<span class="number">0</span>),(<span class="number">0</span>,<span class="number">0</span>),(<span class="number">3</span>,<span class="number">0</span>),(<span class="number">5</span>,<span class="number">0</span>),(<span class="number">9</span>,<span class="number">0</span>),(<span class="number">7</span>,<span class="number">0</span>),(<span class="number">4</span>,<span class="number">0</span>),(<span class="number">10</span>,<span class="number">0</span>)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:<span class="prelude-val">None</span>,split_offsets:<span class="macro">vec!</span>[<span class="number">4</span>],equality_ids:Vec::new(),sort_order_id:<span class="prelude-val">None</span>, partition_spec_id: <span class="number">0 </span>}
                 }
             ];
 
@@ -5076,7 +5104,8 @@
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
-                },
+                    partition_spec_id: <span class="number">0
+                </span>},
             }];
 
         <span class="comment">// write manifest to file and check the return manifest file.
@@ -5168,7 +5197,8 @@
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-                }
+                    partition_spec_id: <span class="number">0
+                </span>}
             }];
 
         <span class="comment">// write manifest to file
@@ -5271,7 +5301,8 @@
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: <span class="macro">vec!</span>[],
                         sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-                    },
+                        partition_spec_id: <span class="number">0
+                    </span>},
                 }
             ];
 
@@ -5374,7 +5405,8 @@
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
-                },
+                    partition_spec_id: <span class="number">0
+                </span>},
             }];
 
         <span class="comment">// write manifest to file
@@ -5460,7 +5492,8 @@
                     split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                     equality_ids: <span class="macro">vec!</span>[],
                     sort_order_id: <span class="prelude-val">None</span>,
-                },
+                    partition_spec_id: <span class="number">0
+                </span>},
             })],
         };
 
@@ -5537,7 +5570,8 @@
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
-                    }
+                        partition_spec_id: <span class="number">0
+                    </span>}
                 },
                     ManifestEntry {
                         status: ManifestStatus::Added,
@@ -5567,7 +5601,8 @@
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,
-                        }
+                            partition_spec_id: <span class="number">0
+                        </span>}
                     },
                     ManifestEntry {
                         status: ManifestStatus::Added,
@@ -5597,7 +5632,8 @@
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,
-                        }
+                            partition_spec_id: <span class="number">0
+                        </span>}
                     },
                     ManifestEntry {
                         status: ManifestStatus::Added,
@@ -5627,7 +5663,8 @@
                             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                             equality_ids: Vec::new(),
                             sort_order_id: <span class="prelude-val">None</span>,
-                        }
+                            partition_spec_id: <span class="number">0
+                        </span>}
                     },
             ];
 
@@ -5718,7 +5755,8 @@
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
-                    },
+                        partition_spec_id: <span class="number">0
+                    </span>},
                 },
                 ManifestEntry {
                     status: ManifestStatus::Deleted,
@@ -5742,7 +5780,8 @@
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
-                    },
+                        partition_spec_id: <span class="number">0
+                    </span>},
                 },
                 ManifestEntry {
                     status: ManifestStatus::Existing,
@@ -5766,7 +5805,8 @@
                         split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
                         equality_ids: Vec::new(),
                         sort_order_id: <span class="prelude-val">None</span>,
-                    },
+                        partition_spec_id: <span class="number">0
+                    </span>},
                 },
             ];
 
@@ -5842,7 +5882,8 @@
             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
             equality_ids: <span class="macro">vec!</span>[],
             sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-        }];
+            partition_spec_id: <span class="number">0
+        </span>}];
 
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
         <span class="kw">let _ </span>= write_data_files_to_avro(
@@ -5856,6 +5897,7 @@
         <span class="kw">let </span>actual_data_file = read_data_files_from_avro(
             <span class="kw-2">&amp;mut </span>Cursor::new(buffer),
             <span class="kw-2">&amp;</span>schema,
+            <span class="number">0</span>,
             <span class="kw-2">&amp;</span>StructType::new(<span class="macro">vec!</span>[]),
             FormatVersion::V2,
         )

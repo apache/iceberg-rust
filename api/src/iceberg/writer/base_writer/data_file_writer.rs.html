@@ -258,6 +258,14 @@
 <a href="#258" id="258">258</a>
 <a href="#259" id="259">259</a>
 <a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -290,14 +298,16 @@
 </span><span class="kw">pub struct </span>DataFileWriterBuilder&lt;B: FileWriterBuilder&gt; {
     inner: B,
     partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;,
+    partition_spec_id: i32,
 }
 
 <span class="kw">impl</span>&lt;B: FileWriterBuilder&gt; DataFileWriterBuilder&lt;B&gt; {
     <span class="doccomment">/// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    </span><span class="kw">pub fn </span>new(inner: B, partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(inner: B, partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;, partition_spec_id: i32) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             inner,
             partition_value,
+            partition_spec_id,
         }
     }
 }
@@ -310,6 +320,7 @@
         <span class="prelude-val">Ok</span>(DataFileWriter {
             inner_writer: <span class="prelude-val">Some</span>(<span class="self">self</span>.inner.clone().build().<span class="kw">await</span><span class="question-mark">?</span>),
             partition_value: <span class="self">self</span>.partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id: <span class="self">self</span>.partition_spec_id,
         })
     }
 }
@@ -319,6 +330,7 @@
 </span><span class="kw">pub struct </span>DataFileWriter&lt;B: FileWriterBuilder&gt; {
     inner_writer: <span class="prelude-ty">Option</span>&lt;B::R&gt;,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 <span class="attr">#[async_trait::async_trait]
@@ -336,6 +348,7 @@
             .map(|<span class="kw-2">mut </span>res| {
                 res.content(DataContentType::Data);
                 res.partition(<span class="self">self</span>.partition_value.clone());
+                res.partition_spec_id(<span class="self">self</span>.partition_spec_id);
                 res.build().expect(<span class="string">"Guaranteed to be valid"</span>)
             })
             .collect_vec())
@@ -402,7 +415,10 @@
             file_name_gen,
         );
 
-        <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = DataFileWriterBuilder::new(pw, <span class="prelude-val">None</span>).build().<span class="kw">await</span>.unwrap();
+        <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer = DataFileWriterBuilder::new(pw, <span class="prelude-val">None</span>, <span class="number">0</span>)
+            .build()
+            .<span class="kw">await
+            </span>.unwrap();
 
         <span class="kw">let </span>arrow_schema = arrow_schema::Schema::new(<span class="macro">vec!</span>[
             Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">false</span>),
@@ -471,7 +487,7 @@
         );
 
         <span class="kw">let </span><span class="kw-2">mut </span>data_file_writer =
-            DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">Some</span>(partition_value.clone()))
+            DataFileWriterBuilder::new(parquet_writer_builder, <span class="prelude-val">Some</span>(partition_value.clone()), <span class="number">0</span>)
                 .build()
                 .<span class="kw">await</span><span class="question-mark">?</span>;
 

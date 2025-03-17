@@ -307,6 +307,13 @@
 <a href="#307" id="307">307</a>
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -443,6 +450,13 @@
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
                     <span class="string">"Only data content type is allowed for fast append"</span>,
+                ));
+            }
+            <span class="comment">// Check if the data file partition spec id matches the table default partition spec id.
+            </span><span class="kw">if </span><span class="self">self</span>.tx.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::DataInvalid,
+                    <span class="string">"Data file partition spec id does not match table default partition spec id"</span>,
                 ));
             }
             <span class="self">Self</span>::validate_partition_value(

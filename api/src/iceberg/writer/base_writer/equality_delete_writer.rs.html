@@ -756,6 +756,13 @@
 <a href="#756" id="756">756</a>
 <a href="#757" id="757">757</a>
 <a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -811,6 +818,7 @@
     <span class="comment">// Projector used to project the data chunk into specific fields.
     </span>projector: RecordBatchProjector,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 <span class="kw">impl </span>EqualityDeleteWriterConfig {
@@ -819,6 +827,7 @@
         equality_ids: Vec&lt;i32&gt;,
         original_schema: SchemaRef,
         partition_value: <span class="prelude-ty">Option</span>&lt;Struct&gt;,
+        partition_spec_id: i32,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>original_arrow_schema = Arc::new(schema_to_arrow_schema(<span class="kw-2">&amp;</span>original_schema)<span class="question-mark">?</span>);
         <span class="kw">let </span>projector = RecordBatchProjector::new(
@@ -855,6 +864,7 @@
             equality_ids,
             projector,
             partition_value: partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id,
         })
     }
 
@@ -874,6 +884,7 @@
             projector: <span class="self">self</span>.config.projector,
             equality_ids: <span class="self">self</span>.config.equality_ids,
             partition_value: <span class="self">self</span>.config.partition_value,
+            partition_spec_id: <span class="self">self</span>.config.partition_spec_id,
         })
     }
 }
@@ -885,6 +896,7 @@
     projector: RecordBatchProjector,
     equality_ids: Vec&lt;i32&gt;,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 <span class="attr">#[async_trait::async_trait]
@@ -911,6 +923,7 @@
                     res.content(<span class="kw">crate</span>::spec::DataContentType::EqualityDeletes);
                     res.equality_ids(<span class="self">self</span>.equality_ids.iter().copied().collect_vec());
                     res.partition(<span class="self">self</span>.partition_value.clone());
+                    res.partition_spec_id(<span class="self">self</span>.partition_spec_id);
                     res.build().expect(<span class="string">"msg"</span>)
                 })
                 .collect_vec())
@@ -1145,7 +1158,7 @@
 
         <span class="kw">let </span>equality_ids = <span class="macro">vec!</span>[<span class="number">0_i32</span>, <span class="number">8</span>];
         <span class="kw">let </span>equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), <span class="prelude-val">None</span>).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), <span class="prelude-val">None</span>, <span class="number">0</span>).unwrap();
         <span class="kw">let </span>delete_schema =
             arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
         <span class="kw">let </span>projector = equality_config.projector.clone();
@@ -1242,19 +1255,19 @@
                 .unwrap(),
         );
         <span class="comment">// Float and Double are not allowed to be used for equality delete
-        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">0</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
-        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">1</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
+        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">0</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
+        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">1</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
         <span class="comment">// Struct is not allowed to be used for equality delete
-        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">3</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
+        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">3</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
         <span class="comment">// Nested field of struct is allowed to be used for equality delete
-        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">4</span>], schema.clone(), <span class="prelude-val">None</span>).is_ok());
+        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">4</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_ok());
         <span class="comment">// Nested field of map is not allowed to be used for equality delete
-        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">7</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
-        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">8</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
-        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">9</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
+        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">7</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
+        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">8</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
+        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">9</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
         <span class="comment">// Nested field of list is not allowed to be used for equality delete
-        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">10</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
-        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">11</span>], schema.clone(), <span class="prelude-val">None</span>).is_err());
+        </span><span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">10</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
+        <span class="macro">assert!</span>(EqualityDeleteWriterConfig::new(<span class="macro">vec!</span>[<span class="number">11</span>], schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).is_err());
 
         <span class="prelude-val">Ok</span>(())
     }
@@ -1307,7 +1320,8 @@
                 .unwrap(),
         );
         <span class="kw">let </span>equality_ids = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>, <span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>, <span class="number">13</span>];
-        <span class="kw">let </span>config = EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), <span class="prelude-val">None</span>).unwrap();
+        <span class="kw">let </span>config =
+            EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), <span class="prelude-val">None</span>, <span class="number">0</span>).unwrap();
         <span class="kw">let </span>delete_arrow_schema = config.projected_arrow_schema_ref().clone();
         <span class="kw">let </span>delete_schema = arrow_schema_to_schema(<span class="kw-2">&amp;</span>delete_arrow_schema).unwrap();
 
@@ -1498,7 +1512,7 @@
         <span class="kw">let </span>to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
         <span class="kw">let </span>equality_ids = <span class="macro">vec!</span>[<span class="number">0_i32</span>, <span class="number">2</span>, <span class="number">5</span>];
         <span class="kw">let </span>equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), <span class="prelude-val">None</span>).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), <span class="prelude-val">None</span>, <span class="number">0</span>).unwrap();
         <span class="kw">let </span>projector = equality_config.projector.clone();
 
         <span class="comment">// check

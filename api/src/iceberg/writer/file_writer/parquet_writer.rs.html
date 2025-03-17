@@ -1566,6 +1566,13 @@
 <a href="#1566" id="1566">1566</a>
 <a href="#1567" id="1567">1567</a>
 <a href="#1568" id="1568">1568</a>
+<a href="#1569" id="1569">1569</a>
+<a href="#1570" id="1570">1570</a>
+<a href="#1571" id="1571">1571</a>
+<a href="#1572" id="1572">1572</a>
+<a href="#1573" id="1573">1573</a>
+<a href="#1574" id="1574">1574</a>
+<a href="#1575" id="1575">1575</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1909,12 +1916,13 @@
                     <span class="macro">format!</span>(<span class="string">"Error reading Parquet metadata: {}"</span>, err),
                 )
             })<span class="question-mark">?</span>;
-            <span class="kw">let </span>builder = ParquetWriter::parquet_to_data_file_builder(
+            <span class="kw">let </span><span class="kw-2">mut </span>builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
                 file_size_in_bytes,
                 file_path,
             )<span class="question-mark">?</span>;
+            builder.partition_spec_id(table_metadata.default_partition_spec_id());
             <span class="kw">let </span>data_file = builder.build().unwrap();
             data_files.push(data_file);
         }
@@ -2355,6 +2363,7 @@
             <span class="comment">// Put dummy field for build successfully.
             </span>.content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
 
@@ -2550,6 +2559,7 @@
             <span class="comment">// Put dummy field for build successfully.
             </span>.content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
 
@@ -2740,6 +2750,7 @@
             <span class="comment">// Put dummy field for build successfully.
             </span>.content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
 
@@ -2888,6 +2899,7 @@
             .unwrap()
             .content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
         <span class="macro">assert_eq!</span>(
@@ -2940,6 +2952,7 @@
             .unwrap()
             .content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
         <span class="macro">assert_eq!</span>(
@@ -2998,6 +3011,7 @@
             .unwrap()
             .content(<span class="kw">crate</span>::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(<span class="number">0</span>)
             .build()
             .unwrap();
         <span class="macro">assert_eq!</span>(
