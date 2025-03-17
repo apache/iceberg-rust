@@ -88,17 +88,16 @@ impl Middleware for SigV4Middleware {
                 if let Some(signing_region) = signing_region {
                     config_loader = config_loader.region(Region::new(signing_region));
                 }
-                match (&self.access_key_id, &self.secret_access_key) {
-                    (Some(access_key_id), Some(secret_access_key)) => {
-                        config_loader = config_loader.credentials_provider(Credentials::new(
-                            access_key_id,
-                            secret_access_key,
-                            self.session_token.clone(),
-                            None,
-                            "iceberg-rest-catalog",
-                        ));
-                    }
-                    _ => {}
+                if let (Some(access_key_id), Some(secret_access_key)) =
+                    (&self.access_key_id, &self.secret_access_key)
+                {
+                    config_loader = config_loader.credentials_provider(Credentials::new(
+                        access_key_id,
+                        secret_access_key,
+                        self.session_token.clone(),
+                        None,
+                        "iceberg-rest-catalog",
+                    ));
                 }
                 config_loader.load().await
             })
