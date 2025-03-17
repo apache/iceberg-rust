@@ -81,7 +81,7 @@
 //!         file_name_generator.clone(),
 //!     );
 //!     // Create a data file writer using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
 //!     // Build the data file writer
 //!     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
 //!
@@ -183,7 +183,7 @@
 //!         file_name_generator.clone(),
 //!     );
 //!     // Create a data file writer builder using parquet file writer builder.
-//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
 //!     // Create latency record writer using data file writer builder.
 //!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
 //!     // Build the final writer
