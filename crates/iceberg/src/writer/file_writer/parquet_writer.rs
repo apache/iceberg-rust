@@ -28,10 +28,12 @@ use itertools::Itertools;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::arrow::AsyncArrowWriter;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::{from_thrift, Statistics};
+use parquet::file::statistics::Statistics;
 use parquet::format::FileMetaData;
+use parquet::thrift::{TCompactOutputProtocol, TSerializable};
+use thrift::protocol::TOutputProtocol;
 
 use super::location_generator::{FileNameGenerator, LocationGenerator};
 use super::track_writer::TrackWriter;
@@ -341,12 +343,15 @@ impl ParquetWriter {
                     format!("Error reading Parquet metadata: {}", err),
                 )
             })?;
-            let builder = ParquetWriter::parquet_to_data_file_builder(
+            let mut builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
                 file_size_in_bytes,
                 file_path,
+                // TODO: Implement nan_value_counts here
+                HashMap::new(),
             )?;
+            builder.partition_spec_id(table_metadata.default_partition_spec_id());
             let data_file = builder.build().unwrap();
             data_files.push(data_file);
         }
@@ -354,90 +359,27 @@ impl ParquetWriter {
         Ok(data_files)
     }
 
-    fn to_data_file_builder(
-        schema: SchemaRef,
-        metadata: FileMetaData,
-        written_size: usize,
-        file_path: String,
-        nan_value_counts: HashMap<i32, u64>,
-    ) -> Result<DataFileBuilder> {
-        let index_by_parquet_path = {
-            let mut visitor = IndexByParquetPathName::new();
-            visit_schema(&schema, &mut visitor)?;
-            visitor
-        };
+    fn thrift_to_parquet_metadata(&self, file_metadata: FileMetaData) -> Result<ParquetMetaData> {
+        let mut buffer = Vec::new();
+        {
+            let mut protocol = TCompactOutputProtocol::new(&mut buffer);
+            file_metadata
+                .write_to_out_protocol(&mut protocol)
+                .map_err(|err| {
+                    Error::new(ErrorKind::Unexpected, "Failed to write parquet metadata")
+                        .with_source(err)
+                })?;
 
-        let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
-            let mut per_col_size: HashMap<i32, u64> = HashMap::new();
-            let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
-            let mut per_col_null_val_num: HashMap<i32, u64> = HashMap::new();
-            let mut min_max_agg = MinMaxColAggregator::new(schema);
+            protocol.flush().map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to flush protocol").with_source(err)
+            })?;
+        }
 
-            for row_group in &metadata.row_groups {
-                for column_chunk in row_group.columns.iter() {
-                    let Some(column_chunk_metadata) = &column_chunk.meta_data else {
-                        continue;
-                    };
-                    let physical_type = column_chunk_metadata.type_;
-                    let Some(&field_id) =
-                        index_by_parquet_path.get(&column_chunk_metadata.path_in_schema.join("."))
-                    else {
-                        // Following java implementation: https://github.com/apache/iceberg/blob/29a2c456353a6120b8c882ed2ab544975b168d7b/parquet/src/main/java/org/apache/iceberg/parquet/ParquetUtil.java#L163
-                        // Ignore the field if it is not in schema.
-                        continue;
-                    };
-                    *per_col_size.entry(field_id).or_insert(0) +=
-                        column_chunk_metadata.total_compressed_size as u64;
-                    *per_col_val_num.entry(field_id).or_insert(0) +=
-                        column_chunk_metadata.num_values as u64;
-                    if let Some(null_count) = column_chunk_metadata
-                        .statistics
-                        .as_ref()
-                        .and_then(|s| s.null_count)
-                    {
-                        *per_col_null_val_num.entry(field_id).or_insert(0_u64) += null_count as u64;
-                    }
-                    if let Some(statistics) = &column_chunk_metadata.statistics {
-                        min_max_agg.update(
-                            field_id,
-                            from_thrift(physical_type.try_into()?, Some(statistics.clone()))?
-                                .unwrap(),
-                        )?;
-                    }
-                }
-            }
+        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
+        })?;
 
-            (
-                per_col_size,
-                per_col_val_num,
-                per_col_null_val_num,
-                min_max_agg.produce(),
-            )
-        };
-
-        let mut builder = DataFileBuilder::default();
-        builder
-            .file_path(file_path)
-            .file_format(DataFileFormat::Parquet)
-            .record_count(metadata.num_rows as u64)
-            .file_size_in_bytes(written_size as u64)
-            .column_sizes(column_sizes)
-            .value_counts(value_counts)
-            .null_value_counts(null_value_counts)
-            .lower_bounds(lower_bounds)
-            .upper_bounds(upper_bounds)
-            .nan_value_counts(nan_value_counts)
-            // # NOTE:
-            // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
-            .key_metadata(metadata.footer_signing_key_metadata)
-            .split_offsets(
-                metadata
-                    .row_groups
-                    .iter()
-                    .filter_map(|group| group.file_offset)
-                    .collect(),
-            );
-        Ok(builder)
+        Ok(parquet_metadata)
     }
 
     /// `ParquetMetadata` to data file builder
@@ -446,6 +388,7 @@ impl ParquetWriter {
         metadata: Arc<ParquetMetaData>,
         written_size: usize,
         file_path: String,
+        nan_value_counts: HashMap<i32, u64>,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::new();
@@ -500,6 +443,9 @@ impl ParquetWriter {
             .column_sizes(column_sizes)
             .value_counts(value_counts)
             .null_value_counts(null_value_counts)
+            .nan_value_counts(nan_value_counts)
+            // # NOTE:
+            // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
             .split_offsets(
@@ -559,19 +505,30 @@ impl FileWriter for ParquetWriter {
         Ok(())
     }
 
-    async fn close(self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
-        let Some(writer) = self.inner_writer else {
-            return Ok(vec![]);
+    async fn close(mut self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
+        let writer = match self.inner_writer.take() {
+            Some(writer) => writer,
+            None => return Ok(vec![]),
         };
+
         let metadata = writer.close().await.map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to close parquet writer.").with_source(err)
         })?;
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
-        Ok(vec![Self::to_data_file_builder(
+        let parquet_metadata =
+            Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to convert metadata from thrift to parquet.",
+                )
+                .with_source(err)
+            })?);
+
+        Ok(vec![Self::parquet_to_data_file_builder(
             self.schema,
-            metadata,
+            parquet_metadata,
             written_size as usize,
             self.out_file.location().to_string(),
             self.nan_value_count_visitor.nan_value_counts,
@@ -846,6 +803,7 @@ mod tests {
             // Put dummy field for build successfully.
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -1041,6 +999,7 @@ mod tests {
             // Put dummy field for build successfully.
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -1231,6 +1190,7 @@ mod tests {
             // Put dummy field for build successfully.
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -1379,6 +1339,7 @@ mod tests {
             .unwrap()
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
         assert_eq!(
@@ -1431,6 +1392,7 @@ mod tests {
             .unwrap()
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
         assert_eq!(
@@ -1489,6 +1451,7 @@ mod tests {
             .unwrap()
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
         assert_eq!(
@@ -1681,6 +1644,7 @@ mod tests {
             // Put dummy field for build successfully.
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -1817,6 +1781,7 @@ mod tests {
             // Put dummy field for build successfully.
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -1983,6 +1948,7 @@ mod tests {
             .unwrap()
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 
@@ -2160,6 +2126,7 @@ mod tests {
             .unwrap()
             .content(crate::spec::DataContentType::Data)
             .partition(Struct::empty())
+            .partition_spec_id(0)
             .build()
             .unwrap();
 

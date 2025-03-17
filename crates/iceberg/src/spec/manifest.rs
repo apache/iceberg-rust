@@ -67,8 +67,11 @@ impl Manifest {
                 reader
                     .into_iter()
                     .map(|value| {
-                        from_value::<_serde::ManifestEntryV1>(&value?)?
-                            .try_into(&partition_type, &metadata.schema)
+                        from_value::<_serde::ManifestEntryV1>(&value?)?.try_into(
+                            metadata.partition_spec.spec_id(),
+                            &partition_type,
+                            &metadata.schema,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?
             }
@@ -78,8 +81,11 @@ impl Manifest {
                 reader
                     .into_iter()
                     .map(|value| {
-                        from_value::<_serde::ManifestEntryV2>(&value?)?
-                            .try_into(&partition_type, &metadata.schema)
+                        from_value::<_serde::ManifestEntryV2>(&value?)?.try_into(
+                            metadata.partition_spec.spec_id(),
+                            &partition_type,
+                            &metadata.schema,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?
             }
@@ -1357,6 +1363,9 @@ pub struct DataFile {
     /// delete files.
     #[builder(default, setter(strip_option))]
     pub(crate) sort_order_id: Option<i32>,
+    /// This field is not included in spec. It is just store in memory representation used
+    /// in process.
+    pub(crate) partition_spec_id: i32,
 }
 
 impl DataFile {
@@ -1470,6 +1479,7 @@ pub fn write_data_files_to_avro<W: Write>(
 pub fn read_data_files_from_avro<R: Read>(
     reader: &mut R,
     schema: &Schema,
+    partition_spec_id: i32,
     partition_type: &StructType,
     version: FormatVersion,
 ) -> Result<Vec<DataFile>> {
@@ -1481,7 +1491,13 @@ pub fn read_data_files_from_avro<R: Read>(
     let reader = AvroReader::with_schema(&avro_schema, reader)?;
     reader
         .into_iter()
-        .map(|value| from_value::<_serde::DataFile>(&value?)?.try_into(partition_type, schema))
+        .map(|value| {
+            from_value::<_serde::DataFile>(&value?)?.try_into(
+                partition_spec_id,
+                partition_type,
+                schema,
+            )
+        })
         .collect::<Result<Vec<_>>>()
 }
 
@@ -1582,6 +1598,7 @@ mod _serde {
 
         pub fn try_into(
             self,
+            partition_spec_id: i32,
             partition_type: &StructType,
             schema: &Schema,
         ) -> Result<ManifestEntry, Error> {
@@ -1590,7 +1607,9 @@ mod _serde {
                 snapshot_id: self.snapshot_id,
                 sequence_number: self.sequence_number,
                 file_sequence_number: self.file_sequence_number,
-                data_file: self.data_file.try_into(partition_type, schema)?,
+                data_file: self
+                    .data_file
+                    .try_into(partition_spec_id, partition_type, schema)?,
             })
         }
     }
@@ -1613,6 +1632,7 @@ mod _serde {
 
         pub fn try_into(
             self,
+            partition_spec_id: i32,
             partition_type: &StructType,
             schema: &Schema,
         ) -> Result<ManifestEntry, Error> {
@@ -1621,7 +1641,9 @@ mod _serde {
                 snapshot_id: Some(self.snapshot_id),
                 sequence_number: Some(0),
                 file_sequence_number: Some(0),
-                data_file: self.data_file.try_into(partition_type, schema)?,
+                data_file: self
+                    .data_file
+                    .try_into(partition_spec_id, partition_type, schema)?,
             })
         }
     }
@@ -1684,6 +1706,7 @@ mod _serde {
 
         pub fn try_into(
             self,
+            partition_spec_id: i32,
             partition_type: &StructType,
             schema: &Schema,
         ) -> Result<super::DataFile, Error> {
@@ -1743,6 +1766,7 @@ mod _serde {
                 split_offsets: self.split_offsets.unwrap_or_default(),
                 equality_ids: self.equality_ids.unwrap_or_default(),
                 sort_order_id: self.sort_order_id,
+                partition_spec_id,
             })
         }
     }
@@ -1945,24 +1969,7 @@ mod tests {
                     snapshot_id: None,
                     sequence_number: None,
                     file_sequence_number: None,
-                    data_file: DataFile {
-                        content: DataContentType::Data,
-                        file_path: "s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),
-                        file_format: DataFileFormat::Parquet,
-                        partition: Struct::empty(),
-                        record_count: 1,
-                        file_size_in_bytes: 5442,
-                        column_sizes: HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),
-                        value_counts: HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),
-                        null_value_counts: HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),
-                        nan_value_counts: HashMap::new(),
-                        lower_bounds: HashMap::new(),
-                        upper_bounds: HashMap::new(),
-                        key_metadata: None,
-                        split_offsets: vec![4],
-                        equality_ids: Vec::new(),
-                        sort_order_id: None,
-                    }
+                    data_file: DataFile {content:DataContentType::Data,file_path:"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:1,file_size_in_bytes:5442,column_sizes:HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),value_counts:HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),null_value_counts:HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:None,split_offsets:vec![4],equality_ids:Vec::new(),sort_order_id:None, partition_spec_id: 0 }
                 }
             ];
 
@@ -2143,6 +2150,7 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
+                    partition_spec_id: 0
                 },
             }];
 
@@ -2235,6 +2243,7 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: Some(0),
+                    partition_spec_id: 0
                 }
             }];
 
@@ -2338,6 +2347,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: vec![],
                         sort_order_id: Some(0),
+                        partition_spec_id: 0
                     },
                 }
             ];
@@ -2441,6 +2451,7 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
+                    partition_spec_id: 0
                 },
             }];
 
@@ -2527,6 +2538,7 @@ mod tests {
                     split_offsets: vec![4],
                     equality_ids: vec![],
                     sort_order_id: None,
+                    partition_spec_id: 0
                 },
             })],
         };
@@ -2604,6 +2616,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     }
                 },
                     ManifestEntry {
@@ -2634,6 +2647,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
                     ManifestEntry {
@@ -2664,6 +2678,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
                     ManifestEntry {
@@ -2694,6 +2709,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
             ];
@@ -2785,6 +2801,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
                 ManifestEntry {
@@ -2809,6 +2826,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
                 ManifestEntry {
@@ -2833,6 +2851,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
             ];
@@ -2909,6 +2928,7 @@ mod tests {
             split_offsets: vec![4],
             equality_ids: vec![],
             sort_order_id: Some(0),
+            partition_spec_id: 0
         }];
 
         let mut buffer = Vec::new();
@@ -2923,6 +2943,7 @@ mod tests {
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
             &schema,
+            0,
             &StructType::new(vec![]),
             FormatVersion::V2,
         )

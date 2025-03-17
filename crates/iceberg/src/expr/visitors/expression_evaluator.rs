@@ -346,6 +346,7 @@ mod tests {
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
+            partition_spec_id: 0,
         }
     }
 
@@ -369,6 +370,7 @@ mod tests {
             split_offsets: vec![],
             equality_ids: vec![],
             sort_order_id: None,
+            partition_spec_id: 0,
         }
     }
 
