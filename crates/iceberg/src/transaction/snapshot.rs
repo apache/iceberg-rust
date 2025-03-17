@@ -136,6 +136,13 @@ impl<'a> SnapshotProduceAction<'a> {
                     "Only data content type is allowed for fast append",
                 ));
             }
+            // Check if the data file partition spec id matches the table default partition spec id.
+            if self.tx.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Data file partition spec id does not match table default partition spec id",
+                ));
+            }
             Self::validate_partition_value(
                 data_file.partition(),
                 self.tx.table.metadata().default_partition_type(),
