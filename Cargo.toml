@@ -90,15 +90,15 @@ regex = "1.10.5"
 reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
 reqwest-middleware = { version = "0.4.0", features = ["json"] }
 rust_decimal = "1.31"
-serde = { version = "1.0.204", features = ["rc"] }
+serde = { version = "1.0.210", features = ["rc"] }
 serde_bytes = "0.11.15"
-serde_derive = "1.0.204"
+serde_derive = "1.0.210"
 serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
 tempfile = "3.18"
 thrift = "0.17.0"  
-tokio = { version = "1.36", default-features = false }
+tokio = { version = "1.40", default-features = false }
 typed-builder = "0.20"
 url = "2.5.4"
 urlencoding = "2"
