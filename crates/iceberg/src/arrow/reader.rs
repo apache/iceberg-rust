@@ -40,7 +40,7 @@ use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMe
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 use roaring::RoaringTreemap;
 
-use crate::arrow::delete_file_manager::DeleteFileManager;
+use crate::arrow::delete_file_manager::CachingDeleteFileManager;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::error::Result;
@@ -106,7 +106,11 @@ impl ArrowReaderBuilder {
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
-            file_io: self.file_io,
+            file_io: self.file_io.clone(),
+            delete_file_manager: CachingDeleteFileManager::new(
+                self.file_io.clone(),
+                self.concurrency_limit_data_files,
+            ),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
@@ -119,6 +123,7 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
+    delete_file_manager: CachingDeleteFileManager,
 
     /// the maximum number of data files that can be fetched at the same time
     concurrency_limit_data_files: usize,
@@ -145,9 +150,9 @@ impl ArrowReader {
                     task,
                     batch_size,
                     file_io,
+                    self.delete_file_manager.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
-                    concurrency_limit_data_files,
                 )
             })
             .map_err(|err| {
@@ -163,20 +168,16 @@ impl ArrowReader {
         task: FileScanTask,
         batch_size: Option<usize>,
         file_io: FileIO,
+        delete_file_manager: CachingDeleteFileManager,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
-        concurrency_limit_data_files: usize,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
         // concurrently retrieve delete files and create RecordBatchStreamBuilder
-        let (delete_file_manager, mut record_batch_stream_builder) = try_join!(
-            DeleteFileManager::load_deletes(
-                task.deletes.clone(),
-                file_io.clone(),
-                concurrency_limit_data_files
-            ),
+        let (_, mut record_batch_stream_builder) = try_join!(
+            delete_file_manager.load_deletes(task.deletes.clone()),
             Self::create_parquet_record_batch_stream_builder(
                 &task.data_file_path,
                 file_io.clone(),

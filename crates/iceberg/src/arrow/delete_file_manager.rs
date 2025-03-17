@@ -19,19 +19,46 @@ use roaring::RoaringTreemap;
 
 use crate::expr::BoundPredicate;
 use crate::io::FileIO;
-use crate::scan::FileScanTaskDeleteFile;
+use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::SchemaRef;
 use crate::{Error, ErrorKind, Result};
 
-pub(crate) struct DeleteFileManager {}
+#[allow(unused)]
+pub trait DeleteFileManager {
+    /// Read the delete file referred to in the task
+    ///
+    /// Returns the raw contents of the delete file as a RecordBatch stream
+    fn read_delete_file(task: &FileScanTaskDeleteFile) -> Result<ArrowRecordBatchStream>;
+}
+
+#[allow(unused)]
+#[derive(Clone, Debug)]
+pub(crate) struct CachingDeleteFileManager {
+    file_io: FileIO,
+    concurrency_limit_data_files: usize,
+}
+
+impl DeleteFileManager for CachingDeleteFileManager {
+    fn read_delete_file(_task: &FileScanTaskDeleteFile) -> Result<ArrowRecordBatchStream> {
+        // TODO, implementation in https://github.com/apache/iceberg-rust/pull/982
+
+        unimplemented!()
+    }
+}
 
 #[allow(unused_variables)]
-impl DeleteFileManager {
+impl CachingDeleteFileManager {
+    pub fn new(file_io: FileIO, concurrency_limit_data_files: usize) -> CachingDeleteFileManager {
+        Self {
+            file_io,
+            concurrency_limit_data_files,
+        }
+    }
+
     pub(crate) async fn load_deletes(
+        &self,
         delete_file_entries: Vec<FileScanTaskDeleteFile>,
-        file_io: FileIO,
-        concurrency_limit_data_files: usize,
-    ) -> Result<DeleteFileManager> {
+    ) -> Result<()> {
         // TODO
 
         if !delete_file_entries.is_empty() {
@@ -40,7 +67,7 @@ impl DeleteFileManager {
                 "Reading delete files is not yet supported",
             ))
         } else {
-            Ok(DeleteFileManager {})
+            Ok(())
         }
     }
 
