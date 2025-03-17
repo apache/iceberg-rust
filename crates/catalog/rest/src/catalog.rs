@@ -235,6 +235,18 @@ impl RestCatalogConfig {
     pub(crate) fn signing_name(&self) -> Option<String> {
         self.props.get("rest.signing-name").cloned()
     }
+
+    pub(crate) fn access_key_id(&self) -> Option<String> {
+        self.props.get("rest.access-key-id").cloned()
+    }
+
+    pub(crate) fn secret_access_key(&self) -> Option<String> {
+        self.props.get("rest.secret-access-key").cloned()
+    }
+
+    pub(crate) fn session_token(&self) -> Option<String> {
+        self.props.get("rest.session-token").cloned()
+    }
 }
 
 #[derive(Debug)]

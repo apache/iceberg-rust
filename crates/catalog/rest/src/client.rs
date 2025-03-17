@@ -63,11 +63,23 @@ impl HttpClient {
 
         #[cfg(feature = "sigv4")]
         if cfg.sigv4_enabled() {
-            client_builder = client_builder.with(crate::middleware::sigv4::SigV4Middleware::new(
+            let mut sigv4_middleware = crate::middleware::sigv4::SigV4Middleware::new(
                 &cfg.base_url(),
                 cfg.signing_name().as_deref().unwrap_or("glue"),
                 cfg.signing_region().as_deref(),
-            ));
+            );
+
+            if let (Some(access_key_id), Some(secret_access_key)) =
+                (cfg.access_key_id(), cfg.secret_access_key())
+            {
+                sigv4_middleware = sigv4_middleware.with_credentials(
+                    access_key_id,
+                    secret_access_key,
+                    cfg.session_token(),
+                );
+            }
+
+            client_builder = client_builder.with(sigv4_middleware);
         }
 
         Ok(HttpClient {
