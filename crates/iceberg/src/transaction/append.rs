@@ -222,6 +222,7 @@ mod tests {
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
             .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([Some(Literal::string("test"))]))
             .build()
             .unwrap();
@@ -233,6 +234,7 @@ mod tests {
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
             .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap();

@@ -30,14 +30,16 @@ use crate::Result;
 pub struct DataFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     partition_value: Option<Struct>,
+    partition_spec_id: i32,
 }
 
 impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     /// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B, partition_value: Option<Struct>) -> Self {
+    pub fn new(inner: B, partition_value: Option<Struct>, partition_spec_id: i32) -> Self {
         Self {
             inner,
             partition_value,
+            partition_spec_id,
         }
     }
 }
@@ -50,6 +52,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
         Ok(DataFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
             partition_value: self.partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id: self.partition_spec_id,
         })
     }
 }
@@ -59,6 +62,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 pub struct DataFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 #[async_trait::async_trait]
@@ -76,6 +80,7 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
             .map(|mut res| {
                 res.content(DataContentType::Data);
                 res.partition(self.partition_value.clone());
+                res.partition_spec_id(self.partition_spec_id);
                 res.build().expect("Guaranteed to be valid")
             })
             .collect_vec())
@@ -142,7 +147,10 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await.unwrap();
+        let mut data_file_writer = DataFileWriterBuilder::new(pw, None, 0)
+            .build()
+            .await
+            .unwrap();
 
         let arrow_schema = arrow_schema::Schema::new(vec![
             Field::new("foo", DataType::Int32, false),
@@ -211,7 +219,7 @@ mod test {
         );
 
         let mut data_file_writer =
-            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()))
+            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()), 0)
                 .build()
                 .await?;
 
