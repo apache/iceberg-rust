@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use super::blob::Blob;
 use crate::io::{FileIOBuilder, InputFile};
 use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
@@ -68,6 +69,7 @@ pub(crate) const METRIC_BLOB_0_TYPE: &str = "some-blob";
 pub(crate) const METRIC_BLOB_0_INPUT_FIELDS: [i32; 1] = [1];
 pub(crate) const METRIC_BLOB_0_SNAPSHOT_ID: i64 = 2;
 pub(crate) const METRIC_BLOB_0_SEQUENCE_NUMBER: i64 = 1;
+pub(crate) const METRIC_BLOB_0_DATA: &str = "abcdefghi";
 
 pub(crate) fn zstd_compressed_metric_blob_0_metadata() -> BlobMetadata {
     BlobMetadata {
@@ -95,10 +97,23 @@ pub(crate) fn uncompressed_metric_blob_0_metadata() -> BlobMetadata {
     }
 }
 
+pub(crate) fn blob_0() -> Blob {
+    Blob {
+        r#type: METRIC_BLOB_0_TYPE.to_string(),
+        fields: METRIC_BLOB_0_INPUT_FIELDS.to_vec(),
+        snapshot_id: METRIC_BLOB_0_SNAPSHOT_ID,
+        sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
+        data: METRIC_BLOB_0_DATA.as_bytes().to_vec(),
+        properties: HashMap::new(),
+    }
+}
+
 pub(crate) const METRIC_BLOB_1_TYPE: &str = "some-other-blob";
 pub(crate) const METRIC_BLOB_1_INPUT_FIELDS: [i32; 1] = [2];
 pub(crate) const METRIC_BLOB_1_SNAPSHOT_ID: i64 = 2;
 pub(crate) const METRIC_BLOB_1_SEQUENCE_NUMBER: i64 = 1;
+pub(crate) const METRIC_BLOB_1_DATA: &str =
+    "some blob \u{0000} binary data 🤯 that is not very very very very very very long, is it?";
 
 pub(crate) fn uncompressed_metric_blob_1_metadata() -> BlobMetadata {
     BlobMetadata {
@@ -122,6 +137,17 @@ pub(crate) fn zstd_compressed_metric_blob_1_metadata() -> BlobMetadata {
         offset: 26,
         length: 77,
         compression_codec: CompressionCodec::Zstd,
+        properties: HashMap::new(),
+    }
+}
+
+pub(crate) fn blob_1() -> Blob {
+    Blob {
+        r#type: METRIC_BLOB_1_TYPE.to_string(),
+        fields: METRIC_BLOB_1_INPUT_FIELDS.to_vec(),
+        snapshot_id: METRIC_BLOB_1_SNAPSHOT_ID,
+        sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
+        data: METRIC_BLOB_1_DATA.as_bytes().to_vec(),
         properties: HashMap::new(),
     }
 }

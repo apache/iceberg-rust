@@ -47,7 +47,7 @@ jobs:
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.6.0
+        uses: apache/skywalking-eyes/header@v0.7.0
 
       - name: Install taplo-cli
         uses: taiki-e/install-action@v2
@@ -152,6 +152,8 @@ jobs:
           # Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build.
           # So we update these transitive dependencies here.
           cargo update tap faststr metainfo linkedbytes
+          # munge 0.4.2 will cause fail to use 1.7.1 so specify the correct version here.
+          cargo update -p munge --precise 0.4.1
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:

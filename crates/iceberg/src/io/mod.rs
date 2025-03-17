@@ -89,6 +89,6 @@ mod storage_gcs;
 #[cfg(feature = "storage-gcs")]
 pub use storage_gcs::*;
 
-fn is_truthy(value: &str) -> bool {
+pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }

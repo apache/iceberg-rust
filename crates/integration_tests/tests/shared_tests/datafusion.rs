@@ -25,17 +25,18 @@ use datafusion::catalog::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::prelude::SessionContext;
 use iceberg::{Catalog, TableIdent};
+use iceberg_catalog_rest::RestCatalog;
 use iceberg_datafusion::IcebergTableProvider;
-use iceberg_integration_tests::set_test_fixture;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_basic_queries() -> Result<(), DataFusionError> {
-    let fixture = set_test_fixture("datafusion_basic_read").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
-    let catalog = fixture.rest_catalog;
-
-    let table = catalog
+    let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "types_test"]).unwrap())
         .await
         .unwrap();
