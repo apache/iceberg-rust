@@ -53,6 +53,7 @@ pub struct EqualityDeleteWriterConfig {
     // Projector used to project the data chunk into specific fields.
     projector: RecordBatchProjector,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 impl EqualityDeleteWriterConfig {
@@ -61,6 +62,7 @@ impl EqualityDeleteWriterConfig {
         equality_ids: Vec<i32>,
         original_schema: SchemaRef,
         partition_value: Option<Struct>,
+        partition_spec_id: i32,
     ) -> Result<Self> {
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
@@ -97,6 +99,7 @@ impl EqualityDeleteWriterConfig {
             equality_ids,
             projector,
             partition_value: partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id,
         })
     }
 
@@ -116,6 +119,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for EqualityDeleteFileWriterBuil
             projector: self.config.projector,
             equality_ids: self.config.equality_ids,
             partition_value: self.config.partition_value,
+            partition_spec_id: self.config.partition_spec_id,
         })
     }
 }
@@ -127,6 +131,7 @@ pub struct EqualityDeleteFileWriter<B: FileWriterBuilder> {
     projector: RecordBatchProjector,
     equality_ids: Vec<i32>,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 #[async_trait::async_trait]
@@ -153,6 +158,7 @@ impl<B: FileWriterBuilder> IcebergWriter for EqualityDeleteFileWriter<B> {
                     res.content(crate::spec::DataContentType::EqualityDeletes);
                     res.equality_ids(self.equality_ids.iter().copied().collect_vec());
                     res.partition(self.partition_value.clone());
+                    res.partition_spec_id(self.partition_spec_id);
                     res.build().expect("msg")
                 })
                 .collect_vec())
@@ -387,7 +393,7 @@ mod test {
 
         let equality_ids = vec![0_i32, 8];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None, 0).unwrap();
         let delete_schema =
             arrow_schema_to_schema(equality_config.projected_arrow_schema_ref()).unwrap();
         let projector = equality_config.projector.clone();
@@ -484,19 +490,19 @@ mod test {
                 .unwrap(),
         );
         // Float and Double are not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![0], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![1], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![0], schema.clone(), None, 0).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![1], schema.clone(), None, 0).is_err());
         // Struct is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![3], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![3], schema.clone(), None, 0).is_err());
         // Nested field of struct is allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![4], schema.clone(), None).is_ok());
+        assert!(EqualityDeleteWriterConfig::new(vec![4], schema.clone(), None, 0).is_ok());
         // Nested field of map is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![7], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![8], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![9], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![7], schema.clone(), None, 0).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![8], schema.clone(), None, 0).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![9], schema.clone(), None, 0).is_err());
         // Nested field of list is not allowed to be used for equality delete
-        assert!(EqualityDeleteWriterConfig::new(vec![10], schema.clone(), None).is_err());
-        assert!(EqualityDeleteWriterConfig::new(vec![11], schema.clone(), None).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![10], schema.clone(), None, 0).is_err());
+        assert!(EqualityDeleteWriterConfig::new(vec![11], schema.clone(), None, 0).is_err());
 
         Ok(())
     }
@@ -549,7 +555,8 @@ mod test {
                 .unwrap(),
         );
         let equality_ids = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
-        let config = EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), None).unwrap();
+        let config =
+            EqualityDeleteWriterConfig::new(equality_ids, schema.clone(), None, 0).unwrap();
         let delete_arrow_schema = config.projected_arrow_schema_ref().clone();
         let delete_schema = arrow_schema_to_schema(&delete_arrow_schema).unwrap();
 
@@ -740,7 +747,7 @@ mod test {
         let to_write = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
         let equality_ids = vec![0_i32, 2, 5];
         let equality_config =
-            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None).unwrap();
+            EqualityDeleteWriterConfig::new(equality_ids, Arc::new(schema), None, 0).unwrap();
         let projector = equality_config.projector.clone();
 
         // check
