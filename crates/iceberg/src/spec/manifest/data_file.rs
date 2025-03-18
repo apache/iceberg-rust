@@ -239,6 +239,10 @@ impl DataFile {
     pub(crate) fn rewrite_partition(&mut self, partition: Struct) {
         self.partition = partition;
     }
+
+    pub(crate) fn rewrite_partition_id(&mut self, partition_spec_id: i32) {
+        self.partition_spec_id = partition_spec_id;
+    }
 }
 
 /// Convert data files to avro bytes and write to writer.

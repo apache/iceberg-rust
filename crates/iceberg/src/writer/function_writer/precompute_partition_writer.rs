@@ -207,7 +207,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let data_file_writer_builder = DataFileWriterBuilder::new(pw, None);
+        let data_file_writer_builder = DataFileWriterBuilder::new(pw, None, 0);
         let mut precompute_partition_writer = PrecomputePartitionWriterBuilder::new(
             data_file_writer_builder,
             Arc::new(partition_spec),

@@ -27,7 +27,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use super::record_batch_projector::RecordBatchProjector;
 use crate::arrow::{arrow_struct_to_literal, type_to_arrow_type};
-use crate::spec::{Literal, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
+use crate::spec::{Literal, PartitionSpec, PartitionSpecRef, SchemaRef, Struct, StructType, Type};
 use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::{Error, ErrorKind, Result};
 
@@ -184,6 +184,10 @@ impl RecordBatchPartitionSpliter {
             transform_functions,
             row_converter,
         })
+    }
+
+    pub(crate) fn partition_spec(&self) -> &PartitionSpec {
+        self.partition_spec.as_ref()
     }
 
     /// Split the record batch into multiple record batches by the partition spec.

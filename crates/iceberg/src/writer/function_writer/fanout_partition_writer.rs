@@ -134,6 +134,7 @@ impl<B: IcebergWriterBuilder> IcebergWriter for FanoutPartitionWriter<B> {
             let mut data_files = writer.close().await?;
             for data_file in data_files.iter_mut() {
                 data_file.rewrite_partition(partition_value.clone());
+                data_file.rewrite_partition_id(self.partition_splitter.partition_spec().spec_id());
             }
             result.append(&mut data_files);
         }
@@ -211,7 +212,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let data_file_writer_builder = DataFileWriterBuilder::new(pw, None);
+        let data_file_writer_builder = DataFileWriterBuilder::new(pw, None, 0);
         let mut fanout_partition_writer = FanoutPartitionWriterBuilder::new(
             data_file_writer_builder,
             Arc::new(partition_spec),

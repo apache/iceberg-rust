@@ -35,15 +35,22 @@ pub struct SortPositionDeleteWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     cache_num: usize,
     partition_value: Option<Struct>,
+    partition_spec_id: Option<i32>,
 }
 
 impl<B: FileWriterBuilder> SortPositionDeleteWriterBuilder<B> {
     /// Create a new `SortPositionDeleteWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B, cache_num: usize, partition_value: Option<Struct>) -> Self {
+    pub fn new(
+        inner: B,
+        cache_num: usize,
+        partition_value: Option<Struct>,
+        partition_spec_id: Option<i32>,
+    ) -> Self {
         Self {
             inner,
             cache_num,
             partition_value,
+            partition_spec_id,
         }
     }
 }
@@ -86,6 +93,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder<PositionDeleteInput, Vec<DataFil
             cache: BTreeMap::new(),
             data_files: Vec::new(),
             partition_value: self.partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id: self.partition_spec_id.unwrap_or(0),
         })
     }
 }
@@ -106,6 +114,7 @@ pub struct SortPositionDeleteWriter<B: FileWriterBuilder> {
     cache: BTreeMap<String, Vec<i64>>,
     data_files: Vec<DataFile>,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 impl<B: FileWriterBuilder> SortPositionDeleteWriter<B> {
@@ -140,6 +149,7 @@ impl<B: FileWriterBuilder> SortPositionDeleteWriter<B> {
             .extend(writer.close().await?.into_iter().map(|mut res| {
                 res.content(crate::spec::DataContentType::PositionDeletes);
                 res.partition(self.partition_value.clone());
+                res.partition_spec_id(self.partition_spec_id);
                 res.build().expect("Guaranteed to be valid")
             }));
         Ok(())
@@ -204,7 +214,7 @@ mod test {
             location_gen,
             file_name_gen,
         );
-        let mut position_delete_writer = SortPositionDeleteWriterBuilder::new(pw, 10, None)
+        let mut position_delete_writer = SortPositionDeleteWriterBuilder::new(pw, 10, None, None)
             .build()
             .await?;
 
