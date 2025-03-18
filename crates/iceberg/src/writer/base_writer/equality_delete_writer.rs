@@ -184,8 +184,10 @@ mod test {
 
     use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
     use crate::io::{FileIO, FileIOBuilder};
-    use crate::spec::data_file::{DataFile, DataFileFormat};
-    use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+    use crate::spec::{
+        DataFile, DataFileFormat, ListType, MapType, NestedField, PrimitiveType, Schema,
+        StructType, Type,
+    };
     use crate::writer::base_writer::equality_delete_writer::{
         EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
     };

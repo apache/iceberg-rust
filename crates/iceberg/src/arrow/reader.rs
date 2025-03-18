@@ -1185,8 +1185,9 @@ mod tests {
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::data_file::{DataContentType, DataFileFormat};
-    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
     use crate::ErrorKind;
 
     fn table_schema_simple() -> SchemaRef {
