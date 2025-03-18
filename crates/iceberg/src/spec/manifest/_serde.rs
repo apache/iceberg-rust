@@ -53,13 +53,15 @@ impl ManifestEntryV2 {
         })
     }
 
-    pub fn try_into(self, partition_type: &StructType, schema: &Schema) -> Result<ManifestEntry> {
+    pub fn try_into(self, partition_spec_id: i32, partition_type: &StructType, schema: &Schema) -> Result<ManifestEntry> {
         Ok(ManifestEntry {
             status: self.status.try_into()?,
             snapshot_id: self.snapshot_id,
             sequence_number: self.sequence_number,
             file_sequence_number: self.file_sequence_number,
-            data_file: self.data_file.try_into(partition_type, schema)?,
+            data_file: self
+                    .data_file
+                    .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
 }
@@ -80,13 +82,15 @@ impl ManifestEntryV1 {
         })
     }
 
-    pub fn try_into(self, partition_type: &StructType, schema: &Schema) -> Result<ManifestEntry> {
+    pub fn try_into(self, partition_spec_id: i32, partition_type: &StructType, schema: &Schema) -> Result<ManifestEntry> {
         Ok(ManifestEntry {
             status: self.status.try_into()?,
             snapshot_id: Some(self.snapshot_id),
             sequence_number: Some(0),
             file_sequence_number: Some(0),
-            data_file: self.data_file.try_into(partition_type, schema)?,
+            data_file: self
+                    .data_file
+                    .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
 }
@@ -149,6 +153,7 @@ impl DataFileSerde {
 
     pub fn try_into(
         self,
+        partition_spec_id: i32, 
         partition_type: &StructType,
         schema: &Schema,
     ) -> Result<data_file::DataFile> {
@@ -208,6 +213,7 @@ impl DataFileSerde {
             split_offsets: self.split_offsets.unwrap_or_default(),
             equality_ids: self.equality_ids.unwrap_or_default(),
             sort_order_id: self.sort_order_id,
+            partition_spec_id,
         })
     }
 }
@@ -711,6 +717,7 @@ mod tests {
     pub fn read_data_files_from_avro<R: Read>(
         reader: &mut R,
         schema: &Schema,
+        partition_spec_id: i32,
         partition_type: &StructType,
         version: FormatVersion,
     ) -> Result<Vec<DataFile>> {
@@ -722,7 +729,13 @@ mod tests {
         let reader = AvroReader::with_schema(&avro_schema, reader)?;
         reader
             .into_iter()
-            .map(|value| from_value::<DataFileSerde>(&value?)?.try_into(partition_type, schema))
+            .map(|value| {
+                from_value::<DataFileSerde>(&value?)?.try_into(
+                    partition_spec_id,
+                    partition_type,
+                    schema,
+                )
+            })
             .collect::<Result<Vec<_>>>()
     }
 
@@ -780,6 +793,7 @@ mod tests {
             split_offsets: vec![4],
             equality_ids: vec![],
             sort_order_id: Some(0),
+            partition_spec_id: 0
         }];
 
         let mut buffer = Vec::new();
@@ -794,6 +808,7 @@ mod tests {
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
             &schema,
+            0,
             &StructType::new(vec![]),
             FormatVersion::V2,
         )

@@ -242,6 +242,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
                 ManifestEntry {
@@ -266,6 +267,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
                 ManifestEntry {
@@ -290,6 +292,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     },
                 },
             ];
@@ -395,6 +398,7 @@ mod tests {
                         split_offsets: vec![4],
                         equality_ids: Vec::new(),
                         sort_order_id: None,
+                        partition_spec_id: 0
                     }
                 },
                     ManifestEntry {
@@ -425,6 +429,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
                     ManifestEntry {
@@ -455,6 +460,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
                     ManifestEntry {
@@ -485,6 +491,7 @@ mod tests {
                             split_offsets: vec![4],
                             equality_ids: Vec::new(),
                             sort_order_id: None,
+                            partition_spec_id: 0
                         }
                     },
             ];

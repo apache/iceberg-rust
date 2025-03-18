@@ -144,6 +144,9 @@ pub struct DataFile {
     /// delete files.
     #[builder(default, setter(strip_option))]
     pub(crate) sort_order_id: Option<i32>,
+    /// This field is not included in spec. It is just store in memory representation used
+    /// in process.
+    pub(crate) partition_spec_id: i32,
 }
 
 impl DataFile {
