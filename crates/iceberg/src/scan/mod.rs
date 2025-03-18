@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+pub use task::*;
 mod task;
 
 use std::sync::Arc;
@@ -29,7 +30,6 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
-pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
 use crate::delete_file_index::DeleteFileIndex;
@@ -51,6 +51,10 @@ pub struct TableScanBuilder<'a> {
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
+    /// Exclusive. Used for incremental scan.
+    from_snapshot_id: Option<i64>,
+    /// Inclusive. Used for incremental scan.
+    to_snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -69,6 +73,8 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: None,
             snapshot_id: None,
+            from_snapshot_id: None,
+            to_snapshot_id: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -130,6 +136,18 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Set the starting snapshot id (exclusive) for incremental scan.
+    pub fn from_snapshot_id(mut self, from_snapshot_id: i64) -> Self {
+        self.from_snapshot_id = Some(from_snapshot_id);
+        self
+    }
+
+    /// Set the ending snapshot id (inclusive) for incremental scan.
+    pub fn to_snapshot_id(mut self, to_snapshot_id: i64) -> Self {
+        self.to_snapshot_id = Some(to_snapshot_id);
+        self
+    }
+
     /// Sets the concurrency limit for both manifest files and manifest
     /// entries for this scan
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
@@ -185,6 +203,25 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
+        // Validate that we have either a snapshot scan or an incremental scan configuration
+        if self.from_snapshot_id.is_some() || self.to_snapshot_id.is_some() {
+            // For incremental scan, we need to_snapshot_id to be set. from_snapshot_id is optional.
+            if self.to_snapshot_id.is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Incremental scan requires to_snapshot_id to be set",
+                ));
+            }
+
+            // snapshot_id should not be set for incremental scan
+            if self.snapshot_id.is_some() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "snapshot_id should not be set for incremental scan. Use from_snapshot_id and to_snapshot_id instead.",
+                ));
+            }
+        }
+
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -214,7 +251,6 @@ impl<'a> TableScanBuilder<'a> {
                 current_snapshot_id.clone()
             }
         };
-
         let schema = snapshot.schema(self.table.metadata())?;
 
         // Check that all column names exist in the schema.
@@ -277,6 +313,8 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
+            from_snapshot_id: self.from_snapshot_id,
+            to_snapshot_id: self.to_snapshot_id,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
@@ -353,7 +391,7 @@ impl TableScan {
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
-        )?;
+        ).await?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
 
@@ -383,7 +421,7 @@ impl TableScan {
                         spawn(async move {
                             Self::process_delete_manifest_entry(manifest_entry_context, tx).await
                         })
-                        .await
+                            .await
                     },
                 )
                 .await;
@@ -406,7 +444,7 @@ impl TableScan {
                         spawn(async move {
                             Self::process_data_manifest_entry(manifest_entry_context, tx).await
                         })
-                        .await
+                            .await
                     },
                 )
                 .await;
