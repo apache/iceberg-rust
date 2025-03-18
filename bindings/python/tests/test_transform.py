@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pyarrow as pa
 import pytest
@@ -58,6 +58,18 @@ def test_bucket_chunked_array():
 
 def test_year_transform():
     arr = pa.array([date(1970, 1, 1), date(2000, 1, 1)])
+    result = transform.year(arr)
+    expected = pa.array([0, 30], type=pa.int32())
+    assert result == expected
+
+
+def test_year_transform_with_tz():
+    arr = pa.array(
+        [
+            datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2000, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        ]
+    )
     result = transform.year(arr)
     expected = pa.array([0, 30], type=pa.int32())
     assert result == expected
