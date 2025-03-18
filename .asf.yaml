@@ -48,6 +48,7 @@ github:
     wiki: false
     issues: true
     projects: true
+    discussions: true
   collaborators:
     - JanKaul
     - c-thiel
@@ -59,3 +60,4 @@ notifications:
   issues: issues@iceberg.apache.org
   pullrequests: issues@iceberg.apache.org
   jira_options: link label link label
+  discussions: issues@iceberg.apache.org
