@@ -1579,6 +1579,26 @@
 <a href="#1579" id="1579">1579</a>
 <a href="#1580" id="1580">1580</a>
 <a href="#1581" id="1581">1581</a>
+<a href="#1582" id="1582">1582</a>
+<a href="#1583" id="1583">1583</a>
+<a href="#1584" id="1584">1584</a>
+<a href="#1585" id="1585">1585</a>
+<a href="#1586" id="1586">1586</a>
+<a href="#1587" id="1587">1587</a>
+<a href="#1588" id="1588">1588</a>
+<a href="#1589" id="1589">1589</a>
+<a href="#1590" id="1590">1590</a>
+<a href="#1591" id="1591">1591</a>
+<a href="#1592" id="1592">1592</a>
+<a href="#1593" id="1593">1593</a>
+<a href="#1594" id="1594">1594</a>
+<a href="#1595" id="1595">1595</a>
+<a href="#1596" id="1596">1596</a>
+<a href="#1597" id="1597">1597</a>
+<a href="#1598" id="1598">1598</a>
+<a href="#1599" id="1599">1599</a>
+<a href="#1600" id="1600">1600</a>
+<a href="#1601" id="1601">1601</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1762,14 +1782,16 @@
     /// - The specified `version_id` does not exist.
     /// - The specified `version_id` is `-1` but no version has been added.
     </span><span class="kw">pub fn </span>set_current_version_id(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>version_id: i32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">if </span>version_id == <span class="self">Self</span>::LAST_ADDED &amp;&amp; <span class="self">self</span>.last_added_version_id.is_none() {
-            version_id = <span class="self">self</span>.last_added_version_id.ok_or_else(|| {
-                Error::new(
+        <span class="kw">if </span>version_id == <span class="self">Self</span>::LAST_ADDED {
+            <span class="kw">let </span><span class="prelude-val">Some</span>(last_added_id) = <span class="self">self</span>.last_added_version_id <span class="kw">else </span>{
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
                     <span class="string">"Cannot set current version id to last added version: no version has been added."</span>,
-                )
-            })<span class="question-mark">?</span>;
+                ));
+            };
+            version_id = last_added_id;
         }
+
         <span class="kw">let </span>version_id = version_id; <span class="comment">// make immutable
 
         </span><span class="kw">if </span>version_id == <span class="self">self</span>.metadata.current_version_id {
@@ -2775,6 +2797,24 @@
             .unwrap_err()
             .to_string()
             .contains(<span class="string">"Cannot set current version to unknown version with id: 10"</span>));
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_set_current_version_to_last_added() {
+        <span class="kw">let </span>builder = builder_without_changes();
+        <span class="kw">let </span>v1 = new_view_version(<span class="number">2</span>, <span class="number">1</span>, <span class="string">"select * from ns.tbl"</span>);
+        <span class="kw">let </span>v2 = new_view_version(<span class="number">3</span>, <span class="number">1</span>, <span class="string">"select a,b from ns.tbl"</span>);
+        <span class="kw">let </span>meta = builder
+            .clone()
+            .add_version(v1)
+            .unwrap()
+            .add_version(v2)
+            .unwrap()
+            .set_current_version_id(-<span class="number">1</span>)
+            .unwrap()
+            .build()
+            .unwrap();
+        <span class="macro">assert_eq!</span>(meta.metadata.current_version_id, <span class="number">3</span>);
     }
 
     <span class="attr">#[test]
