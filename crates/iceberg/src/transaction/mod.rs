@@ -24,6 +24,7 @@ mod sort_order;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem::discriminant;
+use std::sync::Arc;
 
 use uuid::Uuid;
 
