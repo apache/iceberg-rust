@@ -653,6 +653,7 @@ pub fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
     ]
 }
 
+#[allow(dead_code)]
 pub(super) fn data_file_schema_v1(partition_type: &StructType) -> Result<AvroSchema> {
     let schema = Schema::builder()
         .with_fields(data_file_fields_v1(partition_type))
@@ -660,6 +661,7 @@ pub(super) fn data_file_schema_v1(partition_type: &StructType) -> Result<AvroSch
     schema_to_avro_schema("data_file", &schema)
 }
 
+#[allow(dead_code)]
 pub(super) fn data_file_schema_v2(partition_type: &StructType) -> Result<AvroSchema> {
     let schema = Schema::builder()
         .with_fields(data_file_fields_v2(partition_type))
@@ -670,19 +672,17 @@ pub(super) fn data_file_schema_v2(partition_type: &StructType) -> Result<AvroSch
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::{Cursor, Read, Write};
     use std::sync::Arc;
 
-    use apache_avro::{to_value, Reader, Schema as AvroSchema};
-    use once_cell::sync::Lazy;
+    use apache_avro::{from_value, to_value, Reader as AvroReader, Writer as AvroWriter};
 
-    use super::{data_file_schema_v1, data_file_schema_v2, DataFileSerde};
-    use crate::avro::schema_to_avro_schema;
+    use super::{data_file_schema_v1, data_file_schema_v2, DataFileSerde, *};
     use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
     use crate::spec::{
-        DataFile, FormatVersion, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType,
+        DataContentType, DataFile, DataFileFormat, FormatVersion, NestedField, PrimitiveType,
         Schema, StructType, Type,
     };
-    use crate::Error;
 
     /// Convert data files to avro bytes and write to writer.
     /// Return the bytes written.
