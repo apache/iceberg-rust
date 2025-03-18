@@ -26,7 +26,7 @@ pub mod entry;
 pub use entry::*;
 /// Manifest metadata
 pub mod metadata;
-pub use metadata::*;
+pub(crate) use metadata::*;
 /// Manifest Writer
 pub mod writer;
 use std::sync::Arc;
