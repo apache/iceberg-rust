@@ -198,7 +198,7 @@ pub mod file_writer;
 
 use arrow_array::RecordBatch;
 
-use crate::spec::data_file::DataFile;
+use crate::spec::DataFile;
 use crate::Result;
 
 type DefaultInput = RecordBatch;
@@ -247,7 +247,7 @@ mod tests {
 
     use super::IcebergWriter;
     use crate::io::FileIO;
-    use crate::spec::data_file::{DataFile, DataFileFormat};
+    use crate::spec::{DataFile, DataFileFormat};
 
     // This function is used to guarantee the trait can be used as a object safe trait.
     async fn _guarantee_object_safe(mut w: Box<dyn IcebergWriter>) {

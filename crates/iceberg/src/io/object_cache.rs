@@ -191,10 +191,10 @@ mod tests {
 
     use super::*;
     use crate::io::{FileIO, OutputFile};
-    use crate::spec::data_file::{DataContentType, DataFileBuilder, DataFileFormat};
-    use crate::spec::entry::{ManifestEntry, ManifestStatus};
-    use crate::spec::writer::ManifestWriterBuilder;
-    use crate::spec::{Literal, ManifestListWriter, Struct, TableMetadata};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
+    };
     use crate::table::Table;
     use crate::TableIdent;
 

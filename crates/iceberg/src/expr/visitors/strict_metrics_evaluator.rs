@@ -19,8 +19,7 @@ use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::data_file::DataFile;
-use crate::spec::Datum;
+use crate::spec::{DataFile, Datum};
 use crate::{Error, ErrorKind, Result};
 
 #[allow(dead_code)]
@@ -431,8 +430,10 @@ mod test {
         BinaryExpression, Bind, BoundPredicate, Predicate, Reference, SetExpression,
         UnaryExpression,
     };
-    use crate::spec::data_file::{DataContentType, DataFile, DataFileFormat};
-    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataContentType, DataFile, DataFileFormat, Datum, NestedField, PrimitiveType, Schema,
+        Struct, Type,
+    };
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;

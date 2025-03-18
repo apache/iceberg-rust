@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use futures::TryStreamExt;
-use iceberg::spec::data_file::DataFileFormat;
-use iceberg::spec::{Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec};
+use iceberg::spec::{
+    DataFileFormat, Literal, PrimitiveLiteral, Struct, Transform, UnboundPartitionSpec,
+};
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;

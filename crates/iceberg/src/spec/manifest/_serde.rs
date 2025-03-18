@@ -18,21 +18,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use apache_avro::Schema as AvroSchema;
+use once_cell::sync::Lazy;
 use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::ManifestEntry;
+use crate::avro::schema_to_avro_schema;
 use crate::error::Result;
 use crate::spec::manifest::data_file;
-use crate::spec::{Datum, Literal, RawLiteral, Schema, Struct, StructType, Type};
-use crate::{Error, ErrorKind};
-use apache_avro::Schema as AvroSchema;
-use once_cell::sync::Lazy;
-
-use crate::avro::schema_to_avro_schema;
 use crate::spec::{
-    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, 
+    Datum, ListType, Literal, MapType, NestedField, NestedFieldRef, PrimitiveType, RawLiteral,
+    Schema, Struct, StructType, Type,
 };
+use crate::{Error, ErrorKind};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV2 {
@@ -668,7 +667,6 @@ pub(super) fn data_file_schema_v2(partition_type: &StructType) -> Result<AvroSch
     schema_to_avro_schema("data_file", &schema)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -677,14 +675,14 @@ mod tests {
     use apache_avro::{to_value, Reader, Schema as AvroSchema};
     use once_cell::sync::Lazy;
 
+    use super::{data_file_schema_v1, data_file_schema_v2, DataFileSerde};
     use crate::avro::schema_to_avro_schema;
-    use crate::spec::manifest::_serde::parse_i64_entry;
+    use crate::spec::manifest::_serde::{parse_i64_entry, I64Entry};
     use crate::spec::{
-        FormatVersion, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type
+        DataFile, FormatVersion, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType,
+        Schema, StructType, Type,
     };
     use crate::Error;
-
-    use super::{data_file_schema_v1, data_file_schema_v2, DataFileSerde};
 
     /// Convert data files to avro bytes and write to writer.
     /// Return the bytes written.

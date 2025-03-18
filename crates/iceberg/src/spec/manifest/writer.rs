@@ -23,8 +23,9 @@ use itertools::Itertools;
 use serde_json::to_vec;
 
 use super::_serde::{manifest_schema_v1, manifest_schema_v2, ManifestEntryV1, ManifestEntryV2};
-use super::{Datum, FormatVersion, ManifestContentType,
-    PartitionSpec, PrimitiveType, UNASSIGNED_SEQUENCE_NUMBER,
+use super::{
+    Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
+    UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
 use crate::io::OutputFile;

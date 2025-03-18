@@ -19,19 +19,21 @@ mod _serde;
 
 /// Data file
 pub mod data_file;
+pub use data_file::*;
 
 /// Manifest entry
 pub mod entry;
-mod metadata;
+pub use entry::*;
+/// Manifest metadata
+pub mod metadata;
+pub use metadata::*;
 /// Manifest Writer
 pub mod writer;
-
 use std::sync::Arc;
 
 use _serde::{manifest_schema_v1, manifest_schema_v2};
 use apache_avro::{from_value, Reader as AvroReader};
-use entry::{ManifestEntry, ManifestEntryRef};
-use metadata::ManifestMetadata;
+pub use writer::*;
 
 use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct,

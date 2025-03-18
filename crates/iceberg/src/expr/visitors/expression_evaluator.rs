@@ -19,8 +19,7 @@ use fnv::FnvHashSet;
 
 use super::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::data_file::DataFile;
-use crate::spec::{Datum, PrimitiveLiteral, Struct};
+use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
 
 /// Evaluates a [`DataFile`]'s partition [`Struct`] to check
@@ -258,10 +257,10 @@ mod tests {
         predicate, BinaryExpression, Bind, BoundPredicate, Predicate, PredicateOperator, Reference,
         UnaryExpression,
     };
-    use crate::spec::data_file::{DataContentType, DataFile, DataFileFormat};
     use crate::spec::{
-        Datum, Literal, NestedField, PartitionSpec, PartitionSpecRef, PrimitiveType, Schema,
-        SchemaRef, Struct, Transform, Type, UnboundPartitionField,
+        DataContentType, DataFile, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
+        PartitionSpecRef, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        UnboundPartitionField,
     };
     use crate::Result;
 

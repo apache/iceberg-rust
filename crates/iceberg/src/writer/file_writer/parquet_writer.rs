@@ -43,12 +43,12 @@ use crate::arrow::{
     DEFAULT_MAP_FIELD_NAME,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
-use crate::spec::data_file::{DataContentType, DataFile, DataFileBuilder, DataFileFormat};
 use crate::spec::{
-    visit_schema, Datum, ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef,
-    SchemaVisitor, Struct, StructType, TableMetadata, Type,
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
+    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
+    TableMetadata, Type,
 };
-use crate::writer::CurrentFileStatus;
+use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]

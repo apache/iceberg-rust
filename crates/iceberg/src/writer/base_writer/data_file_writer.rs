@@ -20,8 +20,7 @@
 use arrow_array::RecordBatch;
 use itertools::Itertools;
 
-use crate::spec::data_file::{DataContentType, DataFile};
-use crate::spec::Struct;
+use crate::spec::{DataContentType, DataFile, Struct};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::Result;
@@ -108,8 +107,9 @@ mod test {
     use tempfile::TempDir;
 
     use crate::io::FileIOBuilder;
-    use crate::spec::data_file::{DataContentType, DataFileFormat};
-    use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Literal, NestedField, PrimitiveType, Schema, Struct, Type,
+    };
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::location_generator::test::MockLocationGenerator;
     use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;

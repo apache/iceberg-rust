@@ -22,9 +22,7 @@ use futures::TryStreamExt;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::data_file::DataFile;
-use crate::spec::entry::ManifestEntry;
-use crate::spec::{ManifestFile, Operation};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceAction, SnapshotProduceOperation,
 };
@@ -204,8 +202,9 @@ impl SnapshotProduceOperation for FastAppendOperation {
 #[cfg(test)]
 mod tests {
     use crate::scan::tests::TableTestFixture;
-    use crate::spec::data_file::{DataContentType, DataFileBuilder, DataFileFormat};
-    use crate::spec::{Literal, Struct, MAIN_BRANCH};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, MAIN_BRANCH,
+    };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::Transaction;
     use crate::{TableRequirement, TableUpdate};
