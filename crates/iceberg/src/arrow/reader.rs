@@ -38,11 +38,11 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
-use roaring::RoaringTreemap;
 
 use crate::arrow::delete_file_manager::CachingDeleteFileManager;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
+use crate::delete_vector::DeleteVector;
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
@@ -346,7 +346,7 @@ impl ArrowReader {
     fn build_deletes_row_selection(
         row_group_metadata: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
-        mut positional_deletes: RoaringTreemap,
+        mut positional_deletes: DeleteVector,
     ) -> Result<RowSelection> {
         // TODO
 

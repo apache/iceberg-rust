@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use roaring::RoaringTreemap;
-
+use crate::delete_vector::DeleteVector;
 use crate::expr::BoundPredicate;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
@@ -42,7 +41,10 @@ impl DeleteFileManager for CachingDeleteFileManager {
     fn read_delete_file(_task: &FileScanTaskDeleteFile) -> Result<ArrowRecordBatchStream> {
         // TODO, implementation in https://github.com/apache/iceberg-rust/pull/982
 
-        unimplemented!()
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Reading delete files is not yet supported",
+        ))
     }
 }
 
@@ -83,7 +85,7 @@ impl CachingDeleteFileManager {
     pub(crate) fn get_positional_delete_indexes_for_data_file(
         &self,
         data_file_path: &str,
-    ) -> Option<RoaringTreemap> {
+    ) -> Option<DeleteVector> {
         // TODO
 
         None
