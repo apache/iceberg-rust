@@ -31,19 +31,24 @@ static REST_URI: &str = "http://localhost:8181";
 /// [quickstart documentation](https://iceberg.apache.org/spark-quickstart/).
 #[tokio::main]
 async fn main() {
+    // ANCHOR: create_catalog
     // Create the REST iceberg catalog.
     let config = RestCatalogConfig::builder()
         .uri(REST_URI.to_string())
         .build();
     let catalog = RestCatalog::new(config);
+    // ANCHOR_END: create_catalog
 
+    // ANCHOR: list_all_namespace
     // List all namespaces already in the catalog.
     let existing_namespaces = catalog.list_namespaces(None).await.unwrap();
     println!(
         "Namespaces alreading in the existing catalog: {:?}",
         existing_namespaces
     );
+    // ANCHOR_END: list_all_namespace
 
+    // ANCHOR: create_namespace
     // Create a new namespace identifier.
     let namespace_ident =
         NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap();
@@ -66,4 +71,5 @@ async fn main() {
 
     let loaded_namespace = catalog.get_namespace(&namespace_ident).await.unwrap();
     println!("Namespace loaded!\n\nNamespace: {:#?}", loaded_namespace,);
+    // ANCHOR_END: create_namespace
 }
