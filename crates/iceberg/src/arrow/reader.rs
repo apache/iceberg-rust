@@ -356,7 +356,7 @@ impl ArrowReader {
                     f.metadata()
                         .get(PARQUET_FIELD_ID_META_KEY)
                         .and_then(|field_id| i32::from_str(field_id).ok())
-                        .map_or(false, |field_id| {
+                        .is_some_and(|field_id| {
                             projected_fields.insert((*f).clone(), field_id);
                             leaf_field_ids.contains(&field_id)
                         })
@@ -808,7 +808,7 @@ fn project_column(
 type PredicateResult =
     dyn FnMut(RecordBatch) -> std::result::Result<BooleanArray, ArrowError> + Send + 'static;
 
-impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
+impl BoundPredicateVisitor for PredicateConverter<'_> {
     type T = Box<PredicateResult>;
 
     fn always_true(&mut self) -> Result<Box<PredicateResult>> {

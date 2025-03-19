@@ -87,9 +87,11 @@ impl HttpClient {
                 cfg.token()
                     .or_else(|| self.token.into_inner().ok().flatten()),
             ),
-            token_endpoint: (!cfg.get_token_endpoint().is_empty())
-                .then(|| cfg.get_token_endpoint())
-                .unwrap_or(self.token_endpoint),
+            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
+                cfg.get_token_endpoint()
+            } else {
+                self.token_endpoint
+            },
             credential: cfg.credential().or(self.credential),
             extra_headers,
             extra_oauth_params: (!cfg.extra_oauth_params().is_empty())

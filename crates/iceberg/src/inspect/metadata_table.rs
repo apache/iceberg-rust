@@ -43,7 +43,7 @@ impl<'a> MetadataTable<'a> {
         ManifestsTable::new(self.0)
     }
 }
-
+#[allow(missing_docs)]
 #[cfg(test)]
 pub mod tests {
     use expect_test::Expect;

@@ -82,7 +82,7 @@ impl S3TablesCatalog {
                 )
             })?;
 
-        let file_io = FileIO::from_path(&format!("s3://{}", bucket_name))?
+        let file_io = FileIO::from_path(format!("s3://{}", bucket_name))?
             .with_props(&config.properties)
             .build()?;
 

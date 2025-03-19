@@ -1139,9 +1139,9 @@ impl Datum {
     }
 
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
-        return s.as_ref().parse::<i128>().map_err(|e| {
+        s.as_ref().parse::<i128>().map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
-        });
+        })
     }
 
     /// Convert the datum to `target_type`.
@@ -1225,6 +1225,7 @@ impl Datum {
 }
 
 /// Map is a collection of key-value pairs with a key type and a value type.
+///
 /// It used in Literal::Map, to make it hashable, the order of key-value pairs is stored in a separate vector
 /// so that we can hash the map in a deterministic way. But it also means that the order of key-value pairs is matter
 /// for the hash value.
@@ -1721,6 +1722,7 @@ impl Literal {
 }
 
 /// The partition struct stores the tuple of partition values for each file.
+///
 /// Its type is derived from the partition fields of the partition spec used to write the manifest file.
 /// In v2, the partition struct’s field ids must match the ids from the partition spec.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

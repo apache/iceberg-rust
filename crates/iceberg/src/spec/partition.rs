@@ -173,6 +173,7 @@ pub struct UnboundPartitionField {
 }
 
 /// Unbound partition spec can be built without a schema and later bound to a schema.
+///
 /// They are used to transport schema information as part of the REST specification.
 /// The main difference to [`PartitionSpec`] is that the field ids are optional.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
