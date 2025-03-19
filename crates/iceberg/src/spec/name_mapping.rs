@@ -24,6 +24,7 @@ use serde_with::{serde_as, DefaultOnNull};
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(transparent)]
 pub struct NameMapping {
+    /// The fields which are to be mapped from name to field ID.
     pub root: Vec<MappedField>,
 }
 
@@ -32,9 +33,12 @@ pub struct NameMapping {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct MappedField {
+    /// Iceberg field ID when a field's name is present within `names`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field_id: Option<i32>,
+    /// Names for a field.
     pub names: Vec<String>,
+    /// Field mappings for any child fields.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde_as(deserialize_as = "DefaultOnNull")]
