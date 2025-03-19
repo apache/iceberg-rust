@@ -1210,6 +1210,35 @@ impl TableMetadataBuilder {
     fn highest_sort_order_id(&self) -> Option<i64> {
         self.metadata.sort_orders.keys().max().copied()
     }
+
+    /// Remove schemas by their ids from the table metadata.
+    /// Does nothing if a schema id is not present. Active schemas should not be removed.
+    pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
+        if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot remove current schema",
+            ));
+        }
+
+        if !schema_id_to_remove.is_empty() {
+            let mut removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
+            self.metadata.schemas.retain(|id, _schema| {
+                if schema_id_to_remove.contains(id) {
+                    removed_schemas.push(*id);
+                    false
+                } else {
+                    true
+                }
+            });
+
+            self.changes.push(TableUpdate::RemoveSchemas {
+                schema_ids: removed_schemas,
+            });
+        }
+
+        Ok(self)
+    }
 }
 
 impl From<TableMetadataBuildResult> for TableMetadata {
@@ -2411,5 +2440,55 @@ mod tests {
             table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
             table.metadata().current_snapshot_id().unwrap()
         );
+    }
+
+    #[test]
+    fn test_active_schema_cannot_be_removed() {
+        let builder = builder_without_changes(FormatVersion::V2);
+        builder.remove_schemas(&[0]).unwrap_err();
+    }
+
+    #[test]
+    fn test_remove_schemas() {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2Valid.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let table = Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap();
+
+        assert_eq!(2, table.metadata().schemas.len());
+
+        {
+            // can not remove active schema
+            let meta_data_builder = table.metadata().clone().into_builder(None);
+            meta_data_builder.remove_schemas(&[1]).unwrap_err();
+        }
+
+        let mut meta_data_builder = table.metadata().clone().into_builder(None);
+        meta_data_builder = meta_data_builder.remove_schemas(&[0]).unwrap();
+        let build_result = meta_data_builder.build().unwrap();
+        assert_eq!(1, build_result.metadata.schemas.len());
+        assert_eq!(1, build_result.metadata.current_schema_id);
+        assert_eq!(1, build_result.metadata.current_schema().schema_id());
+        assert_eq!(1, build_result.changes.len());
+
+        let remove_schema_ids =
+            if let TableUpdate::RemoveSchemas { schema_ids } = &build_result.changes[0] {
+                schema_ids
+            } else {
+                unreachable!("Expected RemoveSchema change")
+            };
+        assert_eq!(remove_schema_ids, &[0]);
     }
 }
