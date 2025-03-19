@@ -21,6 +21,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::{DataContentType, DataFile, Snapshot, Struct};
+use crate::{Error, ErrorKind};
+
+static STATS_COUNT: u32 = 12;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 /// Represents a statistics file
@@ -67,6 +72,146 @@ pub struct PartitionStatisticsFile {
     pub statistics_path: String,
     /// File size in bytes
     pub file_size_in_bytes: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Statistics for partition pruning
+pub struct PartitionStats {
+    partition: Struct,
+    spec_id: i32,
+    data_record_count: u64,
+    data_file_count: u32,
+    total_data_file_size_in_bytes: u64,
+    position_delete_record_count: u64,
+    position_delete_file_count: u32,
+    equality_delete_record_count: u64,
+    equality_delete_file_count: u32,
+    total_record_count: u64,
+    last_updated_at: Option<i64>,
+    last_updated_snapshot_id: Option<i64>,
+}
+
+impl PartitionStats {
+    /// Creates new `PartitionStats` instance based on partition struct 
+    /// spec id
+    pub fn new(partition: Struct, spec_id: i32) -> Self {
+        Self {
+            partition,
+            spec_id,
+            data_record_count: 0,
+            data_file_count: 0,
+            total_data_file_size_in_bytes: 0,
+            position_delete_record_count: 0,
+            position_delete_file_count: 0,
+            equality_delete_record_count: 0,
+            equality_delete_file_count: 0,
+            total_record_count: 0,
+            last_updated_at: None,
+            last_updated_snapshot_id: None,
+        }
+    }
+
+    /// Returns partition struct
+    pub fn partition(&self) -> &Struct {
+        &self.partition
+    }
+
+    /// Returns partition spec id
+    pub fn spec_id(&self) -> i32 {
+        self.spec_id
+    }
+
+    /// Returns the total number of data records in the partition.
+    pub fn data_record_count(&self) -> u64 {
+        self.data_record_count
+    }
+
+    /// Returns the number of data files in the partition
+    pub fn data_file_count(&self) -> u32 {
+        self.data_file_count
+    }
+
+    /// Returns the total size in bytes of all data files in the partition
+    pub fn total_data_file_size_in_bytes(&self) -> u64 {
+        self.total_data_file_size_in_bytes
+    }
+
+    /// Returns the total number of records in position delete files
+    pub fn position_delete_record_count(&self) -> u64 {
+        self.position_delete_record_count
+    }
+
+    /// Returns the number of position delete files
+    pub fn position_delete_file_count(&self) -> u32 {
+        self.position_delete_file_count
+    }
+
+    /// Returns the total number of records in equality delete files
+    pub fn equality_delete_record_count(&self) -> u64 {
+        self.equality_delete_record_count
+    }
+
+    /// Returns the number of equality delete files
+    pub fn equality_delete_file_count(&self) -> u32 {
+        self.equality_delete_file_count
+    }
+
+    /// Returns the total record count in the partition
+    pub fn total_record_count(&self) -> u64 {
+        self.total_record_count
+    }
+
+    /// Returns the timestamp of the last snapshot update
+    pub fn last_updated_at(&self) -> Option<i64> {
+        self.last_updated_at
+    }
+
+    /// Returns the snapshot id of the last update
+    pub fn last_updated_snapshot_id(&self) -> Option<i64> {
+        self.last_updated_snapshot_id
+    }
+
+    /// Updates the partition statistics based on the given `DataFile` and its corresponding `Snapshot`.
+    pub fn live_entry(&mut self, file: DataFile, snapshot: Snapshot) -> Result<(), Error> {
+        if file.partition_spec_id != self.spec_id {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Spec IDs must match.",
+            ));
+        }
+    
+        match file.content_type() {
+            DataContentType::Data => {
+                self.data_record_count += file.record_count();
+                self.data_file_count += 1;
+                self.total_data_file_size_in_bytes += file.file_size_in_bytes();
+            }
+            DataContentType::PositionDeletes => {
+                self.position_delete_record_count += file.record_count();
+                self.position_delete_file_count += 1;
+            }
+            DataContentType::EqualityDeletes => {
+                self.equality_delete_record_count += file.record_count();
+                self.equality_delete_file_count += 1;
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Unsupported file content type:"
+                ));
+            }
+        }
+    
+        self.update_snapshot_info(snapshot.snapshot_id(), snapshot.timestamp_ms());
+        Ok(())
+    }
+
+    fn update_snapshot_info(&mut self, snapshot_id: i64, updated_at: i64) {
+        if self.last_updated_at.is_none() || self.last_updated_at.unwrap() < updated_at {
+            self.last_updated_at = Some(updated_at);
+            self.last_updated_snapshot_id = Some(snapshot_id);
+        }
+    }
 }
 
 #[cfg(test)]
