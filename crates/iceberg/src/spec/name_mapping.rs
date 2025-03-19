@@ -20,6 +20,9 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DefaultOnNull};
 
+/// Property name for name mapping.
+pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
+
 /// Iceberg fallback field name to ID mapping.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(transparent)]
