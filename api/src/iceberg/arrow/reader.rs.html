@@ -1482,6 +1482,30 @@
 <a href="#1482" id="1482">1482</a>
 <a href="#1483" id="1483">1483</a>
 <a href="#1484" id="1484">1484</a>
+<a href="#1485" id="1485">1485</a>
+<a href="#1486" id="1486">1486</a>
+<a href="#1487" id="1487">1487</a>
+<a href="#1488" id="1488">1488</a>
+<a href="#1489" id="1489">1489</a>
+<a href="#1490" id="1490">1490</a>
+<a href="#1491" id="1491">1491</a>
+<a href="#1492" id="1492">1492</a>
+<a href="#1493" id="1493">1493</a>
+<a href="#1494" id="1494">1494</a>
+<a href="#1495" id="1495">1495</a>
+<a href="#1496" id="1496">1496</a>
+<a href="#1497" id="1497">1497</a>
+<a href="#1498" id="1498">1498</a>
+<a href="#1499" id="1499">1499</a>
+<a href="#1500" id="1500">1500</a>
+<a href="#1501" id="1501">1501</a>
+<a href="#1502" id="1502">1502</a>
+<a href="#1503" id="1503">1503</a>
+<a href="#1504" id="1504">1504</a>
+<a href="#1505" id="1505">1505</a>
+<a href="#1506" id="1506">1506</a>
+<a href="#1507" id="1507">1507</a>
+<a href="#1508" id="1508">1508</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2604,25 +2628,46 @@
 }
 
 <span class="doccomment">/// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-///
-/// # TODO
-///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
-/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
-///
-/// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
-/// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
-/// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
 </span><span class="kw">pub struct </span>ArrowFileReader&lt;R: FileRead&gt; {
     meta: FileMetadata,
+    preload_column_index: bool,
+    preload_offset_index: bool,
+    metadata_size_hint: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     r: R,
 }
 
 <span class="kw">impl</span>&lt;R: FileRead&gt; ArrowFileReader&lt;R&gt; {
     <span class="doccomment">/// Create a new ArrowFileReader
     </span><span class="kw">pub fn </span>new(meta: FileMetadata, r: R) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ meta, r }
+        <span class="self">Self </span>{
+            meta,
+            preload_column_index: <span class="bool-val">false</span>,
+            preload_offset_index: <span class="bool-val">false</span>,
+            metadata_size_hint: <span class="prelude-val">None</span>,
+            r,
+        }
     }
+
+    <span class="doccomment">/// Enable or disable preloading of the column index
+    </span><span class="kw">pub fn </span>with_preload_column_index(<span class="kw-2">mut </span><span class="self">self</span>, preload: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.preload_column_index = preload;
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Enable or disable preloading of the offset index
+    </span><span class="kw">pub fn </span>with_preload_offset_index(<span class="kw-2">mut </span><span class="self">self</span>, preload: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.preload_offset_index = preload;
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    </span><span class="kw">pub fn </span>with_metadata_size_hint(<span class="kw-2">mut </span><span class="self">self</span>, hint: usize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.metadata_size_hint = <span class="prelude-val">Some</span>(hint);
+        <span class="self">self
+    </span>}
 }
 
 <span class="kw">impl</span>&lt;R: FileRead&gt; AsyncFileReader <span class="kw">for </span>ArrowFileReader&lt;R&gt; {
@@ -2636,7 +2681,10 @@
 
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BoxFuture&lt;<span class="lifetime">'_</span>, parquet::errors::Result&lt;Arc&lt;ParquetMetaData&gt;&gt;&gt; {
         <span class="kw">async move </span>{
-            <span class="kw">let </span>reader = ParquetMetaDataReader::new();
+            <span class="kw">let </span>reader = ParquetMetaDataReader::new()
+                .with_prefetch_hint(<span class="self">self</span>.metadata_size_hint)
+                .with_column_indexes(<span class="self">self</span>.preload_column_index)
+                .with_offset_indexes(<span class="self">self</span>.preload_offset_index);
             <span class="kw">let </span>size = <span class="self">self</span>.meta.size <span class="kw">as </span>usize;
             <span class="kw">let </span>meta = reader.load_and_finish(<span class="self">self</span>, size).<span class="kw">await</span><span class="question-mark">?</span>;
 
