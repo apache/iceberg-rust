@@ -1,3 +1,4 @@
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,23 +15,10 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
-
-  paths-ignore:
-    - 'LICENSE'
-    - 'NOTICE'
-    - '.gitattributes'
-    - '**/*.json'
-    # Generated content by mdbook
-    - 'website/book'
-    # Generated content by scripts
-    - '**/DEPENDENCIES.*.tsv'
-    # Release distributions
-    - 'dist/*'
-    - 'Cargo.lock'
-    - '.github/PULL_REQUEST_TEMPLATE.md'
-  comment: on-failure
+blank_issues_enabled: true
+contact_links:
+  - name: Ask questions about iceberg-rust
+    url: https://github.com/apache/iceberg-rust/discussions
+    about: Please ask and answer questions here.

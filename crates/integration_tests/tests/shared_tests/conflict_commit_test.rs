@@ -74,7 +74,7 @@ async fn test_append_data_file_conflict() {
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
+    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -93,6 +93,7 @@ async fn test_append_data_file_conflict() {
     let mut append_action = tx1.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();
     let tx1 = append_action.apply().await.unwrap();
+
     let tx2 = Transaction::new(&table);
     let mut append_action = tx2.fast_append(None, vec![]).unwrap();
     append_action.add_data_files(data_file.clone()).unwrap();

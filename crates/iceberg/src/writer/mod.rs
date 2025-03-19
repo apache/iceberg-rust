@@ -17,32 +17,180 @@
 
 //! Iceberg writer module.
 //!
-//! The writer API is designed to be extensible and flexible. Each writer is decoupled and can be create and config independently. User can:
-//! 1.Customize the writer using the writer trait.
-//! 2.Combine different writer to build a writer which have complex write logic.
+//! This module contains the generic writer trait and specific writer implementation. We categorize the writer into two types:
+//! 1. FileWriter: writer for physical file format (Such as parquet, orc).
+//! 2. IcebergWriter: writer for logical format provided by iceberg table (Such as data file, equality delete file, position delete file)
+//!    or other function (Such as partition writer, delta writer).
 //!
-//! There are two kinds of writer:
-//! 1. FileWriter: Focus on writing record batch to different physical file format.(Such as parquet. orc)
-//! 2. IcebergWriter: Focus on the logical format of iceberg table. It will write the data using the FileWriter finally.
+//! The IcebergWriter will use FileWriter to write underly physical file.
 //!
-//! # Simple example for data file writer:
-//! ```ignore
-//! // Create a parquet file writer builder. The parameter can get from table.
-//! let file_writer_builder = ParquetWriterBuilder::new(
-//!    0,
-//!    WriterProperties::builder().build(),
-//!    schema,
-//!    file_io.clone(),
-//!    loccation_gen,
-//!    file_name_gen,
-//! )
-//! // Create a data file writer using parquet file writer builder.
-//! let data_file_builder = DataFileBuilder::new(file_writer_builder);
-//! // Build the data file writer.
-//! let data_file_writer = data_file_builder.build().await.unwrap();
+//! We hope the writer interface can be extensible and flexible. Each writer can be create config independently
+//! and combined together to build a writer which have complex write logic. E.g. combine `FanoutPartitionWriter`, `DataFileWriter`, `ParquetWriter` to get
+//! a writer can split the data automatelly according to partition and write down as parquet physical format.
 //!
-//! data_file_writer.write(&record_batch).await.unwrap();
-//! let data_files = data_file_writer.flush().await.unwrap();
+//! For this purpose, there are four trait corresponding to these writer:
+//! - IcebergWriterBuilder
+//! - IcebergWriter
+//! - FileWriterBuilder
+//! - FileWriter
+//!
+//! User can create specific writer builder, combine them and build the writer finally. Also user can custom
+//! own writer and implement writer trait for them so that the custom writer can integrate with existing writer. (See following example)
+//!
+//! # Simple example for the data file writer used parquet physical format:
+//! ```rust, no_run
+//! use std::sync::Arc;
+//!
+//! use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
+//! use async_trait::async_trait;
+//! use iceberg::io::{FileIO, FileIOBuilder};
+//! use iceberg::spec::DataFile;
+//! use iceberg::transaction::Transaction;
+//! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::location_generator::{
+//!     DefaultFileNameGenerator, DefaultLocationGenerator,
+//! };
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
+//! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+//! use iceberg::{Catalog, Result, TableIdent};
+//! use iceberg_catalog_memory::MemoryCatalog;
+//! use parquet::file::properties::WriterProperties;
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Build your file IO.
+//!     let file_io = FileIOBuilder::new("memory").build()?;
+//!     // Connect to a catalog.
+//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     // Load table from catalog.
+//!     let table = catalog
+//!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
+//!         .await?;
+//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//!     let file_name_generator = DefaultFileNameGenerator::new(
+//!         "test".to_string(),
+//!         None,
+//!         iceberg::spec::DataFileFormat::Parquet,
+//!     );
+//!
+//!     // Create a parquet file writer builder. The parameter can get from table.
+//!     let parquet_writer_builder = ParquetWriterBuilder::new(
+//!         WriterProperties::default(),
+//!         table.metadata().current_schema().clone(),
+//!         table.file_io().clone(),
+//!         location_generator.clone(),
+//!         file_name_generator.clone(),
+//!     );
+//!     // Create a data file writer using parquet file writer builder.
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!     // Build the data file writer
+//!     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
+//!
+//!     // Write the data using data_file_writer...
+//!
+//!     // Close the write and it will return data files back
+//!     let data_files = data_file_writer.close().await.unwrap();
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Custom writer to record latency
+//! ```rust, no_run
+//! use std::time::Instant;
+//!
+//! use arrow_array::RecordBatch;
+//! use iceberg::io::FileIOBuilder;
+//! use iceberg::spec::DataFile;
+//! use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+//! use iceberg::writer::file_writer::location_generator::{
+//!     DefaultFileNameGenerator, DefaultLocationGenerator,
+//! };
+//! use iceberg::writer::file_writer::ParquetWriterBuilder;
+//! use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+//! use iceberg::{Catalog, Result, TableIdent};
+//! use iceberg_catalog_memory::MemoryCatalog;
+//! use parquet::file::properties::WriterProperties;
+//!
+//! #[derive(Clone)]
+//! struct LatencyRecordWriterBuilder<B> {
+//!     inner_writer_builder: B,
+//! }
+//!
+//! impl<B: IcebergWriterBuilder> LatencyRecordWriterBuilder<B> {
+//!     pub fn new(inner_writer_builder: B) -> Self {
+//!         Self {
+//!             inner_writer_builder,
+//!         }
+//!     }
+//! }
+//!
+//! #[async_trait::async_trait]
+//! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
+//!     type R = LatencyRecordWriter<B::R>;
+//!
+//!     async fn build(self) -> Result<Self::R> {
+//!         Ok(LatencyRecordWriter {
+//!             inner_writer: self.inner_writer_builder.build().await?,
+//!         })
+//!     }
+//! }
+//! struct LatencyRecordWriter<W> {
+//!     inner_writer: W,
+//! }
+//!
+//! #[async_trait::async_trait]
+//! impl<W: IcebergWriter> IcebergWriter for LatencyRecordWriter<W> {
+//!     async fn write(&mut self, input: RecordBatch) -> Result<()> {
+//!         let start = Instant::now();
+//!         self.inner_writer.write(input).await?;
+//!         let _latency = start.elapsed();
+//!         // record latency...
+//!         Ok(())
+//!     }
+//!
+//!     async fn close(&mut self) -> Result<Vec<DataFile>> {
+//!         let start = Instant::now();
+//!         let res = self.inner_writer.close().await?;
+//!         let _latency = start.elapsed();
+//!         // record latency...
+//!         Ok(res)
+//!     }
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Build your file IO.
+//!     let file_io = FileIOBuilder::new("memory").build()?;
+//!     // Connect to a catalog.
+//!     let catalog = MemoryCatalog::new(file_io, None);
+//!     // Load table from catalog.
+//!     let table = catalog
+//!         .load_table(&TableIdent::from_strs(["hello", "world"])?)
+//!         .await?;
+//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+//!     let file_name_generator = DefaultFileNameGenerator::new(
+//!         "test".to_string(),
+//!         None,
+//!         iceberg::spec::DataFileFormat::Parquet,
+//!     );
+//!
+//!     // Create a parquet file writer builder. The parameter can get from table.
+//!     let parquet_writer_builder = ParquetWriterBuilder::new(
+//!         WriterProperties::default(),
+//!         table.metadata().current_schema().clone(),
+//!         table.file_io().clone(),
+//!         location_generator.clone(),
+//!         file_name_generator.clone(),
+//!     );
+//!     // Create a data file writer builder using parquet file writer builder.
+//!     let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
+//!     // Create latency record writer using data file writer builder.
+//!     let latency_record_builder = LatencyRecordWriterBuilder::new(data_file_writer_builder);
+//!     // Build the final writer
+//!     let mut latency_record_data_file_writer = latency_record_builder.build().await.unwrap();
+//!
+//!     Ok(())
+//! }
 //! ```
 
 pub mod base_writer;
