@@ -26,12 +26,16 @@ First, thank you for contributing to Iceberg Rust! The goal of this document is 
   - [Git Branches](#git-branches)
   - [GitHub Pull Requests](#github-pull-requests)
     - [Title](#title)
-    - [Reviews & Approvals](#reviews--approvals)
+    - [Reviews \& Approvals](#reviews--approvals)
     - [Merge Style](#merge-style)
-    - [CI](#ci)
+  - [CI](#ci)
 - [Setup](#setup)
   - [Using a dev container environment](#using-a-dev-container-environment)
   - [Bring your own toolbox](#bring-your-own-toolbox)
+    - [Install rust](#install-rust)
+    - [Install Docker or Podman](#install-docker-or-podman)
+- [Build](#build)
+- [Dependencies](#dependencies)
 - [Code of Conduct](#code-of-conduct)
 
 ## Your First Contribution
@@ -126,6 +130,13 @@ For podman, refer to [Using Podman instead of Docker](docs/contributing/podman.m
 * To check code styles: `make check`
 * To run unit tests only: `make unit-test`
 * To run all tests: `make test`
+
+## Dependencies
+
+`Cargo.lock` is committed, and regularly updated by dependabot to make sure the latest dependency versions are
+tested in CI and developers have reproducible builds.
+
+In `Cargo.toml`, we use a wider range of versions support, to allow users to choose their dependency versions.
 
 ## Code of Conduct
 
