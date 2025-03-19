@@ -1120,24 +1120,45 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 }
 
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-///
-/// # TODO
-///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
-/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
-///
-/// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
-/// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
-/// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
 pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
+    preload_column_index: bool,
+    preload_offset_index: bool,
+    metadata_size_hint: Option<usize>,
     r: R,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
     /// Create a new ArrowFileReader
     pub fn new(meta: FileMetadata, r: R) -> Self {
-        Self { meta, r }
+        Self {
+            meta,
+            preload_column_index: false,
+            preload_offset_index: false,
+            metadata_size_hint: None,
+            r,
+        }
+    }
+
+    /// Enable or disable preloading of the column index
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.preload_column_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the offset index
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.preload_offset_index = preload;
+        self
+    }
+
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
+        self.metadata_size_hint = Some(hint);
+        self
     }
 }
 
@@ -1152,7 +1173,10 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let reader = ParquetMetaDataReader::new();
+            let reader = ParquetMetaDataReader::new()
+                .with_prefetch_hint(self.metadata_size_hint)
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index);
             let size = self.meta.size as usize;
             let meta = reader.load_and_finish(self, size).await?;
 
