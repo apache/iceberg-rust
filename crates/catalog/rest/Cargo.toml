@@ -30,13 +30,18 @@ keywords = ["iceberg", "rest", "catalog"]
 
 [dependencies]
 # async-trait = { workspace = true }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
+aws-config = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
+aws-sigv4 = { workspace = true, optional = true }
 chrono = { workspace = true }
 http = "1.1.0"
 iceberg = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
@@ -50,3 +55,7 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 port_scanner = { workspace = true }
 tokio = { workspace = true }
+wiremock = "0.6"
+
+[features]
+sigv4 = ["aws-config", "aws-sigv4", "aws-credential-types"]
