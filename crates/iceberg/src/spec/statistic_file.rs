@@ -24,8 +24,6 @@ use serde::{Deserialize, Serialize};
 use crate::spec::{DataContentType, DataFile, Snapshot, Struct};
 use crate::{Error, ErrorKind};
 
-static STATS_COUNT: u32 = 12;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 /// Represents a statistics file
@@ -92,7 +90,7 @@ pub struct PartitionStats {
 }
 
 impl PartitionStats {
-    /// Creates new `PartitionStats` instance based on partition struct 
+    /// Creates new `PartitionStats` instance based on partition struct
     /// spec id
     pub fn new(partition: Struct, spec_id: i32) -> Self {
         Self {
@@ -174,12 +172,9 @@ impl PartitionStats {
     /// Updates the partition statistics based on the given `DataFile` and its corresponding `Snapshot`.
     pub fn live_entry(&mut self, file: DataFile, snapshot: Snapshot) -> Result<(), Error> {
         if file.partition_spec_id != self.spec_id {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Spec IDs must match.",
-            ));
+            return Err(Error::new(ErrorKind::Unexpected, "Spec IDs must match."));
         }
-    
+
         match file.content_type() {
             DataContentType::Data => {
                 self.data_record_count += file.record_count();
@@ -194,14 +189,8 @@ impl PartitionStats {
                 self.equality_delete_record_count += file.record_count();
                 self.equality_delete_file_count += 1;
             }
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Unsupported file content type:"
-                ));
-            }
         }
-    
+
         self.update_snapshot_info(snapshot.snapshot_id(), snapshot.timestamp_ms());
         Ok(())
     }
@@ -222,6 +211,7 @@ mod test {
     use serde_json::json;
 
     use super::*;
+    use crate::spec::{DataFileFormat, Datum, Literal, Operation, Summary};
 
     fn test_serde_json<T: Serialize + DeserializeOwned + PartialEq + Debug>(
         json: serde_json::Value,
@@ -337,5 +327,171 @@ mod test {
                 file_size_in_bytes: 43,
             },
         );
+    }
+
+    #[test]
+    fn test_partition_stats() -> Result<(), Error> {
+        let partition = Struct::from_iter(vec![Some(Literal::string("x"))]);
+
+        let spec_id = 0;
+        let mut stats = PartitionStats::new(partition.clone(), spec_id);
+
+        // test data file
+        let snapshot1 = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_sequence_number(0)
+            .with_timestamp_ms(1000)
+            .with_manifest_list("manifest_list_path".to_string())
+            .with_summary(Summary {
+                operation: Operation::default(),
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let data_file = DataFile {
+            content: DataContentType::Data,
+            file_path: "test.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: partition.clone(),
+            record_count: 1,
+            file_size_in_bytes: 874,
+            column_sizes: HashMap::from([(1, 46), (2, 48), (3, 48)]),
+            value_counts: HashMap::from([(1, 1), (2, 1), (3, 1)]),
+            null_value_counts: HashMap::from([(1, 0), (2, 0), (3, 0)]),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::from([
+                (1, Datum::long(1)),
+                (2, Datum::string("a")),
+                (3, Datum::string("x")),
+            ]),
+            upper_bounds: HashMap::from([
+                (1, Datum::long(1)),
+                (2, Datum::string("a")),
+                (3, Datum::string("x")),
+            ]),
+            key_metadata: None,
+            split_offsets: vec![4],
+            equality_ids: vec![],
+            sort_order_id: Some(0),
+            partition_spec_id: spec_id,
+        };
+        stats.live_entry(data_file, snapshot1.clone())?;
+        assert_eq!(stats.data_record_count(), 1);
+        assert_eq!(stats.data_file_count(), 1);
+        assert_eq!(stats.total_data_file_size_in_bytes(), 874);
+        assert_eq!(stats.last_updated_snapshot_id(), Some(1));
+        assert_eq!(stats.last_updated_at(), Some(1000));
+
+        // test position delete file
+        let snapshot2 = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_sequence_number(1)
+            .with_timestamp_ms(2000)
+            .with_manifest_list("manifest_list_path".to_string())
+            .with_summary(Summary {
+                operation: Operation::default(),
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let posdel_file = DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: "test.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: partition.clone(),
+            record_count: 5,
+            file_size_in_bytes: 500,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![10],
+            equality_ids: vec![],
+            sort_order_id: None,
+            partition_spec_id: spec_id,
+        };
+
+        stats.live_entry(posdel_file, snapshot2.clone())?;
+        assert_eq!(stats.position_delete_record_count(), 5);
+        assert_eq!(stats.position_delete_file_count(), 1);
+
+        assert_eq!(stats.last_updated_snapshot_id(), Some(2));
+        assert_eq!(stats.last_updated_at(), Some(2000));
+
+        // test equality delete file
+        let snapshot3 = Snapshot::builder()
+            .with_snapshot_id(3)
+            .with_sequence_number(2)
+            .with_timestamp_ms(3000)
+            .with_manifest_list("manifest_list_path".to_string())
+            .with_summary(Summary {
+                operation: Operation::default(),
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let eqdel_file = DataFile {
+            content: DataContentType::EqualityDeletes,
+            file_path: "test.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: partition.clone(),
+            record_count: 3,
+            file_size_in_bytes: 300,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![15],
+            equality_ids: vec![],
+            sort_order_id: None,
+            partition_spec_id: spec_id,
+        };
+        stats.live_entry(eqdel_file, snapshot3.clone())?;
+        assert_eq!(stats.equality_delete_record_count(), 3);
+        assert_eq!(stats.equality_delete_file_count(), 1);
+        assert_eq!(stats.last_updated_snapshot_id(), Some(3));
+        assert_eq!(stats.last_updated_at(), Some(3000));
+
+        let snapshot4 = Snapshot::builder()
+            .with_snapshot_id(4)
+            .with_sequence_number(3)
+            .with_timestamp_ms(4000)
+            .with_manifest_list("manifest_list_path".to_string())
+            .with_summary(Summary {
+                operation: Operation::default(),
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let wrong_file = DataFile {
+            content: DataContentType::Data,
+            file_path: "test.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition,
+            record_count: 2,
+            file_size_in_bytes: 900,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: vec![20],
+            equality_ids: vec![],
+            sort_order_id: Some(0),
+            partition_spec_id: spec_id + 1, // mismatch spec id.
+        };
+
+        let result = stats.live_entry(wrong_file, snapshot4);
+        assert!(result.is_err());
+
+        Ok(())
     }
 }
