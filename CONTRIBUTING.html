@@ -199,29 +199,6 @@
 -->
 <h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
 <p>First, thank you for contributing to Iceberg Rust! The goal of this document is to provide everything you need to start contributing to iceberg-rust. The following TOC is sorted progressively, starting with the basics and expanding into more specifics.</p>
-<ul>
-<li><a href="#your-first-contribution">Your First Contribution</a></li>
-<li><a href="#workflow">Workflow</a>
-<ul>
-<li><a href="#git-branches">Git Branches</a></li>
-<li><a href="#github-pull-requests">GitHub Pull Requests</a>
-<ul>
-<li><a href="#title">Title</a></li>
-<li><a href="#reviews--approvals">Reviews &amp; Approvals</a></li>
-<li><a href="#merge-style">Merge Style</a></li>
-<li><a href="#ci">CI</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><a href="#setup">Setup</a>
-<ul>
-<li><a href="#using-a-dev-container-environment">Using a dev container environment</a></li>
-<li><a href="#bring-your-own-toolbox">Bring your own toolbox</a></li>
-</ul>
-</li>
-<li><a href="#code-of-conduct">Code of Conduct</a></li>
-</ul>
 <h2 id="your-first-contribution"><a class="header" href="#your-first-contribution">Your First Contribution</a></h2>
 <ol>
 <li><a href="https://github.com/apache/iceberg-rust/fork">Fork the iceberg-rust repository</a> into your own GitHub account.</li>
@@ -278,6 +255,11 @@ cargo 1.69.0 (6e9a83356 2023-04-12)
 <li>To run unit tests only: <code>make unit-test</code></li>
 <li>To run all tests: <code>make test</code></li>
 </ul>
+<h2 id="dependencies"><a class="header" href="#dependencies">Dependencies</a></h2>
+<p><code>Cargo.lock</code> is committed, and regularly updated by dependabot to make sure the latest dependency versions are
+tested in CI and developers have reproducible builds.</p>
+<p>In <code>Cargo.toml</code>, we specify the minimum version required to use iceberg-rust. This allows users to choose their
+dependency versions without always upgrading to the latest.</p>
 <h2 id="code-of-conduct"><a class="header" href="#code-of-conduct">Code of Conduct</a></h2>
 <p>We expect all community members to follow our <a href="https://www.apache.org/foundation/policies/conduct.html">Code of Conduct</a>.</p>
 
