@@ -20,6 +20,7 @@
 mod datatypes;
 mod manifest;
 mod manifest_list;
+mod mapped_fields;
 mod name_mapping;
 mod partition;
 mod schema;
@@ -37,6 +38,7 @@ mod view_version;
 pub use datatypes::*;
 pub use manifest::*;
 pub use manifest_list::*;
+pub use mapped_fields::*;
 pub use name_mapping::*;
 pub use partition::*;
 pub use schema::*;
