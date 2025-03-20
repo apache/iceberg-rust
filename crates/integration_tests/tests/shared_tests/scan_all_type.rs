@@ -156,7 +156,7 @@ async fn test_scan_all_type() {
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None);
+    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 0);
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
 
     // Prepare data

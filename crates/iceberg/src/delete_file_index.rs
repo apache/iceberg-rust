@@ -94,6 +94,14 @@ impl DeleteFileIndex {
 }
 
 impl PopulatedDeleteFileIndex {
+    /// Creates a new populated delete file index from a list of delete file contexts, which
+    /// allows for fast lookup when determining which delete files apply to a given data file.
+    ///
+    /// 1. The partition information is extracted from each delete file's manifest entry.
+    /// 2. If the partition is empty and the delete file is not a positional delete,
+    ///    it is added to the `global_delees` vector
+    /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
+
     fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
         let mut eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
@@ -158,10 +166,10 @@ impl PopulatedDeleteFileIndex {
         if let Some(deletes) = self.eq_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
+                // filter that returns true if the provided delete file's sequence number is **greater than** `seq_num`
                 .filter(|&delete| {
                     seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
+                        .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
                         .unwrap_or_else(|| true)
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
@@ -174,10 +182,10 @@ impl PopulatedDeleteFileIndex {
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
-                // filter that returns true if the provided delete file's sequence number is **greater thano** `seq_num`
+                // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
                 .filter(|&delete| {
                     seq_num
-                        .map(|seq_num| delete.manifest_entry.sequence_number() > Some(seq_num))
+                        .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
                         .unwrap_or_else(|| true)
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
