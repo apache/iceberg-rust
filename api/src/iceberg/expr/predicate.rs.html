@@ -1461,6 +1461,12 @@
 <a href="#1461" id="1461">1461</a>
 <a href="#1462" id="1462">1462</a>
 <a href="#1463" id="1463">1463</a>
+<a href="#1464" id="1464">1464</a>
+<a href="#1465" id="1465">1465</a>
+<a href="#1466" id="1466">1466</a>
+<a href="#1467" id="1467">1467</a>
+<a href="#1468" id="1468">1468</a>
+<a href="#1469" id="1469">1469</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2187,6 +2193,12 @@
     </span>Binary(BinaryExpression&lt;BoundReference&gt;),
     <span class="doccomment">/// Set predicates, for example, `a IN (1, 2, 3)`.
     </span>Set(SetExpression&lt;BoundReference&gt;),
+}
+
+<span class="kw">impl </span>BoundPredicate {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>and(<span class="self">self</span>, other: BoundPredicate) -&gt; BoundPredicate {
+        BoundPredicate::And(LogicalExpression::new([Box::new(<span class="self">self</span>), Box::new(other)]))
+    }
 }
 
 <span class="kw">impl </span>Display <span class="kw">for </span>BoundPredicate {
