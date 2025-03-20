@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::MappedField;
 
-/// TODO
+/// Utility mapping which contains field names to IDs and
+/// field IDs to the underlying [`MappedField`].
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct MappedFields {
     fields: Vec<MappedField>,
