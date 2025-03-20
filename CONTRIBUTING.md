@@ -119,7 +119,8 @@ For podman, refer to [Using Podman instead of Docker](docs/contributing/podman.m
 `Cargo.lock` is committed, and regularly updated by dependabot to make sure the latest dependency versions are
 tested in CI and developers have reproducible builds.
 
-In `Cargo.toml`, we use a wider range of versions support, to allow users to choose their dependency versions.
+In `Cargo.toml`, we specify the minimum version required to use iceberg-rust. This allows users to choose their
+dependency versions without always upgrading to the latest.
 
 ## Code of Conduct
 
