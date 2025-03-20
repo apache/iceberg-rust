@@ -21,23 +21,6 @@
 
 First, thank you for contributing to Iceberg Rust! The goal of this document is to provide everything you need to start contributing to iceberg-rust. The following TOC is sorted progressively, starting with the basics and expanding into more specifics.
 
-- [Your First Contribution](#your-first-contribution)
-- [Workflow](#workflow)
-  - [Git Branches](#git-branches)
-  - [GitHub Pull Requests](#github-pull-requests)
-    - [Title](#title)
-    - [Reviews \& Approvals](#reviews--approvals)
-    - [Merge Style](#merge-style)
-  - [CI](#ci)
-- [Setup](#setup)
-  - [Using a dev container environment](#using-a-dev-container-environment)
-  - [Bring your own toolbox](#bring-your-own-toolbox)
-    - [Install rust](#install-rust)
-    - [Install Docker or Podman](#install-docker-or-podman)
-- [Build](#build)
-- [Dependencies](#dependencies)
-- [Code of Conduct](#code-of-conduct)
-
 ## Your First Contribution
 
 1. [Fork the iceberg-rust repository](https://github.com/apache/iceberg-rust/fork) into your own GitHub account.
