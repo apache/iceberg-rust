@@ -507,7 +507,7 @@ mod _const_schema {
 }
 
 /// Entry in a manifest list.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct ManifestFile {
     /// field: 500
     ///
@@ -590,6 +590,11 @@ impl ManifestFile {
         self.added_files_count.is_none() || self.added_files_count.unwrap() > 0
     }
 
+    /// Checks whether this manifest contains entries with DELETED status.
+    pub fn has_deleted_files(&self) -> bool {
+        self.deleted_files_count.is_none() || self.deleted_files_count.unwrap() > 0
+    }
+
     /// Checks if the manifest file has any existed files.
     pub fn has_existing_files(&self) -> bool {
         self.existing_files_count.is_none() || self.existing_files_count.unwrap() > 0
@@ -597,7 +602,7 @@ impl ManifestFile {
 }
 
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum ManifestContentType {
     /// The manifest content is data.
     Data = 0,
@@ -668,7 +673,7 @@ impl ManifestFile {
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Hash)]
 pub struct FieldSummary {
     /// field: 509
     ///
