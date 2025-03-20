@@ -44,7 +44,7 @@ impl MappedFields {
         self.name_to_id.get(&field_name)
     }
 
-    /// Get a field, by ID, returning the underyling [`MappedField`] if it exists,
+    /// Get a field, by ID, returning the underlying [`MappedField`] if it exists,
     /// otherwise `None`.
     pub fn field(&self, id: i32) -> Option<&MappedField> {
         self.id_to_field.get(&id)
