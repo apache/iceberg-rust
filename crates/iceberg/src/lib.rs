@@ -87,4 +87,5 @@ pub(crate) mod delete_file_index;
 mod utils;
 pub mod writer;
 
+mod delete_vector;
 mod puffin;
