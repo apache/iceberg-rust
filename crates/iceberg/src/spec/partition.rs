@@ -18,13 +18,16 @@
 /*!
  * Partitioning
  */
+
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
-use super::{NestedField, Schema, SchemaRef, StructType};
+use super::{NestedField, Schema, SchemaRef, StructType, TableMetadata, Type};
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
@@ -616,12 +619,12 @@ trait CorePartitionSpecValidator {
 
         if let Some(collision) = collision {
             Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
-                        source_id, transform.dedup_name(), collision.name
-                    ),
-                ))
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
+                    source_id, transform.dedup_name(), collision.name
+                ),
+            ))
         } else {
             Ok(())
         }
@@ -657,10 +660,130 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
     }
 }
 
+/// Builds a unified partition type considering all specs in the table.
+///
+/// Based on Iceberg Java's [`Partitioning#partitionType`][1].
+///
+/// [1]: https://github.com/apache/iceberg/blob/7e0cd3fa1e51d3c80f6c8cff23a03dca86f942fa/core/src/main/java/org/apache/iceberg/Partitioning.java#L240
+pub(crate) fn partition_type(table_metadata: &TableMetadata) -> Result<StructType> {
+    let partition_spec = table_metadata.partition_specs_iter().cloned().collect_vec();
+    let all_field_ids = all_field_ids(&partition_spec);
+
+    build_partition_projection_type(
+        table_metadata.current_schema(),
+        partition_spec,
+        all_field_ids,
+    )
+}
+
+// Based on Iceberg Java's [`Partitioning#buildPartitionProjectionType`][1].
+//
+// [1]:https://github.com/apache/iceberg/blob/apache-iceberg-1.8.0/core/src/main/java/org/apache/iceberg/Partitioning.java#L255
+fn build_partition_projection_type(
+    schema: &Schema,
+    specs: Vec<PartitionSpecRef>,
+    projected_field_ids: HashSet<i32>,
+) -> Result<StructType> {
+    // Check for unknown transforms because we cannot know the output type
+    for spec in &specs {
+        for field in &spec.fields {
+            if field.transform == Transform::Unknown {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Unknown transform in partition spec: {field:?}",),
+                ));
+            }
+        }
+    }
+
+    let mut field_map: HashMap<i32, PartitionField> = HashMap::new();
+    let mut type_map: HashMap<i32, Type> = HashMap::new();
+    let mut name_map: HashMap<i32, String> = HashMap::new();
+
+    // Sort specs by ID in descending order to get latest field names
+    let sorted_specs = specs
+        .iter()
+        .sorted_by_key(|spec| spec.spec_id())
+        .rev()
+        .collect_vec();
+
+    for spec in sorted_specs {
+        for field in spec.fields() {
+            let field_id = field.field_id;
+
+            if !projected_field_ids.contains(&field_id) {
+                continue;
+            }
+
+            let partition_type = spec.partition_type(schema)?;
+            let struct_field = partition_type.field_by_id(field_id).unwrap();
+            let existing_field = field_map.get(&field_id);
+
+            match existing_field {
+                None => {
+                    field_map.insert(field_id, field.clone());
+                    type_map.insert(field_id, struct_field.field_type.as_ref().clone());
+                    name_map.insert(field_id, struct_field.name.clone());
+                }
+                Some(existing_field) => {
+                    // verify the fields are compatible as they may conflict in v1 tables
+                    if !equivalent_ignoring_name(existing_field, field) {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Conflicting partition fields: ['{existing_field:?}', '{field:?}']",
+                            ),
+                        ));
+                    }
+
+                    // use the correct type for dropped partitions in v1 tables
+                    if is_void_transform(existing_field) && !is_void_transform(field) {
+                        field_map.insert(field_id, field.clone());
+                        type_map.insert(field_id, struct_field.field_type.as_ref().clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let sorted_struct_fields = field_map
+        .into_keys()
+        .sorted()
+        .map(|field_id| {
+            NestedField::optional(field_id, &name_map[&field_id], type_map[&field_id].clone())
+        })
+        .map(Arc::new)
+        .collect_vec();
+
+    Ok(StructType::new(sorted_struct_fields))
+}
+
+fn is_void_transform(field: &PartitionField) -> bool {
+    field.transform == Transform::Void
+}
+
+fn equivalent_ignoring_name(field: &PartitionField, another_field: &PartitionField) -> bool {
+    field.field_id == another_field.field_id
+        && field.source_id == another_field.source_id
+        && compatible_transforms(field.transform, another_field.transform)
+}
+
+fn compatible_transforms(t1: Transform, t2: Transform) -> bool {
+    t1 == t2 || t1 == Transform::Void || t2 == Transform::Void
+}
+
+// Collects IDs of all partition field used across specs
+fn all_field_ids(vec: &[PartitionSpecRef]) -> HashSet<i32> {
+    vec.iter()
+        .flat_map(|partition_spec| partition_spec.fields())
+        .map(|partition_field| partition_field.field_id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{PrimitiveType, Type};
+    use crate::spec::{FormatVersion, PrimitiveType, SortOrder, TableMetadataBuilder, Type};
 
     #[test]
     fn test_partition_spec() {
@@ -1732,5 +1855,173 @@ mod tests {
         assert_eq!(1000, spec.fields[0].field_id);
         assert_eq!(1002, spec.fields[1].field_id);
         assert!(!spec.has_sequential_ids());
+    }
+
+    #[test]
+    fn test_combine_partition_type() -> Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
+            ])
+            .build()?;
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "my_location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )?
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(1)
+                .add_partition_fields(vec![
+                    UnboundPartitionField {
+                        source_id: 1,
+                        field_id: Some(1001),
+                        name: "id_bucket".to_string(),
+                        transform: Transform::Bucket(16),
+                    },
+                    UnboundPartitionField {
+                        source_id: 1,
+                        field_id: Some(1002),
+                        name: "id_truncate".to_string(),
+                        transform: Transform::Truncate(4),
+                    },
+                ])?
+                .build(),
+        )?
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(2)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 3,
+                    field_id: Some(1000),
+                    name: "ts_day".to_string(),
+                    transform: Transform::Day,
+                }])?
+                .build(),
+        )?
+        // Spec id 3 overrides a partition field name with the same id
+        // We'll later assert that the new name is used instead of the old one
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(3)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 3,
+                    field_id: Some(1000),
+                    name: "ts_day_overridden".to_string(),
+                    transform: Transform::Day,
+                }])?
+                .build(),
+        )?
+        // Add a void transform
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(4)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 2,
+                    field_id: Some(9999),
+                    name: "name_partition".to_string(),
+                    transform: Transform::Void,
+                }])?
+                .build(),
+        )?
+        // Newer partition fields can override partition void fields
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(5)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 2,
+                    field_id: Some(9999),
+                    name: "name_partition".to_string(),
+                    transform: Transform::Identity,
+                }])?
+                .build(),
+        )?
+        .build()?
+        .metadata;
+
+        assert_eq!(
+            partition_type(&metadata)?,
+            // Assert that fields are sorted
+            StructType::new(vec![
+                NestedField::optional(
+                    1000,
+                    "ts_day_overridden",
+                    Type::Primitive(PrimitiveType::Date),
+                )
+                .into(),
+                NestedField::optional(1001, "id_bucket", Type::Primitive(PrimitiveType::Int),)
+                    .into(),
+                NestedField::optional(1002, "id_truncate", Type::Primitive(PrimitiveType::Int),)
+                    .into(),
+                NestedField::optional(
+                    9999,
+                    "name_partition",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_partition_type_incompatible_specs() -> Result<()> {
+        let metadata = TableMetadataBuilder::new(
+            Schema::builder()
+                .with_fields(vec![NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                )
+                .into()])
+                .build()?,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "my_location".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )?
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(1)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 1,
+                    field_id: Some(2),
+                    name: "id_bucket".to_string(),
+                    transform: Transform::Bucket(4),
+                }])?
+                .build(),
+        )?
+        // Change the partition field incompatibly
+        .add_partition_spec(
+            UnboundPartitionSpec::builder()
+                .with_spec_id(2)
+                .add_partition_fields(vec![UnboundPartitionField {
+                    source_id: 1,
+                    field_id: Some(2),
+                    name: "id_bucket".to_string(),
+                    // Change bucket[4] to bucket[8]
+                    transform: Transform::Bucket(8),
+                }])?
+                .build(),
+        )?
+        .build()?
+        .metadata;
+
+        let result = partition_type(&metadata);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Conflicting partition fields"));
+
+        Ok(())
     }
 }
