@@ -50,7 +50,7 @@ const CHANGED_PARTITION_PREFIX: &str = "partitions.";
 
 #[derive(Default)]
 #[allow(dead_code)]
-pub(crate) struct SnapshotSummaryCollector {
+pub struct SnapshotSummaryCollector {
     metrics: UpdateMetrics,
     partition_metrics: HashMap<String, UpdateMetrics>,
     max_changed_partitions_for_summaries: u64,

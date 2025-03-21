@@ -686,7 +686,7 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{PrimitiveType, Type};
+    use crate::spec::{Literal, PrimitiveType, Type};
 
     #[test]
     fn test_partition_spec() {
@@ -1759,4 +1759,28 @@ mod tests {
         assert_eq!(1002, spec.fields[1].field_id);
         assert!(!spec.has_sequential_ids());
     }
+
+    #[test]
+    fn test_partition_to_path() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+    
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("id", "id", Transform::Identity).unwrap()
+            .add_partition_field("name", "name", Transform::Identity).unwrap()
+            .build()
+            .unwrap();
+    
+        let data = Struct::from_iter([
+            Some(Literal::int(42)),
+            Some(Literal::string("alice")),
+        ]);
+    
+        assert_eq!(spec.partition_to_path(&data, schema.into()), "id=42/name=\"alice\"");
+    } 
 }
