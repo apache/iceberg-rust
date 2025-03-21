@@ -3143,6 +3143,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg-catalog-memory",
+ "parquet",
  "tempfile",
  "tokio",
 ]

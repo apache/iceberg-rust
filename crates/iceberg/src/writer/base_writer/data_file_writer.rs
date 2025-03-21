@@ -103,11 +103,13 @@ impl<B: FileWriterBuilder> CurrentFileStatus for DataFileWriter<B> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::{DataType, Field};
     use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -153,8 +155,14 @@ mod test {
             .unwrap();
 
         let arrow_schema = arrow_schema::Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-            Field::new("bar", DataType::Utf8, false),
+            Field::new("foo", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                3.to_string(),
+            )])),
+            Field::new("bar", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                4.to_string(),
+            )])),
         ]);
         let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
@@ -224,8 +232,14 @@ mod test {
                 .await?;
 
         let arrow_schema = arrow_schema::Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                5.to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                6.to_string(),
+            )])),
         ]);
         let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
