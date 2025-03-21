@@ -1769,18 +1769,20 @@ mod tests {
             ])
             .build()
             .unwrap();
-    
+
         let spec = PartitionSpec::builder(schema.clone())
-            .add_partition_field("id", "id", Transform::Identity).unwrap()
-            .add_partition_field("name", "name", Transform::Identity).unwrap()
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .add_partition_field("name", "name", Transform::Identity)
+            .unwrap()
             .build()
             .unwrap();
-    
-        let data = Struct::from_iter([
-            Some(Literal::int(42)),
-            Some(Literal::string("alice")),
-        ]);
-    
-        assert_eq!(spec.partition_to_path(&data, schema.into()), "id=42/name=\"alice\"");
-    } 
+
+        let data = Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "id=42/name=\"alice\""
+        );
+    }
 }
