@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::MappedField;
+use crate::Error;
 
 /// Utility mapping which contains field names to IDs and
 /// field IDs to the underlying [`MappedField`].
@@ -34,24 +35,42 @@ pub struct MappedFields {
 
 impl MappedFields {
     /// Create a new [`MappedFields`].
-    pub fn new(fields: Vec<MappedField>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// This will produce an error if the input fields contain either duplicate
+    /// names or field IDs.
+    pub fn try_new(fields: Vec<MappedField>) -> Result<Self, Error> {
         let mut name_to_id = HashMap::new();
         let mut id_to_field = HashMap::new();
 
         for field in &fields {
             if let Some(id) = field.field_id() {
+                if id_to_field.contains_key(&id) {
+                    return Err(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        format!("duplicate id '{id}' is not allowed"),
+                    ));
+                }
+
                 id_to_field.insert(id, field.clone());
                 for name in field.names() {
+                    if name_to_id.contains_key(name) {
+                        return Err(Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            format!("duplicate name '{name}' is not allowed"),
+                        ));
+                    }
                     name_to_id.insert(name.to_string(), id);
                 }
             }
         }
 
-        Self {
+        Ok(Self {
             fields,
             name_to_id,
             id_to_field,
-        }
+        })
     }
 
     /// Get a reference to the underlying fields.
@@ -77,6 +96,7 @@ mod test {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::ErrorKind;
 
     #[test]
     fn mapped_fields() {
@@ -89,7 +109,7 @@ mod test {
             ),
         ];
 
-        let mapped_fields = MappedFields::new(my_fields);
+        let mapped_fields = MappedFields::try_new(my_fields).expect("valid mapped fields for test");
 
         assert!(
             mapped_fields.field(1000).is_none(),
@@ -119,5 +139,27 @@ mod test {
             "Field with another name shares the same ID of '2'"
         );
         assert_eq!(mapped_fields.id("field_one".to_string()), Some(1));
+    }
+
+    #[test]
+    fn invalid_mapped_fields() {
+        let duplicate_ids = vec![
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+            MappedField::new(Some(1), vec!["field_two".to_string()], Vec::new()),
+        ];
+
+        assert_eq!(
+            MappedFields::try_new(duplicate_ids).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+
+        let duplicate_names = vec![
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+            MappedField::new(Some(2), vec!["field_one".to_string()], Vec::new()),
+        ];
+        assert_eq!(
+            MappedFields::try_new(duplicate_names).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
     }
 }
