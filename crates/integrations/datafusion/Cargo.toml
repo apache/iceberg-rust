@@ -23,7 +23,7 @@ homepage = { workspace = true }
 # kept the same as DataFusion's MSRV
 # https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
 # https://github.com/apache/datafusion/blob/main/Cargo.toml#L68
-rust-version = "1.80.1"
+rust-version = "1.82.0"
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"

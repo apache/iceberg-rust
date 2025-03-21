@@ -55,10 +55,10 @@ pub(crate) fn empty_footer_payload() -> FileMetadata {
 }
 
 pub(crate) fn empty_footer_payload_bytes() -> Vec<u8> {
-    return serde_json::to_string::<FileMetadata>(&empty_footer_payload())
+    serde_json::to_string::<FileMetadata>(&empty_footer_payload())
         .unwrap()
         .as_bytes()
-        .to_vec();
+        .to_vec()
 }
 
 pub(crate) fn empty_footer_payload_bytes_length_bytes() -> [u8; 4] {

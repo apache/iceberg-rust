@@ -84,8 +84,10 @@ pub trait FileNameGenerator: Clone + Send + 'static {
     fn generate_file_name(&self) -> String;
 }
 
-/// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
-/// passed to `LocationGenerator` to generate the location of the file.
+/// `DefaultFileNameGenerator` used to generate file name for data file.
+///
+/// The file name can be passed to `LocationGenerator`
+/// to generate the location of the file.
 /// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
 #[derive(Clone, Debug)]
 pub struct DefaultFileNameGenerator {

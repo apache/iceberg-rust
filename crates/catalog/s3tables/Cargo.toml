@@ -20,7 +20,7 @@ name = "iceberg-catalog-s3tables"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-rust-version = "1.81.0"
+rust-version = "1.82.0"
 
 categories = ["database"]
 description = "Apache Iceberg Rust S3Tables Catalog"

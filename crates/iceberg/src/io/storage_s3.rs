@@ -46,6 +46,7 @@ pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// S3 Server Side Encryption Type.
 pub const S3_SSE_TYPE: &str = "s3.sse.type";
 /// S3 Server Side Encryption Key.
+///
 /// If S3 encryption type is kms, input is a KMS Key ID.
 /// In case this property is not set, default key "aws/s3" is used.
 /// If encryption type is custom, input is a custom base-64 AES256 symmetric key.

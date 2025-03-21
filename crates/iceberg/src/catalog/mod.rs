@@ -359,6 +359,7 @@ pub enum TableRequirement {
 }
 
 /// TableUpdate represents an update to a table in the catalog.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum TableUpdate {
@@ -748,6 +749,7 @@ pub struct ViewCreation {
 }
 
 /// ViewUpdate represents an update to a view in the catalog.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum ViewUpdate {

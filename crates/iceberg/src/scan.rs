@@ -460,7 +460,7 @@ impl TableScan {
             }
         });
 
-        return Ok(file_scan_task_rx.boxed());
+        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -1115,6 +1115,7 @@ impl FileScanTask {
     }
 }
 
+#[allow(missing_docs)]
 #[cfg(test)]
 pub mod tests {
     use std::collections::HashMap;
