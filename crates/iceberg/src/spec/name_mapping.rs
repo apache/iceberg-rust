@@ -20,11 +20,26 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DefaultOnNull};
 
+/// Property name for name mapping.
+pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
+
 /// Iceberg fallback field name to ID mapping.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(transparent)]
 pub struct NameMapping {
-    pub root: Vec<MappedField>,
+    root: Vec<MappedField>,
+}
+
+impl NameMapping {
+    /// Create a new [`NameMapping`] given a collection of mapped fields.
+    pub fn new(fields: Vec<MappedField>) -> NameMapping {
+        Self { root: fields }
+    }
+
+    /// Get a reference to fields which are to be mapped from name to field ID.
+    pub fn root(&self) -> &[MappedField] {
+        &self.root
+    }
 }
 
 /// Maps field names to IDs.
@@ -33,12 +48,38 @@ pub struct NameMapping {
 #[serde(rename_all = "kebab-case")]
 pub struct MappedField {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub field_id: Option<i32>,
-    pub names: Vec<String>,
+    field_id: Option<i32>,
+    names: Vec<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde_as(deserialize_as = "DefaultOnNull")]
-    pub fields: Vec<MappedField>,
+    fields: Vec<MappedField>,
+}
+
+impl MappedField {
+    /// Create a new [`MappedField`].
+    pub fn new(field_id: Option<i32>, names: Vec<String>, fields: Vec<MappedField>) -> Self {
+        Self {
+            field_id,
+            names,
+            fields,
+        }
+    }
+
+    /// Iceberg field ID when a field's name is present within `names`.
+    pub fn field_id(&self) -> Option<i32> {
+        self.field_id
+    }
+
+    /// Get a reference to names for a mapped field.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// Get a reference to the field mapping for any child fields.
+    pub fn fields(&self) -> &[MappedField] {
+        &self.fields
+    }
 }
 
 #[cfg(test)]
