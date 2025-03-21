@@ -1539,6 +1539,11 @@
 <a href="#1539" id="1539">1539</a>
 <a href="#1540" id="1540">1540</a>
 <a href="#1541" id="1541">1541</a>
+<a href="#1542" id="1542">1542</a>
+<a href="#1543" id="1543">1543</a>
+<a href="#1544" id="1544">1544</a>
+<a href="#1545" id="1545">1545</a>
+<a href="#1546" id="1546">1546</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2048,7 +2053,7 @@
 }
 
 <span class="doccomment">/// Entry in a manifest list.
-</span><span class="attr">#[derive(Debug, PartialEq, Clone)]
+</span><span class="attr">#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 </span><span class="kw">pub struct </span>ManifestFile {
     <span class="doccomment">/// field: 500
     ///
@@ -2128,17 +2133,22 @@
 <span class="kw">impl </span>ManifestFile {
     <span class="doccomment">/// Checks if the manifest file has any added files.
     </span><span class="kw">pub fn </span>has_added_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.added_files_count.is_none() || <span class="self">self</span>.added_files_count.unwrap() &gt; <span class="number">0
-    </span>}
+        <span class="self">self</span>.added_files_count.map(|c| c &gt; <span class="number">0</span>).unwrap_or(<span class="bool-val">true</span>)
+    }
+
+    <span class="doccomment">/// Checks whether this manifest contains entries with DELETED status.
+    </span><span class="kw">pub fn </span>has_deleted_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.deleted_files_count.map(|c| c &gt; <span class="number">0</span>).unwrap_or(<span class="bool-val">true</span>)
+    }
 
     <span class="doccomment">/// Checks if the manifest file has any existed files.
     </span><span class="kw">pub fn </span>has_existing_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.existing_files_count.is_none() || <span class="self">self</span>.existing_files_count.unwrap() &gt; <span class="number">0
-    </span>}
+        <span class="self">self</span>.existing_files_count.map(|c| c &gt; <span class="number">0</span>).unwrap_or(<span class="bool-val">true</span>)
+    }
 }
 
 <span class="doccomment">/// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-</span><span class="attr">#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+</span><span class="attr">#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 </span><span class="kw">pub enum </span>ManifestContentType {
     <span class="doccomment">/// The manifest content is data.
     </span>Data = <span class="number">0</span>,
@@ -2209,7 +2219,7 @@
 <span class="doccomment">/// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Default)]
+</span><span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Default, Hash)]
 </span><span class="kw">pub struct </span>FieldSummary {
     <span class="doccomment">/// field: 509
     ///
