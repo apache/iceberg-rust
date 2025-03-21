@@ -40,6 +40,7 @@ async fn main() {
         .build();
     let catalog = RestCatalog::new(config);
 
+    // ANCHOR: create_table
     // Create the table identifier.
     let namespace_ident = NamespaceIdent::from_vec(vec![NAMESPACE.to_string()]).unwrap();
     let table_ident = TableIdent::new(namespace_ident.clone(), TABLE_NAME.to_string());
@@ -78,7 +79,9 @@ async fn main() {
         .await
         .unwrap();
     println!("Table {TABLE_NAME} created!");
+    // ANCHOR_END: create_table
 
+    // ANCHOR: load_table
     // Ensure that the table is under the correct namespace.
     assert!(catalog
         .list_tables(&namespace_ident)
@@ -89,4 +92,5 @@ async fn main() {
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&table_ident).await.unwrap();
     println!("Table {TABLE_NAME} loaded!\n\nTable: {:?}", loaded_table);
+    // ANCHOR_END: load_table
 }

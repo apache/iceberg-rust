@@ -35,6 +35,7 @@ homepage = "https://rust.iceberg.apache.org/"
 
 repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
+# Check the MSRV policy in README.md before changing this
 rust-version = "1.77.1"
 
 [workspace.dependencies]
@@ -86,6 +87,7 @@ port_scanner = "0.1.5"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
+roaring = "0.10"
 rust_decimal = "1.31"
 serde = { version = "1.0.204", features = ["rc"] }
 serde_bytes = "0.11.15"
