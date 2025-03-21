@@ -587,17 +587,17 @@ pub struct ManifestFile {
 impl ManifestFile {
     /// Checks if the manifest file has any added files.
     pub fn has_added_files(&self) -> bool {
-        self.added_files_count.is_none() || self.added_files_count.unwrap() > 0
+        self.added_files_count.map(|c| c > 0).unwrap_or(true)
     }
 
     /// Checks whether this manifest contains entries with DELETED status.
     pub fn has_deleted_files(&self) -> bool {
-        self.deleted_files_count.is_none() || self.deleted_files_count.unwrap() > 0
+        self.deleted_files_count.map(|c| c > 0).unwrap_or(true)
     }
 
     /// Checks if the manifest file has any existed files.
     pub fn has_existing_files(&self) -> bool {
-        self.existing_files_count.is_none() || self.existing_files_count.unwrap() > 0
+        self.existing_files_count.map(|c| c > 0).unwrap_or(true)
     }
 }
 
