@@ -128,7 +128,8 @@ impl SnapshotSummaryCollector {
                     .merge(partition_metric);
             }
         } else {
-            self.partition_metrics.clear()
+            self.partition_metrics.clear();
+            self.trust_partition_metrics = false;
         }
     }
 
@@ -974,7 +975,7 @@ mod tests {
 
         summary_three.merge(summary_four);
         let props = summary_three.build();
-        
+
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "6");
         assert!(props
