@@ -102,7 +102,7 @@ impl BoundPredicateVisitor for InclusiveProjection {
     }
 
     fn not(&mut self, _inner: Self::T) -> crate::Result<Self::T> {
-        panic!("InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it.")
+        unreachable!("InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it.")
     }
 
     fn is_null(
