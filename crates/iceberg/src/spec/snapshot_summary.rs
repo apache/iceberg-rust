@@ -54,10 +54,16 @@ pub(crate) struct SnapshotSummaryCollector {
     metrics: UpdateMetrics,
     partition_metrics: HashMap<String, UpdateMetrics>,
     max_changed_partitions_for_summaries: u64,
+    properties: HashMap<String, String>,
 }
 
 #[allow(dead_code)]
 impl SnapshotSummaryCollector {
+    // Set properties
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.properties.insert(key.to_string(), value.to_string());
+    }
+
     pub fn set_partition_summary_limit(&mut self, limit: u64) {
         self.max_changed_partitions_for_summaries = limit;
     }
@@ -696,6 +702,7 @@ mod tests {
             split_offsets: vec![4],
             equality_ids: vec![],
             sort_order_id: Some(0),
+            partition_spec_id: 0,
         };
 
         let file2 = DataFile {
@@ -723,6 +730,7 @@ mod tests {
             split_offsets: vec![4],
             equality_ids: vec![],
             sort_order_id: Some(0),
+            partition_spec_id: 0,
         };
 
         collector.add_file(&file1, schema.clone(), partition_spec.clone());
