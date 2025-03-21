@@ -60,8 +60,8 @@ impl MappedFields {
     }
 
     /// Get a field, by name, returning its ID if it exists, otherwise `None`.
-    pub fn id(&self, field_name: String) -> Option<&i32> {
-        self.name_to_id.get(&field_name)
+    pub fn id(&self, field_name: String) -> Option<i32> {
+        self.name_to_id.get(&field_name).copied()
     }
 
     /// Get a field, by ID, returning the underlying [`MappedField`] if it exists,
@@ -112,12 +112,12 @@ mod test {
             mapped_fields.id("not_exist".to_string()).is_none(),
             "Field was not expected to exist in the collection"
         );
-        assert_eq!(mapped_fields.id("field_two".to_string()).cloned(), Some(2));
+        assert_eq!(mapped_fields.id("field_two".to_string()), Some(2));
         assert_eq!(
-            mapped_fields.id("field_foo".to_string()).cloned(),
+            mapped_fields.id("field_foo".to_string()),
             Some(2),
             "Field with another name shares the same ID of '2'"
         );
-        assert_eq!(mapped_fields.id("field_one".to_string()).cloned(), Some(1));
+        assert_eq!(mapped_fields.id("field_one".to_string()), Some(1));
     }
 }
