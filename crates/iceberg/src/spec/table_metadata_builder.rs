@@ -1221,21 +1221,23 @@ impl TableMetadataBuilder {
             ));
         }
 
-        if !schema_id_to_remove.is_empty() {
-            let mut removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
-            self.metadata.schemas.retain(|id, _schema| {
-                if schema_id_to_remove.contains(id) {
-                    removed_schemas.push(*id);
-                    false
-                } else {
-                    true
-                }
-            });
-
-            self.changes.push(TableUpdate::RemoveSchemas {
-                schema_ids: removed_schemas,
-            });
+        if schema_id_to_remove.is_empty() {
+            return Ok(self);
         }
+
+        let mut removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
+        self.metadata.schemas.retain(|id, _schema| {
+            if schema_id_to_remove.contains(id) {
+                removed_schemas.push(*id);
+                false
+            } else {
+                true
+            }
+        });
+
+        self.changes.push(TableUpdate::RemoveSchemas {
+            schema_ids: removed_schemas,
+        });
 
         Ok(self)
     }
