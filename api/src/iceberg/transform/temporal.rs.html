@@ -2767,6 +2767,10 @@
 <a href="#2767" id="2767">2767</a>
 <a href="#2768" id="2768">2768</a>
 <a href="#2769" id="2769">2769</a>
+<a href="#2770" id="2770">2770</a>
+<a href="#2771" id="2771">2771</a>
+<a href="#2772" id="2772">2772</a>
+<a href="#2773" id="2773">2773</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2799,8 +2803,10 @@
 <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
-<span class="doccomment">/// Hour in one second.
-</span><span class="kw">const </span>HOUR_PER_SECOND: f64 = <span class="number">1.0_f64 </span>/ <span class="number">3600.0_f64</span>;
+<span class="doccomment">/// Microseconds in one hour.
+</span><span class="kw">const </span>MICROSECONDS_PER_HOUR: i64 = <span class="number">3_600_000_000</span>;
+<span class="doccomment">/// Nanoseconds in one hour.
+</span><span class="kw">const </span>NANOSECONDS_PER_HOUR: i64 = <span class="number">3_600_000_000_000</span>;
 <span class="doccomment">/// Year of unix epoch.
 </span><span class="kw">const </span>UNIX_EPOCH_YEAR: i32 = <span class="number">1970</span>;
 <span class="doccomment">/// One second in micros.
@@ -3104,12 +3110,12 @@
 <span class="kw">impl </span>Hour {
     <span class="attr">#[inline]
     </span><span class="kw">fn </span>hour_timestamp_micro(v: i64) -&gt; i32 {
-        (v <span class="kw">as </span>f64 / <span class="number">1000.0 </span>/ <span class="number">1000.0 </span>* HOUR_PER_SECOND) <span class="kw">as </span>i32
+        (v / MICROSECONDS_PER_HOUR) <span class="kw">as </span>i32
     }
 
     <span class="attr">#[inline]
     </span><span class="kw">fn </span>hour_timestamp_nano(v: i64) -&gt; i32 {
-        (v <span class="kw">as </span>f64 / <span class="number">1_000_000.0 </span>/ <span class="number">1000.0 </span>* HOUR_PER_SECOND) <span class="kw">as </span>i32
+        (v / NANOSECONDS_PER_HOUR) <span class="kw">as </span>i32
     }
 }
 
@@ -5530,10 +5536,12 @@
         <span class="comment">// Test TimestampMicrosecond
         </span>test_timestamp_and_tz_transform(<span class="string">"2017-12-01 18:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">420042</span>));
         test_timestamp_and_tz_transform(<span class="string">"1969-12-31 23:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
+        test_timestamp_and_tz_transform(<span class="string">"0022-05-01 22:01:01.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">17072905</span>));
 
         <span class="comment">// Test TimestampNanosecond
         </span>test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 18:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">420042</span>));
         test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-31 23:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"1900-05-01 22:01:01.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">610705</span>));
     }
 }
 </code></pre></div></section></main></body></html>
