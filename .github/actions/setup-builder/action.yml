@@ -28,10 +28,12 @@ runs:
     - name: Setup specified Rust toolchain
       shell: bash
       if: ${{ inputs.rust-version != '' }}
+      env:
+        RUST_VERSION: ${{ inputs.rust-version }}
       run: |
-        echo "Installing ${{ inputs.rust-version }}"
-        rustup toolchain install ${{ inputs.rust-version }}
-        rustup override set ${{ inputs.rust-version }}
+        echo "Installing ${RUST_VERSION}"
+        rustup toolchain install ${RUST_VERSION}
+        rustup override set ${RUST_VERSION}
         rustup component add rustfmt clippy
     - name: Setup Rust toolchain according to rust-toolchain.toml
       shell: bash
