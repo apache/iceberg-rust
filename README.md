@@ -76,12 +76,10 @@ The Apache Iceberg Rust project is composed of the following components:
 
 ## Supported Rust Version
 
-Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version). The 
-current MSRV is 1.77.1. 
+Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version).
+At least three months from latest rust release is supported. MSRV is updated when we release iceberg-rust.
 
-Also, iceberg-rust use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
-and only MSRV is required.  
-
+Check the current MSRV on [crates.io](https://crates.io/crates/iceberg).
 
 ## Contribute
 
