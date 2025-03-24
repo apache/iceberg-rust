@@ -81,13 +81,16 @@ pub use storage_s3::*;
 pub(crate) mod object_cache;
 #[cfg(feature = "storage-fs")]
 mod storage_fs;
-
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
 #[cfg(feature = "storage-gcs")]
 mod storage_gcs;
 #[cfg(feature = "storage-gcs")]
 pub use storage_gcs::*;
+#[cfg(feature = "storage-webhdfs")]
+mod storage_webhdfs;
+#[cfg(feature = "storage-webhdfs")]
+pub use storage_webhdfs::*;
 
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())

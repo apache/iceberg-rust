@@ -22,7 +22,10 @@ use opendal::layers::RetryLayer;
 use opendal::services::GcsConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
+#[cfg(feature = "storage-webhdfs")]
+use opendal::services::WebhdfsConfig;
 use opendal::{Operator, Scheme};
+use url::Url;
 
 use super::FileIOBuilder;
 use crate::{Error, ErrorKind};
@@ -47,6 +50,8 @@ pub(crate) enum Storage {
     },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
+    #[cfg(feature = "storage-webhdfs")]
+    Webhdfs { config: Arc<WebhdfsConfig> },
 }
 
 impl Storage {
@@ -69,6 +74,10 @@ impl Storage {
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => Ok(Self::Gcs {
                 config: super::gcs_config_parse(props)?.into(),
+            }),
+            #[cfg(feature = "storage-webhdfs")]
+            Scheme::Webhdfs => Ok(Self::Webhdfs {
+                config: super::webhdfs_config_parse(props)?.into(),
             }),
             // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
@@ -147,6 +156,13 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-webhdfs")]
+            Storage::Webhdfs { config } => {
+                let prefix_url = Url::parse(path)?;
+                let prefix = format!("{}://{}", prefix_url.scheme(), prefix_url.authority());
+                let operator = super::webhdfs_config_build(config)?;
+                Ok((operator, &path[prefix.len()..]))
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
@@ -172,6 +188,8 @@ impl Storage {
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
             "gs" | "gcs" => Ok(Scheme::Gcs),
+            #[cfg(feature = "storage-webhdfs")]
+            "hdfs" => Ok(Scheme::Webhdfs),
             s => Ok(s.parse::<Scheme>()?),
         }
     }
