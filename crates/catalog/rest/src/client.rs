@@ -248,11 +248,14 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 /// TODO: Eventually, this function should return an error response that is custom to the error
 /// codes that all endpoints share (400, 404, etc.).
 pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
+    let (status, headers) = (response.status(), response.headers().clone());
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => return err.into(),
     };
 
     Error::new(ErrorKind::Unexpected, "Received unexpected response")
+        .with_context("status", status.to_string())
+        .with_context("headers", format!("{:?}", headers))
         .with_context("json", String::from_utf8_lossy(&bytes))
 }
