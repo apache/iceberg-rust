@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::{DataContentType, DataFile, PartitionSpecRef};
-use crate::spec::{Operation, SchemaRef, Summary};
+use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
 use crate::{Error, ErrorKind, Result};
 
 const ADDED_DATA_FILES: &str = "added-data-files";
@@ -55,6 +55,7 @@ pub struct SnapshotSummaryCollector {
     partition_metrics: HashMap<String, UpdateMetrics>,
     max_changed_partitions_for_summaries: u64,
     properties: HashMap<String, String>,
+    trust_partition_metrics: bool,
 }
 
 #[allow(dead_code)]
@@ -92,6 +93,12 @@ impl SnapshotSummaryCollector {
         }
     }
 
+    pub fn add_manifest(&mut self, manifest: &ManifestFile) {
+        self.trust_partition_metrics = false;
+        self.partition_metrics.clear();
+        self.metrics.add_manifest(manifest);
+    }
+
     pub fn update_partition_metrics(
         &mut self,
         schema: SchemaRef,
@@ -106,6 +113,23 @@ impl SnapshotSummaryCollector {
             metrics.add_file(data_file);
         } else {
             metrics.remove_file(data_file);
+        }
+    }
+
+    pub fn merge(&mut self, summary: SnapshotSummaryCollector) {
+        self.metrics.merge(&summary.metrics);
+        self.properties.extend(summary.properties);
+
+        if self.trust_partition_metrics && summary.trust_partition_metrics {
+            for (partition, partition_metric) in summary.partition_metrics.iter() {
+                self.partition_metrics
+                    .entry(partition.to_string())
+                    .or_default()
+                    .merge(partition_metric);
+            }
+        } else {
+            self.partition_metrics.clear();
+            self.trust_partition_metrics = false;
         }
     }
 
@@ -140,14 +164,14 @@ impl SnapshotSummaryCollector {
 struct UpdateMetrics {
     added_file_size: u64,
     removed_file_size: u64,
-    added_data_files: u64,
-    removed_data_files: u64,
+    added_data_files: u32,
+    removed_data_files: u32,
     added_eq_delete_files: u64,
     removed_eq_delete_files: u64,
     added_pos_delete_files: u64,
     removed_pos_delete_files: u64,
-    added_delete_files: u64,
-    removed_delete_files: u64,
+    added_delete_files: u32,
+    removed_delete_files: u32,
     added_records: u64,
     deleted_records: u64,
     added_pos_deletes: u64,
@@ -193,6 +217,21 @@ impl UpdateMetrics {
                 self.removed_delete_files += 1;
                 self.removed_eq_delete_files += 1;
                 self.removed_eq_deletes += data_file.record_count;
+            }
+        }
+    }
+
+    fn add_manifest(&mut self, manifest: &ManifestFile) {
+        match manifest.content {
+            ManifestContentType::Data => {
+                self.added_data_files += manifest.added_files_count.unwrap_or(0);
+                self.added_records += manifest.added_rows_count.unwrap_or(0);
+                self.removed_data_files += manifest.deleted_files_count.unwrap_or(0);
+                self.deleted_records += manifest.deleted_rows_count.unwrap_or(0);
+            }
+            ManifestContentType::Deletes => {
+                self.added_delete_files += manifest.added_files_count.unwrap_or(0);
+                self.removed_delete_files += manifest.deleted_files_count.unwrap_or(0);
             }
         }
     }
@@ -253,10 +292,30 @@ impl UpdateMetrics {
         );
         properties
     }
+
+    fn merge(&mut self, other: &UpdateMetrics) {
+        self.added_file_size += other.added_file_size;
+        self.removed_file_size += other.removed_file_size;
+        self.added_data_files += other.added_data_files;
+        self.removed_data_files += other.removed_data_files;
+        self.added_eq_delete_files += other.added_eq_delete_files;
+        self.removed_eq_delete_files += other.removed_eq_delete_files;
+        self.added_pos_delete_files += other.added_pos_delete_files;
+        self.removed_pos_delete_files += other.removed_pos_delete_files;
+        self.added_delete_files += other.added_delete_files;
+        self.removed_delete_files += other.removed_delete_files;
+        self.added_records += other.added_records;
+        self.deleted_records += other.deleted_records;
+        self.added_pos_deletes += other.added_pos_deletes;
+        self.removed_pos_deletes += other.removed_pos_deletes;
+        self.added_eq_deletes += other.added_eq_deletes;
+        self.removed_eq_deletes += other.removed_eq_deletes;
+    }
 }
 
-fn set_if_positive(properties: &mut HashMap<String, String>, value: u64, property_name: &str) {
-    if value > 0 {
+fn set_if_positive<T>(properties: &mut HashMap<String, String>, value: T, property_name: &str)
+where T: PartialOrd + Default + ToString {
+    if value > T::default() {
         properties.insert(property_name.to_string(), value.to_string());
     }
 }
@@ -751,5 +810,176 @@ mod tests {
         assert!(partition_summary.contains(&format!("{}=200", ADDED_FILE_SIZE)));
         assert!(partition_summary.contains(&format!("{}=1", ADDED_DATA_FILES)));
         assert!(partition_summary.contains(&format!("{}=20", ADDED_RECORDS)));
+    }
+
+    #[test]
+    fn test_snapshot_summary_collector_add_manifest() {
+        let mut collector = SnapshotSummaryCollector::default();
+        collector.set_partition_summary_limit(10);
+
+        let manifest = ManifestFile {
+            manifest_path: "file://dummy.manifest".to_string(),
+            manifest_length: 0,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 0,
+            added_files_count: Some(3),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(1),
+            added_rows_count: Some(100),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(50),
+            partitions: Vec::new(),
+            key_metadata: Vec::new(),
+        };
+
+        collector
+            .partition_metrics
+            .insert("dummy".to_string(), UpdateMetrics::default());
+        collector.add_manifest(&manifest);
+
+        let props = collector.build();
+        assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "3");
+        assert_eq!(props.get(DELETED_DATA_FILES).unwrap(), "1");
+        assert_eq!(props.get(ADDED_RECORDS).unwrap(), "100");
+        assert_eq!(props.get(DELETED_RECORDS).unwrap(), "50");
+    }
+
+    #[test]
+    fn test_snapshot_summary_collector_merge() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_unbound_fields(vec![UnboundPartitionField::builder()
+                    .source_id(2)
+                    .name("year".to_string())
+                    .transform(Transform::Identity)
+                    .build()])
+                .unwrap()
+                .with_spec_id(1)
+                .build()
+                .unwrap(),
+        );
+
+        let mut summary_one = SnapshotSummaryCollector::default();
+        let mut summary_two = SnapshotSummaryCollector::default();
+
+        summary_one.add_file(
+            &DataFile {
+                content: DataContentType::Data,
+                file_path: "test.parquet".into(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::from_iter(vec![]),
+                record_count: 10,
+                file_size_in_bytes: 100,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: vec![],
+                equality_ids: vec![],
+                sort_order_id: None,
+                partition_spec_id: 0,
+            },
+            schema.clone(),
+            partition_spec.clone(),
+        );
+
+        summary_two.add_file(
+            &DataFile {
+                content: DataContentType::Data,
+                file_path: "test.parquet".into(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::from_iter(vec![]),
+                record_count: 20,
+                file_size_in_bytes: 200,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: vec![],
+                equality_ids: vec![],
+                sort_order_id: None,
+                partition_spec_id: 0,
+            },
+            schema.clone(),
+            partition_spec.clone(),
+        );
+
+        summary_one.merge(summary_two);
+        let props = summary_one.build();
+        assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
+        assert_eq!(props.get(ADDED_RECORDS).unwrap(), "30");
+
+        let mut summary_three = SnapshotSummaryCollector::default();
+        let mut summary_four = SnapshotSummaryCollector::default();
+
+        summary_three.add_manifest(&ManifestFile {
+            manifest_path: "test.manifest".to_string(),
+            manifest_length: 0,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 0,
+            added_files_count: Some(1),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(5),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: Vec::new(),
+            key_metadata: Vec::new(),
+        });
+
+        summary_four.add_file(
+            &DataFile {
+                content: DataContentType::Data,
+                file_path: "test.parquet".into(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::from_iter(vec![]),
+                record_count: 1,
+                file_size_in_bytes: 10,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: vec![],
+                equality_ids: vec![],
+                sort_order_id: None,
+                partition_spec_id: 0,
+            },
+            schema.clone(),
+            partition_spec.clone(),
+        );
+
+        summary_three.merge(summary_four);
+        let props = summary_three.build();
+
+        assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
+        assert_eq!(props.get(ADDED_RECORDS).unwrap(), "6");
+        assert!(props
+            .iter()
+            .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX)));
     }
 }
