@@ -95,7 +95,7 @@ jobs:
 
     environment:
       name: pypi
-      url: https://pypi.org/p/pyiceberg_core
+      url: https://pypi.org/p/pyiceberg-core
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
