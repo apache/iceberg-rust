@@ -1223,6 +1223,10 @@
 <a href="#1223" id="1223">1223</a>
 <a href="#1224" id="1224">1224</a>
 <a href="#1225" id="1225">1225</a>
+<a href="#1226" id="1226">1226</a>
+<a href="#1227" id="1227">1227</a>
+<a href="#1228" id="1228">1228</a>
+<a href="#1229" id="1229">1229</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1650,7 +1654,8 @@
     }
 }
 
-<span class="kw">struct </span>ArrowArrayAccessor;
+<span class="doccomment">/// Partner type representing accessing and walking arrow arrays alongside iceberg schema
+</span><span class="kw">pub struct </span>ArrowArrayAccessor;
 
 <span class="kw">impl </span>PartnerAccessor&lt;ArrayRef&gt; <span class="kw">for </span>ArrowArrayAccessor {
     <span class="kw">fn </span>struct_parner&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, schema_partner: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ArrayRef) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>ArrayRef&gt; {
@@ -1660,6 +1665,7 @@
                 <span class="string">"The schema partner is not a struct type"</span>,
             ));
         }
+
         <span class="prelude-val">Ok</span>(schema_partner)
     }
 
@@ -1677,6 +1683,7 @@
                     <span class="string">"The struct partner is not a struct array"</span>,
                 )
             })<span class="question-mark">?</span>;
+
         <span class="kw">let </span>field_pos = struct_array
             .fields()
             .iter()
@@ -1691,6 +1698,7 @@
                     <span class="macro">format!</span>(<span class="string">"Field id {} not found in struct array"</span>, field.id),
                 )
             })<span class="question-mark">?</span>;
+
         <span class="prelude-val">Ok</span>(struct_array.column(field_pos))
     }
 

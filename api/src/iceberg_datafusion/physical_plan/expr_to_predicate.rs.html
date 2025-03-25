@@ -419,6 +419,17 @@
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
 <a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -641,20 +652,31 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
+    <span class="kw">use </span>std::collections::HashMap;
+
     <span class="kw">use </span>datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     <span class="kw">use </span>datafusion::common::DFSchema;
     <span class="kw">use </span>datafusion::logical_expr::utils::split_conjunction;
     <span class="kw">use </span>datafusion::prelude::{Expr, SessionContext};
     <span class="kw">use </span>iceberg::expr::{Predicate, Reference};
     <span class="kw">use </span>iceberg::spec::Datum;
+    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     <span class="kw">use </span><span class="kw">super</span>::convert_filters_to_predicate;
 
     <span class="kw">fn </span>create_test_schema() -&gt; DFSchema {
         <span class="kw">let </span>arrow_schema = Schema::new(<span class="macro">vec!</span>[
-            Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">true</span>),
-            Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">true</span>),
-            Field::new(<span class="string">"ts"</span>, DataType::Timestamp(TimeUnit::Second, <span class="prelude-val">None</span>), <span class="bool-val">true</span>),
+            Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">true</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="string">"1"</span>.to_string(),
+            )])),
+            Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="string">"2"</span>.to_string(),
+            )])),
+            Field::new(<span class="string">"ts"</span>, DataType::Timestamp(TimeUnit::Second, <span class="prelude-val">None</span>), <span class="bool-val">true</span>).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"3"</span>.to_string())]),
+            ),
         ]);
         DFSchema::try_from_qualified_schema(<span class="string">"my_table"</span>, <span class="kw-2">&amp;</span>arrow_schema).unwrap()
     }

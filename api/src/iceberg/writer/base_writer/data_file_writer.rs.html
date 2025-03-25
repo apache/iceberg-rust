@@ -266,6 +266,20 @@
 <a href="#266" id="266">266</a>
 <a href="#267" id="267">267</a>
 <a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -371,11 +385,13 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>test {
+    <span class="kw">use </span>std::collections::HashMap;
     <span class="kw">use </span>std::sync::Arc;
 
     <span class="kw">use </span>arrow_array::{Int32Array, StringArray};
     <span class="kw">use </span>arrow_schema::{DataType, Field};
     <span class="kw">use </span>parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     <span class="kw">use </span>parquet::file::properties::WriterProperties;
     <span class="kw">use </span>tempfile::TempDir;
 
@@ -421,8 +437,14 @@
             </span>.unwrap();
 
         <span class="kw">let </span>arrow_schema = arrow_schema::Schema::new(<span class="macro">vec!</span>[
-            Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">false</span>),
-            Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+            Field::new(<span class="string">"foo"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="number">3</span>.to_string(),
+            )])),
+            Field::new(<span class="string">"bar"</span>, DataType::Utf8, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="number">4</span>.to_string(),
+            )])),
         ]);
         <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), <span class="macro">vec!</span>[
             Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
@@ -492,8 +514,14 @@
                 .<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>arrow_schema = arrow_schema::Schema::new(<span class="macro">vec!</span>[
-            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
-            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="number">5</span>.to_string(),
+            )])),
+            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="number">6</span>.to_string(),
+            )])),
         ]);
         <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), <span class="macro">vec!</span>[
             Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])),
