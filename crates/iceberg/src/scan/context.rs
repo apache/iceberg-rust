@@ -250,9 +250,11 @@ impl PlanContext {
                     matches!(entry.status(), ManifestStatus::Added)
                         && matches!(entry.data_file().content_type(), DataContentType::Data)
                         && (
-                            // Is it possible that the snapshot id here is not contained?
-                            entry.snapshot_id().is_none()
-                                || snapshot_ids.contains(&entry.snapshot_id().unwrap())
+                            entry
+                                .snapshot_id()
+                                .map(|id| snapshot_ids.contains(&id))
+                                .unwrap_or(true)
+                            // Include entries without snapshot_id
                         )
                 }));
 
@@ -273,7 +275,10 @@ impl PlanContext {
                 };
                 (Some(delete_file_idx.clone()), tx.clone())
             } else {
-                (delete_file_idx_and_tx.as_ref().map(|(idx, _)| idx.clone()), tx_data.clone())
+                (
+                    delete_file_idx_and_tx.as_ref().map(|(idx, _)| idx.clone()),
+                    tx_data.clone(),
+                )
             };
 
             let partition_bound_predicate = if self.predicate.is_some() {

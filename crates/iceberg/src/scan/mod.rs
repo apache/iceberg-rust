@@ -137,12 +137,18 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Set the starting snapshot id (exclusive) for incremental scan.
+    ///
+    /// # Behavior
+    /// - Only includes files from Append and Overwrite operations
+    /// - Excludes Replace operations (e.g., compaction)
+    /// - Only returns Added manifest entries with Data content
+    /// - Delete files are not supported in incremental scans
     pub fn from_snapshot_id(mut self, from_snapshot_id: i64) -> Self {
         self.from_snapshot_id = Some(from_snapshot_id);
         self
     }
 
-    /// Set the ending snapshot id (inclusive) for incremental scan.
+    /// Set the ending snapshot id (inclusive) for incremental scan (See [`Self::from_snapshot_id`]).
     pub fn to_snapshot_id(mut self, to_snapshot_id: i64) -> Self {
         self.to_snapshot_id = Some(to_snapshot_id);
         self
@@ -209,7 +215,7 @@ impl<'a> TableScanBuilder<'a> {
             if self.to_snapshot_id.is_none() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    "Incremental scan requires to_snapshot_id to be set",
+                    "Incremental scan requires to_snapshot_id to be set. Use from_snapshot_id (exclusive) and to_snapshot_id (inclusive) to specify the range.",
                 ));
             }
 
@@ -221,7 +227,39 @@ impl<'a> TableScanBuilder<'a> {
                 ));
             }
 
+            let to_snapshot_id = self.to_snapshot_id.unwrap();
 
+            // Validate to_snapshot_id exists
+            if self
+                .table
+                .metadata()
+                .snapshot_by_id(to_snapshot_id)
+                .is_none()
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("to_snapshot_id {} not found", to_snapshot_id),
+                ));
+            }
+
+            // Validate from_snapshot_id if provided
+            if let Some(from_id) = self.from_snapshot_id {
+                // Validate from_snapshot_id exists
+                if self.table.metadata().snapshot_by_id(from_id).is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("from_snapshot_id {} not found", from_id),
+                    ));
+                }
+
+                // Validate snapshot order
+                if to_snapshot_id <= from_id {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "to_snapshot_id must be greater than from_snapshot_id",
+                    ));
+                }
+            }
         }
 
         let snapshot = match self.snapshot_id {
@@ -388,8 +426,13 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
-        let delete_file_idx_and_tx = Some((delete_file_idx.clone(), delete_file_tx.clone()));
+        // For incremental scan, disable delete file processing
+        let delete_file_idx_and_tx = if plan_context.to_snapshot_id.is_some() {
+            None
+        } else {
+            let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+            Some((delete_file_idx.clone(), delete_file_tx.clone()))
+        };
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
@@ -429,7 +472,8 @@ impl TableScan {
                         concurrency_limit_manifest_entries,
                         |(manifest_entry_context, tx)| async move {
                             spawn(async move {
-                                Self::process_delete_manifest_entry(manifest_entry_context, tx).await
+                                Self::process_delete_manifest_entry(manifest_entry_context, tx)
+                                    .await
                             })
                             .await
                         },
@@ -1843,5 +1887,225 @@ pub mod tests {
             deletes: vec![],
         };
         test_fn(task);
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Get the two snapshots in the table
+        let snapshots = fixture.table.metadata().snapshots().collect::<Vec<_>>();
+
+        assert_eq!(snapshots.len(), 2, "Test fixture should have two snapshots");
+
+        // First snapshot is the parent of the second
+        let first_snapshot_id = snapshots[0].snapshot_id();
+        let second_snapshot_id = snapshots[1].snapshot_id();
+
+        // Create an incremental scan from first to second snapshot
+        let table_scan = fixture
+            .table
+            .scan()
+            .from_snapshot_id(first_snapshot_id)
+            .to_snapshot_id(second_snapshot_id)
+            .build()
+            .unwrap();
+
+        // Plan files and verify we get the expected files
+        let tasks = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_fold(vec![], |mut acc, task| async move {
+                acc.push(task);
+                Ok(acc)
+            })
+            .await
+            .unwrap();
+
+        // Only files added between first and second snapshot should be included
+        // The way our test fixture is set up, the added files should be in the second snapshot
+        // For our test fixture, only one file should be returned by incremental scan
+        assert_eq!(
+            tasks.len(),
+            1,
+            "Incremental scan should return only added files between snapshots"
+        );
+
+        // Verify this is the expected file (file 1.parquet which was added in the second snapshot)
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location),
+            "Incremental scan should return the file added in the second snapshot"
+        );
+
+        // Verify we can read the data
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify data contents from 1.parquet
+        assert_eq!(batches.len(), 1, "Should have one record batch");
+        assert_eq!(batches[0].num_rows(), 1024, "Should have 1024 rows");
+
+        // Verify content of some columns
+        let col_x = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col_x.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            int64_arr.value(0),
+            1,
+            "First value of column 'x' should be 1"
+        );
+
+        let col_a = batches[0].column_by_name("a").unwrap();
+        let string_arr = col_a.as_any().downcast_ref::<StringArray>().unwrap();
+        assert!(
+            string_arr.value(0) == "Apache" || string_arr.value(0) == "Iceberg",
+            "First value of column 'a' should be either 'Apache' or 'Iceberg'"
+        );
+    }
+
+    #[test]
+    fn test_invalid_incremental_scan_configurations() {
+        let table = TableTestFixture::new().table;
+
+        // Test case 1: to_snapshot_id is required for incremental scan
+        let result = table
+            .scan()
+            .from_snapshot_id(1234) // Only providing from_snapshot_id
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should fail when to_snapshot_id is not set"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => Incremental scan requires to_snapshot_id to be set. Use from_snapshot_id (exclusive) and to_snapshot_id (inclusive) to specify the range.",
+            "Should have correct error message for missing to_snapshot_id"
+        );
+
+        // Test case 2: snapshot_id should not be set with incremental scan
+        let result = table
+            .scan()
+            .snapshot_id(1234)
+            .from_snapshot_id(1234)
+            .to_snapshot_id(5678)
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should fail when snapshot_id is set with incremental scan"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => snapshot_id should not be set for incremental scan. Use from_snapshot_id and to_snapshot_id instead.",
+            "Should have correct error message for setting both snapshot_id and incremental scan parameters"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_edge_cases() {
+        let fixture = TableTestFixture::new();
+        let table = &fixture.table;
+
+        // Test case 1: Non-existent to_snapshot_id
+        let result = table
+            .scan()
+            .to_snapshot_id(999999) // Non-existent snapshot ID
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should fail when to_snapshot_id does not exist"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => to_snapshot_id 999999 not found",
+            "Should have correct error message for non-existent to_snapshot_id"
+        );
+
+        // Test case 2: Non-existent from_snapshot_id
+        let result = table
+            .scan()
+            .from_snapshot_id(999998) // Non-existent snapshot ID
+            .to_snapshot_id(999999) // Non-existent snapshot ID
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should fail when to_snapshot_id does not exist"
+        );
+        // This should fail on to_snapshot_id first since that's checked first
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "DataInvalid => to_snapshot_id 999999 not found",
+            "Should fail on to_snapshot_id check first"
+        );
+
+        // We need to set up snapshots for the remaining tests
+        let snapshots = table.metadata().snapshots().collect::<Vec<_>>();
+        if snapshots.len() >= 2 {
+            let first_snapshot_id = snapshots[0].snapshot_id();
+            let second_snapshot_id = snapshots[1].snapshot_id();
+
+            // Test case 3: from_snapshot_id doesn't exist but to_snapshot_id does
+            let result = table
+                .scan()
+                .from_snapshot_id(999998) // Non-existent
+                .to_snapshot_id(second_snapshot_id) // Existent
+                .build();
+
+            assert!(
+                result.is_err(),
+                "Should fail when from_snapshot_id does not exist"
+            );
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "DataInvalid => from_snapshot_id 999998 not found",
+                "Should have correct error message for non-existent from_snapshot_id"
+            );
+
+            // Determine which snapshot is newer based on snapshot IDs
+            let (older_snapshot_id, newer_snapshot_id) = if first_snapshot_id < second_snapshot_id {
+                (first_snapshot_id, second_snapshot_id)
+            } else {
+                (second_snapshot_id, first_snapshot_id)
+            };
+
+            // Test case 4: Reversed snapshot order (to_snapshot_id <= from_snapshot_id)
+            let result = table
+                .scan()
+                .from_snapshot_id(newer_snapshot_id) // Later snapshot
+                .to_snapshot_id(older_snapshot_id) // Earlier snapshot
+                .build();
+
+            assert!(
+                result.is_err(),
+                "Should fail when to_snapshot_id <= from_snapshot_id"
+            );
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
+                "Should have correct error message for reversed snapshot order"
+            );
+
+            // Test case 5: Equal snapshot IDs (empty range)
+            let result = table
+                .scan()
+                .from_snapshot_id(older_snapshot_id)
+                .to_snapshot_id(older_snapshot_id)
+                .build();
+
+            assert!(
+                result.is_err(),
+                "Should fail when from_snapshot_id == to_snapshot_id"
+            );
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "DataInvalid => to_snapshot_id must be greater than from_snapshot_id",
+                "Should have correct error message for equal snapshot IDs"
+            );
+        }
     }
 }
