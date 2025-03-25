@@ -17,5 +17,6 @@
 
 //! This module contains the functional writer.
 
+pub mod equality_delta_writer;
 pub mod fanout_partition_writer;
 pub mod precompute_partition_writer;

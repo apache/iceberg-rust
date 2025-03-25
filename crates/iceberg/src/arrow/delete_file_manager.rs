@@ -57,6 +57,7 @@ impl CachingDeleteFileManager {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn load_deletes(
         &self,
         delete_file_entries: Vec<FileScanTaskDeleteFile>,

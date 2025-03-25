@@ -140,6 +140,8 @@ impl ManifestEntryContext {
                 .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
 
             deletes,
+            sequence_number: self.manifest_entry.sequence_number().unwrap_or(0),
+            equality_ids: self.manifest_entry.data_file().equality_ids().to_vec(),
         })
     }
 }

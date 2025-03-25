@@ -39,8 +39,8 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FI
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use super::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::delete_file_manager::CachingDeleteFileManager;
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -50,7 +50,7 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+use crate::spec::{DataContentType, Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -176,14 +176,12 @@ impl ArrowReader {
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
         // concurrently retrieve delete files and create RecordBatchStreamBuilder
-        let (_, mut record_batch_stream_builder) = try_join!(
-            delete_file_manager.load_deletes(task.deletes.clone()),
-            Self::create_parquet_record_batch_stream_builder(
-                &task.data_file_path,
-                file_io.clone(),
-                should_load_page_index,
-            )
-        )?;
+        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
+            &task.data_file_path,
+            file_io.clone(),
+            should_load_page_index,
+        )
+        .await?;
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
@@ -305,13 +303,16 @@ impl ArrowReader {
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        let record_batch_stream =
-            record_batch_stream_builder
-                .build()?
-                .map(move |batch| match batch {
+        let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
+            if matches!(task.data_file_content, DataContentType::PositionDeletes) {
+                Ok(batch?)
+            } else {
+                match batch {
                     Ok(batch) => record_batch_transformer.process_record_batch(batch),
                     Err(err) => Err(err.into()),
-                });
+                }
+            }
+        });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -1520,6 +1521,8 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                sequence_number: 0,
+                equality_ids: vec![],
             })]
             .into_iter(),
         )) as FileScanTaskStream;

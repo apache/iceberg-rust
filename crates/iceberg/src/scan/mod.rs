@@ -605,6 +605,8 @@ impl TableScan {
             .send(DeleteFileContext {
                 manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
+                snapshot_schema: manifest_entry_context.snapshot_schema.clone(),
+                field_ids: manifest_entry_context.field_ids.clone(),
             })
             .await?;
 
@@ -1791,6 +1793,8 @@ pub mod tests {
             record_count: Some(100),
             data_file_format: DataFileFormat::Parquet,
             deletes: vec![],
+            sequence_number: 0,
+            equality_ids: vec![],
         };
         test_fn(task);
 
@@ -1806,6 +1810,8 @@ pub mod tests {
             record_count: None,
             data_file_format: DataFileFormat::Avro,
             deletes: vec![],
+            sequence_number: 0,
+            equality_ids: vec![],
         };
         test_fn(task);
     }

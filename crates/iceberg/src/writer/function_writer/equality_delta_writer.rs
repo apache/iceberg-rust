@@ -255,12 +255,14 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -318,7 +320,7 @@ mod test {
                 location_gen.clone(),
                 file_name_gen.clone(),
             );
-            DataFileWriterBuilder::new(pw.clone(), None, None)
+            DataFileWriterBuilder::new(pw.clone(), None, 0)
         };
         let position_delete_writer_builder = {
             let pw = ParquetWriterBuilder::new(
@@ -331,7 +333,7 @@ mod test {
             SortPositionDeleteWriterBuilder::new(pw.clone(), 100, None, None)
         };
         let equality_delete_writer_builder = {
-            let config = EqualityDeleteWriterConfig::new(vec![1, 2], schema, None, None)?;
+            let config = EqualityDeleteWriterConfig::new(vec![1, 2], schema, None, 0)?;
             let pw = ParquetWriterBuilder::new(
                 WriterProperties::builder().build(),
                 arrow_schema_to_schema(config.projected_arrow_schema_ref())
@@ -355,9 +357,18 @@ mod test {
 
         // write data
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("data", DataType::Utf8, true),
-            Field::new("op", DataType::Int32, false),
+            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("data", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
+            Field::new("op", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                3.to_string(),
+            )])),
         ]));
         {
             let id_array = Int64Array::from(vec![1, 2, 1, 3, 2, 3, 1]);
@@ -388,8 +399,14 @@ mod test {
         assert_eq!(data_files.len(), 3);
         // data file
         let data_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("data", DataType::Utf8, true),
+            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("data", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
         ]));
         let data_file = data_files
             .iter()
