@@ -15,16 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
-use arrow_array::types::{Int64Type, TimestampMillisecondType};
+use arrow_array::builder::{MapBuilder, MapFieldNames, PrimitiveBuilder, StringBuilder};
+use arrow_array::types::{Int64Type, TimestampMicrosecondType};
 use arrow_array::RecordBatch;
+use arrow_schema::{DataType, Field};
 use futures::{stream, StreamExt};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema_to_arrow_schema;
+use crate::arrow::{schema_to_arrow_schema, DEFAULT_MAP_FIELD_NAME};
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{MapType, NestedField, PrimitiveType, Type};
+use crate::spec::{
+    MapType, NestedField, PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+};
 use crate::table::Table;
 use crate::Result;
 
@@ -42,29 +47,31 @@ impl<'a> SnapshotsTable<'a> {
     /// Returns the iceberg schema of the snapshots table.
     pub fn schema(&self) -> crate::spec::Schema {
         let fields = vec![
-            NestedField::required(1, "committed_at", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(
+                1,
+                "committed_at",
+                Type::Primitive(PrimitiveType::Timestamptz),
+            ),
             NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long)),
             NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long)),
-            NestedField::required(4, "operation", Type::Primitive(PrimitiveType::String)),
-            NestedField::required(5, "manifest_list", Type::Primitive(PrimitiveType::String)),
-            NestedField::required(
+            NestedField::optional(4, "operation", Type::Primitive(PrimitiveType::String)),
+            NestedField::optional(5, "manifest_list", Type::Primitive(PrimitiveType::String)),
+            NestedField::optional(
                 6,
                 "summary",
                 Type::Map(MapType {
-                    key_field: Arc::new(NestedField::required(
+                    key_field: Arc::new(NestedField::map_key_element(
                         7,
-                        "key",
                         Type::Primitive(PrimitiveType::String),
                     )),
-                    value_field: Arc::new(NestedField::optional(
+                    value_field: Arc::new(NestedField::map_value_element(
                         8,
-                        "value",
                         Type::Primitive(PrimitiveType::String),
+                        false,
                     )),
                 }),
             ),
         ];
-
         crate::spec::Schema::builder()
             .with_fields(fields.into_iter().map(|f| f.into()))
             .build()
@@ -75,15 +82,34 @@ impl<'a> SnapshotsTable<'a> {
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let schema = schema_to_arrow_schema(&self.schema())?;
 
-        let mut committed_at = PrimitiveBuilder::<TimestampMillisecondType>::new();
+        let mut committed_at =
+            PrimitiveBuilder::<TimestampMicrosecondType>::new().with_timezone("+00:00");
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
         let mut parent_id = PrimitiveBuilder::<Int64Type>::new();
         let mut operation = StringBuilder::new();
         let mut manifest_list = StringBuilder::new();
-        let mut summary = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
-
+        let mut summary = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: DEFAULT_MAP_FIELD_NAME.to_string(),
+                key: MAP_KEY_FIELD_NAME.to_string(),
+                value: MAP_VALUE_FIELD_NAME.to_string(),
+            }),
+            StringBuilder::new(),
+            StringBuilder::new(),
+        )
+        .with_keys_field(Arc::new(
+            Field::new(MAP_KEY_FIELD_NAME, DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "7".to_string(),
+            )])),
+        ))
+        .with_values_field(Arc::new(
+            Field::new(MAP_VALUE_FIELD_NAME, DataType::Utf8, true).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "8".to_string()),
+            ])),
+        ));
         for snapshot in self.table.metadata().snapshots() {
-            committed_at.append_value(snapshot.timestamp_ms());
+            committed_at.append_value(snapshot.timestamp_ms() * 1000);
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
             manifest_list.append_value(snapshot.manifest_list());
@@ -124,14 +150,14 @@ mod tests {
         check_record_batches(
             batch_stream,
             expect![[r#"
-                Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "operation", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "manifest_list", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "summary", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#]],
+                Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+                Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+                Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
+                Field { name: "operation", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
+                Field { name: "manifest_list", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
+                Field { name: "summary", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#]],
             expect![[r#"
-                committed_at: PrimitiveArray<Timestamp(Millisecond, Some("+00:00"))>
+                committed_at: PrimitiveArray<Timestamp(Microsecond, Some("+00:00"))>
                 [
                   2018-01-04T21:22:35.770+00:00,
                   2019-04-12T20:29:15.770+00:00,
@@ -159,11 +185,11 @@ mod tests {
                 [
                 ]
                 [
-                -- child 0: "keys" (Utf8)
+                -- child 0: "key" (Utf8)
                 StringArray
                 [
                 ]
-                -- child 1: "values" (Utf8)
+                -- child 1: "value" (Utf8)
                 StringArray
                 [
                 ]
@@ -173,11 +199,11 @@ mod tests {
                 [
                 ]
                 [
-                -- child 0: "keys" (Utf8)
+                -- child 0: "key" (Utf8)
                 StringArray
                 [
                 ]
-                -- child 1: "values" (Utf8)
+                -- child 1: "value" (Utf8)
                 StringArray
                 [
                 ]
