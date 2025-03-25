@@ -129,10 +129,26 @@ impl<'a> Transaction<'a> {
     /// Creates a fast append action.
     pub fn fast_append(
         self,
+        snapshot_id: Option<i64>,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
-        let snapshot_id = self.generate_unique_snapshot_id();
+        let snapshot_id = if let Some(snapshot_id) = snapshot_id {
+            if self
+                .table
+                .metadata()
+                .snapshots()
+                .any(|s| s.snapshot_id() == snapshot_id)
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot id {} already exists", snapshot_id),
+                ));
+            }
+            snapshot_id
+        } else {
+            self.generate_unique_snapshot_id()
+        };
         FastAppendAction::new(
             self,
             snapshot_id,
