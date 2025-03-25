@@ -425,7 +425,8 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
     }
 }
 
-struct ArrowArrayAccessor;
+/// Partner type representing accessing and walking arrow arrays alongside iceberg schema
+pub struct ArrowArrayAccessor;
 
 impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
     fn struct_parner<'a>(&self, schema_partner: &'a ArrayRef) -> Result<&'a ArrayRef> {
@@ -435,6 +436,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                 "The schema partner is not a struct type",
             ));
         }
+
         Ok(schema_partner)
     }
 
@@ -452,6 +454,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     "The struct partner is not a struct array",
                 )
             })?;
+
         let field_pos = struct_array
             .fields()
             .iter()
@@ -466,6 +469,7 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
                     format!("Field id {} not found in struct array", field.id),
                 )
             })?;
+
         Ok(struct_array.column(field_pos))
     }
 

@@ -40,7 +40,7 @@ use super::track_writer::TrackWriter;
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, ArrowFileReader,
-    DEFAULT_MAP_FIELD_NAME,
+    NanValueCountVisitor, DEFAULT_MAP_FIELD_NAME,
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
@@ -99,6 +99,7 @@ impl<T: LocationGenerator, F: FileNameGenerator> FileWriterBuilder for ParquetWr
             written_size,
             current_row_num: 0,
             out_file,
+            nan_value_count_visitor: NanValueCountVisitor::new(),
         })
     }
 }
@@ -224,6 +225,7 @@ pub struct ParquetWriter {
     writer_properties: WriterProperties,
     written_size: Arc<AtomicI64>,
     current_row_num: usize,
+    nan_value_count_visitor: NanValueCountVisitor,
 }
 
 /// Used to aggregate min and max value of each column.
@@ -346,6 +348,8 @@ impl ParquetWriter {
                 parquet_metadata,
                 file_size_in_bytes,
                 file_path,
+                // TODO: Implement nan_value_counts here
+                HashMap::new(),
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
             let data_file = builder.build().unwrap();
@@ -384,6 +388,7 @@ impl ParquetWriter {
         metadata: Arc<ParquetMetaData>,
         written_size: usize,
         file_path: String,
+        nan_value_counts: HashMap<i32, u64>,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::new();
@@ -438,6 +443,9 @@ impl ParquetWriter {
             .column_sizes(column_sizes)
             .value_counts(value_counts)
             .null_value_counts(null_value_counts)
+            .nan_value_counts(nan_value_counts)
+            // # NOTE:
+            // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
             .split_offsets(
@@ -460,6 +468,10 @@ impl FileWriter for ParquetWriter {
         }
 
         self.current_row_num += batch.num_rows();
+
+        let batch_c = batch.clone();
+        self.nan_value_count_visitor
+            .compute(self.schema.clone(), batch_c)?;
 
         // Lazy initialize the writer
         let writer = if let Some(writer) = &mut self.inner_writer {
@@ -489,6 +501,7 @@ impl FileWriter for ParquetWriter {
             )
             .with_source(err)
         })?;
+
         Ok(())
     }
 
@@ -518,6 +531,7 @@ impl FileWriter for ParquetWriter {
             parquet_metadata,
             written_size as usize,
             self.out_file.location().to_string(),
+            self.nan_value_count_visitor.nan_value_counts,
         )?])
     }
 }
@@ -576,12 +590,13 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use arrow_array::types::Int64Type;
+    use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
+    use arrow_array::types::{Float32Type, Int64Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Decimal128Array, Int32Array, Int64Array, ListArray,
-        RecordBatch, StructArray,
+        Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
+        Int64Array, ListArray, MapArray, RecordBatch, StructArray,
     };
-    use arrow_schema::{DataType, SchemaRef as ArrowSchemaRef};
+    use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use rust_decimal::Decimal;
@@ -1569,6 +1584,588 @@ mod tests {
         let file_path = pw.out_file.location().to_string();
         pw.close().await.unwrap();
         assert!(!file_io.exists(file_path).await.unwrap());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nan_val_cnts_primitive_type() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // prepare data
+        let arrow_schema = {
+            let fields = vec![
+                Field::new("col", arrow_schema::DataType::Float32, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+                Field::new("col2", arrow_schema::DataType::Float64, false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let float_32_col = Arc::new(Float32Array::from_iter_values_with_nulls(
+            [1.0_f32, f32::NAN, 2.0, 2.0].into_iter(),
+            None,
+        )) as ArrayRef;
+
+        let float_64_col = Arc::new(Float64Array::from_iter_values_with_nulls(
+            [1.0_f64, f64::NAN, 2.0, 2.0].into_iter(),
+            None,
+        )) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![float_32_col, float_64_col]).unwrap();
+
+        // write data
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            // Put dummy field for build successfully.
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // check data file
+        assert_eq!(data_file.record_count(), 4);
+        assert_eq!(*data_file.value_counts(), HashMap::from([(0, 4), (1, 4)]));
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([(0, Datum::float(1.0)), (1, Datum::double(1.0)),])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([(0, Datum::float(2.0)), (1, Datum::double(2.0)),])
+        );
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(0, 0), (1, 0)])
+        );
+        assert_eq!(
+            *data_file.nan_value_counts(),
+            HashMap::from([(0, 1), (1, 1)])
+        );
+
+        // check the written file
+        let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nan_val_cnts_struct_type() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema_struct_float_fields =
+            Fields::from(vec![Field::new("col4", DataType::Float32, false)
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "4".to_string(),
+                )]))]);
+
+        let schema_struct_nested_float_fields =
+            Fields::from(vec![Field::new("col7", DataType::Float32, false)
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "7".to_string(),
+                )]))]);
+
+        let schema_struct_nested_fields = Fields::from(vec![Field::new(
+            "col6",
+            arrow_schema::DataType::Struct(schema_struct_nested_float_fields.clone()),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "6".to_string(),
+        )]))]);
+
+        // prepare data
+        let arrow_schema = {
+            let fields = vec![
+                Field::new(
+                    "col3",
+                    arrow_schema::DataType::Struct(schema_struct_float_fields.clone()),
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "3".to_string(),
+                )])),
+                Field::new(
+                    "col5",
+                    arrow_schema::DataType::Struct(schema_struct_nested_fields.clone()),
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "5".to_string(),
+                )])),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let float_32_col = Arc::new(Float32Array::from_iter_values_with_nulls(
+            [1.0_f32, f32::NAN, 2.0, 2.0].into_iter(),
+            None,
+        )) as ArrayRef;
+
+        let struct_float_field_col = Arc::new(StructArray::new(
+            schema_struct_float_fields,
+            vec![float_32_col.clone()],
+            None,
+        )) as ArrayRef;
+
+        let struct_nested_float_field_col = Arc::new(StructArray::new(
+            schema_struct_nested_fields,
+            vec![Arc::new(StructArray::new(
+                schema_struct_nested_float_fields,
+                vec![float_32_col.clone()],
+                None,
+            )) as ArrayRef],
+            None,
+        )) as ArrayRef;
+
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            struct_float_field_col,
+            struct_nested_float_field_col,
+        ])
+        .unwrap();
+
+        // write data
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(to_write.schema().as_ref().try_into().unwrap()),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            // Put dummy field for build successfully.
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // check data file
+        assert_eq!(data_file.record_count(), 4);
+        assert_eq!(*data_file.value_counts(), HashMap::from([(4, 4), (7, 4)]));
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([(4, Datum::float(1.0)), (7, Datum::float(1.0)),])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([(4, Datum::float(2.0)), (7, Datum::float(2.0)),])
+        );
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(4, 0), (7, 0)])
+        );
+        assert_eq!(
+            *data_file.nan_value_counts(),
+            HashMap::from([(4, 1), (7, 1)])
+        );
+
+        // check the written file
+        let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nan_val_cnts_list_type() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema_list_float_field = Field::new("element", DataType::Float32, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+        );
+
+        let schema_struct_list_float_field = Field::new("element", DataType::Float32, true)
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "4".to_string(),
+            )]));
+
+        let schema_struct_list_field = Fields::from(vec![Field::new_list(
+            "col2",
+            schema_struct_list_float_field.clone(),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "3".to_string(),
+        )]))]);
+
+        let arrow_schema = {
+            let fields = vec![
+                Field::new_list("col0", schema_list_float_field.clone(), true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+                Field::new_struct("col1", schema_struct_list_field.clone(), true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "2".to_string(),
+                    )]))
+                    .clone(),
+                // Field::new_large_list("col3", schema_large_list_float_field.clone(), true).with_metadata(
+                //     HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "5".to_string())]),
+                // ).clone(),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let list_parts = ListArray::from_iter_primitive::<Float32Type, _, _>(vec![Some(vec![
+            Some(1.0_f32),
+            Some(f32::NAN),
+            Some(2.0),
+            Some(2.0),
+        ])])
+        .into_parts();
+
+        let list_float_field_col = Arc::new({
+            let list_parts = list_parts.clone();
+            ListArray::new(
+                {
+                    if let DataType::List(field) = arrow_schema.field(0).data_type() {
+                        field.clone()
+                    } else {
+                        unreachable!()
+                    }
+                },
+                list_parts.1,
+                list_parts.2,
+                list_parts.3,
+            )
+        }) as ArrayRef;
+
+        let struct_list_fields_schema =
+            if let DataType::Struct(fields) = arrow_schema.field(1).data_type() {
+                fields.clone()
+            } else {
+                unreachable!()
+            };
+
+        let struct_list_float_field_col = Arc::new({
+            ListArray::new(
+                {
+                    if let DataType::List(field) = struct_list_fields_schema
+                        .first()
+                        .expect("could not find first list field")
+                        .data_type()
+                    {
+                        field.clone()
+                    } else {
+                        unreachable!()
+                    }
+                },
+                list_parts.1,
+                list_parts.2,
+                list_parts.3,
+            )
+        }) as ArrayRef;
+
+        let struct_list_float_field_col = Arc::new(StructArray::new(
+            struct_list_fields_schema,
+            vec![struct_list_float_field_col.clone()],
+            None,
+        )) as ArrayRef;
+
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            list_float_field_col,
+            struct_list_float_field_col,
+            // large_list_float_field_col,
+        ])
+        .expect("Could not form record batch");
+
+        // write data
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(
+                to_write
+                    .schema()
+                    .as_ref()
+                    .try_into()
+                    .expect("Could not convert iceberg schema"),
+            ),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // check data file
+        assert_eq!(data_file.record_count(), 1);
+        assert_eq!(*data_file.value_counts(), HashMap::from([(1, 4), (4, 4)]));
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([(1, Datum::float(1.0)), (4, Datum::float(1.0))])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([(1, Datum::float(2.0)), (4, Datum::float(2.0))])
+        );
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(1, 0), (4, 0)])
+        );
+        assert_eq!(
+            *data_file.nan_value_counts(),
+            HashMap::from([(1, 1), (4, 1)])
+        );
+
+        // check the written file
+        let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    macro_rules! construct_map_arr {
+        ($map_key_field_schema:ident, $map_value_field_schema:ident) => {{
+            let int_builder = Int32Builder::new();
+            let float_builder = Float32Builder::with_capacity(4);
+            let mut builder = MapBuilder::new(None, int_builder, float_builder);
+            builder.keys().append_value(1);
+            builder.values().append_value(1.0_f32);
+            builder.append(true).unwrap();
+            builder.keys().append_value(2);
+            builder.values().append_value(f32::NAN);
+            builder.append(true).unwrap();
+            builder.keys().append_value(3);
+            builder.values().append_value(2.0);
+            builder.append(true).unwrap();
+            builder.keys().append_value(4);
+            builder.values().append_value(2.0);
+            builder.append(true).unwrap();
+            let array = builder.finish();
+
+            let (_field, offsets, entries, nulls, ordered) = array.into_parts();
+            let new_struct_fields_schema =
+                Fields::from(vec![$map_key_field_schema, $map_value_field_schema]);
+
+            let entries = {
+                let (_, arrays, nulls) = entries.into_parts();
+                StructArray::new(new_struct_fields_schema.clone(), arrays, nulls)
+            };
+
+            let field = Arc::new(Field::new(
+                DEFAULT_MAP_FIELD_NAME,
+                DataType::Struct(new_struct_fields_schema),
+                false,
+            ));
+
+            Arc::new(MapArray::new(field, offsets, entries, nulls, ordered))
+        }};
+    }
+
+    #[tokio::test]
+    async fn test_nan_val_cnts_map_type() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let map_key_field_schema =
+            Field::new(MAP_KEY_FIELD_NAME, DataType::Int32, false).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+            ]));
+
+        let map_value_field_schema =
+            Field::new(MAP_VALUE_FIELD_NAME, DataType::Float32, true).with_metadata(HashMap::from(
+                [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
+            ));
+
+        let struct_map_key_field_schema =
+            Field::new(MAP_KEY_FIELD_NAME, DataType::Int32, false).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "6".to_string()),
+            ]));
+
+        let struct_map_value_field_schema =
+            Field::new(MAP_VALUE_FIELD_NAME, DataType::Float32, true).with_metadata(HashMap::from(
+                [(PARQUET_FIELD_ID_META_KEY.to_string(), "7".to_string())],
+            ));
+
+        let schema_struct_map_field = Fields::from(vec![Field::new_map(
+            "col3",
+            DEFAULT_MAP_FIELD_NAME,
+            struct_map_key_field_schema.clone(),
+            struct_map_value_field_schema.clone(),
+            false,
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "5".to_string(),
+        )]))]);
+
+        let arrow_schema = {
+            let fields = vec![
+                Field::new_map(
+                    "col0",
+                    DEFAULT_MAP_FIELD_NAME,
+                    map_key_field_schema.clone(),
+                    map_value_field_schema.clone(),
+                    false,
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "0".to_string(),
+                )])),
+                Field::new_struct("col1", schema_struct_map_field.clone(), true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "3".to_string(),
+                    )]))
+                    .clone(),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let map_array = construct_map_arr!(map_key_field_schema, map_value_field_schema);
+
+        let struct_map_arr =
+            construct_map_arr!(struct_map_key_field_schema, struct_map_value_field_schema);
+
+        let struct_list_float_field_col = Arc::new(StructArray::new(
+            schema_struct_map_field,
+            vec![struct_map_arr],
+            None,
+        )) as ArrayRef;
+
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![
+            map_array,
+            struct_list_float_field_col,
+        ])
+        .expect("Could not form record batch");
+
+        // write data
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(
+                to_write
+                    .schema()
+                    .as_ref()
+                    .try_into()
+                    .expect("Could not convert iceberg schema"),
+            ),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // check data file
+        assert_eq!(data_file.record_count(), 4);
+        assert_eq!(
+            *data_file.value_counts(),
+            HashMap::from([(1, 4), (2, 4), (6, 4), (7, 4)])
+        );
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([
+                (1, Datum::int(1)),
+                (2, Datum::float(1.0)),
+                (6, Datum::int(1)),
+                (7, Datum::float(1.0))
+            ])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([
+                (1, Datum::int(4)),
+                (2, Datum::float(2.0)),
+                (6, Datum::int(4)),
+                (7, Datum::float(2.0))
+            ])
+        );
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(1, 0), (2, 0), (6, 0), (7, 0)])
+        );
+        assert_eq!(
+            *data_file.nan_value_counts(),
+            HashMap::from([(2, 1), (7, 1)])
+        );
+
+        // check the written file
+        let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
+        check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
 
         Ok(())
     }
