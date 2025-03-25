@@ -21,7 +21,7 @@ mod schema;
 pub use schema::*;
 
 mod nan_val_cnt_visitor;
-pub use nan_val_cnt_visitor::*;
+pub(crate) use nan_val_cnt_visitor::*;
 
 pub(crate) mod delete_file_manager;
 
