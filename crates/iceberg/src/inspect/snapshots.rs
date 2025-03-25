@@ -20,10 +20,11 @@ use std::sync::Arc;
 use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int64Type, TimestampMillisecondType};
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use futures::{stream, StreamExt};
 
+use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
+use crate::spec::{MapType, NestedField, PrimitiveType, Type};
 use crate::table::Table;
 use crate::Result;
 
@@ -38,43 +39,43 @@ impl<'a> SnapshotsTable<'a> {
         Self { table }
     }
 
-    /// Returns the schema of the snapshots table.
-    pub fn schema(&self) -> Schema {
-        Schema::new(vec![
-            Field::new(
-                "committed_at",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
-                false,
-            ),
-            Field::new("snapshot_id", DataType::Int64, false),
-            Field::new("parent_id", DataType::Int64, true),
-            Field::new("operation", DataType::Utf8, false),
-            Field::new("manifest_list", DataType::Utf8, false),
-            Field::new(
+    /// Returns the iceberg schema of the snapshots table.
+    pub fn schema(&self) -> crate::spec::Schema {
+        let fields = vec![
+            NestedField::required(1, "committed_at", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(2, "snapshot_id", Type::Primitive(PrimitiveType::Long)),
+            NestedField::optional(3, "parent_id", Type::Primitive(PrimitiveType::Long)),
+            NestedField::required(4, "operation", Type::Primitive(PrimitiveType::String)),
+            NestedField::required(5, "manifest_list", Type::Primitive(PrimitiveType::String)),
+            NestedField::required(
+                6,
                 "summary",
-                DataType::Map(
-                    Arc::new(Field::new(
-                        "entries",
-                        DataType::Struct(
-                            vec![
-                                Field::new("keys", DataType::Utf8, false),
-                                Field::new("values", DataType::Utf8, true),
-                            ]
-                            .into(),
-                        ),
-                        false,
+                Type::Map(MapType {
+                    key_field: Arc::new(NestedField::required(
+                        7,
+                        "key",
+                        Type::Primitive(PrimitiveType::String),
                     )),
-                    false,
-                ),
-                false,
+                    value_field: Arc::new(NestedField::optional(
+                        8,
+                        "value",
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                }),
             ),
-        ])
+        ];
+
+        crate::spec::Schema::builder()
+            .with_fields(fields.into_iter().map(|f| f.into()))
+            .build()
+            .unwrap()
     }
 
     /// Scans the snapshots table.
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
-        let mut committed_at =
-            PrimitiveBuilder::<TimestampMillisecondType>::new().with_timezone("+00:00");
+        let schema = schema_to_arrow_schema(&self.schema())?;
+
+        let mut committed_at = PrimitiveBuilder::<TimestampMillisecondType>::new();
         let mut snapshot_id = PrimitiveBuilder::<Int64Type>::new();
         let mut parent_id = PrimitiveBuilder::<Int64Type>::new();
         let mut operation = StringBuilder::new();
@@ -94,7 +95,7 @@ impl<'a> SnapshotsTable<'a> {
             summary.append(true)?;
         }
 
-        let batch = RecordBatch::try_new(Arc::new(self.schema()), vec![
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
