@@ -140,6 +140,7 @@ impl<B: IcebergWriterBuilder> IcebergWriter<(StructArray, RecordBatch)>
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
@@ -147,6 +148,7 @@ mod test {
     use arrow_select::concat::concat_batches;
     use itertools::Itertools;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -219,8 +221,14 @@ mod test {
 
         // prepare data
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("data", DataType::Utf8, true),
+            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("data", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
         ]));
         let id_array = Int64Array::from(vec![1, 2, 1, 3, 2, 3, 1]);
         let data_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g"]);
