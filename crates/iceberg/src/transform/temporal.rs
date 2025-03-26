@@ -30,8 +30,10 @@ use super::TransformFunction;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
-/// Hour in one second.
-const HOUR_PER_SECOND: f64 = 1.0_f64 / 3600.0_f64;
+/// Microseconds in one hour.
+const MICROSECONDS_PER_HOUR: i64 = 3_600_000_000;
+/// Nanoseconds in one hour.
+const NANOSECONDS_PER_HOUR: i64 = 3_600_000_000_000;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
 /// One second in micros.
@@ -335,12 +337,12 @@ pub struct Hour;
 impl Hour {
     #[inline]
     fn hour_timestamp_micro(v: i64) -> i32 {
-        (v as f64 / 1000.0 / 1000.0 * HOUR_PER_SECOND) as i32
+        (v / MICROSECONDS_PER_HOUR) as i32
     }
 
     #[inline]
     fn hour_timestamp_nano(v: i64) -> i32 {
-        (v as f64 / 1_000_000.0 / 1000.0 * HOUR_PER_SECOND) as i32
+        (v / NANOSECONDS_PER_HOUR) as i32
     }
 }
 
@@ -2761,9 +2763,11 @@ mod test {
         // Test TimestampMicrosecond
         test_timestamp_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
         test_timestamp_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
+        test_timestamp_and_tz_transform("0022-05-01 22:01:01.00", &hour, Datum::int(-17072905));
 
         // Test TimestampNanosecond
         test_timestamp_ns_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
         test_timestamp_ns_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("1900-05-01 22:01:01.00", &hour, Datum::int(-610705));
     }
 }
