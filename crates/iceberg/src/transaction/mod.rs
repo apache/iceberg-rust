@@ -131,7 +131,7 @@ impl<'a> Transaction<'a> {
         Ok(self)
     }
 
-    fn generate_unique_snapshot_id(&self) -> i64 {
+    pub fn generate_unique_snapshot_id(&self) -> i64 {
         let generate_random_id = || -> i64 {
             let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
             let snapshot_id = (lhs ^ rhs) as i64;
