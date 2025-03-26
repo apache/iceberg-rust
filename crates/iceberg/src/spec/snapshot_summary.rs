@@ -16,10 +16,11 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use itertools::Itertools;
 
-use super::{DataContentType, DataFile, PartitionSpecRef};
+use super::{DataContentType, DataFile, PartitionSpecRef, Snapshot, SnapshotRef, TableMetadata};
 use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
 use crate::{Error, ErrorKind, Result};
 
@@ -48,8 +49,10 @@ const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
 
+/// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
+/// It gathers metrics about added or removed data files and manifests, and tracks
+/// partition-specific updates.
 #[derive(Default)]
-#[allow(dead_code)]
 pub struct SnapshotSummaryCollector {
     metrics: UpdateMetrics,
     partition_metrics: HashMap<String, UpdateMetrics>,
@@ -58,17 +61,19 @@ pub struct SnapshotSummaryCollector {
     trust_partition_metrics: bool,
 }
 
-#[allow(dead_code)]
 impl SnapshotSummaryCollector {
-    // Set properties
+    /// Set properties for snapshot summary
     pub fn set(&mut self, key: &str, value: &str) {
         self.properties.insert(key.to_string(), value.to_string());
     }
 
+    /// Sets the limit for including partition summaries. Summaries are not
+    /// included if the number of partitions is exceeded.
     pub fn set_partition_summary_limit(&mut self, limit: u64) {
         self.max_changed_partitions_for_summaries = limit;
     }
 
+    /// Adds a data file to the summary collector
     pub fn add_file(
         &mut self,
         data_file: &DataFile,
@@ -81,6 +86,7 @@ impl SnapshotSummaryCollector {
         }
     }
 
+    /// Removes a data file from the summary collector
     pub fn remove_file(
         &mut self,
         data_file: &DataFile,
@@ -93,12 +99,14 @@ impl SnapshotSummaryCollector {
         }
     }
 
+    /// Adds a manifest to the summary collector
     pub fn add_manifest(&mut self, manifest: &ManifestFile) {
         self.trust_partition_metrics = false;
         self.partition_metrics.clear();
         self.metrics.add_manifest(manifest);
     }
 
+    /// Updates partition-specific metrics for a data file.
     pub fn update_partition_metrics(
         &mut self,
         schema: SchemaRef,
@@ -116,6 +124,7 @@ impl SnapshotSummaryCollector {
         }
     }
 
+    /// Merges another `SnapshotSummaryCollector` into the current one
     pub fn merge(&mut self, summary: SnapshotSummaryCollector) {
         self.metrics.merge(&summary.metrics);
         self.properties.extend(summary.properties);
@@ -133,6 +142,7 @@ impl SnapshotSummaryCollector {
         }
     }
 
+    /// Builds final map of summaries
     pub fn build(&self) -> HashMap<String, String> {
         let mut properties = self.metrics.to_map();
         let changed_partitions_count = self.partition_metrics.len() as u64;
@@ -507,7 +517,21 @@ fn update_totals(
         .insert(total_property.to_string(), new_total.to_string());
 }
 
-// TODO: ancestors of function
+// Returns the ancestors of the current snapshot
+#[allow(dead_code)]
+fn ancestors_of(current_snapshot: Snapshot, table_metadata: TableMetadata) -> Vec<Arc<Snapshot>> {
+    let mut ancestors = Vec::new();
+    let mut current: Option<SnapshotRef> = Some(Arc::new(current_snapshot));
+
+    while let Some(snapshot) = current {
+        ancestors.push(snapshot.clone());
+        current = snapshot
+            .parent_snapshot_id()
+            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id).cloned());
+    }
+
+    ancestors
+}
 
 #[cfg(test)]
 mod tests {
