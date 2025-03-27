@@ -282,7 +282,7 @@ impl ArrowReader {
             let delete_row_selection = Self::build_deletes_row_selection(
                 record_batch_stream_builder.metadata().row_groups(),
                 &selected_row_group_indices,
-                positional_delete_indexes,
+                positional_delete_indexes.as_ref(),
             )?;
 
             // merge the row selection from the delete files with the row selection
@@ -345,17 +345,19 @@ impl ArrowReader {
     /// as having been deleted by a positional delete, taking into account any row groups that have
     /// been skipped entirely by the filter predicate
     fn build_deletes_row_selection(
-        row_group_metadata: &[RowGroupMetaData],
+        row_group_metadata_list: &[RowGroupMetaData],
         selected_row_groups: &Option<Vec<usize>>,
-        mut positional_deletes: DeleteVector,
+        positional_deletes: &DeleteVector,
     ) -> Result<RowSelection> {
         let mut results: Vec<RowSelector> = Vec::new();
         let mut selected_row_groups_idx = 0;
-        let mut current_page_base_idx: u64 = 0;
+        let mut current_row_group_base_idx: u64 = 0;
+        let mut delete_vector_iter = positional_deletes.iter();
+        let mut next_deleted_row_idx_opt = delete_vector_iter.next();
 
-        for (idx, row_group_metadata) in row_group_metadata.iter().enumerate() {
-            let page_num_rows = row_group_metadata.num_rows() as u64;
-            let next_page_base_idx = current_page_base_idx + page_num_rows;
+        for (idx, row_group_metadata) in row_group_metadata_list.iter().enumerate() {
+            let row_group_num_rows = row_group_metadata.num_rows() as u64;
+            let next_row_group_base_idx = current_row_group_base_idx + row_group_num_rows;
 
             // if row group selection is enabled,
             if let Some(selected_row_groups) = selected_row_groups {
@@ -372,36 +374,37 @@ impl ArrowReader {
                 } else {
                     // remove any positional deletes from the skipped page so that
                     // `positional.deletes.min()` can be used
-                    positional_deletes.remove_range(current_page_base_idx..next_page_base_idx);
+                    delete_vector_iter.advance_to(next_row_group_base_idx);
+                    next_deleted_row_idx_opt = delete_vector_iter.next();
 
                     // still increment the current page base index but then skip to the next row group
                     // in the file
-                    current_page_base_idx += page_num_rows;
+                    current_row_group_base_idx += row_group_num_rows;
                     continue;
                 }
             }
 
-            let mut next_deleted_row_idx = match positional_deletes.min() {
+            let mut next_deleted_row_idx = match next_deleted_row_idx_opt {
                 Some(next_deleted_row_idx) => {
-                    // if the index of the next deleted row is beyond this page, add a selection for
-                    // the remainder of this page and skip to the next page
-                    if next_deleted_row_idx >= next_page_base_idx {
-                        results.push(RowSelector::select(page_num_rows as usize));
+                    // if the index of the next deleted row is beyond this row group, add a selection for
+                    // the remainder of this row group and skip to the next row group
+                    if next_deleted_row_idx >= next_row_group_base_idx {
+                        results.push(RowSelector::select(row_group_num_rows as usize));
                         continue;
                     }
 
                     next_deleted_row_idx
                 }
 
-                // If there are no more pos deletes, add a selector for the entirety of this page.
+                // If there are no more pos deletes, add a selector for the entirety of this row group.
                 _ => {
-                    results.push(RowSelector::select(page_num_rows as usize));
+                    results.push(RowSelector::select(row_group_num_rows as usize));
                     continue;
                 }
             };
 
-            let mut current_idx = current_page_base_idx;
-            'chunks: while next_deleted_row_idx < next_page_base_idx {
+            let mut current_idx = current_row_group_base_idx;
+            'chunks: while next_deleted_row_idx < next_row_group_base_idx {
                 // `select` all rows that precede the next delete index
                 if current_idx < next_deleted_row_idx {
                     let run_length = next_deleted_row_idx - current_idx;
@@ -412,18 +415,18 @@ impl ArrowReader {
                 // `skip` all consecutive deleted rows in the current row group
                 let mut run_length = 0;
                 while next_deleted_row_idx == current_idx
-                    && next_deleted_row_idx < next_page_base_idx
+                    && next_deleted_row_idx < next_row_group_base_idx
                 {
                     run_length += 1;
                     current_idx += 1;
-                    positional_deletes.remove(next_deleted_row_idx);
 
-                    next_deleted_row_idx = match positional_deletes.min() {
+                    next_deleted_row_idx_opt = delete_vector_iter.next();
+                    next_deleted_row_idx = match next_deleted_row_idx_opt {
                         Some(next_deleted_row_idx) => next_deleted_row_idx,
                         _ => {
                             // We've processed the final positional delete.
                             // Conclude the skip and then break so that we select the remaining
-                            // rows in the page and move on to the next row group
+                            // rows in the row group and move on to the next row group
                             results.push(RowSelector::skip(run_length));
                             break 'chunks;
                         }
@@ -432,13 +435,13 @@ impl ArrowReader {
                 results.push(RowSelector::skip(run_length));
             }
 
-            if current_idx < next_page_base_idx {
+            if current_idx < next_row_group_base_idx {
                 results.push(RowSelector::select(
-                    (next_page_base_idx - current_idx) as usize,
+                    (next_row_group_base_idx - current_idx) as usize,
                 ));
             }
 
-            current_page_base_idx += page_num_rows;
+            current_row_group_base_idx += row_group_num_rows;
         }
 
         Ok(results.into())
@@ -1375,18 +1378,19 @@ mod tests {
     use arrow_array::{ArrayRef, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::{ArrowWriter, ProjectionMask};
     use parquet::basic::Compression;
-    use parquet::file::properties::WriterProperties;
-    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
-    use tempfile::TempDir;
     use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use roaring::RoaringTreemap;
+    use tempfile::TempDir;
 
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::delete_vector::DeleteVector;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
@@ -1733,16 +1737,14 @@ message schema {
             2999, // single item at end of selected rg3 (1)
             3000, // single item at start of skipped rg4
         ]);
-        
-        let positional_deletes = DeleteVector {
-            inner: positional_deletes
-        };
+
+        let positional_deletes = DeleteVector::new(positional_deletes);
 
         // using selected row groups 1 and 3
         let result = ArrowReader::build_deletes_row_selection(
             &row_groups_metadata,
             &selected_row_groups,
-            positional_deletes.clone(),
+            &positional_deletes,
         )
         .unwrap();
 
@@ -1766,7 +1768,7 @@ message schema {
         let result = ArrowReader::build_deletes_row_selection(
             &row_groups_metadata,
             &None,
-            positional_deletes,
+            &positional_deletes,
         )
         .unwrap();
 
