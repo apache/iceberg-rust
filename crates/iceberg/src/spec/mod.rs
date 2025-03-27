@@ -24,6 +24,7 @@ mod name_mapping;
 mod partition;
 mod schema;
 mod snapshot;
+mod snapshot_summary;
 mod sort;
 mod statistic_file;
 mod table_metadata;

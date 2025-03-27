@@ -69,9 +69,9 @@ once_cell = { workspace = true }
 opendal = { workspace = true }
 ordered-float = { workspace = true }
 parquet = { workspace = true, features = ["async"] }
-paste = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }

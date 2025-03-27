@@ -64,6 +64,7 @@ pub(crate) struct PageIndexEvaluator<'a> {
     row_group_metadata: &'a RowGroupMetaData,
     iceberg_field_id_to_parquet_column_index: &'a HashMap<i32, usize>,
     snapshot_schema: &'a Schema,
+    row_count_cache: HashMap<usize, Vec<usize>>,
 }
 
 impl<'a> PageIndexEvaluator<'a> {
@@ -80,6 +81,7 @@ impl<'a> PageIndexEvaluator<'a> {
             row_group_metadata,
             iceberg_field_id_to_parquet_column_index: field_id_map,
             snapshot_schema,
+            row_count_cache: HashMap::new(),
         }
     }
 
@@ -126,7 +128,7 @@ impl<'a> PageIndexEvaluator<'a> {
     }
 
     fn calc_row_selection<F>(
-        &self,
+        &mut self,
         field_id: i32,
         predicate: F,
         missing_col_behavior: MissingColBehavior,
@@ -168,17 +170,28 @@ impl<'a> PageIndexEvaluator<'a> {
             return self.select_all_rows();
         };
 
-        let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
-            // if we have a column index, we should always have an offset index.
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Missing offset index for field id {}", field_id),
-            ));
-        };
+        let row_counts = {
+            // Caches row count calculations for columns that appear multiple times in
+            // the predicate
+            match self.row_count_cache.get(&parquet_column_index) {
+                Some(count) => count.clone(),
+                None => {
+                    let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
+                        // if we have a column index, we should always have an offset index.
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Missing offset index for field id {}", field_id),
+                        ));
+                    };
 
-        // TODO: cache row_counts to avoid recalcing if the same column
-        //       appears multiple times in the filter predicate
-        let row_counts = self.calc_row_counts(offset_index);
+                    let count = self.calc_row_counts(offset_index);
+                    self.row_count_cache
+                        .insert(parquet_column_index, count.clone());
+
+                    count
+                }
+            }
+        };
 
         let Some(page_filter) = Self::apply_predicate_to_column_index(
             predicate,
@@ -205,7 +218,7 @@ impl<'a> PageIndexEvaluator<'a> {
         Ok(row_selectors.into())
     }
 
-    /// returns a list of row counts per page
+    /// Returns a list of row counts per page
     fn calc_row_counts(&self, offset_index: &OffsetIndexMetaData) -> Vec<usize> {
         let mut remaining_rows = self.row_group_metadata.num_rows() as usize;
         let mut row_counts = Vec::with_capacity(self.offset_index.len());

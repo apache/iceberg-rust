@@ -36,3 +36,9 @@ updates:
        # For all packages, ignore all patch updates
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+    groups:
+      arrow-parquet:
+        applies-to: version-updates
+        patterns:
+          - "arrow*"
+          - "parquet"
