@@ -18,5 +18,5 @@
 # iceberg-rust use unstable rust to run linters, such as `clippy` and `rustfmt`. But this will not affect downstream users, 
 # and only MSRV is required.
 [toolchain]
-channel = "nightly-2024-06-10"
+channel = "nightly-2025-03-10"
 components = ["rustfmt", "clippy"]
