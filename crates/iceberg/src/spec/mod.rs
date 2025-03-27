@@ -41,6 +41,7 @@ pub use manifest_list::*;
 pub use partition::*;
 pub use schema::*;
 pub use snapshot::*;
+pub use snapshot_summary::*;
 pub use sort::*;
 pub use statistic_file::*;
 pub use table_metadata::*;

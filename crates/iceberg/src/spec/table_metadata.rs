@@ -77,6 +77,11 @@ pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str = "write.metadata.previo
 /// Default value for max number of previous versions to keep.
 pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
 
+/// Property key for max number of partitions to keep summary stats for.
+pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str = "write.summary.partition-limit";
+/// Default value for the max number of partitions to keep summary stats for.
+pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = 0;
+
 /// Reserved Iceberg table properties list.
 ///
 /// Reserved table properties are only used to control behaviors when creating or updating a
