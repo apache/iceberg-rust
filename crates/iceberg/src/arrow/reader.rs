@@ -432,7 +432,9 @@ impl ArrowReader {
                         }
                     };
                 }
-                results.push(RowSelector::skip(run_length));
+                if run_length > 0 {
+                    results.push(RowSelector::skip(run_length));
+                }
             }
 
             if current_idx < next_row_group_base_idx {
