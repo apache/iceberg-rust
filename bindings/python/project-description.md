@@ -24,5 +24,5 @@ This project is used to build an iceberg-rust powered core for pyiceberg, and in
 Install via PyPI:
 
 ```
-pip install pyiceberg_core
+pip install pyiceberg-core
 ```

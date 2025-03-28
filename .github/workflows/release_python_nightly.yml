@@ -109,7 +109,7 @@ jobs:
 
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/pyiceberg_core
+      url: https://test.pypi.org/p/pyiceberg-core
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing

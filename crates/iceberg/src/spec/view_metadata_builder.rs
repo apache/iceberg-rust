@@ -181,14 +181,16 @@ impl ViewMetadataBuilder {
     /// - The specified `version_id` does not exist.
     /// - The specified `version_id` is `-1` but no version has been added.
     pub fn set_current_version_id(mut self, mut version_id: i32) -> Result<Self> {
-        if version_id == Self::LAST_ADDED && self.last_added_version_id.is_none() {
-            version_id = self.last_added_version_id.ok_or_else(|| {
-                Error::new(
+        if version_id == Self::LAST_ADDED {
+            let Some(last_added_id) = self.last_added_version_id else {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Cannot set current version id to last added version: no version has been added.",
-                )
-            })?;
+                ));
+            };
+            version_id = last_added_id;
         }
+
         let version_id = version_id; // make immutable
 
         if version_id == self.metadata.current_version_id {
@@ -1194,6 +1196,24 @@ mod test {
             .unwrap_err()
             .to_string()
             .contains("Cannot set current version to unknown version with id: 10"));
+    }
+
+    #[test]
+    fn test_set_current_version_to_last_added() {
+        let builder = builder_without_changes();
+        let v1 = new_view_version(2, 1, "select * from ns.tbl");
+        let v2 = new_view_version(3, 1, "select a,b from ns.tbl");
+        let meta = builder
+            .clone()
+            .add_version(v1)
+            .unwrap()
+            .add_version(v2)
+            .unwrap()
+            .set_current_version_id(-1)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(meta.metadata.current_version_id, 3);
     }
 
     #[test]

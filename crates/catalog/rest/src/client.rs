@@ -57,12 +57,15 @@ impl Debug for HttpClient {
 impl HttpClient {
     /// Create a new http client.
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
+        let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
-            client: Client::new(),
+            client: Client::builder()
+                .default_headers(extra_headers.clone())
+                .build()?,
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
-            extra_headers: cfg.extra_headers()?,
+            extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
         })
     }
@@ -72,8 +75,14 @@ impl HttpClient {
     /// If cfg carries new value, we will use cfg instead.
     /// Otherwise, we will keep the old value.
     pub fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
+        let extra_headers = (!cfg.extra_headers()?.is_empty())
+            .then(|| cfg.extra_headers())
+            .transpose()?
+            .unwrap_or(self.extra_headers);
         Ok(HttpClient {
-            client: self.client,
+            client: Client::builder()
+                .default_headers(extra_headers.clone())
+                .build()?,
             token: Mutex::new(
                 cfg.token()
                     .or_else(|| self.token.into_inner().ok().flatten()),
@@ -82,10 +91,7 @@ impl HttpClient {
                 .then(|| cfg.get_token_endpoint())
                 .unwrap_or(self.token_endpoint),
             credential: cfg.credential().or(self.credential),
-            extra_headers: (!cfg.extra_headers()?.is_empty())
-                .then(|| cfg.extra_headers())
-                .transpose()?
-                .unwrap_or(self.extra_headers),
+            extra_headers,
             extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
                 .then(|| cfg.extra_oauth_params())
                 .unwrap_or(self.extra_oauth_params),
@@ -248,11 +254,14 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 /// TODO: Eventually, this function should return an error response that is custom to the error
 /// codes that all endpoints share (400, 404, etc.).
 pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
+    let (status, headers) = (response.status(), response.headers().clone());
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => return err.into(),
     };
 
     Error::new(ErrorKind::Unexpected, "Received unexpected response")
+        .with_context("status", status.to_string())
+        .with_context("headers", format!("{:?}", headers))
         .with_context("json", String::from_utf8_lossy(&bytes))
 }
