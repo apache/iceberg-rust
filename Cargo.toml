@@ -62,13 +62,11 @@ chrono = "0.4.38"
 ctor = "0.2.8"
 datafusion = "45"
 derive_builder = "0.20"
-either = "1"
 env_logger = "0.11.0"
 fnv = "1.0.7"
 futures = "0.3"
 iceberg = { version = "0.4.0", path = "./crates/iceberg" }
 iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
-iceberg-catalog-hms = { version = "0.4.0", path = "./crates/catalog/hms" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
@@ -100,7 +98,6 @@ thrift = "0.17.0"
 tokio = { version = "1.36", default-features = false }
 typed-builder = "0.20"
 url = "2.5.4"
-urlencoding = "2"
 uuid = { version = "1.13.1", features = ["v7"] }
 volo-thrift = "0.10"
 hive_metastore = "0.1"
