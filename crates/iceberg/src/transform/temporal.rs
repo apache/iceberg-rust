@@ -2463,7 +2463,7 @@ mod test {
             &year,
             Datum::int(1970 - super::UNIX_EPOCH_YEAR),
         );
-        test_timestamp_and_tz_transform("1969-01-01 00:00:00.00", &year, Datum::int(-1));
+        test_timestamp_and_tz_transform("1969-01-01T00:00:00.000000", &year, Datum::int(-1));
 
         // Test TimestampNanosecond
         test_timestamp_ns_and_tz_transform_using_i64(
@@ -2471,7 +2471,7 @@ mod test {
             &year,
             Datum::int(1970 - super::UNIX_EPOCH_YEAR),
         );
-        test_timestamp_ns_and_tz_transform("1969-01-01 00:00:00.00", &year, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("1969-01-01T00:00:00.000000", &year, Datum::int(-1));
     }
 
     #[test]
@@ -2562,10 +2562,10 @@ mod test {
             &month,
             Datum::int((1970 - super::UNIX_EPOCH_YEAR) * 12),
         );
-        test_timestamp_and_tz_transform("1969-12-01 23:00:00.00", &month, Datum::int(-1));
-        test_timestamp_and_tz_transform("2017-12-01 00:00:00.00", &month, Datum::int(575));
-        test_timestamp_and_tz_transform("1970-01-01 00:00:00.00", &month, Datum::int(0));
-        test_timestamp_and_tz_transform("1969-12-31 00:00:00.00", &month, Datum::int(-1));
+        test_timestamp_and_tz_transform("1969-12-01T23:00:00.000000", &month, Datum::int(-1));
+        test_timestamp_and_tz_transform("2017-12-01T00:00:00.000000", &month, Datum::int(575));
+        test_timestamp_and_tz_transform("1970-01-01T00:00:00.000000", &month, Datum::int(0));
+        test_timestamp_and_tz_transform("1969-12-31T00:00:00.000000", &month, Datum::int(-1));
 
         // Test TimestampNanosecond
         test_timestamp_ns_and_tz_transform_using_i64(
@@ -2573,10 +2573,10 @@ mod test {
             &month,
             Datum::int((1970 - super::UNIX_EPOCH_YEAR) * 12),
         );
-        test_timestamp_ns_and_tz_transform("1969-12-01 23:00:00.00", &month, Datum::int(-1));
-        test_timestamp_ns_and_tz_transform("2017-12-01 00:00:00.00", &month, Datum::int(575));
-        test_timestamp_ns_and_tz_transform("1970-01-01 00:00:00.00", &month, Datum::int(0));
-        test_timestamp_ns_and_tz_transform("1969-12-31 00:00:00.00", &month, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("1969-12-01T23:00:00.000000", &month, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("2017-12-01T00:00:00.000000", &month, Datum::int(575));
+        test_timestamp_ns_and_tz_transform("1970-01-01T00:00:00.000000", &month, Datum::int(0));
+        test_timestamp_ns_and_tz_transform("1969-12-31T00:00:00.000000", &month, Datum::int(-1));
     }
 
     #[test]
@@ -2667,12 +2667,12 @@ mod test {
         // Test TimestampMicrosecond
         test_timestamp_and_tz_transform_using_i64(1512151975038194, &day, Datum::date(17501));
         test_timestamp_and_tz_transform_using_i64(-115200000000, &day, Datum::date(-2));
-        test_timestamp_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::date(17501));
+        test_timestamp_and_tz_transform("2017-12-01T10:30:42.123000", &day, Datum::date(17501));
 
         // Test TimestampNanosecond
         test_timestamp_ns_and_tz_transform_using_i64(1512151975038194, &day, Datum::date(17));
         test_timestamp_ns_and_tz_transform_using_i64(-115200000000, &day, Datum::date(-1));
-        test_timestamp_ns_and_tz_transform("2017-12-01 10:30:42.123", &day, Datum::date(17501));
+        test_timestamp_ns_and_tz_transform("2017-12-01T10:30:42.123000", &day, Datum::date(17501));
     }
 
     #[test]
