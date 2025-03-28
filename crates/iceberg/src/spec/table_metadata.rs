@@ -955,14 +955,14 @@ pub(super) mod _serde {
                     .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
                     .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
                     .build()?;
-                
+
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             } else {
                 // Option 3: Create empty partition spec
                 let spec = PartitionSpec::builder(current_schema.clone())
                     .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
                     .build()?;
-                
+
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             };
 
@@ -970,7 +970,7 @@ pub(super) mod _serde {
             let default_spec_id = value
                 .default_spec_id
                 .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default());
-                
+
             // Get the default spec
             let default_spec: PartitionSpecRef = partition_specs
                 .get(&default_spec_id)
@@ -2677,8 +2677,10 @@ mod tests {
 
     #[test]
     fn test_table_metadata_v1_partition_specs_without_default_id() {
-        let metadata =
-            fs::read_to_string("testdata/table_metadata/TableMetadataV1PartitionSpecsWithoutDefaultId.json").unwrap();
+        let metadata = fs::read_to_string(
+            "testdata/table_metadata/TableMetadataV1PartitionSpecsWithoutDefaultId.json",
+        )
+        .unwrap();
 
         // Deserialize the JSON - this should succeed by inferring default_spec_id as the max spec ID
         let desered_type: TableMetadata = serde_json::from_str(&metadata)
@@ -2690,11 +2692,11 @@ mod tests {
             desered_type.uuid(),
             Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap()
         );
-        
+
         // Verify partition specs
         assert_eq!(desered_type.default_partition_spec_id(), 2); // Should pick the largest spec ID (2)
         assert_eq!(desered_type.partition_specs.len(), 2);
-        
+
         // Verify the default spec has the expected fields
         let default_spec = &desered_type.default_spec;
         assert_eq!(default_spec.spec_id(), 2);
