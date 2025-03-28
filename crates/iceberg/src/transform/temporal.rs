@@ -2745,8 +2745,16 @@ mod test {
         test_timestamp_and_tz_transform("0022-05-01T22:01:01.000000", &hour, Datum::int(-17072906));
 
         // Test TimestampNanosecond
-        test_timestamp_ns_and_tz_transform("2017-12-01T18:00:00.0000000000", &hour, Datum::int(420042));
+        test_timestamp_ns_and_tz_transform(
+            "2017-12-01T18:00:00.0000000000",
+            &hour,
+            Datum::int(420042),
+        );
         test_timestamp_ns_and_tz_transform("1969-12-31T23:00:00.0000000000", &hour, Datum::int(-1));
-        test_timestamp_ns_and_tz_transform("1900-05-01T22:01:01.0000000000", &hour, Datum::int(-610706));
+        test_timestamp_ns_and_tz_transform(
+            "1900-05-01T22:01:01.0000000000",
+            &hour,
+            Datum::int(-610706),
+        );
     }
 }
