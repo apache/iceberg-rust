@@ -31,9 +31,9 @@ use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 /// Microseconds in one hour.
-const MICROSECONDS_PER_HOUR: i64 = 3_600_000_000;
+const MICROSECONDS_PER_HOUR: f64 = 3_600_000_000_f64;
 /// Nanoseconds in one hour.
-const NANOSECONDS_PER_HOUR: i64 = 3_600_000_000_000;
+const NANOSECONDS_PER_HOUR: f64 = 3_600_000_000_000_f64;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
 /// One second in micros.
@@ -337,12 +337,12 @@ pub struct Hour;
 impl Hour {
     #[inline]
     fn hour_timestamp_micro(v: i64) -> i32 {
-        (v / MICROSECONDS_PER_HOUR) as i32
+        (v as f64 / MICROSECONDS_PER_HOUR).floor() as i32
     }
 
     #[inline]
     fn hour_timestamp_nano(v: i64) -> i32 {
-        (v / NANOSECONDS_PER_HOUR) as i32
+        (v as f64 / NANOSECONDS_PER_HOUR).floor() as i32
     }
 }
 
@@ -2390,18 +2390,8 @@ mod test {
         transform: &BoxedTransformFunction,
         expect: Datum,
     ) {
-        let timestamp = Datum::timestamp_micros(
-            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        );
-        let timestamp_tz = Datum::timestamptz_micros(
-            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        );
+        let timestamp = Datum::timestamp_from_str(time).unwrap();
+        let timestamp_tz = Datum::timestamptz_from_str(time.to_owned() + " +00:00").unwrap();
         let res = transform.transform_literal(&timestamp).unwrap().unwrap();
         assert_eq!(res, expect);
         let res = transform.transform_literal(&timestamp_tz).unwrap().unwrap();
@@ -2432,20 +2422,8 @@ mod test {
         transform: &BoxedTransformFunction,
         expect: Datum,
     ) {
-        let timestamp_ns = Datum::timestamp_nanos(
-            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        let timestamptz_ns = Datum::timestamptz_nanos(
-            NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S.%f")
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
+        let timestamp_ns = Datum::timestamp_from_str(time).unwrap();
+        let timestamptz_ns = Datum::timestamptz_from_str(time.to_owned() + " +00:00").unwrap();
         let res = transform.transform_literal(&timestamp_ns).unwrap().unwrap();
         assert_eq!(res, expect);
         let res = transform
@@ -2760,14 +2738,15 @@ mod test {
     fn test_transform_hours_literal() {
         let hour = Box::new(super::Hour) as BoxedTransformFunction;
 
-        // Test TimestampMicrosecond
-        test_timestamp_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
-        test_timestamp_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
-        test_timestamp_and_tz_transform("0022-05-01 22:01:01.00", &hour, Datum::int(-17072905));
+        test_timestamp_and_tz_transform("2017-12-01T18:00:00.000000", &hour, Datum::int(420042));
+        test_timestamp_and_tz_transform("1970-01-01T22:01:01.000000", &hour, Datum::int(22));
+        test_timestamp_and_tz_transform("1969-12-31T23:00:00.000000", &hour, Datum::int(-1));
+        test_timestamp_and_tz_transform("1969-12-31T22:01:01.000000", &hour, Datum::int(-2));
+        test_timestamp_and_tz_transform("0022-05-01T22:01:01.000000", &hour, Datum::int(-17072906));
 
         // Test TimestampNanosecond
-        test_timestamp_ns_and_tz_transform("2017-12-01 18:00:00.00", &hour, Datum::int(420042));
-        test_timestamp_ns_and_tz_transform("1969-12-31 23:00:00.00", &hour, Datum::int(-1));
-        test_timestamp_ns_and_tz_transform("1900-05-01 22:01:01.00", &hour, Datum::int(-610705));
+        test_timestamp_ns_and_tz_transform("2017-12-01T18:00:00.0000000000", &hour, Datum::int(420042));
+        test_timestamp_ns_and_tz_transform("1969-12-31T23:00:00.0000000000", &hour, Datum::int(-1));
+        test_timestamp_ns_and_tz_transform("1900-05-01T22:01:01.0000000000", &hour, Datum::int(-610706));
     }
 }
