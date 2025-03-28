@@ -138,73 +138,75 @@ impl CachingDeleteFileManager {
         }
     }
 
+    /// Load the deletes for all the specified tasks
+    ///
+    /// Returned future completes once all loading has finished.
+    ///
+    ///  * Create a single stream of all delete file tasks irrespective of type,
+    ///      so that we can respect the combined concurrency limit
+    ///  * We then process each in two phases: load and parse.
+    ///  * for positional deletes the load phase instantiates an ArrowRecordBatchStream to
+    ///      stream the file contents out
+    ///  * for eq deletes, we first check if the EQ delete is already loaded or being loaded by
+    ///      another concurrently processing data file scan task. If it is, we return a future
+    ///      for the pre-existing task from the load phase. If not, we create such a future
+    ///      and store it in the state to prevent other data file tasks from starting to load
+    ///      the same equality delete file, and return a record batch stream from the load phase
+    ///      as per the other delete file types - only this time it is accompanied by a one-shot
+    ///      channel sender that we will eventually use to resolve the shared future that we stored
+    ///      in the state.
+    ///  * When this gets updated to add support for delete vectors, the load phase will return
+    ///      a PuffinReader for them.
+    ///  * The parse phase parses each record batch stream according to its associated data type.
+    ///      The result of this is a map of data file paths to delete vectors for the positional
+    ///      delete tasks (and in future for the delete vector tasks). For equality delete
+    ///      file tasks, this results in an unbound Predicate.
+    ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
+    ///      channel to store them in the right place in the delete file managers state.
+    ///  * The results of all of these futures are awaited on in parallel with the specified
+    ///      level of concurrency and collected into a vec. We then combine all of the delete
+    ///      vector maps that resulted from any positional delete or delete vector files into a
+    ///      single map and persist it in the state.
+    ///
+    ///  
+    ///  Conceptually, the data flow is like this:
+    /// ```none
+    ///                                          FileScanTaskDeleteFile
+    ///                                                     |
+    ///            Already-loading EQ Delete                |             Everything Else
+    ///                     +---------------------------------------------------+
+    ///                     |                                                   |
+    ///            [get existing future]                         [load recordbatch stream / puffin]
+    ///         DeleteFileContext::InProgEqDel                           DeleteFileContext
+    ///                     |                                                   |
+    ///                     |                                                   |
+    ///                     |                     +-----------------------------+--------------------------+
+    ///                     |                   Pos Del           Del Vec (Not yet Implemented)         EQ Del
+    ///                     |                     |                             |                          |
+    ///                     |          [parse pos del stream]         [parse del vec puffin]       [parse eq del]
+    ///                     |  HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
+    ///                     |                     |                             |                          |
+    ///                     |                     |                             |                 [persist to state]
+    ///                     |                     |                             |                          ()
+    ///                     |                     |                             |                          |
+    ///                     |                     +-----------------------------+--------------------------+
+    ///                     |                                                   |
+    ///                     |                                            [buffer unordered]
+    ///                     |                                                   |
+    ///                     |                                            [combine del vectors]
+    ///                     |                                      HashMap<String, RoaringTreeMap>
+    ///                     |                                                   |
+    ///                     |                                      [persist del vectors to state]
+    ///                     |                                                   ()
+    ///                     |                                                   |
+    ///                     +-------------------------+-------------------------+
+    ///                                               |
+    ///                                            [join!]
+    /// ```
     pub(crate) async fn load_deletes(
         &self,
         delete_file_entries: &[FileScanTaskDeleteFile],
     ) -> Result<()> {
-        /*
-               * Create a single stream of all delete file tasks irrespective of type,
-                   so that we can respect the combined concurrency limit
-               * We then process each in two phases: load and parse.
-               * for positional deletes the load phase instantiates an ArrowRecordBatchStream to
-                   stream the file contents out
-               * for eq deletes, we first check if the EQ delete is already loaded or being loaded by
-                   another concurrently processing data file scan task. If it is, we return a future
-                   for the pre-existing task from the load phase. If not, we create such a future
-                   and store it in the state to prevent other data file tasks from starting to load
-                   the same equality delete file, and return a record batch stream from the load phase
-                   as per the other delete file types - only this time it is accompanied by a one-shot
-                   channel sender that we will eventually use to resolve the shared future that we stored
-                   in the state.
-               * When this gets updated to add support for delete vectors, the load phase will return
-                   a PuffinReader for them.
-               * The parse phase parses each record batch stream according to its associated data type.
-                   The result of this is a map of data file paths to delete vectors for the positional
-                   delete tasks (and in future for the delete vector tasks). For equality delete
-                   file tasks, this results in an unbound Predicate.
-               * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
-                   channel to store them in the right place in the delete file manager's state.
-               * The results of all of these futures are awaited on in parallel with the specified
-                   level of concurrency and collected into a vec. We then combine all of the delete
-                   vector maps that resulted from any positional delete or delete vector files into a
-                   single map and persist it in the state.
-
-
-           Conceptually, the data flow is like this:
-
-                                         FileScanTaskDeleteFile
-                                                    |
-           Already-loading EQ Delete                |             Everything Else
-                    +---------------------------------------------------+
-                    |                                                   |
-           [get existing future]                         [load recordbatch stream / puffin]
-        DeleteFileContext::InProgEqDel                           DeleteFileContext
-                    |                                                   |
-                    |                                                   |
-                    |                     +-----------------------------+--------------------------+
-                    |                   Pos Del           Del Vec (Not yet Implemented)         EQ Del
-                    |                     |                             |                          |
-                    |          [parse pos del stream]         [parse del vec puffin]       [parse eq del]
-                    |  HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
-                    |                     |                             |                          |
-                    |                     |                             |                 [persist to state]
-                    |                     |                             |                          ()
-                    |                     |                             |                          |
-                    |                     +-----------------------------+--------------------------+
-                    |                                                   |
-                    |                                            [buffer unordered]
-                    |                                                   |
-                    |                                            [combine del vectors]
-                    |                                      HashMap<String, RoaringTreeMap>
-                    |                                                   |
-                    |                                      [persist del vectors to state]
-                    |                                                   ()
-                    |                                                   |
-                    +-------------------------+-------------------------+
-                                              |
-                                           [join!]
-               */
-
         let stream_items = delete_file_entries
             .iter()
             .map(|t| (t.clone(), self.file_io.clone(), self.state.clone()))
@@ -253,18 +255,20 @@ impl CachingDeleteFileManager {
             )),
 
             DataContentType::EqualityDeletes => {
-                let (sender, fut) = EqDelFuture::new();
-                {
+                let sender = {
                     let mut state = state.write().unwrap();
-
                     if let Some(existing) = state.equality_deletes.get(&task.file_path) {
                         return Ok(DeleteFileContext::InProgEqDel(existing.clone()));
                     }
 
+                    let (sender, fut) = EqDelFuture::new();
+
                     state
                         .equality_deletes
                         .insert(task.file_path.to_string(), fut);
-                }
+
+                    sender
+                };
 
                 Ok(DeleteFileContext::FreshEqDel {
                     batch_stream: Self::parquet_to_batch_stream(&task.file_path, file_io).await?,
