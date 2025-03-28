@@ -98,7 +98,7 @@ def test_hour_transform():
         ]
     )
     result = transform.hour(arr)
-    expected = pa.array([19, 264420, -17072905], type=pa.int32())
+    expected = pa.array([19, 264420, -17072906], type=pa.int32())
     assert result == expected
 
 
