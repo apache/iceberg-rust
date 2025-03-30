@@ -31,9 +31,9 @@ use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
 /// Microseconds in one hour.
-const MICROSECONDS_PER_HOUR: f64 = 3_600_000_000_f64;
+const MICROSECONDS_PER_HOUR: i64 = 3_600_000_000;
 /// Nanoseconds in one hour.
-const NANOSECONDS_PER_HOUR: f64 = 3_600_000_000_000_f64;
+const NANOSECONDS_PER_HOUR: i64 = 3_600_000_000_000;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
 /// One second in micros.
@@ -337,12 +337,12 @@ pub struct Hour;
 impl Hour {
     #[inline]
     fn hour_timestamp_micro(v: i64) -> i32 {
-        (v as f64 / MICROSECONDS_PER_HOUR).floor() as i32
+        v.div_euclid(MICROSECONDS_PER_HOUR) as i32
     }
 
     #[inline]
     fn hour_timestamp_nano(v: i64) -> i32 {
-        (v as f64 / NANOSECONDS_PER_HOUR).floor() as i32
+        v.div_euclid(NANOSECONDS_PER_HOUR) as i32
     }
 }
 
