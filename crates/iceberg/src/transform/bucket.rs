@@ -919,8 +919,11 @@ mod test {
         let bucket = Bucket::new(100);
         let ns_value = 1510871468000000i64 * 1000;
         assert_eq!(
-            bucket.transform_literal(&Datum::timestamp_nanos(ns_value)).unwrap().unwrap(),
-            Datum::int(bucket.bucket_timestamp(ns_value))
+            bucket
+                .transform_literal(&Datum::timestamp_nanos(ns_value))
+                .unwrap()
+                .unwrap(),
+            Datum::int(79)
         );
     }
 
@@ -929,8 +932,11 @@ mod test {
         let bucket = Bucket::new(100);
         let ns_value = 1510871468000000i64 * 1000;
         assert_eq!(
-            bucket.transform_literal(&Datum::timestamptz_nanos(ns_value)).unwrap().unwrap(),
-            Datum::int(bucket.bucket_timestamp(ns_value))
+            bucket
+                .transform_literal(&Datum::timestamptz_nanos(ns_value))
+                .unwrap()
+                .unwrap(),
+            Datum::int(79)
         );
     }
 }
