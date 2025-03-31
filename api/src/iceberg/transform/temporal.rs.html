@@ -2758,19 +2758,6 @@
 <a href="#2758" id="2758">2758</a>
 <a href="#2759" id="2759">2759</a>
 <a href="#2760" id="2760">2760</a>
-<a href="#2761" id="2761">2761</a>
-<a href="#2762" id="2762">2762</a>
-<a href="#2763" id="2763">2763</a>
-<a href="#2764" id="2764">2764</a>
-<a href="#2765" id="2765">2765</a>
-<a href="#2766" id="2766">2766</a>
-<a href="#2767" id="2767">2767</a>
-<a href="#2768" id="2768">2768</a>
-<a href="#2769" id="2769">2769</a>
-<a href="#2770" id="2770">2770</a>
-<a href="#2771" id="2771">2771</a>
-<a href="#2772" id="2772">2772</a>
-<a href="#2773" id="2773">2773</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3110,12 +3097,12 @@
 <span class="kw">impl </span>Hour {
     <span class="attr">#[inline]
     </span><span class="kw">fn </span>hour_timestamp_micro(v: i64) -&gt; i32 {
-        (v / MICROSECONDS_PER_HOUR) <span class="kw">as </span>i32
+        v.div_euclid(MICROSECONDS_PER_HOUR) <span class="kw">as </span>i32
     }
 
     <span class="attr">#[inline]
     </span><span class="kw">fn </span>hour_timestamp_nano(v: i64) -&gt; i32 {
-        (v / NANOSECONDS_PER_HOUR) <span class="kw">as </span>i32
+        v.div_euclid(NANOSECONDS_PER_HOUR) <span class="kw">as </span>i32
     }
 }
 
@@ -5163,18 +5150,8 @@
         transform: <span class="kw-2">&amp;</span>BoxedTransformFunction,
         expect: Datum,
     ) {
-        <span class="kw">let </span>timestamp = Datum::timestamp_micros(
-            NaiveDateTime::parse_from_str(time, <span class="string">"%Y-%m-%d %H:%M:%S.%f"</span>)
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        );
-        <span class="kw">let </span>timestamp_tz = Datum::timestamptz_micros(
-            NaiveDateTime::parse_from_str(time, <span class="string">"%Y-%m-%d %H:%M:%S.%f"</span>)
-                .unwrap()
-                .and_utc()
-                .timestamp_micros(),
-        );
+        <span class="kw">let </span>timestamp = Datum::timestamp_from_str(time).unwrap();
+        <span class="kw">let </span>timestamp_tz = Datum::timestamptz_from_str(time.to_owned() + <span class="string">" +00:00"</span>).unwrap();
         <span class="kw">let </span>res = transform.transform_literal(<span class="kw-2">&amp;</span>timestamp).unwrap().unwrap();
         <span class="macro">assert_eq!</span>(res, expect);
         <span class="kw">let </span>res = transform.transform_literal(<span class="kw-2">&amp;</span>timestamp_tz).unwrap().unwrap();
@@ -5205,20 +5182,8 @@
         transform: <span class="kw-2">&amp;</span>BoxedTransformFunction,
         expect: Datum,
     ) {
-        <span class="kw">let </span>timestamp_ns = Datum::timestamp_nanos(
-            NaiveDateTime::parse_from_str(time, <span class="string">"%Y-%m-%d %H:%M:%S.%f"</span>)
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
-        <span class="kw">let </span>timestamptz_ns = Datum::timestamptz_nanos(
-            NaiveDateTime::parse_from_str(time, <span class="string">"%Y-%m-%d %H:%M:%S.%f"</span>)
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap(),
-        );
+        <span class="kw">let </span>timestamp_ns = Datum::timestamp_from_str(time).unwrap();
+        <span class="kw">let </span>timestamptz_ns = Datum::timestamptz_from_str(time.to_owned() + <span class="string">" +00:00"</span>).unwrap();
         <span class="kw">let </span>res = transform.transform_literal(<span class="kw-2">&amp;</span>timestamp_ns).unwrap().unwrap();
         <span class="macro">assert_eq!</span>(res, expect);
         <span class="kw">let </span>res = transform
@@ -5258,7 +5223,7 @@
             <span class="kw-2">&amp;</span>year,
             Datum::int(<span class="number">1970 </span>- <span class="kw">super</span>::UNIX_EPOCH_YEAR),
         );
-        test_timestamp_and_tz_transform(<span class="string">"1969-01-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>year, Datum::int(-<span class="number">1</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1969-01-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>year, Datum::int(-<span class="number">1</span>));
 
         <span class="comment">// Test TimestampNanosecond
         </span>test_timestamp_ns_and_tz_transform_using_i64(
@@ -5266,7 +5231,7 @@
             <span class="kw-2">&amp;</span>year,
             Datum::int(<span class="number">1970 </span>- <span class="kw">super</span>::UNIX_EPOCH_YEAR),
         );
-        test_timestamp_ns_and_tz_transform(<span class="string">"1969-01-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>year, Datum::int(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"1969-01-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>year, Datum::int(-<span class="number">1</span>));
     }
 
     <span class="attr">#[test]
@@ -5357,10 +5322,10 @@
             <span class="kw-2">&amp;</span>month,
             Datum::int((<span class="number">1970 </span>- <span class="kw">super</span>::UNIX_EPOCH_YEAR) * <span class="number">12</span>),
         );
-        test_timestamp_and_tz_transform(<span class="string">"1969-12-01 23:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
-        test_timestamp_and_tz_transform(<span class="string">"2017-12-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">575</span>));
-        test_timestamp_and_tz_transform(<span class="string">"1970-01-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">0</span>));
-        test_timestamp_and_tz_transform(<span class="string">"1969-12-31 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1969-12-01T23:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
+        test_timestamp_and_tz_transform(<span class="string">"2017-12-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">575</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1970-01-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">0</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1969-12-31T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
 
         <span class="comment">// Test TimestampNanosecond
         </span>test_timestamp_ns_and_tz_transform_using_i64(
@@ -5368,10 +5333,10 @@
             <span class="kw-2">&amp;</span>month,
             Datum::int((<span class="number">1970 </span>- <span class="kw">super</span>::UNIX_EPOCH_YEAR) * <span class="number">12</span>),
         );
-        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-01 23:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">575</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"1970-01-01 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">0</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-31 00:00:00.00"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-01T23:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">575</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"1970-01-01T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(<span class="number">0</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-31T00:00:00.000000"</span>, <span class="kw-2">&amp;</span>month, Datum::int(-<span class="number">1</span>));
     }
 
     <span class="attr">#[test]
@@ -5462,12 +5427,12 @@
         <span class="comment">// Test TimestampMicrosecond
         </span>test_timestamp_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
         test_timestamp_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::date(-<span class="number">2</span>));
-        test_timestamp_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
+        test_timestamp_and_tz_transform(<span class="string">"2017-12-01T10:30:42.123000"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
 
         <span class="comment">// Test TimestampNanosecond
         </span>test_timestamp_ns_and_tz_transform_using_i64(<span class="number">1512151975038194</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17</span>));
         test_timestamp_ns_and_tz_transform_using_i64(-<span class="number">115200000000</span>, <span class="kw-2">&amp;</span>day, Datum::date(-<span class="number">1</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 10:30:42.123"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
+        test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01T10:30:42.123000"</span>, <span class="kw-2">&amp;</span>day, Datum::date(<span class="number">17501</span>));
     }
 
     <span class="attr">#[test]
@@ -5533,15 +5498,24 @@
     </span><span class="kw">fn </span>test_transform_hours_literal() {
         <span class="kw">let </span>hour = Box::new(<span class="kw">super</span>::Hour) <span class="kw">as </span>BoxedTransformFunction;
 
-        <span class="comment">// Test TimestampMicrosecond
-        </span>test_timestamp_and_tz_transform(<span class="string">"2017-12-01 18:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">420042</span>));
-        test_timestamp_and_tz_transform(<span class="string">"1969-12-31 23:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
-        test_timestamp_and_tz_transform(<span class="string">"0022-05-01 22:01:01.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">17072905</span>));
+        test_timestamp_and_tz_transform(<span class="string">"2017-12-01T18:00:00.000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">420042</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1970-01-01T22:01:01.000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">22</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1969-12-31T23:00:00.000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
+        test_timestamp_and_tz_transform(<span class="string">"1969-12-31T22:01:01.000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">2</span>));
+        test_timestamp_and_tz_transform(<span class="string">"0022-05-01T22:01:01.000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">17072906</span>));
 
         <span class="comment">// Test TimestampNanosecond
-        </span>test_timestamp_ns_and_tz_transform(<span class="string">"2017-12-01 18:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(<span class="number">420042</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-31 23:00:00.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
-        test_timestamp_ns_and_tz_transform(<span class="string">"1900-05-01 22:01:01.00"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">610705</span>));
+        </span>test_timestamp_ns_and_tz_transform(
+            <span class="string">"2017-12-01T18:00:00.0000000000"</span>,
+            <span class="kw-2">&amp;</span>hour,
+            Datum::int(<span class="number">420042</span>),
+        );
+        test_timestamp_ns_and_tz_transform(<span class="string">"1969-12-31T23:00:00.0000000000"</span>, <span class="kw-2">&amp;</span>hour, Datum::int(-<span class="number">1</span>));
+        test_timestamp_ns_and_tz_transform(
+            <span class="string">"1900-05-01T22:01:01.0000000000"</span>,
+            <span class="kw-2">&amp;</span>hour,
+            Datum::int(-<span class="number">610706</span>),
+        );
     }
 }
 </code></pre></div></section></main></body></html>
