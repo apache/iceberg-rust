@@ -51,14 +51,11 @@ impl TableProvider for IcebergMetadataTableProvider {
 
     fn schema(&self) -> ArrowSchemaRef {
         let metadata_table = self.table.inspect();
-        match self.r#type {
-            MetadataTableType::Snapshots => metadata_table.snapshots().schema().into(),
-            MetadataTableType::Manifests => {
-                schema_to_arrow_schema(&metadata_table.manifests().schema())
-                    .unwrap()
-                    .into()
-            }
-        }
+        let schema = match self.r#type {
+            MetadataTableType::Snapshots => metadata_table.snapshots().schema(),
+            MetadataTableType::Manifests => metadata_table.manifests().schema(),
+        };
+        schema_to_arrow_schema(&schema).unwrap().into()
     }
 
     fn table_type(&self) -> TableType {
