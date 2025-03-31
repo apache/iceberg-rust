@@ -167,6 +167,16 @@ impl TransformFunction for Bucket {
                 .downcast_ref::<arrow_array::TimestampMicrosecondArray>()
                 .unwrap()
                 .unary(|v| self.bucket_timestamp(v)),
+            DataType::Time64(TimeUnit::Nanosecond) => input
+                .as_any()
+                .downcast_ref::<arrow_array::Time64NanosecondArray>()
+                .unwrap()
+                .unary(|v| self.bucket_time(v)),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => input
+                .as_any()
+                .downcast_ref::<arrow_array::TimestampNanosecondArray>()
+                .unwrap()
+                .unary(|v| self.bucket_timestamp(v)),
             DataType::Utf8 => arrow_array::Int32Array::from_iter(
                 input
                     .as_any()
@@ -228,6 +238,9 @@ impl TransformFunction for Bucket {
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => self.bucket_date(*v),
             (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => self.bucket_time(*v),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
             (PrimitiveType::String, PrimitiveLiteral::String(v)) => self.bucket_str(v.as_str()),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) => {
                 self.bucket_bytes(uuid::Uuid::from_u128(*v).as_ref())
@@ -886,6 +899,38 @@ mod test {
                 .unwrap()
                 .unwrap(),
             Datum::int(32)
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_literal() {
+        let bucket = Bucket::new(100);
+        assert_eq!(
+            bucket
+                .transform_literal(&Datum::timestamptz_micros(1510871468000000))
+                .unwrap()
+                .unwrap(),
+            Datum::int(7)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_ns_literal() {
+        let bucket = Bucket::new(100);
+        let ns_value = 1510871468000000i64 * 1000;
+        assert_eq!(
+            bucket.transform_literal(&Datum::timestamp_nanos(ns_value)).unwrap().unwrap(),
+            Datum::int(bucket.bucket_timestamp(ns_value))
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_ns_literal() {
+        let bucket = Bucket::new(100);
+        let ns_value = 1510871468000000i64 * 1000;
+        assert_eq!(
+            bucket.transform_literal(&Datum::timestamptz_nanos(ns_value)).unwrap().unwrap(),
+            Datum::int(bucket.bucket_timestamp(ns_value))
         );
     }
 }
