@@ -226,7 +226,8 @@ mod tests {
                                     "type": "float"
                                 }
                             ]
-                        }
+                        },
+                        "element-name": "element"
                     }
                 }
             ]

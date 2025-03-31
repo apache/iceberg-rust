@@ -1107,8 +1107,8 @@ mod tests {
             "type": "list",
             "element-id": 3,
             "element-required": true,
-            "element-name": "list1",
-            "element": "string"
+            "element": "string",
+            "element-name": "list1"
         }
         "#;
 
