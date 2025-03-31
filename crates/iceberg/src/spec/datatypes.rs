@@ -735,7 +735,6 @@ pub(super) mod _serde {
             element_id: i32,
             element_required: bool,
             element: Cow<'a, Type>,
-            #[serde(default = "default_list_field_name")]
             element_name: String,
         },
         Struct {
@@ -752,10 +751,6 @@ pub(super) mod _serde {
             value: Cow<'a, Type>,
         },
         Primitive(PrimitiveType),
-    }
-
-    fn default_list_field_name() -> String {
-        LIST_FIELD_NAME.to_owned()
     }
 
     impl<'a> From<SerdeType<'a>> for Type {
