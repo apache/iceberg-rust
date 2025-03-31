@@ -187,6 +187,33 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -204,15 +231,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use </span>std::sync::Arc;
+</span><span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span>arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
-<span class="kw">use </span>arrow_array::types::{Int64Type, TimestampMillisecondType};
+<span class="kw">use </span>arrow_array::builder::{MapBuilder, MapFieldNames, PrimitiveBuilder, StringBuilder};
+<span class="kw">use </span>arrow_array::types::{Int64Type, TimestampMicrosecondType};
 <span class="kw">use </span>arrow_array::RecordBatch;
-<span class="kw">use </span>arrow_schema::{DataType, Field, Schema, TimeUnit};
+<span class="kw">use </span>arrow_schema::{DataType, Field};
 <span class="kw">use </span>futures::{stream, StreamExt};
+<span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+<span class="kw">use </span><span class="kw">crate</span>::arrow::{schema_to_arrow_schema, DEFAULT_MAP_FIELD_NAME};
 <span class="kw">use </span><span class="kw">crate</span>::scan::ArrowRecordBatchStream;
+<span class="kw">use </span><span class="kw">crate</span>::spec::{
+    MapType, NestedField, PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
+};
 <span class="kw">use </span><span class="kw">crate</span>::table::Table;
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
@@ -227,51 +260,72 @@
         <span class="self">Self </span>{ table }
     }
 
-    <span class="doccomment">/// Returns the schema of the snapshots table.
-    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Schema {
-        Schema::new(<span class="macro">vec!</span>[
-            Field::new(
+    <span class="doccomment">/// Returns the iceberg schema of the snapshots table.
+    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::spec::Schema {
+        <span class="kw">let </span>fields = <span class="macro">vec!</span>[
+            NestedField::required(
+                <span class="number">1</span>,
                 <span class="string">"committed_at"</span>,
-                DataType::Timestamp(TimeUnit::Millisecond, <span class="prelude-val">Some</span>(<span class="string">"+00:00"</span>.into())),
-                <span class="bool-val">false</span>,
+                Type::Primitive(PrimitiveType::Timestamptz),
             ),
-            Field::new(<span class="string">"snapshot_id"</span>, DataType::Int64, <span class="bool-val">false</span>),
-            Field::new(<span class="string">"parent_id"</span>, DataType::Int64, <span class="bool-val">true</span>),
-            Field::new(<span class="string">"operation"</span>, DataType::Utf8, <span class="bool-val">false</span>),
-            Field::new(<span class="string">"manifest_list"</span>, DataType::Utf8, <span class="bool-val">false</span>),
-            Field::new(
+            NestedField::required(<span class="number">2</span>, <span class="string">"snapshot_id"</span>, Type::Primitive(PrimitiveType::Long)),
+            NestedField::optional(<span class="number">3</span>, <span class="string">"parent_id"</span>, Type::Primitive(PrimitiveType::Long)),
+            NestedField::optional(<span class="number">4</span>, <span class="string">"operation"</span>, Type::Primitive(PrimitiveType::String)),
+            NestedField::optional(<span class="number">5</span>, <span class="string">"manifest_list"</span>, Type::Primitive(PrimitiveType::String)),
+            NestedField::optional(
+                <span class="number">6</span>,
                 <span class="string">"summary"</span>,
-                DataType::Map(
-                    Arc::new(Field::new(
-                        <span class="string">"entries"</span>,
-                        DataType::Struct(
-                            <span class="macro">vec!</span>[
-                                Field::new(<span class="string">"keys"</span>, DataType::Utf8, <span class="bool-val">false</span>),
-                                Field::new(<span class="string">"values"</span>, DataType::Utf8, <span class="bool-val">true</span>),
-                            ]
-                            .into(),
-                        ),
+                Type::Map(MapType {
+                    key_field: Arc::new(NestedField::map_key_element(
+                        <span class="number">7</span>,
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                    value_field: Arc::new(NestedField::map_value_element(
+                        <span class="number">8</span>,
+                        Type::Primitive(PrimitiveType::String),
                         <span class="bool-val">false</span>,
                     )),
-                    <span class="bool-val">false</span>,
-                ),
-                <span class="bool-val">false</span>,
+                }),
             ),
-        ])
+        ];
+        <span class="kw">crate</span>::spec::Schema::builder()
+            .with_fields(fields.into_iter().map(|f| f.into()))
+            .build()
+            .unwrap()
     }
 
     <span class="doccomment">/// Scans the snapshots table.
     </span><span class="kw">pub async fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ArrowRecordBatchStream&gt; {
+        <span class="kw">let </span>schema = schema_to_arrow_schema(<span class="kw-2">&amp;</span><span class="self">self</span>.schema())<span class="question-mark">?</span>;
+
         <span class="kw">let </span><span class="kw-2">mut </span>committed_at =
-            PrimitiveBuilder::&lt;TimestampMillisecondType&gt;::new().with_timezone(<span class="string">"+00:00"</span>);
+            PrimitiveBuilder::&lt;TimestampMicrosecondType&gt;::new().with_timezone(<span class="string">"+00:00"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>snapshot_id = PrimitiveBuilder::&lt;Int64Type&gt;::new();
         <span class="kw">let </span><span class="kw-2">mut </span>parent_id = PrimitiveBuilder::&lt;Int64Type&gt;::new();
         <span class="kw">let </span><span class="kw-2">mut </span>operation = StringBuilder::new();
         <span class="kw">let </span><span class="kw-2">mut </span>manifest_list = StringBuilder::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>summary = MapBuilder::new(<span class="prelude-val">None</span>, StringBuilder::new(), StringBuilder::new());
-
+        <span class="kw">let </span><span class="kw-2">mut </span>summary = MapBuilder::new(
+            <span class="prelude-val">Some</span>(MapFieldNames {
+                entry: DEFAULT_MAP_FIELD_NAME.to_string(),
+                key: MAP_KEY_FIELD_NAME.to_string(),
+                value: MAP_VALUE_FIELD_NAME.to_string(),
+            }),
+            StringBuilder::new(),
+            StringBuilder::new(),
+        )
+        .with_keys_field(Arc::new(
+            Field::new(MAP_KEY_FIELD_NAME, DataType::Utf8, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                <span class="string">"7"</span>.to_string(),
+            )])),
+        ))
+        .with_values_field(Arc::new(
+            Field::new(MAP_VALUE_FIELD_NAME, DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), <span class="string">"8"</span>.to_string()),
+            ])),
+        ));
         <span class="kw">for </span>snapshot <span class="kw">in </span><span class="self">self</span>.table.metadata().snapshots() {
-            committed_at.append_value(snapshot.timestamp_ms());
+            committed_at.append_value(snapshot.timestamp_ms() * <span class="number">1000</span>);
             snapshot_id.append_value(snapshot.snapshot_id());
             parent_id.append_option(snapshot.parent_snapshot_id());
             manifest_list.append_value(snapshot.manifest_list());
@@ -283,7 +337,7 @@
             summary.append(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(<span class="self">self</span>.schema()), <span class="macro">vec!</span>[
+        <span class="kw">let </span>batch = RecordBatch::try_new(Arc::new(schema), <span class="macro">vec!</span>[
             Arc::new(committed_at.finish()),
             Arc::new(snapshot_id.finish()),
             Arc::new(parent_id.finish()),
@@ -312,14 +366,14 @@
         check_record_batches(
             batch_stream,
             <span class="macro">expect!</span>[[<span class="string">r#"
-                Field { name: "committed_at", data_type: Timestamp(Millisecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "operation", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "manifest_list", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} },
-                Field { name: "summary", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "values", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }"#</span>]],
+                Field { name: "committed_at", data_type: Timestamp(Microsecond, Some("+00:00")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "1"} },
+                Field { name: "snapshot_id", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "2"} },
+                Field { name: "parent_id", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "3"} },
+                Field { name: "operation", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "4"} },
+                Field { name: "manifest_list", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "5"} },
+                Field { name: "summary", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "7"} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "8"} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {"PARQUET:field_id": "6"} }"#</span>]],
             <span class="macro">expect!</span>[[<span class="string">r#"
-                committed_at: PrimitiveArray&lt;Timestamp(Millisecond, Some("+00:00"))&gt;
+                committed_at: PrimitiveArray&lt;Timestamp(Microsecond, Some("+00:00"))&gt;
                 [
                   2018-01-04T21:22:35.770+00:00,
                   2019-04-12T20:29:15.770+00:00,
@@ -347,11 +401,11 @@
                 [
                 ]
                 [
-                -- child 0: "keys" (Utf8)
+                -- child 0: "key" (Utf8)
                 StringArray
                 [
                 ]
-                -- child 1: "values" (Utf8)
+                -- child 1: "value" (Utf8)
                 StringArray
                 [
                 ]
@@ -361,11 +415,11 @@
                 [
                 ]
                 [
-                -- child 0: "keys" (Utf8)
+                -- child 0: "key" (Utf8)
                 StringArray
                 [
                 ]
-                -- child 1: "values" (Utf8)
+                -- child 1: "value" (Utf8)
                 StringArray
                 [
                 ]
