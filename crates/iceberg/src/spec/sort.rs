@@ -214,7 +214,7 @@ impl SortOrderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{ListType, NestedField, PrimitiveType, Type};
+    use crate::spec::{ListType, NestedField, PrimitiveType, Type, LIST_FIELD_NAME};
 
     #[test]
     fn test_sort_field() {
@@ -425,6 +425,7 @@ mod tests {
                     element_field: NestedField::list_element(
                         2,
                         Type::Primitive(PrimitiveType::String),
+                        LIST_FIELD_NAME.to_owned(),
                         true,
                     )
                     .into(),

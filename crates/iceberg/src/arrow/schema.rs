@@ -309,8 +309,12 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
         let id = get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
-        let mut element_field =
-            NestedField::list_element(id, value.clone(), !element_field.is_nullable());
+        let mut element_field = NestedField::list_element(
+            id,
+            value.clone(),
+            element_field.name().clone(),
+            !element_field.is_nullable(),
+        );
         if let Some(doc) = doc {
             element_field = element_field.with_doc(doc);
         }
@@ -1217,7 +1221,8 @@ mod tests {
                         "type": "list",
                         "element-id": 15,
                         "element-required": true,
-                        "element": "int"
+                        "element": "int",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1228,7 +1233,8 @@ mod tests {
                         "type": "list",
                         "element-id": 23,
                         "element-required": true,
-                        "element": "string"
+                        "element": "string",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1239,7 +1245,8 @@ mod tests {
                         "type": "list",
                         "element-id": 26,
                         "element-required": true,
-                        "element": "binary"
+                        "element": "binary",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1504,7 +1511,8 @@ mod tests {
                         "type": "list",
                         "element-id": 15,
                         "element-required": true,
-                        "element": "int"
+                        "element": "int",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1515,7 +1523,8 @@ mod tests {
                         "type": "list",
                         "element-id": 23,
                         "element-required": true,
-                        "element": "string"
+                        "element": "string",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1526,7 +1535,8 @@ mod tests {
                         "type": "list",
                         "element-id": 26,
                         "element-required": true,
-                        "element": "binary"
+                        "element": "binary",
+                        "element-name": "element"
                     }
                 },
                 {
@@ -1676,5 +1686,29 @@ mod tests {
             ]));
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
         }
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_list() {
+        let schema_list_float_field = Field::new("col1", DataType::Float32, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+        );
+
+        let arrow_schema = {
+            let fields = vec![
+                Field::new_list("col0", schema_list_float_field.clone(), true).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "0".to_string())]),
+                ),
+            ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+
+        let converted_schema =
+            arrow_schema_to_schema(&arrow_schema).expect("Could not convert to iceberg schema");
+
+        assert_eq!(
+            converted_schema.field_by_id(1).unwrap().name,
+            String::from("col1")
+        );
     }
 }

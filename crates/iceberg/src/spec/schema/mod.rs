@@ -432,7 +432,7 @@ mod tests {
     };
     use crate::spec::schema::Schema;
     use crate::spec::values::Map as MapValue;
-    use crate::spec::{Datum, Literal};
+    use crate::spec::{Datum, Literal, LIST_FIELD_NAME};
 
     #[test]
     fn test_construct_schema() {
@@ -509,6 +509,7 @@ mod tests {
                         element_field: NestedField::list_element(
                             5,
                             Type::Primitive(PrimitiveType::String),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -565,6 +566,7 @@ mod tests {
                                 )
                                 .into(),
                             ])),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -793,6 +795,7 @@ table {
                         element_field: NestedField::list_element(
                             5,
                             Type::Primitive(PrimitiveType::String),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -889,6 +892,7 @@ table {
                                 )
                                 .into(),
                             ])),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -905,6 +909,7 @@ table {
                         NestedField::optional(14, "longitude", Primitive(PrimitiveType::Float))
                             .into(),
                     ])),
+                    LIST_FIELD_NAME.to_owned(),
                     true,
                 ),
             ),
@@ -1119,8 +1124,13 @@ table {
                 1,
                 "List",
                 Type::List(ListType::new(
-                    NestedField::list_element(2, Type::Primitive(PrimitiveType::String), true)
-                        .into(),
+                    NestedField::list_element(
+                        2,
+                        Type::Primitive(PrimitiveType::String),
+                        LIST_FIELD_NAME.to_owned(),
+                        true
+                    )
+                    .into(),
                 )),
             )
             .into()])

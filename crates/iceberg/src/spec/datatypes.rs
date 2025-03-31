@@ -633,11 +633,11 @@ impl NestedField {
     }
 
     /// Construct list type's element field.
-    pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
+    pub fn list_element(id: i32, field_type: Type, field_name: String, required: bool) -> Self {
         if required {
-            Self::required(id, LIST_FIELD_NAME, field_type)
+            Self::required(id, field_name, field_type)
         } else {
-            Self::optional(id, LIST_FIELD_NAME, field_type)
+            Self::optional(id, field_name, field_type)
         }
     }
 
@@ -733,6 +733,7 @@ pub(super) mod _serde {
             element_id: i32,
             element_required: bool,
             element: Cow<'a, Type>,
+            element_name: String,
         },
         Struct {
             r#type: String,
@@ -758,10 +759,12 @@ pub(super) mod _serde {
                     element_id,
                     element_required,
                     element,
+                    element_name,
                 } => Self::List(ListType {
                     element_field: NestedField::list_element(
                         element_id,
                         element.into_owned(),
+                        element_name,
                         element_required,
                     )
                     .into(),
@@ -798,6 +801,7 @@ pub(super) mod _serde {
                     element_id: list.element_field.id,
                     element_required: list.element_field.required,
                     element: Cow::Borrowed(&list.element_field.field_type),
+                    element_name: list.element_field.name.clone(),
                 },
                 Type::Map(map) => SerdeType::Map {
                     r#type: "map".to_string(),
@@ -1103,6 +1107,7 @@ mod tests {
             "type": "list",
             "element-id": 3,
             "element-required": true,
+            "element-name": "list1",
             "element": "string"
         }
         "#;
@@ -1113,6 +1118,7 @@ mod tests {
                 element_field: NestedField::list_element(
                     3,
                     Type::Primitive(PrimitiveType::String),
+                    "list1".to_string(),
                     true,
                 )
                 .into(),

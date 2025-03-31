@@ -2879,8 +2879,8 @@ mod tests {
     use super::*;
     use crate::avro::schema_to_avro_schema;
     use crate::spec::datatypes::{ListType, MapType, NestedField, StructType};
-    use crate::spec::Schema;
     use crate::spec::Type::Primitive;
+    use crate::spec::{Schema, LIST_FIELD_NAME};
 
     fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
         let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
@@ -3142,6 +3142,7 @@ mod tests {
                 element_field: NestedField::list_element(
                     0,
                     Type::Primitive(PrimitiveType::Int),
+                    LIST_FIELD_NAME.to_owned(),
                     true,
                 )
                 .into(),
@@ -3356,6 +3357,7 @@ mod tests {
                 element_field: NestedField::list_element(
                     0,
                     Type::Primitive(PrimitiveType::Int),
+                    LIST_FIELD_NAME.to_owned(),
                     false,
                 )
                 .into(),
@@ -3372,6 +3374,7 @@ mod tests {
                 element_field: NestedField::list_element(
                     0,
                     Type::Primitive(PrimitiveType::Int),
+                    LIST_FIELD_NAME.to_owned(),
                     true,
                 )
                 .into(),

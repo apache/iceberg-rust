@@ -102,7 +102,13 @@ async fn test_scan_all_type() {
                 16,
                 "list",
                 Type::List(ListType::new(
-                    NestedField::list_element(20, Type::Primitive(PrimitiveType::Int), true).into(),
+                    NestedField::list_element(
+                        20,
+                        Type::Primitive(PrimitiveType::Int),
+                        LIST_FIELD_NAME.to_owned(),
+                        true,
+                    )
+                    .into(),
                 )),
             )
             .into(),

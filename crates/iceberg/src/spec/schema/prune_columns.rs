@@ -296,6 +296,7 @@ mod tests {
                         element_field: NestedField::list_element(
                             5,
                             Type::Primitive(PrimitiveType::String),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -333,6 +334,7 @@ mod tests {
                         element_field: NestedField::list_element(
                             5,
                             Type::Primitive(PrimitiveType::String),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),

@@ -28,7 +28,7 @@ use serde_json::{Number, Value};
 
 use crate::spec::{
     visit_schema, ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema,
-    SchemaVisitor, StructType, Type,
+    SchemaVisitor, StructType, Type, LIST_FIELD_NAME,
 };
 use crate::{ensure_data_valid, Error, ErrorKind, Result};
 
@@ -492,6 +492,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
         let element_field = NestedField::list_element(
             element_field_id,
             item.unwrap(),
+            LIST_FIELD_NAME.to_owned(),
             !is_avro_optional(&array.items),
         )
         .into();
@@ -730,6 +731,7 @@ mod tests {
                                 .into(),
                         ])
                         .into(),
+                        LIST_FIELD_NAME.to_owned(),
                         true,
                     )
                     .into(),
@@ -790,6 +792,7 @@ mod tests {
                         element_field: NestedField::list_element(
                             101,
                             PrimitiveType::String.into(),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -839,6 +842,7 @@ mod tests {
                         element_field: NestedField::list_element(
                             101,
                             PrimitiveType::String.into(),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
@@ -916,6 +920,7 @@ mod tests {
                                 .into(),
                             ])
                             .into(),
+                            LIST_FIELD_NAME.to_owned(),
                             true,
                         )
                         .into(),
