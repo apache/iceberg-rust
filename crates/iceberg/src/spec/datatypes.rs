@@ -723,8 +723,6 @@ pub(super) mod _serde {
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
 
-    use super::LIST_FIELD_NAME;
-
     /// List type for serialization and deserialization
     #[derive(Serialize, Deserialize)]
     #[serde(untagged)]
