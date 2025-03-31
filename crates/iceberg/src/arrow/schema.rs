@@ -213,7 +213,7 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
 }
 
 /// Convert Arrow schema to Iceberg schema.
-/// 
+///
 /// Iceberg schema fields require a unique field id, and this function assumes that each field
 /// in the provided Arrow schema contains a field id in its metadata. If the metadata is missing
 /// or the field id is not set, the conversion will fail
