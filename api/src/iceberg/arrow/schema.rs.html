@@ -1678,6 +1678,10 @@
 <a href="#1678" id="1678">1678</a>
 <a href="#1679" id="1679">1679</a>
 <a href="#1680" id="1680">1680</a>
+<a href="#1681" id="1681">1681</a>
+<a href="#1682" id="1682">1682</a>
+<a href="#1683" id="1683">1683</a>
+<a href="#1684" id="1684">1684</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1893,6 +1897,10 @@
 }
 
 <span class="doccomment">/// Convert Arrow schema to Iceberg schema.
+///
+/// Iceberg schema fields require a unique field id, and this function assumes that each field
+/// in the provided Arrow schema contains a field id in its metadata. If the metadata is missing
+/// or the field id is not set, the conversion will fail
 </span><span class="kw">pub fn </span>arrow_schema_to_schema(schema: <span class="kw-2">&amp;</span>ArrowSchema) -&gt; <span class="prelude-ty">Result</span>&lt;Schema&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>visitor = ArrowSchemaConverter::new();
     visit_schema(schema, <span class="kw-2">&amp;mut </span>visitor)
