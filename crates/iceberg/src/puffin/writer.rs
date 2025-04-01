@@ -18,7 +18,6 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use futures::lock::Mutex;
 
 use crate::io::{FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
@@ -26,15 +25,11 @@ use crate::puffin::compression::CompressionCodec;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 use crate::Result;
 
-struct WriterState {
+/// Puffin writer
+pub(crate) struct PuffinWriter {
     writer: Box<dyn FileWrite>,
     is_header_written: bool,
     num_bytes_written: u64,
-}
-
-/// Puffin writer
-pub(crate) struct PuffinWriter {
-    writer_state: Mutex<WriterState>,
     written_blobs_metadata: Vec<BlobMetadata>,
     properties: HashMap<String, String>,
     footer_compression_codec: CompressionCodec,
@@ -56,14 +51,10 @@ impl PuffinWriter {
             CompressionCodec::None
         };
 
-        let initial_state = WriterState {
+        Ok(Self {
             writer: output_file.writer().await?,
             is_header_written: false,
             num_bytes_written: 0,
-        };
-
-        Ok(Self {
-            writer_state: Mutex::new(initial_state),
             written_blobs_metadata: Vec::new(),
             properties,
             footer_compression_codec,
@@ -77,14 +68,12 @@ impl PuffinWriter {
         blob: Blob,
         compression_codec: CompressionCodec,
     ) -> Result<()> {
-        let mut writer_state = self.writer_state.lock().await;
+        self.write_header_once().await?;
 
-        PuffinWriter::write_header_once(&mut writer_state).await?;
-
-        let offset = writer_state.num_bytes_written;
+        let offset = self.num_bytes_written;
         let compressed_bytes: Bytes = compression_codec.compress(blob.data)?.into();
         let length = compressed_bytes.len().try_into()?;
-        PuffinWriter::write(&mut writer_state, compressed_bytes).await?;
+        self.write(compressed_bytes).await?;
         self.written_blobs_metadata.push(BlobMetadata {
             r#type: blob.r#type,
             fields: blob.fields,
@@ -100,26 +89,25 @@ impl PuffinWriter {
     }
 
     /// Finalizes the Puffin file
-    pub(crate) async fn close(&mut self) -> Result<()> {
-        let mut writer_state = self.writer_state.lock().await;
-        PuffinWriter::write_header_once(&mut writer_state).await?;
-        self.write_footer(&mut writer_state).await?;
-        writer_state.writer.close().await?;
+    pub(crate) async fn close(mut self) -> Result<()> {
+        self.write_header_once().await?;
+        self.write_footer().await?;
+        self.writer.close().await?;
         Ok(())
     }
 
-    async fn write(writer_state: &mut WriterState, bytes: Bytes) -> Result<()> {
+    async fn write(&mut self, bytes: Bytes) -> Result<()> {
         let length = bytes.len();
-        writer_state.writer.write(bytes).await?;
-        writer_state.num_bytes_written += length as u64;
+        self.writer.write(bytes).await?;
+        self.num_bytes_written += length as u64;
         Ok(())
     }
 
-    async fn write_header_once(writer_state: &mut WriterState) -> Result<()> {
-        if !writer_state.is_header_written {
+    async fn write_header_once(&mut self) -> Result<()> {
+        if !self.is_header_written {
             let bytes = Bytes::copy_from_slice(&FileMetadata::MAGIC);
-            PuffinWriter::write(writer_state, bytes).await?;
-            writer_state.is_header_written = true;
+            self.write(bytes).await?;
+            self.is_header_written = true;
         }
         Ok(())
     }
@@ -143,7 +131,7 @@ impl PuffinWriter {
         result
     }
 
-    async fn write_footer(&self, writer_state: &mut WriterState) -> Result<()> {
+    async fn write_footer(&mut self) -> Result<()> {
         let mut footer_payload_bytes = self.footer_payload_bytes()?;
         let footer_payload_bytes_length = u32::to_le_bytes(footer_payload_bytes.len().try_into()?);
 
@@ -154,7 +142,7 @@ impl PuffinWriter {
         footer_bytes.extend(self.flags_bytes());
         footer_bytes.extend(&FileMetadata::MAGIC);
 
-        PuffinWriter::write(writer_state, footer_bytes.into()).await
+        self.write(footer_bytes.into()).await
     }
 }
 
@@ -177,50 +165,6 @@ mod tests {
     };
     use crate::puffin::writer::PuffinWriter;
     use crate::Result;
-
-    #[tokio::test]
-    async fn test_throws_error_if_attempt_to_add_blob_after_closing() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let file_name = "temp_puffin.bin";
-        let full_path = format!("{}/{}", temp_dir.path().to_str().unwrap(), file_name);
-
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let output_file = file_io.new_output(full_path).unwrap();
-        let mut writer = PuffinWriter::new(&output_file, HashMap::new(), false)
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-
-        assert_eq!(
-            writer
-                .add(blob_0(), CompressionCodec::None)
-                .await
-                .unwrap_err()
-                .to_string(),
-            "Unexpected => Failure in doing io operation, source: Unexpected (persistent) at  => writer has been closed or aborted",
-        )
-    }
-
-    #[tokio::test]
-    async fn test_throws_error_if_attempt_to_close_multiple_times() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let file_name = "temp_puffin.bin";
-        let full_path = format!("{}/{}", temp_dir.path().to_str().unwrap(), file_name);
-
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
-        let output_file = file_io.new_output(full_path).unwrap();
-        let mut writer = PuffinWriter::new(&output_file, HashMap::new(), false)
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-
-        assert_eq!(
-            writer.close().await.unwrap_err().to_string(),
-            "Unexpected => Failure in doing io operation, source: Unexpected (persistent) at  => writer has been closed or aborted",
-        )
-    }
 
     async fn write_puffin_file(
         temp_dir: &TempDir,
