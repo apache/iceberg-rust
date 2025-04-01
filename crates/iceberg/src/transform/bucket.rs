@@ -239,8 +239,12 @@ impl TransformFunction for Bucket {
             (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => self.bucket_time(*v),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
-            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => self.bucket_timestamp(*v),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                self.bucket_timestamp(*v / 1000)
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                self.bucket_timestamp(*v / 1000)
+            }
             (PrimitiveType::String, PrimitiveLiteral::String(v)) => self.bucket_str(v.as_str()),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) => {
                 self.bucket_bytes(uuid::Uuid::from_u128(*v).as_ref())
@@ -926,7 +930,7 @@ mod test {
                 .transform_literal(&Datum::timestamp_nanos(ns_value))
                 .unwrap()
                 .unwrap(),
-            Datum::int(79)
+            Datum::int(7)
         );
     }
 
@@ -939,7 +943,7 @@ mod test {
                 .transform_literal(&Datum::timestamptz_nanos(ns_value))
                 .unwrap()
                 .unwrap(),
-            Datum::int(79)
+            Datum::int(7)
         );
     }
 
