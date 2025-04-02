@@ -19,32 +19,36 @@
 
 use std::sync::Arc;
 
+use futures::TryFutureExt;
+
 use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
-use crate::{Error, ErrorKind, Result, TableIdent};
+use crate::{Catalog, Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
-pub struct TableBuilder {
+pub struct TableBuilder<'a> {
     file_io: Option<FileIO>,
     metadata_location: Option<String>,
     metadata: Option<TableMetadataRef>,
     identifier: Option<TableIdent>,
+    catalog: Option<&'a dyn Catalog>,
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
 }
 
-impl TableBuilder {
+impl<'a> TableBuilder<'a> {
     pub(crate) fn new() -> Self {
         Self {
             file_io: None,
             metadata_location: None,
             metadata: None,
             identifier: None,
+            catalog: None,
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
@@ -75,6 +79,12 @@ impl TableBuilder {
         self
     }
 
+    /// required - passes in the reference to the Catalog to use for the Table
+    pub fn catalog(mut self, catalog: &'a dyn Catalog) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
     /// specifies if the Table is readonly or not (default not)
     pub fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
@@ -102,6 +112,7 @@ impl TableBuilder {
             metadata_location,
             metadata,
             identifier,
+            catalog,
             readonly,
             disable_cache,
             cache_size_bytes,
@@ -128,6 +139,13 @@ impl TableBuilder {
             ));
         };
 
+        let Some(catalog) = catalog else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Catalog must be provided with TableBuilder.catalog()",
+            ));
+        };
+
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
@@ -144,6 +162,7 @@ impl TableBuilder {
             metadata_location,
             metadata,
             identifier,
+            catalog,
             readonly,
             object_cache,
         })
@@ -152,18 +171,19 @@ impl TableBuilder {
 
 /// Table represents a table in the catalog.
 #[derive(Debug, Clone)]
-pub struct Table {
+pub struct Table<'a> {
     file_io: FileIO,
     metadata_location: Option<String>,
     metadata: TableMetadataRef,
     identifier: TableIdent,
+    catalog: &'a dyn Catalog,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
 }
 
-impl Table {
+impl <'a> Table<'a> {
     /// Returns a TableBuilder to build a table
-    pub fn builder() -> TableBuilder {
+    pub fn builder<'b>() -> TableBuilder<'a> {
         TableBuilder::new()
     }
 
@@ -215,6 +235,18 @@ impl Table {
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
         ArrowReaderBuilder::new(self.file_io.clone())
+    }
+
+    /// Returns latest table metadata and updates current table metadata
+    pub async fn refresh(&mut self) -> Result<TableMetadata> {
+        let table = self.catalog.load_table(self.identifier()).await.unwrap();
+        let metadata: TableMetadata = (*table.metadata).clone();
+
+        self.metadata = Arc::new(metadata.clone());
+        self.file_io = table.file_io.clone();
+        self.metadata_location = table.metadata_location.clone();
+
+        Ok(metadata)
     }
 }
 
