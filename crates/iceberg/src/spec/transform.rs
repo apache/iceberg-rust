@@ -31,6 +31,7 @@ use crate::expr::{
     SetExpression, UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::spec::Literal;
 use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
 
@@ -134,6 +135,27 @@ pub enum Transform {
 }
 
 impl Transform {
+    /// Returns a human-readable String representation of a transformed value.
+    pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
+        if let Some(value) = value {
+            if let Some(value) = value.as_primitive_literal() {
+                let field_type = field_type.as_primitive_type().unwrap();
+                let datum = Datum::new(field_type.clone(), value);
+                match self {
+                    Self::Identity => datum.to_string(),
+                    Self::Void => "null".to_string(),
+                    _ => {
+                        todo!()
+                    }
+                }
+            } else {
+                "null".to_string()
+            }
+        } else {
+            "null".to_string()
+        }
+    }
+
     /// Get the return type of transform given the input type.
     /// Returns `None` if it can't be transformed.
     pub fn result_type(&self, input_type: &Type) -> Result<Type> {

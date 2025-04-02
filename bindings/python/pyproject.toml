@@ -20,7 +20,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "pyiceberg_core"
+name = "pyiceberg-core"
 version = "0.4.0"
 readme = "project-description.md"
 requires-python = "~=3.9"

@@ -30,14 +30,16 @@ use crate::Result;
 pub struct DataFileWriterBuilder<B: FileWriterBuilder> {
     inner: B,
     partition_value: Option<Struct>,
+    partition_spec_id: i32,
 }
 
 impl<B: FileWriterBuilder> DataFileWriterBuilder<B> {
     /// Create a new `DataFileWriterBuilder` using a `FileWriterBuilder`.
-    pub fn new(inner: B, partition_value: Option<Struct>) -> Self {
+    pub fn new(inner: B, partition_value: Option<Struct>, partition_spec_id: i32) -> Self {
         Self {
             inner,
             partition_value,
+            partition_spec_id,
         }
     }
 }
@@ -50,6 +52,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
         Ok(DataFileWriter {
             inner_writer: Some(self.inner.clone().build().await?),
             partition_value: self.partition_value.unwrap_or(Struct::empty()),
+            partition_spec_id: self.partition_spec_id,
         })
     }
 }
@@ -59,6 +62,7 @@ impl<B: FileWriterBuilder> IcebergWriterBuilder for DataFileWriterBuilder<B> {
 pub struct DataFileWriter<B: FileWriterBuilder> {
     inner_writer: Option<B::R>,
     partition_value: Struct,
+    partition_spec_id: i32,
 }
 
 #[async_trait::async_trait]
@@ -76,6 +80,7 @@ impl<B: FileWriterBuilder> IcebergWriter for DataFileWriter<B> {
             .map(|mut res| {
                 res.content(DataContentType::Data);
                 res.partition(self.partition_value.clone());
+                res.partition_spec_id(self.partition_spec_id);
                 res.build().expect("Guaranteed to be valid")
             })
             .collect_vec())
@@ -98,11 +103,13 @@ impl<B: FileWriterBuilder> CurrentFileStatus for DataFileWriter<B> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::{DataType, Field};
     use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -142,11 +149,20 @@ mod test {
             file_name_gen,
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(pw, None).build().await.unwrap();
+        let mut data_file_writer = DataFileWriterBuilder::new(pw, None, 0)
+            .build()
+            .await
+            .unwrap();
 
         let arrow_schema = arrow_schema::Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-            Field::new("bar", DataType::Utf8, false),
+            Field::new("foo", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                3.to_string(),
+            )])),
+            Field::new("bar", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                4.to_string(),
+            )])),
         ]);
         let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
@@ -211,13 +227,19 @@ mod test {
         );
 
         let mut data_file_writer =
-            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()))
+            DataFileWriterBuilder::new(parquet_writer_builder, Some(partition_value.clone()), 0)
                 .build()
                 .await?;
 
         let arrow_schema = arrow_schema::Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                5.to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                6.to_string(),
+            )])),
         ]);
         let batch = RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
