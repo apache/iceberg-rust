@@ -76,16 +76,6 @@ pub struct Summary {
     pub additional_properties: HashMap<String, String>,
 }
 
-impl Summary {
-    /// Create new snapshot summary
-    pub fn new(operation: Operation) -> Self {
-        Self {
-            operation,
-            additional_properties: HashMap::new(),
-        }
-    }
-}
-
 impl Default for Operation {
     fn default() -> Operation {
         Self::Append

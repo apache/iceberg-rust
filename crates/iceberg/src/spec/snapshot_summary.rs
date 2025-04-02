@@ -16,11 +16,10 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use itertools::Itertools;
 
-use super::{DataContentType, DataFile, PartitionSpecRef, Snapshot, SnapshotRef, TableMetadata};
+use super::{DataContentType, DataFile, PartitionSpecRef};
 use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
 use crate::{Error, ErrorKind, Result};
 
@@ -515,22 +514,6 @@ fn update_totals(
     summary
         .additional_properties
         .insert(total_property.to_string(), new_total.to_string());
-}
-
-// Returns the ancestors of the current snapshot
-#[allow(dead_code)]
-fn ancestors_of(current_snapshot: Snapshot, table_metadata: TableMetadata) -> Vec<Arc<Snapshot>> {
-    let mut ancestors = Vec::new();
-    let mut current: Option<SnapshotRef> = Some(Arc::new(current_snapshot));
-
-    while let Some(snapshot) = current {
-        ancestors.push(snapshot.clone());
-        current = snapshot
-            .parent_snapshot_id()
-            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id).cloned());
-    }
-
-    ancestors
 }
 
 #[cfg(test)]
