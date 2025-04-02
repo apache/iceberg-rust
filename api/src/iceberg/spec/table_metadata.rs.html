@@ -2885,6 +2885,11 @@
 <a href="#2885" id="2885">2885</a>
 <a href="#2886" id="2886">2886</a>
 <a href="#2887" id="2887">2887</a>
+<a href="#2888" id="2888">2888</a>
+<a href="#2889" id="2889">2889</a>
+<a href="#2890" id="2890">2890</a>
+<a href="#2891" id="2891">2891</a>
+<a href="#2892" id="2892">2892</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2963,6 +2968,11 @@
 </span><span class="kw">pub const </span>PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: <span class="kw-2">&amp;</span>str = <span class="string">"write.metadata.previous-versions-max"</span>;
 <span class="doccomment">/// Default value for max number of previous versions to keep.
 </span><span class="kw">pub const </span>PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = <span class="number">100</span>;
+
+<span class="doccomment">/// Property key for max number of partitions to keep summary stats for.
+</span><span class="kw">pub const </span>PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: <span class="kw-2">&amp;</span>str = <span class="string">"write.summary.partition-limit"</span>;
+<span class="doccomment">/// Default value for the max number of partitions to keep summary stats for.
+</span><span class="kw">pub const </span>PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64 = <span class="number">0</span>;
 
 <span class="doccomment">/// Reserved Iceberg table properties list.
 ///

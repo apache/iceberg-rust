@@ -983,6 +983,13 @@
 <a href="#983" id="983">983</a>
 <a href="#984" id="984">984</a>
 <a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1033,8 +1040,10 @@
 <span class="kw">const </span>CHANGED_PARTITION_COUNT_PROP: <span class="kw-2">&amp;</span>str = <span class="string">"changed-partition-count"</span>;
 <span class="kw">const </span>CHANGED_PARTITION_PREFIX: <span class="kw-2">&amp;</span>str = <span class="string">"partitions."</span>;
 
-<span class="attr">#[derive(Default)]
-#[allow(dead_code)]
+<span class="doccomment">/// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
+/// It gathers metrics about added or removed data files and manifests, and tracks
+/// partition-specific updates.
+</span><span class="attr">#[derive(Default)]
 </span><span class="kw">pub struct </span>SnapshotSummaryCollector {
     metrics: UpdateMetrics,
     partition_metrics: HashMap&lt;String, UpdateMetrics&gt;,
@@ -1043,18 +1052,20 @@
     trust_partition_metrics: bool,
 }
 
-<span class="attr">#[allow(dead_code)]
-</span><span class="kw">impl </span>SnapshotSummaryCollector {
-    <span class="comment">// Set properties
+<span class="kw">impl </span>SnapshotSummaryCollector {
+    <span class="doccomment">/// Set properties for snapshot summary
     </span><span class="kw">pub fn </span>set(<span class="kw-2">&amp;mut </span><span class="self">self</span>, key: <span class="kw-2">&amp;</span>str, value: <span class="kw-2">&amp;</span>str) {
         <span class="self">self</span>.properties.insert(key.to_string(), value.to_string());
     }
 
-    <span class="kw">pub fn </span>set_partition_summary_limit(<span class="kw-2">&amp;mut </span><span class="self">self</span>, limit: u64) {
+    <span class="doccomment">/// Sets the limit for including partition summaries. Summaries are not
+    /// included if the number of partitions is exceeded.
+    </span><span class="kw">pub fn </span>set_partition_summary_limit(<span class="kw-2">&amp;mut </span><span class="self">self</span>, limit: u64) {
         <span class="self">self</span>.max_changed_partitions_for_summaries = limit;
     }
 
-    <span class="kw">pub fn </span>add_file(
+    <span class="doccomment">/// Adds a data file to the summary collector
+    </span><span class="kw">pub fn </span>add_file(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         data_file: <span class="kw-2">&amp;</span>DataFile,
         schema: SchemaRef,
@@ -1066,7 +1077,8 @@
         }
     }
 
-    <span class="kw">pub fn </span>remove_file(
+    <span class="doccomment">/// Removes a data file from the summary collector
+    </span><span class="kw">pub fn </span>remove_file(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         data_file: <span class="kw-2">&amp;</span>DataFile,
         schema: SchemaRef,
@@ -1078,13 +1090,15 @@
         }
     }
 
-    <span class="kw">pub fn </span>add_manifest(<span class="kw-2">&amp;mut </span><span class="self">self</span>, manifest: <span class="kw-2">&amp;</span>ManifestFile) {
+    <span class="doccomment">/// Adds a manifest to the summary collector
+    </span><span class="kw">pub fn </span>add_manifest(<span class="kw-2">&amp;mut </span><span class="self">self</span>, manifest: <span class="kw-2">&amp;</span>ManifestFile) {
         <span class="self">self</span>.trust_partition_metrics = <span class="bool-val">false</span>;
         <span class="self">self</span>.partition_metrics.clear();
         <span class="self">self</span>.metrics.add_manifest(manifest);
     }
 
-    <span class="kw">pub fn </span>update_partition_metrics(
+    <span class="doccomment">/// Updates partition-specific metrics for a data file.
+    </span><span class="kw">pub fn </span>update_partition_metrics(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         schema: SchemaRef,
         partition_spec: PartitionSpecRef,
@@ -1101,7 +1115,8 @@
         }
     }
 
-    <span class="kw">pub fn </span>merge(<span class="kw-2">&amp;mut </span><span class="self">self</span>, summary: SnapshotSummaryCollector) {
+    <span class="doccomment">/// Merges another `SnapshotSummaryCollector` into the current one
+    </span><span class="kw">pub fn </span>merge(<span class="kw-2">&amp;mut </span><span class="self">self</span>, summary: SnapshotSummaryCollector) {
         <span class="self">self</span>.metrics.merge(<span class="kw-2">&amp;</span>summary.metrics);
         <span class="self">self</span>.properties.extend(summary.properties);
 
@@ -1118,7 +1133,8 @@
         }
     }
 
-    <span class="kw">pub fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, String&gt; {
+    <span class="doccomment">/// Builds final map of summaries
+    </span><span class="kw">pub fn </span>build(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, String&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>properties = <span class="self">self</span>.metrics.to_map();
         <span class="kw">let </span>changed_partitions_count = <span class="self">self</span>.partition_metrics.len() <span class="kw">as </span>u64;
         set_if_positive(
@@ -1492,9 +1508,7 @@
         .insert(total_property.to_string(), new_total.to_string());
 }
 
-<span class="comment">// TODO: ancestors of function
-
-</span><span class="attr">#[cfg(test)]
+<span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::collections::HashMap;
     <span class="kw">use </span>std::sync::Arc;
