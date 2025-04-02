@@ -889,6 +889,88 @@
 <a href="#889" id="889">889</a>
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -1058,6 +1140,16 @@
                 .downcast_ref::&lt;arrow_array::TimestampMicrosecondArray&gt;()
                 .unwrap()
                 .unary(|v| <span class="self">self</span>.bucket_timestamp(v)),
+            DataType::Time64(TimeUnit::Nanosecond) =&gt; input
+                .as_any()
+                .downcast_ref::&lt;arrow_array::Time64NanosecondArray&gt;()
+                .unwrap()
+                .unary(|v| <span class="self">self</span>.bucket_time(v / <span class="number">1000</span>)),
+            DataType::Timestamp(TimeUnit::Nanosecond, <span class="kw">_</span>) =&gt; input
+                .as_any()
+                .downcast_ref::&lt;arrow_array::TimestampNanosecondArray&gt;()
+                .unwrap()
+                .unary(|v| <span class="self">self</span>.bucket_timestamp(v / <span class="number">1000</span>)),
             DataType::Utf8 =&gt; arrow_array::Int32Array::from_iter(
                 input
                     .as_any()
@@ -1119,6 +1211,13 @@
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) =&gt; <span class="self">self</span>.bucket_date(<span class="kw-2">*</span>v),
             (PrimitiveType::Time, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_time(<span class="kw-2">*</span>v),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v),
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) =&gt; <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v),
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) =&gt; {
+                <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v / <span class="number">1000</span>)
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) =&gt; {
+                <span class="self">self</span>.bucket_timestamp(<span class="kw-2">*</span>v / <span class="number">1000</span>)
+            }
             (PrimitiveType::String, PrimitiveLiteral::String(v)) =&gt; <span class="self">self</span>.bucket_str(v.as_str()),
             (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(v)) =&gt; {
                 <span class="self">self</span>.bucket_bytes(uuid::Uuid::from_u128(<span class="kw-2">*</span>v).as_ref())
@@ -1141,6 +1240,9 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>test {
+    <span class="kw">use </span>std::sync::Arc;
+
+    <span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray};
     <span class="kw">use </span>chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
     <span class="kw">use </span><span class="kw">super</span>::Bucket;
@@ -1778,6 +1880,68 @@
                 .unwrap(),
             Datum::int(<span class="number">32</span>)
         );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_timestamptz_literal() {
+        <span class="kw">let </span>bucket = Bucket::new(<span class="number">100</span>);
+        <span class="macro">assert_eq!</span>(
+            bucket
+                .transform_literal(<span class="kw-2">&amp;</span>Datum::timestamptz_micros(<span class="number">1510871468000000</span>))
+                .unwrap()
+                .unwrap(),
+            Datum::int(<span class="number">7</span>)
+        );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_timestamp_ns_literal() {
+        <span class="kw">let </span>bucket = Bucket::new(<span class="number">100</span>);
+        <span class="kw">let </span>ns_value = <span class="number">1510871468000000i64 </span>* <span class="number">1000</span>;
+        <span class="macro">assert_eq!</span>(
+            bucket
+                .transform_literal(<span class="kw-2">&amp;</span>Datum::timestamp_nanos(ns_value))
+                .unwrap()
+                .unwrap(),
+            Datum::int(<span class="number">7</span>)
+        );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_timestamptz_ns_literal() {
+        <span class="kw">let </span>bucket = Bucket::new(<span class="number">100</span>);
+        <span class="kw">let </span>ns_value = <span class="number">1510871468000000i64 </span>* <span class="number">1000</span>;
+        <span class="macro">assert_eq!</span>(
+            bucket
+                .transform_literal(<span class="kw-2">&amp;</span>Datum::timestamptz_nanos(ns_value))
+                .unwrap()
+                .unwrap(),
+            Datum::int(<span class="number">7</span>)
+        );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_transform_timestamp_nanos_and_micros_array_equivalence() {
+        <span class="kw">let </span>bucket = Bucket::new(<span class="number">100</span>);
+        <span class="kw">let </span>micros_value = <span class="number">1510871468000000</span>;
+        <span class="kw">let </span>nanos_value = micros_value * <span class="number">1000</span>;
+
+        <span class="kw">let </span>micro_array = TimestampMicrosecondArray::from_iter_values(<span class="macro">vec!</span>[micros_value]);
+        <span class="kw">let </span>nano_array = TimestampNanosecondArray::from_iter_values(<span class="macro">vec!</span>[nanos_value]);
+
+        <span class="kw">let </span>transformed_micro: ArrayRef = bucket.transform(Arc::new(micro_array)).unwrap();
+        <span class="kw">let </span>transformed_nano: ArrayRef = bucket.transform(Arc::new(nano_array)).unwrap();
+
+        <span class="kw">let </span>micro_result = transformed_micro
+            .as_any()
+            .downcast_ref::&lt;Int32Array&gt;()
+            .unwrap();
+        <span class="kw">let </span>nano_result = transformed_nano
+            .as_any()
+            .downcast_ref::&lt;Int32Array&gt;()
+            .unwrap();
+
+        <span class="macro">assert_eq!</span>(micro_result.value(<span class="number">0</span>), nano_result.value(<span class="number">0</span>));
     }
 }
 </code></pre></div></section></main></body></html>
