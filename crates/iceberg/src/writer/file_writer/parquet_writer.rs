@@ -461,7 +461,7 @@ impl ParquetWriter {
     }
 
     #[allow(dead_code)]
-    fn partition_value_from_bounds (
+    fn partition_value_from_bounds(
         table_spec: Arc<PartitionSpec>,
         lower_bounds: &HashMap<i32, Datum>,
         upper_bounds: &HashMap<i32, Datum>,
