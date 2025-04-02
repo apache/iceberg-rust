@@ -33,9 +33,8 @@ use uuid::Uuid;
 use super::snapshot::SnapshotReference;
 pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
 use super::{
-    PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef, Snapshot, SnapshotRef,
-    SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    DEFAULT_PARTITION_SPEC_ID,
+    PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef, SnapshotRef, SnapshotRetention,
+    SortOrder, SortOrderRef, StatisticsFile, StructType, DEFAULT_PARTITION_SPEC_ID,
 };
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::{Error, ErrorKind};
@@ -398,33 +397,6 @@ impl TableMetadata {
         self.partition_statistics.get(&snapshot_id)
     }
 
-    /// Append snapshot to table
-    #[deprecated(
-        since = "0.4.0",
-        note = "please use `TableMetadataBuilder.set_branch_snapshot` instead"
-    )]
-    pub fn append_snapshot(&mut self, snapshot: Snapshot) {
-        self.last_updated_ms = snapshot.timestamp_ms();
-        self.last_sequence_number = snapshot.sequence_number();
-
-        self.refs
-            .entry(MAIN_BRANCH.to_string())
-            .and_modify(|s| {
-                s.snapshot_id = snapshot.snapshot_id();
-            })
-            .or_insert_with(|| {
-                SnapshotReference::new(snapshot.snapshot_id(), SnapshotRetention::Branch {
-                    min_snapshots_to_keep: None,
-                    max_snapshot_age_ms: None,
-                    max_ref_age_ms: None,
-                })
-            });
-
-        self.snapshot_log.push(snapshot.log());
-        self.snapshots
-            .insert(snapshot.snapshot_id(), Arc::new(snapshot));
-    }
-
     fn construct_refs(&mut self) {
         if let Some(current_snapshot_id) = self.current_snapshot_id {
             if !self.refs.contains_key(MAIN_BRANCH) {
@@ -725,12 +697,14 @@ pub(super) mod _serde {
         pub location: String,
         pub last_updated_ms: i64,
         pub last_column_id: i32,
-        pub schema: SchemaV1,
+        /// `schema` is optional to prioritize `schemas` and `current-schema-id`, allowing liberal reading of V1 metadata.
+        pub schema: Option<SchemaV1>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schemas: Option<Vec<SchemaV1>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub current_schema_id: Option<i32>,
-        pub partition_spec: Vec<PartitionField>,
+        /// `partition_spec` is optional to prioritize `partition_specs`, aligning with liberal reading of potentially invalid V1 metadata.
+        pub partition_spec: Option<Vec<PartitionField>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub partition_specs: Option<Vec<PartitionSpec>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -924,60 +898,80 @@ pub(super) mod _serde {
                 value.current_snapshot_id
             };
 
-            let schemas = value
-                .schemas
-                .map(|schemas| {
-                    Ok::<_, Error>(HashMap::from_iter(
-                        schemas
+            let (schemas, current_schema_id, current_schema) =
+                if let (Some(schemas_vec), Some(schema_id)) =
+                    (&value.schemas, value.current_schema_id)
+                {
+                    // Option 1: Use 'schemas' + 'current_schema_id'
+                    let schema_map = HashMap::from_iter(
+                        schemas_vec
+                            .clone()
                             .into_iter()
-                            .enumerate()
-                            .map(|(i, schema)| {
-                                Ok((
-                                    schema.schema_id.unwrap_or(i as i32),
-                                    Arc::new(schema.try_into()?),
-                                ))
+                            .map(|schema| {
+                                let schema: Schema = schema.try_into()?;
+                                Ok((schema.schema_id(), Arc::new(schema)))
                             })
-                            .collect::<Result<Vec<_>, Error>>()?
-                            .into_iter(),
-                    ))
-                })
-                .or_else(|| {
-                    Some(value.schema.try_into().map(|schema: Schema| {
-                        HashMap::from_iter(vec![(schema.schema_id(), Arc::new(schema))])
-                    }))
-                })
-                .transpose()?
-                .unwrap_or_default();
-            let current_schema_id = value
-                .current_schema_id
-                .unwrap_or_else(|| schemas.keys().copied().max().unwrap_or_default());
-            let current_schema = schemas
-                .get(&current_schema_id)
-                .ok_or_else(|| {
-                    Error::new(
+                            .collect::<Result<Vec<_>, Error>>()?,
+                    );
+
+                    let schema = schema_map
+                        .get(&schema_id)
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "No schema exists with the current schema id {}.",
+                                    schema_id
+                                ),
+                            )
+                        })?
+                        .clone();
+                    (schema_map, schema_id, schema)
+                } else if let Some(schema) = value.schema {
+                    // Option 2: Fall back to `schema`
+                    let schema: Schema = schema.try_into()?;
+                    let schema_id = schema.schema_id();
+                    let schema_arc = Arc::new(schema);
+                    let schema_map = HashMap::from_iter(vec![(schema_id, schema_arc.clone())]);
+                    (schema_map, schema_id, schema_arc)
+                } else {
+                    // Option 3: No valid schema configuration found
+                    return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!(
-                            "No schema exists with the current schema id {}.",
-                            current_schema_id
-                        ),
-                    )
-                })?
-                .clone();
+                        "No valid schema configuration found in table metadata",
+                    ));
+                };
 
-            let partition_specs = match value.partition_specs {
-                Some(partition_specs) => partition_specs,
-                None => vec![PartitionSpec::builder(current_schema.clone())
+            // Prioritize 'partition_specs' over 'partition_spec'
+            let partition_specs = if let Some(specs_vec) = value.partition_specs {
+                // Option 1: Use 'partition_specs'
+                specs_vec
+                    .into_iter()
+                    .map(|x| (x.spec_id(), Arc::new(x)))
+                    .collect::<HashMap<_, _>>()
+            } else if let Some(partition_spec) = value.partition_spec {
+                // Option 2: Fall back to 'partition_spec'
+                let spec = PartitionSpec::builder(current_schema.clone())
                     .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(value.partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?],
-            }
-            .into_iter()
-            .map(|x| (x.spec_id(), Arc::new(x)))
-            .collect::<HashMap<_, _>>();
+                    .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
+                    .build()?;
 
+                HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
+            } else {
+                // Option 3: Create empty partition spec
+                let spec = PartitionSpec::builder(current_schema.clone())
+                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
+                    .build()?;
+
+                HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
+            };
+
+            // Get the default_spec_id, prioritizing the explicit value if provided
             let default_spec_id = value
                 .default_spec_id
                 .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default());
+
+            // Get the default spec
             let default_spec: PartitionSpecRef = partition_specs
                 .get(&default_spec_id)
                 .map(|x| Arc::unwrap_or_clone(x.clone()))
@@ -1129,16 +1123,17 @@ pub(super) mod _serde {
                 location: v.location,
                 last_updated_ms: v.last_updated_ms,
                 last_column_id: v.last_column_id,
-                schema: v
-                    .schemas
-                    .get(&v.current_schema_id)
-                    .ok_or(Error::new(
-                        ErrorKind::Unexpected,
-                        "current_schema_id not found in schemas",
-                    ))?
-                    .as_ref()
-                    .clone()
-                    .into(),
+                schema: Some(
+                    v.schemas
+                        .get(&v.current_schema_id)
+                        .ok_or(Error::new(
+                            ErrorKind::Unexpected,
+                            "current_schema_id not found in schemas",
+                        ))?
+                        .as_ref()
+                        .clone()
+                        .into(),
+                ),
                 schemas: Some(
                     v.schemas
                         .into_values()
@@ -1150,7 +1145,7 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 current_schema_id: Some(v.current_schema_id),
-                partition_spec: v.default_spec.fields().to_vec(),
+                partition_spec: Some(v.default_spec.fields().to_vec()),
                 partition_specs: Some(
                     v.partition_specs
                         .into_values()
@@ -2611,6 +2606,104 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_compat() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Compat.json").unwrap();
+
+        // Deserialize the JSON to verify it works
+        let desered_type: TableMetadata = serde_json::from_str(&metadata)
+            .expect("Failed to deserialize TableMetadataV1Compat.json");
+
+        // Verify some key fields match
+        assert_eq!(desered_type.format_version(), FormatVersion::V1);
+        assert_eq!(
+            desered_type.uuid(),
+            Uuid::parse_str("3276010d-7b1d-488c-98d8-9025fc4fde6b").unwrap()
+        );
+        assert_eq!(
+            desered_type.location(),
+            "s3://bucket/warehouse/iceberg/glue.db/table_name"
+        );
+        assert_eq!(desered_type.last_updated_ms(), 1727773114005);
+        assert_eq!(desered_type.current_schema_id(), 0);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_schemas_without_current_id() {
+        let metadata = fs::read_to_string(
+            "testdata/table_metadata/TableMetadataV1SchemasWithoutCurrentId.json",
+        )
+        .unwrap();
+
+        // Deserialize the JSON - this should succeed by using the 'schema' field instead of 'schemas'
+        let desered_type: TableMetadata = serde_json::from_str(&metadata)
+            .expect("Failed to deserialize TableMetadataV1SchemasWithoutCurrentId.json");
+
+        // Verify it used the 'schema' field
+        assert_eq!(desered_type.format_version(), FormatVersion::V1);
+        assert_eq!(
+            desered_type.uuid(),
+            Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap()
+        );
+
+        // Get the schema and verify it has the expected fields
+        let schema = desered_type.current_schema();
+        assert_eq!(schema.as_struct().fields().len(), 3);
+        assert_eq!(schema.as_struct().fields()[0].name, "x");
+        assert_eq!(schema.as_struct().fields()[1].name, "y");
+        assert_eq!(schema.as_struct().fields()[2].name, "z");
+    }
+
+    #[test]
+    fn test_table_metadata_v1_no_valid_schema() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1NoValidSchema.json")
+                .unwrap();
+
+        // Deserialize the JSON - this should fail because neither schemas + current_schema_id nor schema is valid
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(&metadata);
+
+        assert!(desered.is_err());
+        let error_message = desered.unwrap_err().to_string();
+        assert!(
+            error_message.contains("No valid schema configuration found"),
+            "Expected error about no valid schema configuration, got: {}",
+            error_message
+        );
+    }
+
+    #[test]
+    fn test_table_metadata_v1_partition_specs_without_default_id() {
+        let metadata = fs::read_to_string(
+            "testdata/table_metadata/TableMetadataV1PartitionSpecsWithoutDefaultId.json",
+        )
+        .unwrap();
+
+        // Deserialize the JSON - this should succeed by inferring default_spec_id as the max spec ID
+        let desered_type: TableMetadata = serde_json::from_str(&metadata)
+            .expect("Failed to deserialize TableMetadataV1PartitionSpecsWithoutDefaultId.json");
+
+        // Verify basic metadata
+        assert_eq!(desered_type.format_version(), FormatVersion::V1);
+        assert_eq!(
+            desered_type.uuid(),
+            Uuid::parse_str("d20125c8-7284-442c-9aea-15fee620737c").unwrap()
+        );
+
+        // Verify partition specs
+        assert_eq!(desered_type.default_partition_spec_id(), 2); // Should pick the largest spec ID (2)
+        assert_eq!(desered_type.partition_specs.len(), 2);
+
+        // Verify the default spec has the expected fields
+        let default_spec = &desered_type.default_spec;
+        assert_eq!(default_spec.spec_id(), 2);
+        assert_eq!(default_spec.fields().len(), 1);
+        assert_eq!(default_spec.fields()[0].name, "y");
+        assert_eq!(default_spec.fields()[0].transform, Transform::Identity);
+        assert_eq!(default_spec.fields()[0].source_id, 2);
     }
 
     #[test]
