@@ -217,6 +217,7 @@ impl Snapshot {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn log(&self) -> SnapshotLog {
         SnapshotLog {
             timestamp_ms: self.timestamp_ms,
