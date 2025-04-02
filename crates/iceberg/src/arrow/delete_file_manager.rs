@@ -362,7 +362,6 @@ impl CachingDeleteFileManager {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            let schema = batch.schema();
             let columns = batch.columns();
 
             let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
