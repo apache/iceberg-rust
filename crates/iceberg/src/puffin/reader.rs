@@ -23,14 +23,14 @@ use crate::puffin::metadata::{BlobMetadata, FileMetadata};
 use crate::Result;
 
 /// Puffin reader
-pub(crate) struct PuffinReader {
+pub struct PuffinReader {
     input_file: InputFile,
     file_metadata: OnceCell<FileMetadata>,
 }
 
 impl PuffinReader {
     /// Returns a new Puffin reader
-    pub(crate) fn new(input_file: InputFile) -> Self {
+    pub fn new(input_file: InputFile) -> Self {
         Self {
             input_file,
             file_metadata: OnceCell::new(),
@@ -38,14 +38,14 @@ impl PuffinReader {
     }
 
     /// Returns file metadata
-    pub(crate) async fn file_metadata(&self) -> Result<&FileMetadata> {
+    pub async fn file_metadata(&self) -> Result<&FileMetadata> {
         self.file_metadata
             .get_or_try_init(|| FileMetadata::read(&self.input_file))
             .await
     }
 
     /// Returns blob
-    pub(crate) async fn blob(&self, blob_metadata: &BlobMetadata) -> Result<Blob> {
+    pub async fn blob(&self, blob_metadata: &BlobMetadata) -> Result<Blob> {
         let file_read = self.input_file.reader().await?;
         let start = blob_metadata.offset;
         let end = start + blob_metadata.length;

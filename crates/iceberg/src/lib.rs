@@ -88,4 +88,4 @@ mod utils;
 pub mod writer;
 
 mod delete_vector;
-mod puffin;
+pub mod puffin;
