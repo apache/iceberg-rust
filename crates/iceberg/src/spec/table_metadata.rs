@@ -434,7 +434,7 @@ impl TableMetadata {
         self.validate_chronological_metadata_logs()?;
         // Normalize location (remove trailing slash)
         self.location = self.location.trim_end_matches('/').to_string();
-        self.validate_format_version_specifics()?;
+        self.validate_snapshot_sequence_number()?;
         self.try_normalize_partition_spec()?;
         self.try_normalize_sort_order()?;
         Ok(self)
@@ -547,7 +547,7 @@ impl TableMetadata {
     }
 
     /// Validate that for V1 Metadata the last_sequence_number is 0
-    fn validate_format_version_specifics(&self) -> Result<()> {
+    fn validate_snapshot_sequence_number(&self) -> Result<()> {
         if self.format_version < FormatVersion::V2 && self.last_sequence_number != 0 {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -556,6 +556,24 @@ impl TableMetadata {
                     self.last_sequence_number
                 ),
             ));
+        }
+
+        if self.format_version >= FormatVersion::V2 && self.last_sequence_number < 0 {
+            if let Some(snapshot) = self
+                .snapshots
+                .values()
+                .find(|snapshot| snapshot.sequence_number() > self.last_sequence_number)
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Invalid snapshot with id {} and sequence number {} greater than last sequence number {}",
+                        snapshot.snapshot_id(),
+                        snapshot.sequence_number(),
+                        self.last_sequence_number
+                    ),
+                ));
+            }
         }
 
         Ok(())
