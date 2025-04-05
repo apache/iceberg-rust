@@ -18,21 +18,21 @@
 use std::collections::HashMap;
 
 /// A serialized form of a "compact" Theta sketch produced by the Apache DataSketches library.
-pub(crate) const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
+pub const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
 
 /// The blob
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Blob {
+pub struct Blob {
     /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
-    pub(crate) r#type: String,
+    pub r#type: String,
     /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
-    pub(crate) fields: Vec<i32>,
+    pub fields: Vec<i32>,
     /// ID of the Iceberg table's snapshot the blob was computed from
-    pub(crate) snapshot_id: i64,
+    pub snapshot_id: i64,
     /// Sequence number of the Iceberg table's snapshot the blob was computed from
-    pub(crate) sequence_number: i64,
+    pub sequence_number: i64,
     /// The uncompressed blob data
-    pub(crate) data: Vec<u8>,
+    pub data: Vec<u8>,
     /// Arbitrary meta-information about the blob
-    pub(crate) properties: HashMap<String, String>,
+    pub properties: HashMap<String, String>,
 }

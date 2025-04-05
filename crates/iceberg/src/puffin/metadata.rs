@@ -26,33 +26,33 @@ use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
 /// Example: "Trino version 381"
-pub(crate) const CREATED_BY_PROPERTY: &str = "created-by";
+pub const CREATED_BY_PROPERTY: &str = "created-by";
 
 /// Metadata about a blob.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct BlobMetadata {
+pub struct BlobMetadata {
     /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
-    pub(crate) r#type: String,
+    pub r#type: String,
     /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
-    pub(crate) fields: Vec<i32>,
+    pub fields: Vec<i32>,
     /// ID of the Iceberg table's snapshot the blob was computed from
-    pub(crate) snapshot_id: i64,
+    pub snapshot_id: i64,
     /// Sequence number of the Iceberg table's snapshot the blob was computed from
-    pub(crate) sequence_number: i64,
+    pub sequence_number: i64,
     /// The offset in the file where the blob contents start
-    pub(crate) offset: u64,
+    pub offset: u64,
     /// The length of the blob stored in the file (after compression, if compressed)
-    pub(crate) length: u64,
+    pub length: u64,
     /// The compression codec used to compress the data
     #[serde(skip_serializing_if = "CompressionCodec::is_none")]
     #[serde(default)]
-    pub(crate) compression_codec: CompressionCodec,
+    pub compression_codec: CompressionCodec,
     /// Arbitrary meta-information about the blob
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
-    pub(crate) properties: HashMap<String, String>,
+    pub properties: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -91,13 +91,13 @@ impl Flag {
 /// Metadata about a puffin file.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub(crate) struct FileMetadata {
+pub struct FileMetadata {
     /// Metadata about blobs in file
-    pub(crate) blobs: Vec<BlobMetadata>,
+    pub blobs: Vec<BlobMetadata>,
     /// Arbitrary meta-information, like writer identification/version.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
-    pub(crate) properties: HashMap<String, String>,
+    pub properties: HashMap<String, String>,
 }
 
 impl FileMetadata {
