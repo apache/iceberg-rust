@@ -74,6 +74,10 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
 [iceberg-catalog-rest dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_rest/
 
+## Iceberg Rust Implementation Status
+
+The features that Iceberg Rust currently supports can be found [here](https://iceberg.apache.org/status/).
+
 ## Supported Rust Version
 
 Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version).
