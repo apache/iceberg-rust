@@ -52,6 +52,11 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Returns `Table` reference from `Transaction`
+    pub fn table(&self) -> &Table {
+        self.table
+    }
+
     fn append_updates(&mut self, updates: Vec<TableUpdate>) -> Result<()> {
         for update in &updates {
             for up in &self.updates {
