@@ -558,7 +558,7 @@ impl TableMetadata {
             ));
         }
 
-        if self.format_version >= FormatVersion::V2 && self.last_sequence_number > 0 {
+        if self.format_version >= FormatVersion::V2 {
             if let Some(snapshot) = self
                 .snapshots
                 .values()
