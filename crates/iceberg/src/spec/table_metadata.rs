@@ -558,7 +558,7 @@ impl TableMetadata {
             ));
         }
 
-        if self.format_version >= FormatVersion::V2 && self.last_sequence_number < 0 {
+        if self.format_version >= FormatVersion::V2 && self.last_sequence_number > 0 {
             if let Some(snapshot) = self
                 .snapshots
                 .values()
@@ -2031,6 +2031,89 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Snapshot for reference foo does not exist in the existing snapshots list"));
+    }
+
+    #[test]
+    fn test_v2_wrong_max_snapshot_sequence_number() {
+        let data = r#"
+        {
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 1,
+            "last-updated-ms": 1602638573590,
+            "last-column-id": 3,
+            "current-schema-id": 0,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "x",
+                            "required": true,
+                            "type": "long"
+                        }
+                    ]
+                }
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [
+                {
+                    "spec-id": 0,
+                    "fields": []
+                }
+            ],
+            "last-partition-id": 1000,
+            "default-sort-order-id": 0,
+            "sort-orders": [
+                {
+                    "order-id": 0,
+                    "fields": []
+                }
+            ],
+            "properties": {},
+            "current-snapshot-id": 3055729675574597004,
+            "snapshots": [
+                {
+                    "snapshot-id": 3055729675574597004,
+                    "timestamp-ms": 1555100955770,
+                    "sequence-number": 4,
+                    "summary": {
+                        "operation": "append"
+                    },
+                    "manifest-list": "s3://a/b/2.avro",
+                    "schema-id": 0
+                }
+            ],
+            "statistics": [],
+            "snapshot-log": [],
+            "metadata-log": []
+        }
+    "#;
+
+        let err = serde_json::from_str::<TableMetadata>(data).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains(
+            "Invalid snapshot with id 3055729675574597004 and sequence number 4 greater than last sequence number 1"
+        ));
+
+        // Change max sequence number to 4 - should work
+        let data = data.replace(
+            r#""last-sequence-number": 1,"#,
+            r#""last-sequence-number": 4,"#,
+        );
+        let metadata = serde_json::from_str::<TableMetadata>(data.as_str()).unwrap();
+        assert_eq!(metadata.last_sequence_number, 4);
+
+        // Change max sequence number to 5 - should work
+        let data = data.replace(
+            r#""last-sequence-number": 4,"#,
+            r#""last-sequence-number": 5,"#,
+        );
+        let metadata = serde_json::from_str::<TableMetadata>(data.as_str()).unwrap();
+        assert_eq!(metadata.last_sequence_number, 5);
     }
 
     #[test]
