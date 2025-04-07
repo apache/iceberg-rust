@@ -23,6 +23,7 @@ use iceberg_catalog_rest::RestCatalog;
 
 use crate::get_shared_containers;
 
+mod add_field_test;
 mod append_data_file_test;
 mod append_partition_data_file_test;
 mod conflict_commit_test;

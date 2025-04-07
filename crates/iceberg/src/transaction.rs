@@ -31,8 +31,9 @@ use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestWriterBuilder, NullOrder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
-    SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform, MAIN_BRANCH,
+    ManifestWriterBuilder, NestedFieldRef, NullOrder, Operation, Snapshot, SnapshotReference,
+    SnapshotRetention, SortDirection, SortField, SortOrder, Struct, StructType, Summary, Transform,
+    MAIN_BRANCH,
 };
 use crate::table::Table;
 use crate::writer::file_writer::ParquetWriter;
@@ -160,6 +161,17 @@ impl<'a> Transaction<'a> {
     pub fn remove_properties(mut self, keys: Vec<String>) -> Result<Self> {
         self.append_updates(vec![TableUpdate::RemoveProperties { removals: keys }])?;
         Ok(self)
+    }
+
+    /// Creates an add fields action.
+    pub fn add_fields(
+        self,
+        fields: impl IntoIterator<Item = NestedFieldRef>,
+    ) -> AddFieldsAction<'a> {
+        AddFieldsAction {
+            tx: self,
+            fields: fields.into_iter().collect(),
+        }
     }
 
     /// Commit transaction.
@@ -608,6 +620,40 @@ impl<'a> SnapshotProduceAction<'a> {
     }
 }
 
+/// Transaction action for easily adding fields to the table.
+pub struct AddFieldsAction<'a> {
+    tx: Transaction<'a>,
+    fields: Vec<NestedFieldRef>,
+}
+
+/// Transaction action for easily adding fields to the table.
+impl<'a> AddFieldsAction<'a> {
+    /// Creates a new `AddFieldsAction` for the given transaction.
+    pub fn new(tx: Transaction<'a>) -> Self {
+        Self { tx, fields: vec![] }
+    }
+
+    /// Finish building the action and apply it to the transaction.
+    pub fn apply(mut self) -> Result<Transaction<'a>> {
+        let base_schema = self.tx.table.metadata().current_schema();
+        let schema_builder = <crate::spec::Schema as Clone>::clone(base_schema).into_builder();
+        let schema = schema_builder.with_fields(self.fields).build()?;
+        let schema_id = schema.schema_id();
+
+        let updates = vec![
+            TableUpdate::AddSchema { schema },
+            TableUpdate::SetCurrentSchema {
+                schema_id: schema_id + 1,
+            },
+        ];
+        let requirements = vec![TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: self.tx.table.metadata().current_schema().schema_id(),
+        }];
+        self.tx.append_updates(updates)?;
+        self.tx.append_requirements(requirements)?;
+        Ok(self.tx)
+    }
+}
 /// Transaction action for replacing sort order.
 pub struct ReplaceSortOrderAction<'a> {
     tx: Transaction<'a>,
