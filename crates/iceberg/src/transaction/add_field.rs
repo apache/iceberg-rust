@@ -59,7 +59,7 @@ impl<'a> AddFieldsAction<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Schema, Type};
+    use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::Transaction;
     use crate::TableUpdate;
