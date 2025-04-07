@@ -155,7 +155,7 @@ impl<'a> UpdateSchema<'a> {
             }
         }
 
-        if parent.len() > 0 {
+        if parent.is_empty()  {
             let parent_field = if self.case_sensitive {
                 self.schema.field_by_name(&parent_full_path)
             } else {
@@ -197,7 +197,7 @@ impl<'a> UpdateSchema<'a> {
 
         self.adds
             .entry(parent_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(new_field);
 
         Ok(self)
