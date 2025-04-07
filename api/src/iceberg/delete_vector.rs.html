@@ -88,6 +88,21 @@
 <a href="#88" id="88">88</a>
 <a href="#89" id="89">89</a>
 <a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -105,7 +120,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-</span><span class="kw">use </span>roaring::RoaringTreemap;
+</span><span class="kw">use </span>roaring::bitmap::Iter;
+<span class="kw">use </span>roaring::treemap::BitmapIter;
+<span class="kw">use </span>roaring::RoaringTreemap;
 
 <span class="attr">#[allow(unused)]
 </span><span class="kw">pub struct </span>DeleteVector {
@@ -113,69 +130,82 @@
 }
 
 <span class="kw">impl </span>DeleteVector {
-    <span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DeleteVectorIterator {
-        <span class="kw">let </span><span class="kw-2">mut </span>iter = <span class="self">self</span>.inner.bitmaps();
-        <span class="kw">match </span>iter.next() {
-            <span class="prelude-val">Some</span>((high_bits, bitmap)) =&gt; {
-                DeleteVectorIterator {
-                    inner: <span class="prelude-val">Some</span>(DeleteVectorIteratorInner {
-                        <span class="comment">// iter,
-                        </span>high_bits: (high_bits <span class="kw">as </span>u64) &lt;&lt; <span class="number">32</span>,
-                        bitmap_iter: bitmap.iter(),
-                    }),
-                }
-            }
-            <span class="kw">_ </span>=&gt; DeleteVectorIterator { inner: <span class="prelude-val">None </span>},
+    <span class="attr">#[allow(unused)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(roaring_treemap: RoaringTreemap) -&gt; DeleteVector {
+        DeleteVector {
+            inner: roaring_treemap,
         }
+    }
+
+    <span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DeleteVectorIterator {
+        <span class="kw">let </span>outer = <span class="self">self</span>.inner.bitmaps();
+        DeleteVectorIterator { outer, inner: <span class="prelude-val">None </span>}
     }
 }
 
-<span class="kw">pub struct </span>DeleteVectorIterator&lt;<span class="lifetime">'a</span>&gt; {
+<span class="comment">// Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
+// But right now, it does not have a corresponding implementation of `roaring::bitmap::Iter::advance_to`,
+// which is very handy in ArrowReader::build_deletes_row_selection.
+// There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
+// and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
+// to just a wrapper around the underlying iterator's method.
+</span><span class="kw">pub struct </span>DeleteVectorIterator&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="comment">// NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
+    // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
+    // the roaring dependency.
+    </span>outer: BitmapIter&lt;<span class="lifetime">'a</span>&gt;,
     inner: <span class="prelude-ty">Option</span>&lt;DeleteVectorIteratorInner&lt;<span class="lifetime">'a</span>&gt;&gt;,
 }
 
 <span class="kw">struct </span>DeleteVectorIteratorInner&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="comment">// TODO: roaring::treemap::iter::BitmapIter is currently private.
-    // See https://github.com/RoaringBitmap/roaring-rs/issues/312
-    // iter: roaring::treemap::iter::BitmapIter&lt;'a&gt;,
-    </span>high_bits: u64,
-    bitmap_iter: roaring::bitmap::Iter&lt;<span class="lifetime">'a</span>&gt;,
+    high_bits: u32,
+    bitmap_iter: Iter&lt;<span class="lifetime">'a</span>&gt;,
 }
 
 <span class="kw">impl </span>Iterator <span class="kw">for </span>DeleteVectorIterator&lt;<span class="lifetime">'_</span>&gt; {
     <span class="kw">type </span>Item = u64;
 
     <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>inner) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner <span class="kw">else </span>{
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>inner) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.inner {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(inner_next) = inner.bitmap_iter.next() {
+                <span class="kw">return </span><span class="prelude-val">Some</span>(u64::from(inner.high_bits) &lt;&lt; <span class="number">32 </span>| u64::from(inner_next));
+            }
+        }
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>((high_bits, next_bitmap)) = <span class="self">self</span>.outer.next() {
+            <span class="self">self</span>.inner = <span class="prelude-val">Some</span>(DeleteVectorIteratorInner {
+                high_bits,
+                bitmap_iter: next_bitmap.iter(),
+            })
+        } <span class="kw">else </span>{
             <span class="kw">return </span><span class="prelude-val">None</span>;
-        };
+        }
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(lower) = inner.bitmap_iter.next() {
-            <span class="kw">return </span><span class="prelude-val">Some</span>(inner.high_bits &amp; lower <span class="kw">as </span>u64);
-        };
-
-        <span class="comment">// TODO: roaring::treemap::iter::BitmapIter is currently private.
-        // See https://github.com/RoaringBitmap/roaring-rs/issues/312
-
-        // replace with commented-out code below once BitmapIter is pub,
-        // or use RoaringTreemap::iter if `advance_to` gets implemented natively
-        </span><span class="prelude-val">None
-
-        </span><span class="comment">// let Some((high_bits, bitmap)) = inner.iter.next() else {
-        //     self.inner = None;
-        //     return None;
-        // };
-        //
-        // inner.high_bits = (high_bits as u64) &lt;&lt; 32;
-        // inner.bitmap_iter = bitmap.iter();
-        //
-        // self.next()
-    </span>}
+        <span class="self">self</span>.next()
+    }
 }
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; DeleteVectorIterator&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">pub fn </span>advance_to(<span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw-2">mut </span><span class="self">self</span>, _pos: u64) {
-        <span class="comment">// TODO
-    </span>}
+    <span class="kw">pub fn </span>advance_to(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pos: u64) {
+        <span class="kw">let </span>hi = (pos &gt;&gt; <span class="number">32</span>) <span class="kw">as </span>u32;
+        <span class="kw">let </span>lo = pos <span class="kw">as </span>u32;
+
+        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>inner) = <span class="self">self</span>.inner <span class="kw">else </span>{
+            <span class="kw">return</span>;
+        };
+
+        <span class="kw">while </span>inner.high_bits &lt; hi {
+            <span class="kw">let </span><span class="prelude-val">Some</span>((next_hi, next_bitmap)) = <span class="self">self</span>.outer.next() <span class="kw">else </span>{
+                <span class="kw">return</span>;
+            };
+
+            <span class="kw-2">*</span>inner = DeleteVectorIteratorInner {
+                high_bits: next_hi,
+                bitmap_iter: next_bitmap.iter(),
+            }
+        }
+
+        inner.bitmap_iter.advance_to(lo);
+    }
 }
 </code></pre></div></section></main></body></html>
