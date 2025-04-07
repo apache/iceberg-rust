@@ -470,8 +470,8 @@ impl ParquetWriter {
 
         for field in table_spec.fields() {
             if let (Some(lower), Some(upper)) = (
-                lower_bounds.get(&field.field_id),
-                upper_bounds.get(&field.field_id),
+                lower_bounds.get(&field.source_id),
+                upper_bounds.get(&field.source_id),
             ) {
                 if !field.transform.preserves_order() {
                     return Err(Error::new(
