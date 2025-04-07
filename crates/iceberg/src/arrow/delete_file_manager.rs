@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::delete_vector::DeleteVector;
 use crate::expr::BoundPredicate;
 use crate::io::FileIO;
@@ -85,7 +87,7 @@ impl CachingDeleteFileManager {
     pub(crate) fn get_positional_delete_indexes_for_data_file(
         &self,
         data_file_path: &str,
-    ) -> Option<DeleteVector> {
+    ) -> Option<Arc<DeleteVector>> {
         // TODO
 
         None
