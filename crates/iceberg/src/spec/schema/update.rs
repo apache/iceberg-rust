@@ -155,7 +155,7 @@ impl<'a> UpdateSchema<'a> {
             }
         }
 
-        if parent.is_empty()  {
+        if parent.is_empty() {
             let parent_field = if self.case_sensitive {
                 self.schema.field_by_name(&parent_full_path)
             } else {
@@ -195,10 +195,7 @@ impl<'a> UpdateSchema<'a> {
         self.added_name_to_id.insert(full_name.clone(), new_id);
         let new_field = NestedField::new(new_id, name, field_type, required).with_doc(doc.unwrap());
 
-        self.adds
-            .entry(parent_id)
-            .or_default()
-            .push(new_field);
+        self.adds.entry(parent_id).or_default().push(new_field);
 
         Ok(self)
     }
