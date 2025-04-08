@@ -38,7 +38,7 @@ storage-s3 = ["opendal/services-s3"]
 storage-gcs = ["opendal/services-gcs"]
 
 async-std = ["dep:async-std"]
-tokio = ["tokio/full"]
+tokio = ["tokio/rt-multi-thread"]
 
 [dependencies]
 anyhow = { workspace = true }
