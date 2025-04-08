@@ -2170,6 +2170,55 @@
 <a href="#2170" id="2170">2170</a>
 <a href="#2171" id="2171">2171</a>
 <a href="#2172" id="2172">2172</a>
+<a href="#2173" id="2173">2173</a>
+<a href="#2174" id="2174">2174</a>
+<a href="#2175" id="2175">2175</a>
+<a href="#2176" id="2176">2176</a>
+<a href="#2177" id="2177">2177</a>
+<a href="#2178" id="2178">2178</a>
+<a href="#2179" id="2179">2179</a>
+<a href="#2180" id="2180">2180</a>
+<a href="#2181" id="2181">2181</a>
+<a href="#2182" id="2182">2182</a>
+<a href="#2183" id="2183">2183</a>
+<a href="#2184" id="2184">2184</a>
+<a href="#2185" id="2185">2185</a>
+<a href="#2186" id="2186">2186</a>
+<a href="#2187" id="2187">2187</a>
+<a href="#2188" id="2188">2188</a>
+<a href="#2189" id="2189">2189</a>
+<a href="#2190" id="2190">2190</a>
+<a href="#2191" id="2191">2191</a>
+<a href="#2192" id="2192">2192</a>
+<a href="#2193" id="2193">2193</a>
+<a href="#2194" id="2194">2194</a>
+<a href="#2195" id="2195">2195</a>
+<a href="#2196" id="2196">2196</a>
+<a href="#2197" id="2197">2197</a>
+<a href="#2198" id="2198">2198</a>
+<a href="#2199" id="2199">2199</a>
+<a href="#2200" id="2200">2200</a>
+<a href="#2201" id="2201">2201</a>
+<a href="#2202" id="2202">2202</a>
+<a href="#2203" id="2203">2203</a>
+<a href="#2204" id="2204">2204</a>
+<a href="#2205" id="2205">2205</a>
+<a href="#2206" id="2206">2206</a>
+<a href="#2207" id="2207">2207</a>
+<a href="#2208" id="2208">2208</a>
+<a href="#2209" id="2209">2209</a>
+<a href="#2210" id="2210">2210</a>
+<a href="#2211" id="2211">2211</a>
+<a href="#2212" id="2212">2212</a>
+<a href="#2213" id="2213">2213</a>
+<a href="#2214" id="2214">2214</a>
+<a href="#2215" id="2215">2215</a>
+<a href="#2216" id="2216">2216</a>
+<a href="#2217" id="2217">2217</a>
+<a href="#2218" id="2218">2218</a>
+<a href="#2219" id="2219">2219</a>
+<a href="#2220" id="2220">2220</a>
+<a href="#2221" id="2221">2221</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -2216,10 +2265,11 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::io::{FileIO, FileWrite, OutputFile};
 <span class="kw">use </span><span class="kw">crate</span>::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
-    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
-    TableMetadata, Type,
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
+    MapType, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
+    Struct, StructType, TableMetadata, Type,
 };
+<span class="kw">use </span><span class="kw">crate</span>::transform::create_transform_function;
 <span class="kw">use </span><span class="kw">crate</span>::writer::{CurrentFileStatus, DataFile};
 <span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 
@@ -2629,6 +2679,54 @@
             );
 
         <span class="prelude-val">Ok</span>(builder)
+    }
+
+    <span class="attr">#[allow(dead_code)]
+    </span><span class="kw">fn </span>partition_value_from_bounds(
+        table_spec: Arc&lt;PartitionSpec&gt;,
+        lower_bounds: <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt;,
+        upper_bounds: <span class="kw-2">&amp;</span>HashMap&lt;i32, Datum&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Struct&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>partition_literals: Vec&lt;<span class="prelude-ty">Option</span>&lt;Literal&gt;&gt; = Vec::new();
+
+        <span class="kw">for </span>field <span class="kw">in </span>table_spec.fields() {
+            <span class="kw">if let </span>(<span class="prelude-val">Some</span>(lower), <span class="prelude-val">Some</span>(upper)) = (
+                lower_bounds.get(<span class="kw-2">&amp;</span>field.source_id),
+                upper_bounds.get(<span class="kw-2">&amp;</span>field.source_id),
+            ) {
+                <span class="kw">if </span>!field.transform.preserves_order() {
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                        ErrorKind::DataInvalid,
+                        <span class="macro">format!</span>(
+                            <span class="string">"cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}"</span>,
+                            field.name, field.transform
+                        ),
+                    ));
+                }
+
+                <span class="kw">if </span>lower != upper {
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                        ErrorKind::DataInvalid,
+                        <span class="macro">format!</span>(
+                            <span class="string">"multiple partition values for field {}: lower: {:?}, upper: {:?}"</span>,
+                            field.name, lower, upper
+                        ),
+                    ));
+                }
+
+                <span class="kw">let </span>transform_fn = create_transform_function(<span class="kw-2">&amp;</span>field.transform)<span class="question-mark">?</span>;
+                <span class="kw">let </span>transform_literal =
+                    Literal::from(transform_fn.transform_literal_result(lower)<span class="question-mark">?</span>);
+
+                partition_literals.push(<span class="prelude-val">Some</span>(transform_literal));
+            } <span class="kw">else </span>{
+                partition_literals.push(<span class="prelude-val">None</span>);
+            }
+        }
+
+        <span class="kw">let </span>partition_struct = Struct::from_iter(partition_literals);
+
+        <span class="prelude-val">Ok</span>(partition_struct)
     }
 }
 
