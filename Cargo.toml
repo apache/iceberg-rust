@@ -83,7 +83,7 @@ port_scanner = "0.1.5"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
-roaring = "0.10"
+roaring = { version = "0.10", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
 rust_decimal = "1.31"
 serde = { version = "1.0.204", features = ["rc"] }
 serde_bytes = "0.11.15"
@@ -93,7 +93,7 @@ serde_repr = "0.1.16"
 serde_with = "3.4"
 tempfile = "3.18"
 thrift = "0.17.0"  
-tokio = { version = "1.36", default-features = false }
+tokio = { version = "1.44", default-features = false }
 typed-builder = "0.20"
 url = "2.5.4"
 uuid = { version = "1.13.1", features = ["v7"] }
