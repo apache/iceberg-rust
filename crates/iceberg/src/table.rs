@@ -19,8 +19,6 @@
 
 use std::sync::Arc;
 
-use futures::TryFutureExt;
-
 use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::object_cache::ObjectCache;
@@ -30,18 +28,18 @@ use crate::spec::{TableMetadata, TableMetadataRef};
 use crate::{Catalog, Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
-pub struct TableBuilder<'a> {
+pub struct TableBuilder {
     file_io: Option<FileIO>,
     metadata_location: Option<String>,
     metadata: Option<TableMetadataRef>,
     identifier: Option<TableIdent>,
-    catalog: Option<&'a dyn Catalog>,
+    catalog: Option<Arc<dyn Catalog>>,
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
 }
 
-impl<'a> TableBuilder<'a> {
+impl TableBuilder {
     pub(crate) fn new() -> Self {
         Self {
             file_io: None,
@@ -80,7 +78,7 @@ impl<'a> TableBuilder<'a> {
     }
 
     /// required - passes in the reference to the Catalog to use for the Table
-    pub fn catalog(mut self, catalog: &'a dyn Catalog) -> Self {
+    pub fn catalog(mut self, catalog: Arc<dyn Catalog>) -> Self {
         self.catalog = Some(catalog);
         self
     }
@@ -171,19 +169,19 @@ impl<'a> TableBuilder<'a> {
 
 /// Table represents a table in the catalog.
 #[derive(Debug, Clone)]
-pub struct Table<'a> {
+pub struct Table {
     file_io: FileIO,
     metadata_location: Option<String>,
     metadata: TableMetadataRef,
     identifier: TableIdent,
-    catalog: &'a dyn Catalog,
+    catalog: Arc<dyn Catalog>,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
 }
 
-impl <'a> Table<'a> {
+impl Table {
     /// Returns a TableBuilder to build a table
-    pub fn builder<'b>() -> TableBuilder<'a> {
+    pub fn builder<'b>() -> TableBuilder {
         TableBuilder::new()
     }
 

@@ -37,14 +37,14 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 
 /// Table transaction.
 pub struct Transaction<'a> {
-    table: &'a mut Table<'a>,
+    table: &'a Table,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
 impl<'a> Transaction<'a> {
     /// Creates a new transaction.
-    pub fn new(table: &'a mut Table) -> Self {
+    pub fn new(table: &'a Table) -> Self {
         Self {
             table,
             updates: vec![],
@@ -127,14 +127,12 @@ impl<'a> Transaction<'a> {
     }
 
     /// Creates a fast append action.
-    pub async fn fast_append(
+    pub fn fast_append(
         self,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
     ) -> Result<FastAppendAction<'a>> {
         let snapshot_id = self.generate_unique_snapshot_id();
-        let _ = self.table.refresh().await?;
-        
         FastAppendAction::new(
             self,
             snapshot_id,
