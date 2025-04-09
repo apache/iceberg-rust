@@ -453,7 +453,7 @@ impl TableScan {
             }
         });
 
-        return Ok(file_scan_task_rx.boxed());
+        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -591,6 +591,9 @@ pub(crate) struct BoundPredicates {
 
 #[cfg(test)]
 pub mod tests {
+    //! shared tests for the table scan API
+    #![allow(missing_docs)]
+
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
