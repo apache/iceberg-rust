@@ -42,10 +42,9 @@ impl TrackWriter {
 impl FileWrite for TrackWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
         let size = bs.len();
-        self.inner.write(bs).await.map(|v| {
+        self.inner.write(bs).await.inspect(|_| {
             self.written_size
                 .fetch_add(size as i64, std::sync::atomic::Ordering::Relaxed);
-            v
         })
     }
 

@@ -36,7 +36,7 @@ homepage = "https://rust.iceberg.apache.org/"
 repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.77.1"
+rust-version = "1.84"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
@@ -102,3 +102,4 @@ hive_metastore = "0.1"
 tera = "1"
 zstd = "0.13.2"
 expect-test = "1"
+http = "1.1"
