@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-hms"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg-catalog-hms"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Hive Metastore Catalog Support"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "hive", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }

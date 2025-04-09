@@ -16,26 +16,26 @@
 # under the License.
 
 [package]
-name = "iceberg"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust implementation"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
-storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
-storage-s3 = ["opendal/services-s3"]
 storage-gcs = ["opendal/services-gcs"]
+storage-memory = ["opendal/services-memory"]
+storage-s3 = ["opendal/services-s3"]
 
 async-std = ["dep:async-std"]
 tokio = ["tokio/rt-multi-thread"]

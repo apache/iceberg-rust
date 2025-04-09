@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-glue"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg-catalog-glue"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Glue Catalog Support"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "glue", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
