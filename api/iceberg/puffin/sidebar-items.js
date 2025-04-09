@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["APACHE_DATASKETCHES_THETA_V1","CREATED_BY_PROPERTY"],"enum":["CompressionCodec"],"struct":["Blob","BlobMetadata","FileMetadata","PuffinReader","PuffinWriter"]};

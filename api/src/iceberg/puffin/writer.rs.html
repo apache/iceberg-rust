@@ -332,11 +332,7 @@
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a>
-<a href="#337" id="337">337</a>
-<a href="#338" id="338">338</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#334" id="334">334</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -364,7 +360,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
 <span class="doccomment">/// Puffin writer
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>PuffinWriter {
+</span><span class="kw">pub struct </span>PuffinWriter {
     writer: Box&lt;<span class="kw">dyn </span>FileWrite&gt;,
     is_header_written: bool,
     num_bytes_written: u64,
@@ -376,7 +372,7 @@
 
 <span class="kw">impl </span>PuffinWriter {
     <span class="doccomment">/// Returns a new Puffin writer
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>new(
+    </span><span class="kw">pub async fn </span>new(
         output_file: <span class="kw-2">&amp;</span>OutputFile,
         properties: HashMap&lt;String, String&gt;,
         compress_footer: bool,
@@ -401,11 +397,7 @@
     }
 
     <span class="doccomment">/// Adds blob to Puffin file
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>add(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        blob: Blob,
-        compression_codec: CompressionCodec,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    </span><span class="kw">pub async fn </span>add(<span class="kw-2">&amp;mut </span><span class="self">self</span>, blob: Blob, compression_codec: CompressionCodec) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="self">self</span>.write_header_once().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>offset = <span class="self">self</span>.num_bytes_written;
@@ -427,7 +419,7 @@
     }
 
     <span class="doccomment">/// Finalizes the Puffin file
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    </span><span class="kw">pub async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="self">self</span>.write_header_once().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="self">self</span>.write_footer().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="self">self</span>.writer.close().<span class="kw">await</span><span class="question-mark">?</span>;

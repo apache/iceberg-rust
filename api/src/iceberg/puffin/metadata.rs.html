@@ -775,7 +775,59 @@
 <a href="#774" id="774">774</a>
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -803,33 +855,75 @@
 
 <span class="doccomment">/// Human-readable identification of the application writing the file, along with its version.
 /// Example: "Trino version 381"
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>CREATED_BY_PROPERTY: <span class="kw-2">&amp;</span>str = <span class="string">"created-by"</span>;
+</span><span class="kw">pub const </span>CREATED_BY_PROPERTY: <span class="kw-2">&amp;</span>str = <span class="string">"created-by"</span>;
 
 <span class="doccomment">/// Metadata about a blob.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
 </span><span class="attr">#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = <span class="string">"kebab-case"</span>)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobMetadata {
-    <span class="doccomment">/// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) r#type: String,
-    <span class="doccomment">/// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) fields: Vec&lt;i32&gt;,
-    <span class="doccomment">/// ID of the Iceberg table's snapshot the blob was computed from
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) snapshot_id: i64,
-    <span class="doccomment">/// Sequence number of the Iceberg table's snapshot the blob was computed from
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sequence_number: i64,
-    <span class="doccomment">/// The offset in the file where the blob contents start
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) offset: u64,
-    <span class="doccomment">/// The length of the blob stored in the file (after compression, if compressed)
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) length: u64,
-    <span class="doccomment">/// The compression codec used to compress the data
-    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"CompressionCodec::is_none"</span>)]
+</span><span class="kw">pub struct </span>BlobMetadata {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) r#type: String,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) fields: Vec&lt;i32&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) snapshot_id: i64,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) sequence_number: i64,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) offset: u64,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) length: u64,
+    <span class="attr">#[serde(skip_serializing_if = <span class="string">"CompressionCodec::is_none"</span>)]
     #[serde(default)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) compression_codec: CompressionCodec,
-    <span class="doccomment">/// Arbitrary meta-information about the blob
-    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"HashMap::is_empty"</span>)]
+    <span class="attr">#[serde(skip_serializing_if = <span class="string">"HashMap::is_empty"</span>)]
     #[serde(default)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) properties: HashMap&lt;String, String&gt;,
+}
+
+<span class="kw">impl </span>BlobMetadata {
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    </span><span class="kw">pub fn </span>blob_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.r#type
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
+    </span><span class="kw">pub fn </span>fields(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[i32] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.fields
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// ID of the Iceberg table's snapshot the blob was computed from
+    </span><span class="kw">pub fn </span>snapshot_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i64 {
+        <span class="self">self</span>.snapshot_id
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// Sequence number of the Iceberg table's snapshot the blob was computed from
+    </span><span class="kw">pub fn </span>sequence_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i64 {
+        <span class="self">self</span>.sequence_number
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// The offset in the file where the blob contents start
+    </span><span class="kw">pub fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.offset
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// The length of the blob stored in the file (after compression, if compressed)
+    </span><span class="kw">pub fn </span>length(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.length
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// The compression codec used to compress the data
+    </span><span class="kw">pub fn </span>compression_codec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; CompressionCodec {
+        <span class="self">self</span>.compression_codec
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// Arbitrary meta-information about the blob
+    </span><span class="kw">pub fn </span>properties(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;String, String&gt; {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.properties
+    }
 }
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -868,11 +962,9 @@
 <span class="doccomment">/// Metadata about a puffin file.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
 </span><span class="attr">#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>FileMetadata {
-    <span class="doccomment">/// Metadata about blobs in file
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) blobs: Vec&lt;BlobMetadata&gt;,
-    <span class="doccomment">/// Arbitrary meta-information, like writer identification/version.
-    </span><span class="attr">#[serde(skip_serializing_if = <span class="string">"HashMap::is_empty"</span>)]
+</span><span class="kw">pub struct </span>FileMetadata {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) blobs: Vec&lt;BlobMetadata&gt;,
+    <span class="attr">#[serde(skip_serializing_if = <span class="string">"HashMap::is_empty"</span>)]
     #[serde(default)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) properties: HashMap&lt;String, String&gt;,
 }
@@ -1023,6 +1115,18 @@
         <span class="kw">let </span>footer_payload_str =
             FileMetadata::extract_footer_payload_as_str(<span class="kw-2">&amp;</span>footer_bytes, footer_payload_length)<span class="question-mark">?</span>;
         FileMetadata::from_json_str(<span class="kw-2">&amp;</span>footer_payload_str)
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// Metadata about blobs in file
+    </span><span class="kw">pub fn </span>blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[BlobMetadata] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.blobs
+    }
+
+    <span class="attr">#[inline]
+    </span><span class="doccomment">/// Arbitrary meta-information, like writer identification/version.
+    </span><span class="kw">pub fn </span>properties(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashMap&lt;String, String&gt; {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.properties
     }
 }
 

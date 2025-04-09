@@ -30,7 +30,13 @@
 <a href="#29" id="29">29</a>
 <a href="#30" id="30">30</a>
 <a href="#31" id="31">31</a>
-<a href="#32" id="32">32</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+<a href="#36" id="36">36</a>
+<a href="#37" id="37">37</a>
+<a href="#38" id="38">38</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -50,15 +56,21 @@
 </span><span class="doccomment">//! Iceberg Puffin implementation.
 
 </span><span class="attr">#![deny(missing_docs)]
-</span><span class="comment">// Temporarily allowing this while crate is under active development
-</span><span class="attr">#![allow(dead_code)]
 
 </span><span class="kw">mod </span>blob;
+<span class="kw">pub use </span>blob::{Blob, APACHE_DATASKETCHES_THETA_V1};
+
 <span class="kw">mod </span>compression;
+<span class="kw">pub use </span>compression::CompressionCodec;
+
 <span class="kw">mod </span>metadata;
-<span class="attr">#[cfg(feature = <span class="string">"tokio"</span>)]
-</span><span class="kw">mod </span>reader;
+<span class="kw">pub use </span>metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
+
+<span class="kw">mod </span>reader;
+<span class="kw">pub use </span>reader::PuffinReader;
+
 <span class="kw">mod </span>writer;
+<span class="kw">pub use </span>writer::PuffinWriter;
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>test_utils;

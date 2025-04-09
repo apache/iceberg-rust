@@ -148,14 +148,14 @@
 <span class="kw">use </span><span class="kw">crate</span>::Result;
 
 <span class="doccomment">/// Puffin reader
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>PuffinReader {
+</span><span class="kw">pub struct </span>PuffinReader {
     input_file: InputFile,
     file_metadata: OnceCell&lt;FileMetadata&gt;,
 }
 
 <span class="kw">impl </span>PuffinReader {
     <span class="doccomment">/// Returns a new Puffin reader
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(input_file: InputFile) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(input_file: InputFile) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             input_file,
             file_metadata: OnceCell::new(),
@@ -163,14 +163,14 @@
     }
 
     <span class="doccomment">/// Returns file metadata
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>file_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span>FileMetadata&gt; {
+    </span><span class="kw">pub async fn </span>file_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span>FileMetadata&gt; {
         <span class="self">self</span>.file_metadata
             .get_or_try_init(|| FileMetadata::read(<span class="kw-2">&amp;</span><span class="self">self</span>.input_file))
             .<span class="kw">await
     </span>}
 
     <span class="doccomment">/// Returns blob
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>blob(<span class="kw-2">&amp;</span><span class="self">self</span>, blob_metadata: <span class="kw-2">&amp;</span>BlobMetadata) -&gt; <span class="prelude-ty">Result</span>&lt;Blob&gt; {
+    </span><span class="kw">pub async fn </span>blob(<span class="kw-2">&amp;</span><span class="self">self</span>, blob_metadata: <span class="kw-2">&amp;</span>BlobMetadata) -&gt; <span class="prelude-ty">Result</span>&lt;Blob&gt; {
         <span class="kw">let </span>file_read = <span class="self">self</span>.input_file.reader().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>start = blob_metadata.offset;
         <span class="kw">let </span>end = start + blob_metadata.length;
