@@ -18,13 +18,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/catalog/*",
-    "crates/examples",
-    "crates/iceberg",
-    "crates/integration_tests",
-    "crates/integrations/*",
-    "crates/sqllogictest",
-    "crates/test_utils",
+  "crates/catalog/*",
+  "crates/examples",
+  "crates/iceberg",
+  "crates/integration_tests",
+  "crates/integrations/*",
+  "crates/sqllogictest",
+  "crates/test_utils",
 ]
 exclude = ["bindings/python"]
 
