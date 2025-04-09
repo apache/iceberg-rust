@@ -52,7 +52,9 @@
 <a href="#51" id="51">51</a>
 <a href="#52" id="52">52</a>
 <a href="#53" id="53">53</a>
-<a href="#54" id="54">54</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#54" id="54">54</a>
+<a href="#55" id="55">55</a>
+<a href="#56" id="56">56</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -71,12 +73,14 @@
 
 </span><span class="kw">use </span>std::process::Command;
 
+<span class="kw">use </span>tracing::info;
+
 <span class="kw">pub fn </span>run_command(<span class="kw-2">mut </span>cmd: Command, desc: <span class="kw">impl </span>ToString) {
     <span class="kw">let </span>desc = desc.to_string();
-    <span class="macro">log::info!</span>(<span class="string">"Starting to {}, command: {:?}"</span>, <span class="kw-2">&amp;</span>desc, cmd);
+    <span class="macro">info!</span>(<span class="string">"Starting to {}, command: {:?}"</span>, <span class="kw-2">&amp;</span>desc, cmd);
     <span class="kw">let </span>exit = cmd.status().unwrap();
     <span class="kw">if </span>exit.success() {
-        <span class="macro">log::info!</span>(<span class="string">"{} succeed!"</span>, desc)
+        <span class="macro">info!</span>(<span class="string">"{} succeed!"</span>, desc)
     } <span class="kw">else </span>{
         <span class="macro">panic!</span>(<span class="string">"{} failed: {:?}"</span>, desc, exit);
     }
@@ -84,12 +88,12 @@
 
 <span class="kw">pub fn </span>get_cmd_output_result(<span class="kw-2">mut </span>cmd: Command, desc: <span class="kw">impl </span>ToString) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
     <span class="kw">let </span>desc = desc.to_string();
-    <span class="macro">log::info!</span>(<span class="string">"Starting to {}, command: {:?}"</span>, <span class="kw-2">&amp;</span>desc, cmd);
+    <span class="macro">info!</span>(<span class="string">"Starting to {}, command: {:?}"</span>, <span class="kw-2">&amp;</span>desc, cmd);
     <span class="kw">let </span>result = cmd.output();
     <span class="kw">match </span>result {
         <span class="prelude-val">Ok</span>(output) =&gt; {
             <span class="kw">if </span>output.status.success() {
-                <span class="macro">log::info!</span>(<span class="string">"{} succeed!"</span>, desc);
+                <span class="macro">info!</span>(<span class="string">"{} succeed!"</span>, desc);
                 <span class="prelude-val">Ok</span>(String::from_utf8(output.stdout).unwrap())
             } <span class="kw">else </span>{
                 <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"{} failed with rc: {:?}"</span>, desc, output.status))

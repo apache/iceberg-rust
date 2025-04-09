@@ -74,7 +74,7 @@
 
     <span class="kw">static </span>INIT: Once = Once::new();
     <span class="kw">pub fn </span>set_up() {
-        INIT.call_once(env_logger::init);
+        INIT.call_once(tracing_subscriber::fmt::init);
     }
     <span class="kw">pub fn </span>normalize_test_name(s: <span class="kw">impl </span>ToString) -&gt; String {
         s.to_string().replace(<span class="string">"::"</span>, <span class="string">"__"</span>).replace(<span class="string">'.'</span>, <span class="string">"_"</span>)
