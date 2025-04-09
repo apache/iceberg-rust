@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  rust_msrv: "1.77.1"
+  rust_msrv: "1.84.0"
 
 jobs:
   check:

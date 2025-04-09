@@ -32,7 +32,7 @@ keywords = ["iceberg", "rest", "catalog"]
 # async-trait = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-http = "1.1.0"
+http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
 reqwest = { workspace = true }

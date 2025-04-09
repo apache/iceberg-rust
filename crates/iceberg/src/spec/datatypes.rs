@@ -726,7 +726,7 @@ pub(super) mod _serde {
         Primitive(PrimitiveType),
     }
 
-    impl<'a> From<SerdeType<'a>> for Type {
+    impl From<SerdeType<'_>> for Type {
         fn from(value: SerdeType) -> Self {
             match value {
                 SerdeType::List {
@@ -947,7 +947,7 @@ mod tests {
         let record = r#"
         {
             "type": "struct",
-            "fields": [ 
+            "fields": [
                 {
                     "id": 1,
                     "name": "id",
@@ -960,7 +960,7 @@ mod tests {
                     "name": "data",
                     "required": false,
                     "type": "int"
-                } 
+                }
             ]
         }
         "#;
