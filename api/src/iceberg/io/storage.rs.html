@@ -167,16 +167,7 @@
 <a href="#166" id="166">166</a>
 <a href="#167" id="167">167</a>
 <a href="#168" id="168">168</a>
-<a href="#169" id="169">169</a>
-<a href="#170" id="170">170</a>
-<a href="#171" id="171">171</a>
-<a href="#172" id="172">172</a>
-<a href="#173" id="173">173</a>
-<a href="#174" id="174">174</a>
-<a href="#175" id="175">175</a>
-<a href="#176" id="176">176</a>
-<a href="#177" id="177">177</a>
-<a href="#178" id="178">178</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#169" id="169">169</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -217,10 +208,6 @@
         <span class="doccomment">/// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
         </span>scheme_str: String,
-        <span class="doccomment">/// uses the same client for one FileIO Storage.
-        ///
-        /// TODO: allow users to configure this client.
-        </span>client: reqwest::Client,
         config: Arc&lt;S3Config&gt;,
     },
     <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
@@ -241,7 +228,6 @@
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
             </span>Scheme::S3 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::S3 {
                 scheme_str,
-                client: reqwest::Client::new(),
                 config: <span class="kw">super</span>::s3_config_parse(props)<span class="question-mark">?</span>.into(),
             }),
             <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
@@ -293,12 +279,8 @@
                 }
             }
             <span class="attr">#[cfg(feature = <span class="string">"storage-s3"</span>)]
-            </span>Storage::S3 {
-                scheme_str,
-                client,
-                config,
-            } =&gt; {
-                <span class="kw">let </span>op = <span class="kw">super</span>::s3_config_build(client, config, path)<span class="question-mark">?</span>;
+            </span>Storage::S3 { scheme_str, config } =&gt; {
+                <span class="kw">let </span>op = <span class="kw">super</span>::s3_config_build(config, path)<span class="question-mark">?</span>;
                 <span class="kw">let </span>op_info = op.info();
 
                 <span class="comment">// Check prefix of s3 path.

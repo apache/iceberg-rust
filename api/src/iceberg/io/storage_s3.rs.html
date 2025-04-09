@@ -168,14 +168,7 @@
 <a href="#167" id="167">167</a>
 <a href="#168" id="168">168</a>
 <a href="#169" id="169">169</a>
-<a href="#170" id="170">170</a>
-<a href="#171" id="171">171</a>
-<a href="#172" id="172">172</a>
-<a href="#173" id="173">173</a>
-<a href="#174" id="174">174</a>
-<a href="#175" id="175">175</a>
-<a href="#176" id="176">176</a>
-<a href="#177" id="177">177</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#170" id="170">170</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -194,7 +187,6 @@
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
-<span class="kw">use </span>opendal::raw::HttpClient;
 <span class="kw">use </span>opendal::services::S3Config;
 <span class="kw">use </span>opendal::{Configurator, Operator};
 <span class="kw">use </span>url::Url;
@@ -329,11 +321,7 @@
 }
 
 <span class="doccomment">/// Build new opendal operator from give path.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(
-    client: <span class="kw-2">&amp;</span>reqwest::Client,
-    cfg: <span class="kw-2">&amp;</span>S3Config,
-    path: <span class="kw-2">&amp;</span>str,
-) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>s3_config_build(cfg: <span class="kw-2">&amp;</span>S3Config, path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Operator&gt; {
     <span class="kw">let </span>url = Url::parse(path)<span class="question-mark">?</span>;
     <span class="kw">let </span>bucket = url.host_str().ok_or_else(|| {
         Error::new(
@@ -346,9 +334,7 @@
         .clone()
         .into_builder()
         <span class="comment">// Set bucket name.
-        </span>.bucket(bucket)
-        <span class="comment">// Set http client we want to use.
-        </span>.http_client(HttpClient::with(client.clone()));
+        </span>.bucket(bucket);
 
     <span class="prelude-val">Ok</span>(Operator::new(builder)<span class="question-mark">?</span>.finish())
 }
