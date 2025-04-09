@@ -16,13 +16,13 @@
 # under the License.
 
 [package]
-name = "iceberg-integration-tests"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
 license = { workspace = true }
+name = "iceberg-integration-tests"
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
 arrow-array = { workspace = true }

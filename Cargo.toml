@@ -16,25 +16,25 @@
 # under the License.
 
 [workspace]
-resolver = "2"
-members = [
-    "crates/catalog/*",
-    "crates/examples",
-    "crates/iceberg",
-    "crates/integration_tests",
-    "crates/integrations/*",
-    "crates/sqllogictest",
-    "crates/test_utils",
-]
 exclude = ["bindings/python"]
+members = [
+  "crates/catalog/*",
+  "crates/examples",
+  "crates/iceberg",
+  "crates/integration_tests",
+  "crates/integrations/*",
+  "crates/sqllogictest",
+  "crates/test_utils",
+]
+resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org/"
+version = "0.4.0"
 
-repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
+repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
 rust-version = "1.84"
 
@@ -50,8 +50,8 @@ arrow-ord = { version = "54.2.0" }
 arrow-schema = { version = "54.2.0" }
 arrow-select = { version = "54.2.0" }
 arrow-string = { version = "54.2.0" }
-async-trait = "0.1.86"
 async-std = "1.12"
+async-trait = "0.1.86"
 aws-config = "1"
 aws-sdk-glue = "1.39"
 bimap = "0.6"
@@ -62,11 +62,14 @@ ctor = "0.2.8"
 datafusion = "45"
 derive_builder = "0.20"
 env_logger = "0.11.0"
+expect-test = "1"
 fnv = "1.0.7"
 futures = "0.3"
+hive_metastore = "0.1"
+http = "1.1"
 iceberg = { version = "0.4.0", path = "./crates/iceberg" }
-iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
+iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
 log = "0.4.22"
@@ -78,8 +81,8 @@ opendal = "0.53.0"
 ordered-float = "4"
 parquet = "54.2.0"
 pilota = "0.11.2"
-pretty_assertions = "1.4"
 port_scanner = "0.1.5"
+pretty_assertions = "1.4"
 rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
@@ -92,14 +95,11 @@ serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
 tempfile = "3.18"
+tera = "1"
 thrift = "0.17.0"
 tokio = { version = "1.44", default-features = false }
 typed-builder = "0.20"
 url = "2.5.4"
 uuid = { version = "1.14", features = ["v7"] }
 volo-thrift = "0.10"
-hive_metastore = "0.1"
-tera = "1"
 zstd = "0.13.2"
-expect-test = "1"
-http = "1.1"
