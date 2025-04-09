@@ -80,7 +80,7 @@ impl Iterator for DeleteVectorIterator<'_> {
     }
 }
 
-impl<'a> DeleteVectorIterator<'a> {
+impl DeleteVectorIterator<'_> {
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;

@@ -1139,9 +1139,9 @@ impl Datum {
     }
 
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
-        return s.as_ref().parse::<i128>().map_err(|e| {
+        s.as_ref().parse::<i128>().map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
-        });
+        })
     }
 
     /// Convert the datum to `target_type`.
