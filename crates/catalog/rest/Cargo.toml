@@ -35,7 +35,7 @@ chrono = { workspace = true }
 http = "1.1.0"
 iceberg = { workspace = true }
 itertools = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }

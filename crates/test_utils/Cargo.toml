@@ -26,8 +26,8 @@ repository = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-env_logger = { workspace = true }
-log = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 tests = []
