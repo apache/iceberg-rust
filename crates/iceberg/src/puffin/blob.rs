@@ -18,21 +18,53 @@
 use std::collections::HashMap;
 
 /// A serialized form of a "compact" Theta sketch produced by the Apache DataSketches library.
-pub(crate) const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
+pub const APACHE_DATASKETCHES_THETA_V1: &str = "apache-datasketches-theta-v1";
 
 /// The blob
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Blob {
-    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+pub struct Blob {
     pub(crate) r#type: String,
-    /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
     pub(crate) fields: Vec<i32>,
-    /// ID of the Iceberg table's snapshot the blob was computed from
     pub(crate) snapshot_id: i64,
-    /// Sequence number of the Iceberg table's snapshot the blob was computed from
     pub(crate) sequence_number: i64,
-    /// The uncompressed blob data
     pub(crate) data: Vec<u8>,
-    /// Arbitrary meta-information about the blob
     pub(crate) properties: HashMap<String, String>,
+}
+
+impl Blob {
+    #[inline]
+    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    pub fn blob_type(&self) -> &str {
+        &self.r#type
+    }
+
+    #[inline]
+    /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
+    pub fn fields(&self) -> &[i32] {
+        &self.fields
+    }
+
+    #[inline]
+    /// ID of the Iceberg table's snapshot the blob was computed from
+    pub fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
+    #[inline]
+    /// Sequence number of the Iceberg table's snapshot the blob was computed from
+    pub fn sequence_number(&self) -> i64 {
+        self.sequence_number
+    }
+
+    #[inline]
+    /// The uncompressed blob data
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    #[inline]
+    /// Arbitrary meta-information about the blob
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
 }

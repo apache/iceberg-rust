@@ -18,15 +18,21 @@
 //! Iceberg Puffin implementation.
 
 #![deny(missing_docs)]
-// Temporarily allowing this while crate is under active development
-#![allow(dead_code)]
 
 mod blob;
+pub use blob::{Blob, APACHE_DATASKETCHES_THETA_V1};
+
 mod compression;
+pub use compression::CompressionCodec;
+
 mod metadata;
-#[cfg(feature = "tokio")]
+pub use metadata::{BlobMetadata, FileMetadata, CREATED_BY_PROPERTY};
+
 mod reader;
+pub use reader::PuffinReader;
+
 mod writer;
+pub use writer::PuffinWriter;
 
 #[cfg(test)]
 mod test_utils;
