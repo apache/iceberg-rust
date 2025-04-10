@@ -92,7 +92,12 @@
 <a href="#91" id="91">91</a>
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
-<a href="#94" id="94">94</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -182,6 +187,11 @@
 </span><span class="kw">mod </span>storage_gcs;
 <span class="attr">#[cfg(feature = <span class="string">"storage-gcs"</span>)]
 </span><span class="kw">pub use </span>storage_gcs::<span class="kw-2">*</span>;
+
+<span class="attr">#[cfg(feature = <span class="string">"storage-oss"</span>)]
+</span><span class="kw">mod </span>storage_oss;
+<span class="attr">#[cfg(feature = <span class="string">"storage-oss"</span>)]
+</span><span class="kw">pub use </span>storage_oss::<span class="kw-2">*</span>;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_truthy(value: <span class="kw-2">&amp;</span>str) -&gt; bool {
     [<span class="string">"true"</span>, <span class="string">"t"</span>, <span class="string">"1"</span>, <span class="string">"on"</span>].contains(<span class="kw-2">&amp;</span>value.to_lowercase().as_str())
