@@ -31,7 +31,7 @@ pub(crate) struct InclusiveMetricsEvaluator<'a> {
 }
 
 impl<'a> InclusiveMetricsEvaluator<'a> {
-    fn new(data_file: &'a DataFile) -> Self {
+    pub fn new(data_file: &'a DataFile) -> Self {
         InclusiveMetricsEvaluator { data_file }
     }
 
@@ -50,6 +50,18 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
 
         let mut evaluator = Self::new(data_file);
         visit(&mut evaluator, filter)
+    }
+
+    pub(crate) fn evaluate(
+        &mut self,
+        filter: &'a BoundPredicate,
+        include_empty_files: bool,
+    ) -> crate::Result<bool> {
+        if !include_empty_files && self.data_file.record_count == 0 {
+            return ROWS_CANNOT_MATCH;
+        }
+
+        visit(self, filter)
     }
 
     fn nan_count(&self, field_id: i32) -> Option<&u64> {
