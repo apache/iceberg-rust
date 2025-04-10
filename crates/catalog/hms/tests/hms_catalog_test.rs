@@ -30,6 +30,7 @@ use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
+use tracing::info;
 
 const HMS_CATALOG_PORT: u16 = 9083;
 const MINIO_PORT: u16 = 9000;
@@ -67,8 +68,8 @@ async fn get_catalog() -> HmsCatalog {
     let hms_socket_addr = SocketAddr::new(hms_catalog_ip, HMS_CATALOG_PORT);
     let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
     while !scan_port_addr(hms_socket_addr) {
-        log::info!("scan hms_socket_addr {} check", hms_socket_addr);
-        log::info!("Waiting for 1s hms catalog to ready...");
+        info!("scan hms_socket_addr {} check", hms_socket_addr);
+        info!("Waiting for 1s hms catalog to ready...");
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 

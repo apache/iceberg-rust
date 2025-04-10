@@ -101,7 +101,6 @@ impl PopulatedDeleteFileIndex {
     /// 2. If the partition is empty and the delete file is not a positional delete,
     ///    it is added to the `global_delees` vector
     /// 3. Otherwise, the delete file is added to one of two hash maps based on its content type.
-
     fn new(files: Vec<DeleteFileContext>) -> PopulatedDeleteFileIndex {
         let mut eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();

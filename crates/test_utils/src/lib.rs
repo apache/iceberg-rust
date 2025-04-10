@@ -33,7 +33,7 @@ mod common {
 
     static INIT: Once = Once::new();
     pub fn set_up() {
-        INIT.call_once(env_logger::init);
+        INIT.call_once(tracing_subscriber::fmt::init);
     }
     pub fn normalize_test_name(s: impl ToString) -> String {
         s.to_string().replace("::", "__").replace('.', "_")

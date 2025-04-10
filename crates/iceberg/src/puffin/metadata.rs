@@ -26,33 +26,75 @@ use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
 /// Example: "Trino version 381"
-pub(crate) const CREATED_BY_PROPERTY: &str = "created-by";
+pub const CREATED_BY_PROPERTY: &str = "created-by";
 
 /// Metadata about a blob.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#blobmetadata
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct BlobMetadata {
-    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+pub struct BlobMetadata {
     pub(crate) r#type: String,
-    /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
     pub(crate) fields: Vec<i32>,
-    /// ID of the Iceberg table's snapshot the blob was computed from
     pub(crate) snapshot_id: i64,
-    /// Sequence number of the Iceberg table's snapshot the blob was computed from
     pub(crate) sequence_number: i64,
-    /// The offset in the file where the blob contents start
     pub(crate) offset: u64,
-    /// The length of the blob stored in the file (after compression, if compressed)
     pub(crate) length: u64,
-    /// The compression codec used to compress the data
     #[serde(skip_serializing_if = "CompressionCodec::is_none")]
     #[serde(default)]
     pub(crate) compression_codec: CompressionCodec,
-    /// Arbitrary meta-information about the blob
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
     pub(crate) properties: HashMap<String, String>,
+}
+
+impl BlobMetadata {
+    #[inline]
+    /// See blob types: https://iceberg.apache.org/puffin-spec/#blob-types
+    pub fn blob_type(&self) -> &str {
+        &self.r#type
+    }
+
+    #[inline]
+    /// List of field IDs the blob was computed for; the order of items is used to compute sketches stored in the blob.
+    pub fn fields(&self) -> &[i32] {
+        &self.fields
+    }
+
+    #[inline]
+    /// ID of the Iceberg table's snapshot the blob was computed from
+    pub fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
+    #[inline]
+    /// Sequence number of the Iceberg table's snapshot the blob was computed from
+    pub fn sequence_number(&self) -> i64 {
+        self.sequence_number
+    }
+
+    #[inline]
+    /// The offset in the file where the blob contents start
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    #[inline]
+    /// The length of the blob stored in the file (after compression, if compressed)
+    pub fn length(&self) -> u64 {
+        self.length
+    }
+
+    #[inline]
+    /// The compression codec used to compress the data
+    pub fn compression_codec(&self) -> CompressionCodec {
+        self.compression_codec
+    }
+
+    #[inline]
+    /// Arbitrary meta-information about the blob
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -91,10 +133,8 @@ impl Flag {
 /// Metadata about a puffin file.
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub(crate) struct FileMetadata {
-    /// Metadata about blobs in file
+pub struct FileMetadata {
     pub(crate) blobs: Vec<BlobMetadata>,
-    /// Arbitrary meta-information, like writer identification/version.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
     pub(crate) properties: HashMap<String, String>,
@@ -246,6 +286,18 @@ impl FileMetadata {
         let footer_payload_str =
             FileMetadata::extract_footer_payload_as_str(&footer_bytes, footer_payload_length)?;
         FileMetadata::from_json_str(&footer_payload_str)
+    }
+
+    #[inline]
+    /// Metadata about blobs in file
+    pub fn blobs(&self) -> &[BlobMetadata] {
+        &self.blobs
+    }
+
+    #[inline]
+    /// Arbitrary meta-information, like writer identification/version.
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
     }
 }
 
