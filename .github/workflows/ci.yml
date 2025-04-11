@@ -126,14 +126,6 @@ jobs:
       - name: Test
         run: cargo test --no-fail-fast --all-targets --all-features --workspace
 
-      # See https://github.com/actions/runner-images/issues/2840#issuecomment-790492173
-      - name: Clean device space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-
       - name: Async-std Test
         run: cargo test --no-fail-fast --all-targets --no-default-features  --features "async-std" --features "storage-all" --workspace
 
