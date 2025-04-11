@@ -32,8 +32,11 @@ repository = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+faststr = {workspace = true}
 hive_metastore = { workspace = true }
 iceberg = { workspace = true }
+linkedbytes = {workspace = true}
+metainfo = {workspace = true}
 pilota = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

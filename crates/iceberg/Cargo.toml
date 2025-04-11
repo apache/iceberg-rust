@@ -80,6 +80,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
+tap = {workspace = true}
 thrift = { workspace = true }
 tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
