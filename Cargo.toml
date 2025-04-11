@@ -52,19 +52,19 @@ arrow-select = { version = "54.2.0" }
 arrow-string = { version = "54.2.0" }
 async-std = "1.12"
 async-trait = "0.1.86"
-aws-config = "1.5"
+aws-config = "1"
 aws-sdk-glue = "1.39"
 bimap = "0.6"
 bitvec = "1.0.1"
 bytes = "1.6"
 chrono = "0.4.38"
 ctor = "0.2.8"
-clap = { version = "4.5.32", features = ["derive", "cargo"] }
+clap = { version = "4", features = ["derive", "cargo"] }
 datafusion = "45"
 datafusion-cli = "45"
 derive_builder = "0.20"
 expect-test = "1"
-dirs = "6.0.0"
+dirs = "6"
 fnv = "1.0.7"
 futures = "0.3"
 hive_metastore = "0.1"
@@ -102,7 +102,7 @@ tokio = { version = "1.44", default-features = false }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.8"
 typed-builder = "0.20"
-toml = "0.8.20"
+toml = "0.8"
 url = "2.5.4"
 uuid = { version = "1.14", features = ["v7"] }
 volo-thrift = "0.10"
