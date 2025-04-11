@@ -60,8 +60,8 @@ bytes = "1.6"
 chrono = "0.4.38"
 ctor = "0.2.8"
 clap = { version = "4", features = ["derive", "cargo"] }
-datafusion = "45"
-datafusion-cli = "45"
+datafusion = "46"
+datafusion-cli = "46"
 derive_builder = "0.20"
 expect-test = "1"
 dirs = "6"
@@ -69,10 +69,10 @@ fnv = "1.0.7"
 futures = "0.3"
 hive_metastore = "0.1"
 http = "1.1"
-iceberg = { path = "./crates/iceberg" }
-iceberg-catalog-memory = { path = "./crates/catalog/memory" }
-iceberg-catalog-rest = { path = "./crates/catalog/rest" }
-iceberg-datafusion = { path = "./crates/integrations/datafusion" }
+iceberg = { version = "0.4.0", path = "./crates/iceberg" }
+iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
+iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
+iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
 mockito = "1"
 murmur3 = "0.5.2"
