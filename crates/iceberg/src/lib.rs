@@ -84,6 +84,7 @@ mod runtime;
 
 pub mod arrow;
 pub(crate) mod delete_file_index;
+pub mod test_utils;
 mod utils;
 pub mod writer;
 
