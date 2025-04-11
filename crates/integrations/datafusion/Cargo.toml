@@ -20,10 +20,7 @@ edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-datafusion"
 version = { workspace = true }
-# kept the same as DataFusion's MSRV
-# https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
-# https://github.com/apache/datafusion/blob/main/Cargo.toml#L68
-rust-version = "1.82"
+rust-version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"
