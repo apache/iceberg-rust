@@ -74,6 +74,7 @@ iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
+mimalloc = "0.1.46"
 mockito = "1"
 murmur3 = "0.5.2"
 num-bigint = "0.4.6"
