@@ -17,6 +17,7 @@
 
 //! This module contains transaction api.
 
+mod add_field;
 mod append;
 mod snapshot;
 mod sort_order;
@@ -28,8 +29,9 @@ use std::mem::discriminant;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::FormatVersion;
+use crate::spec::{FormatVersion, NestedFieldRef};
 use crate::table::Table;
+use crate::transaction::add_field::AddFieldsAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
@@ -140,6 +142,11 @@ impl<'a> Transaction<'a> {
             key_metadata,
             HashMap::new(),
         )
+    }
+
+    /// Creates an add fields action.
+    pub fn add_fields(self, fields: Vec<NestedFieldRef>) -> AddFieldsAction<'a> {
+        AddFieldsAction::new(self, fields)
     }
 
     /// Creates replace sort order action.
