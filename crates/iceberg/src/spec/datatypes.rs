@@ -608,37 +608,17 @@ impl NestedField {
 
     /// Construct a required field.
     pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
-        Self {
-            id,
-            name: name.to_string(),
-            required: true,
-            field_type: Box::new(field_type),
-            doc: None,
-            initial_default: None,
-            write_default: None,
-        }
+        Self::new(id, name, field_type, true)
     }
 
     /// Construct an optional field.
     pub fn optional(id: i32, name: impl ToString, field_type: Type) -> Self {
-        Self {
-            id,
-            name: name.to_string(),
-            required: false,
-            field_type: Box::new(field_type),
-            doc: None,
-            initial_default: None,
-            write_default: None,
-        }
+        Self::new(id, name, field_type, false)
     }
 
     /// Construct list type's element field.
     pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
-        if required {
-            Self::required(id, LIST_FIELD_NAME, field_type)
-        } else {
-            Self::optional(id, LIST_FIELD_NAME, field_type)
-        }
+        Self::new(id, LIST_FIELD_NAME, field_type, required)
     }
 
     /// Construct map type's key field.
@@ -648,11 +628,7 @@ impl NestedField {
 
     /// Construct map type's value field.
     pub fn map_value_element(id: i32, field_type: Type, required: bool) -> Self {
-        if required {
-            Self::required(id, MAP_VALUE_FIELD_NAME, field_type)
-        } else {
-            Self::optional(id, MAP_VALUE_FIELD_NAME, field_type)
-        }
+        Self::new(id, MAP_VALUE_FIELD_NAME, field_type, required)
     }
 
     /// Set the field's doc.
@@ -750,7 +726,7 @@ pub(super) mod _serde {
         Primitive(PrimitiveType),
     }
 
-    impl<'a> From<SerdeType<'a>> for Type {
+    impl From<SerdeType<'_>> for Type {
         fn from(value: SerdeType) -> Self {
             match value {
                 SerdeType::List {
@@ -971,7 +947,7 @@ mod tests {
         let record = r#"
         {
             "type": "struct",
-            "fields": [ 
+            "fields": [
                 {
                     "id": 1,
                     "name": "id",
@@ -984,7 +960,7 @@ mod tests {
                     "name": "data",
                     "required": false,
                     "type": "int"
-                } 
+                }
             ]
         }
         "#;

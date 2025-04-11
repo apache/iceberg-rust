@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  rust_msrv: "1.77.1"
+  rust_msrv: "1.84.0"
 
 jobs:
   check:
@@ -64,13 +64,6 @@ jobs:
 
       - name: Cargo clippy
         run: make check-clippy
-
-      - name: Install cargo-sort
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-sort@1.0.9
-      - name: Cargo sort
-        run: cargo sort -c -w
 
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
