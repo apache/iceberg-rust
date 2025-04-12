@@ -151,9 +151,7 @@
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
-<a href="#153" id="153">153</a>
-<a href="#154" id="154">154</a>
-<a href="#155" id="155">155</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#153" id="153">153</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -213,20 +211,18 @@
 
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">self</span>, container: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Struct) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Datum&gt;&gt; {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.inner {
-            <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">if </span>container.is_null_at_index(<span class="self">self</span>.position) {
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
-                } <span class="kw">else if let </span>Literal::Primitive(literal) = <span class="kw-2">&amp;</span>container[<span class="self">self</span>.position] {
+            <span class="prelude-val">None </span>=&gt; <span class="kw">match </span><span class="kw-2">&amp;</span>container[<span class="self">self</span>.position] {
+                <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+                <span class="prelude-val">Some</span>(Literal::Primitive(literal)) =&gt; {
                     <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Datum::new(<span class="self">self</span>.r#type().clone(), literal.clone())))
-                } <span class="kw">else </span>{
-                    <span class="prelude-val">Err</span>(Error::new(
-                        ErrorKind::Unexpected,
-                        <span class="string">"Expected Literal to be Primitive"</span>,
-                    ))
                 }
-            }
+                <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Expected Literal to be Primitive"</span>,
+                )),
+            },
             <span class="prelude-val">Some</span>(inner) =&gt; {
-                <span class="kw">if let </span>Literal::Struct(wrapped) = <span class="kw-2">&amp;</span>container[<span class="self">self</span>.position] {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(Literal::Struct(wrapped)) = <span class="kw-2">&amp;</span>container[<span class="self">self</span>.position] {
                     inner.get(wrapped)
                 } <span class="kw">else </span>{
                     <span class="prelude-val">Err</span>(Error::new(

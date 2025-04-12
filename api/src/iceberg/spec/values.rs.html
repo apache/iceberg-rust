@@ -3799,57 +3799,7 @@
 <a href="#3798" id="3798">3798</a>
 <a href="#3799" id="3799">3799</a>
 <a href="#3800" id="3800">3800</a>
-<a href="#3801" id="3801">3801</a>
-<a href="#3802" id="3802">3802</a>
-<a href="#3803" id="3803">3803</a>
-<a href="#3804" id="3804">3804</a>
-<a href="#3805" id="3805">3805</a>
-<a href="#3806" id="3806">3806</a>
-<a href="#3807" id="3807">3807</a>
-<a href="#3808" id="3808">3808</a>
-<a href="#3809" id="3809">3809</a>
-<a href="#3810" id="3810">3810</a>
-<a href="#3811" id="3811">3811</a>
-<a href="#3812" id="3812">3812</a>
-<a href="#3813" id="3813">3813</a>
-<a href="#3814" id="3814">3814</a>
-<a href="#3815" id="3815">3815</a>
-<a href="#3816" id="3816">3816</a>
-<a href="#3817" id="3817">3817</a>
-<a href="#3818" id="3818">3818</a>
-<a href="#3819" id="3819">3819</a>
-<a href="#3820" id="3820">3820</a>
-<a href="#3821" id="3821">3821</a>
-<a href="#3822" id="3822">3822</a>
-<a href="#3823" id="3823">3823</a>
-<a href="#3824" id="3824">3824</a>
-<a href="#3825" id="3825">3825</a>
-<a href="#3826" id="3826">3826</a>
-<a href="#3827" id="3827">3827</a>
-<a href="#3828" id="3828">3828</a>
-<a href="#3829" id="3829">3829</a>
-<a href="#3830" id="3830">3830</a>
-<a href="#3831" id="3831">3831</a>
-<a href="#3832" id="3832">3832</a>
-<a href="#3833" id="3833">3833</a>
-<a href="#3834" id="3834">3834</a>
-<a href="#3835" id="3835">3835</a>
-<a href="#3836" id="3836">3836</a>
-<a href="#3837" id="3837">3837</a>
-<a href="#3838" id="3838">3838</a>
-<a href="#3839" id="3839">3839</a>
-<a href="#3840" id="3840">3840</a>
-<a href="#3841" id="3841">3841</a>
-<a href="#3842" id="3842">3842</a>
-<a href="#3843" id="3843">3843</a>
-<a href="#3844" id="3844">3844</a>
-<a href="#3845" id="3845">3845</a>
-<a href="#3846" id="3846">3846</a>
-<a href="#3847" id="3847">3847</a>
-<a href="#3848" id="3848">3848</a>
-<a href="#3849" id="3849">3849</a>
-<a href="#3850" id="3850">3850</a>
-<a href="#3851" id="3851">3851</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#3801" id="3801">3801</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -3878,7 +3828,6 @@
 <span class="kw">use </span>std::str::FromStr;
 
 <span class="kw">pub use </span>_serde::RawLiteral;
-<span class="kw">use </span>bitvec::vec::BitVec;
 <span class="kw">use </span>chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 <span class="kw">use </span>num_bigint::BigInt;
 <span class="kw">use </span>ordered_float::OrderedFloat;
@@ -5577,102 +5526,53 @@
 </span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 </span><span class="kw">pub struct </span>Struct {
     <span class="doccomment">/// Vector to store the field values
-    </span>fields: Vec&lt;Literal&gt;,
-    <span class="doccomment">/// Null bitmap
-    </span>null_bitmap: BitVec,
+    </span>fields: Vec&lt;<span class="prelude-ty">Option</span>&lt;Literal&gt;&gt;,
 }
 
 <span class="kw">impl </span>Struct {
     <span class="doccomment">/// Create a empty struct.
     </span><span class="kw">pub fn </span>empty() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            fields: Vec::new(),
-            null_bitmap: BitVec::new(),
-        }
+        <span class="self">Self </span>{ fields: Vec::new() }
     }
 
     <span class="doccomment">/// Create a iterator to read the field in order of field_value.
     </span><span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ExactSizeIterator&lt;Item = <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Literal&gt;&gt; {
-        <span class="self">self</span>.null_bitmap.iter().zip(<span class="self">self</span>.fields.iter()).map(
-            |(null, value)| {
-                <span class="kw">if </span><span class="kw-2">*</span>null {
-                    <span class="prelude-val">None
-                </span>} <span class="kw">else </span>{
-                    <span class="prelude-val">Some</span>(value)
-                }
-            },
-        )
+        <span class="self">self</span>.fields.iter().map(|field| field.as_ref())
     }
 
     <span class="doccomment">/// returns true if the field at position `index` is null
     </span><span class="kw">pub fn </span>is_null_at_index(<span class="kw-2">&amp;</span><span class="self">self</span>, index: usize) -&gt; bool {
-        <span class="self">self</span>.null_bitmap[index]
+        <span class="self">self</span>.fields[index].is_none()
     }
 
     <span class="doccomment">/// Return fields in the struct.
-    </span><span class="kw">pub fn </span>fields(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Literal] {
+    </span><span class="kw">pub fn </span>fields(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;Literal&gt;] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.fields
     }
 }
 
 <span class="kw">impl </span>Index&lt;usize&gt; <span class="kw">for </span>Struct {
-    <span class="kw">type </span>Output = Literal;
+    <span class="kw">type </span>Output = <span class="prelude-ty">Option</span>&lt;Literal&gt;;
 
     <span class="kw">fn </span>index(<span class="kw-2">&amp;</span><span class="self">self</span>, idx: usize) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Output {
         <span class="kw-2">&amp;</span><span class="self">self</span>.fields[idx]
     }
 }
 
-<span class="doccomment">/// An iterator that moves out of a struct.
-</span><span class="kw">pub struct </span>StructValueIntoIter {
-    null_bitmap: bitvec::boxed::IntoIter,
-    fields: std::vec::IntoIter&lt;Literal&gt;,
-}
-
-<span class="kw">impl </span>Iterator <span class="kw">for </span>StructValueIntoIter {
-    <span class="kw">type </span>Item = <span class="prelude-ty">Option</span>&lt;Literal&gt;;
-
-    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-        <span class="kw">match </span>(<span class="self">self</span>.null_bitmap.next(), <span class="self">self</span>.fields.next()) {
-            (<span class="prelude-val">Some</span>(null), <span class="prelude-val">Some</span>(value)) =&gt; <span class="prelude-val">Some</span>(<span class="kw">if </span>null { <span class="prelude-val">None </span>} <span class="kw">else </span>{ <span class="prelude-val">Some</span>(value) }),
-            <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-        }
-    }
-}
-
 <span class="kw">impl </span>IntoIterator <span class="kw">for </span>Struct {
     <span class="kw">type </span>Item = <span class="prelude-ty">Option</span>&lt;Literal&gt;;
 
-    <span class="kw">type </span>IntoIter = StructValueIntoIter;
+    <span class="kw">type </span>IntoIter = std::vec::IntoIter&lt;<span class="prelude-ty">Option</span>&lt;Literal&gt;&gt;;
 
     <span class="kw">fn </span>into_iter(<span class="self">self</span>) -&gt; <span class="self">Self</span>::IntoIter {
-        StructValueIntoIter {
-            null_bitmap: <span class="self">self</span>.null_bitmap.into_iter(),
-            fields: <span class="self">self</span>.fields.into_iter(),
-        }
+        <span class="self">self</span>.fields.into_iter()
     }
 }
 
 <span class="kw">impl </span>FromIterator&lt;<span class="prelude-ty">Option</span>&lt;Literal&gt;&gt; <span class="kw">for </span>Struct {
     <span class="kw">fn </span>from_iter&lt;I: IntoIterator&lt;Item = <span class="prelude-ty">Option</span>&lt;Literal&gt;&gt;&gt;(iter: I) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>fields = Vec::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>null_bitmap = BitVec::new();
-
-        <span class="kw">for </span>value <span class="kw">in </span>iter.into_iter() {
-            <span class="kw">match </span>value {
-                <span class="prelude-val">Some</span>(value) =&gt; {
-                    fields.push(value);
-                    null_bitmap.push(<span class="bool-val">false</span>)
-                }
-                <span class="prelude-val">None </span>=&gt; {
-                    fields.push(Literal::Primitive(PrimitiveLiteral::Boolean(<span class="bool-val">false</span>)));
-                    null_bitmap.push(<span class="bool-val">true</span>)
-                }
-            }
-        }
         Struct {
-            fields,
-            null_bitmap,
+            fields: iter.into_iter().collect(),
         }
     }
 }
@@ -7253,7 +7153,7 @@
             <span class="kw">match </span>(<span class="kw-2">&amp;</span>desered_literal, <span class="kw-2">&amp;</span>struct_literal) {
                 (Literal::Struct(desered), Literal::Struct(expected)) =&gt; {
                     <span class="kw">match </span>(<span class="kw-2">&amp;</span>desered.fields[<span class="number">0</span>], <span class="kw-2">&amp;</span>expected.fields[<span class="number">0</span>]) {
-                        (Literal::Map(desered), Literal::Map(expected)) =&gt; {
+                        (<span class="prelude-val">Some</span>(Literal::Map(desered)), <span class="prelude-val">Some</span>(Literal::Map(expected))) =&gt; {
                             <span class="macro">assert!</span>(desered.has_same_content(expected))
                         }
                         <span class="kw">_ </span>=&gt; {

@@ -362,9 +362,7 @@
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
 <a href="#363" id="363">363</a>
-<a href="#364" id="364">364</a>
-<a href="#365" id="365">365</a>
-<a href="#366" id="366">366</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#364" id="364">364</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -471,21 +469,19 @@
         }
 
         <span class="kw">for </span>(value, field) <span class="kw">in </span>partition_value.fields().iter().zip(partition_type.fields()) {
-            <span class="kw">if </span>!field
-                .field_type
-                .as_primitive_type()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        <span class="string">"Partition field should only be primitive type."</span>,
-                    )
-                })<span class="question-mark">?
-                </span>.compatible(<span class="kw-2">&amp;</span>value.as_primitive_literal().unwrap())
-            {
-                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                    ErrorKind::DataInvalid,
-                    <span class="string">"Partition value is not compatible partition type"</span>,
-                ));
+            <span class="kw">let </span>field = field.field_type.as_primitive_type().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    <span class="string">"Partition field should only be primitive type."</span>,
+                )
+            })<span class="question-mark">?</span>;
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = value {
+                <span class="kw">if </span>!field.compatible(<span class="kw-2">&amp;</span>value.as_primitive_literal().unwrap()) {
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                        ErrorKind::DataInvalid,
+                        <span class="string">"Partition value is not compatible partition type"</span>,
+                    ));
+                }
             }
         }
         <span class="prelude-val">Ok</span>(())

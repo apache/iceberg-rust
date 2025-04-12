@@ -1681,8 +1681,7 @@
 <a href="#1680" id="1680">1680</a>
 <a href="#1681" id="1681">1681</a>
 <a href="#1682" id="1682">1682</a>
-<a href="#1683" id="1683">1683</a>
-<a href="#1684" id="1684">1684</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#1683" id="1683">1683</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -1712,7 +1711,6 @@
     Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 <span class="kw">use </span>arrow_schema::{DataType, Field, Fields, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
-<span class="kw">use </span>bitvec::macros::internal::funty::Fundamental;
 <span class="kw">use </span>num_bigint::BigInt;
 <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 <span class="kw">use </span>parquet::file::statistics::Statistics;
@@ -2346,10 +2344,10 @@
             <span class="prelude-val">Ok</span>(Box::new(Int64Array::new_scalar(<span class="kw-2">*</span>value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Float32Array::new_scalar(value.as_f32())))
+            <span class="prelude-val">Ok</span>(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) =&gt; {
-            <span class="prelude-val">Ok</span>(Box::new(Float64Array::new_scalar(value.as_f64())))
+            <span class="prelude-val">Ok</span>(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) =&gt; {
             <span class="prelude-val">Ok</span>(Box::new(StringArray::new_scalar(value.as_str())))
