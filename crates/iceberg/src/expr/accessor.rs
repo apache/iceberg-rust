@@ -58,20 +58,18 @@ impl StructAccessor {
 
     pub(crate) fn get<'a>(&'a self, container: &'a Struct) -> Result<Option<Datum>> {
         match &self.inner {
-            None => {
-                if container.is_null_at_index(self.position) {
-                    Ok(None)
-                } else if let Literal::Primitive(literal) = &container[self.position] {
+            None => match &container[self.position] {
+                None => Ok(None),
+                Some(Literal::Primitive(literal)) => {
                     Ok(Some(Datum::new(self.r#type().clone(), literal.clone())))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::Unexpected,
-                        "Expected Literal to be Primitive",
-                    ))
                 }
-            }
+                Some(_) => Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Expected Literal to be Primitive",
+                )),
+            },
             Some(inner) => {
-                if let Literal::Struct(wrapped) = &container[self.position] {
+                if let Some(Literal::Struct(wrapped)) = &container[self.position] {
                     inner.get(wrapped)
                 } else {
                     Err(Error::new(
