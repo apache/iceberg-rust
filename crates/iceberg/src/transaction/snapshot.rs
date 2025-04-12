@@ -105,21 +105,19 @@ impl<'a> SnapshotProduceAction<'a> {
         }
 
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
-            if !field
-                .field_type
-                .as_primitive_type()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Partition field should only be primitive type.",
-                    )
-                })?
-                .compatible(&value.as_primitive_literal().unwrap())
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Partition value is not compatible partition type",
-                ));
+            let field = field.field_type.as_primitive_type().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Partition field should only be primitive type.",
+                )
+            })?;
+            if let Some(value) = value {
+                if !field.compatible(&value.as_primitive_literal().unwrap()) {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Partition value is not compatible partition type",
+                    ));
+                }
             }
         }
         Ok(())

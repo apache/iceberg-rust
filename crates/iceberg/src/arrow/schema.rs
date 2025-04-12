@@ -28,7 +28,7 @@ use arrow_array::{
     Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
-use bitvec::macros::internal::funty::Fundamental;
+use funty::Fundamental;
 use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;

@@ -27,7 +27,6 @@ use std::ops::Index;
 use std::str::FromStr;
 
 pub use _serde::RawLiteral;
-use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -1726,102 +1725,53 @@ impl Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Struct {
     /// Vector to store the field values
-    fields: Vec<Literal>,
-    /// Null bitmap
-    null_bitmap: BitVec,
+    fields: Vec<Option<Literal>>,
 }
 
 impl Struct {
     /// Create a empty struct.
     pub fn empty() -> Self {
-        Self {
-            fields: Vec::new(),
-            null_bitmap: BitVec::new(),
-        }
+        Self { fields: Vec::new() }
     }
 
     /// Create a iterator to read the field in order of field_value.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = Option<&Literal>> {
-        self.null_bitmap.iter().zip(self.fields.iter()).map(
-            |(null, value)| {
-                if *null {
-                    None
-                } else {
-                    Some(value)
-                }
-            },
-        )
+        self.fields.iter().map(|field| field.as_ref())
     }
 
     /// returns true if the field at position `index` is null
     pub fn is_null_at_index(&self, index: usize) -> bool {
-        self.null_bitmap[index]
+        self.fields[index].is_none()
     }
 
     /// Return fields in the struct.
-    pub fn fields(&self) -> &[Literal] {
+    pub fn fields(&self) -> &[Option<Literal>] {
         &self.fields
     }
 }
 
 impl Index<usize> for Struct {
-    type Output = Literal;
+    type Output = Option<Literal>;
 
     fn index(&self, idx: usize) -> &Self::Output {
         &self.fields[idx]
     }
 }
 
-/// An iterator that moves out of a struct.
-pub struct StructValueIntoIter {
-    null_bitmap: bitvec::boxed::IntoIter,
-    fields: std::vec::IntoIter<Literal>,
-}
-
-impl Iterator for StructValueIntoIter {
-    type Item = Option<Literal>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match (self.null_bitmap.next(), self.fields.next()) {
-            (Some(null), Some(value)) => Some(if null { None } else { Some(value) }),
-            _ => None,
-        }
-    }
-}
-
 impl IntoIterator for Struct {
     type Item = Option<Literal>;
 
-    type IntoIter = StructValueIntoIter;
+    type IntoIter = std::vec::IntoIter<Option<Literal>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        StructValueIntoIter {
-            null_bitmap: self.null_bitmap.into_iter(),
-            fields: self.fields.into_iter(),
-        }
+        self.fields.into_iter()
     }
 }
 
 impl FromIterator<Option<Literal>> for Struct {
     fn from_iter<I: IntoIterator<Item = Option<Literal>>>(iter: I) -> Self {
-        let mut fields = Vec::new();
-        let mut null_bitmap = BitVec::new();
-
-        for value in iter.into_iter() {
-            match value {
-                Some(value) => {
-                    fields.push(value);
-                    null_bitmap.push(false)
-                }
-                None => {
-                    fields.push(Literal::Primitive(PrimitiveLiteral::Boolean(false)));
-                    null_bitmap.push(true)
-                }
-            }
-        }
         Struct {
-            fields,
-            null_bitmap,
+            fields: iter.into_iter().collect(),
         }
     }
 }
