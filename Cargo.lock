@@ -2908,7 +2908,6 @@ dependencies = [
  "derive_builder",
  "expect-test",
  "fnv",
- "funty",
  "futures",
  "iceberg-catalog-memory",
  "iceberg_test_utils",
