@@ -3352,7 +3352,7 @@ mod tests {
             match (&desered_literal, &struct_literal) {
                 (Literal::Struct(desered), Literal::Struct(expected)) => {
                     match (&desered.fields[0], &expected.fields[0]) {
-                        (Literal::Map(desered), Literal::Map(expected)) => {
+                        (Some(Literal::Map(desered)), Some(Literal::Map(expected))) => {
                             assert!(desered.has_same_content(expected))
                         }
                         _ => {
