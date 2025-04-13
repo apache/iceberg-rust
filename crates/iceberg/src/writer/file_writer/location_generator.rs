@@ -35,7 +35,7 @@ const WRITE_DATA_LOCATION: &str = "write.data.path";
 const WRITE_FOLDER_STORAGE_LOCATION: &str = "write.folder-storage.path";
 const DEFAULT_DATA_DIR: &str = "/data";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// `DefaultLocationGenerator` used to generate the data dir location of data file.
 /// The location is generated based on the table location and the data location in table properties.
 pub struct DefaultLocationGenerator {
@@ -87,7 +87,7 @@ pub trait FileNameGenerator: Clone + Send + 'static {
 /// `DefaultFileNameGenerator` used to generate file name for data file. The file name can be
 /// passed to `LocationGenerator` to generate the location of the file.
 /// The file name format is "{prefix}-{file_count}[-{suffix}].{file_format}".
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DefaultFileNameGenerator {
     prefix: String,
     suffix: String,
@@ -132,7 +132,7 @@ pub(crate) mod test {
     use uuid::Uuid;
 
     use super::LocationGenerator;
-    use crate::spec::{FormatVersion, TableMetadata};
+    use crate::spec::{FormatVersion, PartitionSpec, StructType, TableMetadata};
     use crate::writer::file_writer::location_generator::{
         FileNameGenerator, WRITE_DATA_LOCATION, WRITE_FOLDER_STORAGE_LOCATION,
     };
@@ -165,7 +165,8 @@ pub(crate) mod test {
             schemas: HashMap::new(),
             current_schema_id: 1,
             partition_specs: HashMap::new(),
-            default_spec_id: 1,
+            default_spec: PartitionSpec::unpartition_spec().into(),
+            default_partition_type: StructType::new(vec![]),
             last_partition_id: 1000,
             default_sort_order_id: 0,
             sort_orders: HashMap::from_iter(vec![]),
@@ -176,6 +177,8 @@ pub(crate) mod test {
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
+            statistics: HashMap::new(),
+            partition_statistics: HashMap::new(),
         };
 
         let file_name_genertaor = super::DefaultFileNameGenerator::new(

@@ -40,7 +40,7 @@ mod tests {
             normalize_test_name(module_path!()),
             format!("{}/testdata/file_io_gcs", env!("CARGO_MANIFEST_DIR")),
         );
-        docker_compose.run();
+        docker_compose.up();
         guard.replace(docker_compose);
     }
 
@@ -93,10 +93,7 @@ mod tests {
     #[tokio::test]
     async fn gcs_exists() {
         let file_io = get_file_io_gcs().await;
-        assert!(file_io
-            .is_exist(format!("{}/", get_gs_path()))
-            .await
-            .unwrap());
+        assert!(file_io.exists(format!("{}/", get_gs_path())).await.unwrap());
     }
 
     #[tokio::test]
@@ -108,7 +105,7 @@ mod tests {
             .write(bytes::Bytes::from_static(b"iceberg-gcs!"))
             .await
             .expect("Write to test output file");
-        assert!(file_io.is_exist(gs_file).await.unwrap())
+        assert!(file_io.exists(gs_file).await.unwrap())
     }
 
     #[tokio::test]
@@ -120,7 +117,7 @@ mod tests {
             .write(bytes::Bytes::from_static(b"iceberg!"))
             .await
             .expect("Write to test output file");
-        assert!(file_io.is_exist(&gs_file).await.unwrap());
+        assert!(file_io.exists(&gs_file).await.unwrap());
 
         let input = file_io.new_input(gs_file).unwrap();
         assert_eq!(input.read().await.unwrap(), Bytes::from_static(b"iceberg!"));

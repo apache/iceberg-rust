@@ -268,7 +268,7 @@ define_from_err!(
 define_from_err!(
     std::array::TryFromSliceError,
     ErrorKind::DataInvalid,
-    "failed to convert byte slive to array"
+    "failed to convert byte slice to array"
 );
 
 define_from_err!(
@@ -335,6 +335,12 @@ define_from_err!(
     futures::channel::mpsc::SendError,
     ErrorKind::Unexpected,
     "Failed to send a message to a channel"
+);
+
+define_from_err!(
+    arrow_schema::ArrowError,
+    ErrorKind::Unexpected,
+    "Arrow Schema Error"
 );
 
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");

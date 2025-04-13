@@ -17,13 +17,21 @@
 
 //! This module contains transaction api.
 
+mod append;
+mod snapshot;
+mod sort_order;
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::mem::discriminant;
 
+use uuid::Uuid;
+
 use crate::error::Result;
-use crate::spec::{FormatVersion, NullOrder, SortDirection, SortField, SortOrder, Transform};
+use crate::spec::FormatVersion;
 use crate::table::Table;
+use crate::transaction::append::FastAppendAction;
+use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
@@ -96,6 +104,44 @@ impl<'a> Transaction<'a> {
         Ok(self)
     }
 
+    fn generate_unique_snapshot_id(&self) -> i64 {
+        let generate_random_id = || -> i64 {
+            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
+            let snapshot_id = (lhs ^ rhs) as i64;
+            if snapshot_id < 0 {
+                -snapshot_id
+            } else {
+                snapshot_id
+            }
+        };
+        let mut snapshot_id = generate_random_id();
+        while self
+            .table
+            .metadata()
+            .snapshots()
+            .any(|s| s.snapshot_id() == snapshot_id)
+        {
+            snapshot_id = generate_random_id();
+        }
+        snapshot_id
+    }
+
+    /// Creates a fast append action.
+    pub fn fast_append(
+        self,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> Result<FastAppendAction<'a>> {
+        let snapshot_id = self.generate_unique_snapshot_id();
+        FastAppendAction::new(
+            self,
+            snapshot_id,
+            commit_uuid.unwrap_or_else(Uuid::now_v7),
+            key_metadata,
+            HashMap::new(),
+        )
+    }
+
     /// Creates replace sort order action.
     pub fn replace_sort_order(self) -> ReplaceSortOrderAction<'a> {
         ReplaceSortOrderAction {
@@ -111,7 +157,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Commit transaction.
-    pub async fn commit(self, catalog: &impl Catalog) -> Result<Table> {
+    pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().clone())
             .updates(self.updates)
@@ -122,101 +168,17 @@ impl<'a> Transaction<'a> {
     }
 }
 
-/// Transaction action for replacing sort order.
-pub struct ReplaceSortOrderAction<'a> {
-    tx: Transaction<'a>,
-    sort_fields: Vec<SortField>,
-}
-
-impl<'a> ReplaceSortOrderAction<'a> {
-    /// Adds a field for sorting in ascending order.
-    pub fn asc(self, name: &str, null_order: NullOrder) -> Result<Self> {
-        self.add_sort_field(name, SortDirection::Ascending, null_order)
-    }
-
-    /// Adds a field for sorting in descending order.
-    pub fn desc(self, name: &str, null_order: NullOrder) -> Result<Self> {
-        self.add_sort_field(name, SortDirection::Descending, null_order)
-    }
-
-    /// Finished building the action and apply it to the transaction.
-    pub fn apply(mut self) -> Result<Transaction<'a>> {
-        let unbound_sort_order = SortOrder::builder()
-            .with_fields(self.sort_fields)
-            .build_unbound()?;
-
-        let updates = vec![
-            TableUpdate::AddSortOrder {
-                sort_order: unbound_sort_order,
-            },
-            TableUpdate::SetDefaultSortOrder { sort_order_id: -1 },
-        ];
-
-        let requirements = vec![
-            TableRequirement::CurrentSchemaIdMatch {
-                current_schema_id: self.tx.table.metadata().current_schema().schema_id() as i64,
-            },
-            TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: self
-                    .tx
-                    .table
-                    .metadata()
-                    .default_sort_order()
-                    .ok_or(Error::new(
-                        ErrorKind::Unexpected,
-                        "default sort order impossible to be none",
-                    ))?
-                    .order_id,
-            },
-        ];
-
-        self.tx.append_requirements(requirements)?;
-        self.tx.append_updates(updates)?;
-        Ok(self.tx)
-    }
-
-    fn add_sort_field(
-        mut self,
-        name: &str,
-        sort_direction: SortDirection,
-        null_order: NullOrder,
-    ) -> Result<Self> {
-        let field_id = self
-            .tx
-            .table
-            .metadata()
-            .current_schema()
-            .field_id_by_name(name)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Cannot find field {} in table schema", name),
-                )
-            })?;
-
-        let sort_field = SortField::builder()
-            .source_id(field_id)
-            .transform(Transform::Identity)
-            .direction(sort_direction)
-            .null_order(null_order)
-            .build();
-
-        self.sort_fields.push(sort_field);
-        Ok(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
 
-    use crate::io::FileIO;
+    use crate::io::FileIOBuilder;
     use crate::spec::{FormatVersion, TableMetadata};
     use crate::table::Table;
     use crate::transaction::Transaction;
-    use crate::{TableIdent, TableRequirement, TableUpdate};
+    use crate::{TableIdent, TableUpdate};
 
     fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -232,12 +194,12 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap()
     }
 
-    fn make_v2_table() -> Table {
+    pub fn make_v2_table() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -251,7 +213,26 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .build()
+            .unwrap()
+    }
+
+    pub fn make_v2_minimal_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV2ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIOBuilder::new("memory").build().unwrap())
             .build()
             .unwrap()
     }
@@ -324,35 +305,6 @@ mod tests {
                 removals: vec!["a".to_string(), "b".to_string()]
             }],
             tx.updates
-        );
-    }
-
-    #[test]
-    fn test_replace_sort_order() {
-        let table = make_v2_table();
-        let tx = Transaction::new(&table);
-        let tx = tx.replace_sort_order().apply().unwrap();
-
-        assert_eq!(
-            vec![
-                TableUpdate::AddSortOrder {
-                    sort_order: Default::default()
-                },
-                TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }
-            ],
-            tx.updates
-        );
-
-        assert_eq!(
-            vec![
-                TableRequirement::CurrentSchemaIdMatch {
-                    current_schema_id: 1
-                },
-                TableRequirement::DefaultSortOrderIdMatch {
-                    default_sort_order_id: 3
-                }
-            ],
-            tx.requirements
         );
     }
 

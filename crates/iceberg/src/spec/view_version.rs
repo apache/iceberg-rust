@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::view_metadata::ViewVersionLog;
+use super::INITIAL_VIEW_VERSION_ID;
 use crate::catalog::NamespaceIdent;
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::spec::{SchemaId, SchemaRef, ViewMetadata};
@@ -44,12 +45,14 @@ pub type ViewVersionId = i32;
 /// A view versions represents the definition of a view at a specific point in time.
 pub struct ViewVersion {
     /// A unique long ID
+    #[builder(default = INITIAL_VIEW_VERSION_ID)]
     version_id: ViewVersionId,
     /// ID of the schema for the view version
     schema_id: SchemaId,
     /// Timestamp when the version was created (ms from epoch)
     timestamp_ms: i64,
     /// A string to string map of summary metadata about the version
+    #[builder(default = HashMap::new())]
     summary: HashMap<String, String>,
     /// A list of representations for the view definition.
     representations: ViewRepresentations,
@@ -124,9 +127,35 @@ impl ViewVersion {
     }
 
     /// Retrieve the history log entry for this view version.
-    #[allow(dead_code)]
     pub(crate) fn log(&self) -> ViewVersionLog {
         ViewVersionLog::new(self.version_id, self.timestamp_ms)
+    }
+
+    /// Check if this view version behaves the same as another view spec.
+    ///
+    /// Returns true if the view version is equal to the other view version
+    /// with `timestamp_ms` and `version_id` ignored. The following must be identical:
+    /// * Summary (all of them)
+    /// * Representations
+    /// * Default Catalog
+    /// * Default Namespace
+    /// * The Schema ID
+    pub(crate) fn behaves_identical_to(&self, other: &Self) -> bool {
+        self.summary == other.summary
+            && self.representations == other.representations
+            && self.default_catalog == other.default_catalog
+            && self.default_namespace == other.default_namespace
+            && self.schema_id == other.schema_id
+    }
+
+    /// Change the version id of this view version.
+    pub fn with_version_id(self, version_id: i32) -> Self {
+        Self { version_id, ..self }
+    }
+
+    /// Change the schema id of this view version.
+    pub fn with_schema_id(self, schema_id: SchemaId) -> Self {
+        Self { schema_id, ..self }
     }
 }
 
@@ -148,7 +177,7 @@ impl ViewRepresentations {
     }
 
     /// Get an iterator over the representations
-    pub fn iter(&self) -> impl Iterator<Item = &'_ ViewRepresentation> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &'_ ViewRepresentation> {
         self.0.iter()
     }
 }
@@ -253,6 +282,7 @@ mod tests {
     use crate::spec::view_version::ViewVersion;
     use crate::spec::view_version::_serde::ViewVersionV1;
     use crate::spec::ViewRepresentations;
+    use crate::NamespaceIdent;
 
     #[test]
     fn view_version() {
@@ -309,5 +339,51 @@ mod tests {
             result.default_namespace.inner(),
             vec!["default".to_string()]
         );
+    }
+
+    #[test]
+    fn test_behaves_identical_to() {
+        let view_version = ViewVersion::builder()
+            .with_version_id(1)
+            .with_schema_id(1)
+            .with_timestamp_ms(1573518431292)
+            .with_summary({
+                let mut map = std::collections::HashMap::new();
+                map.insert("engine-name".to_string(), "Spark".to_string());
+                map.insert("engineVersion".to_string(), "3.3.2".to_string());
+                map
+            })
+            .with_representations(ViewRepresentations(vec![super::ViewRepresentation::Sql(
+                super::SqlViewRepresentation {
+                    sql: "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2"
+                        .to_string(),
+                    dialect: "spark".to_string(),
+                },
+            )]))
+            .with_default_catalog(Some("prod".to_string()))
+            .with_default_namespace(NamespaceIdent::new("default".to_string()))
+            .build();
+
+        let mut identical_view_version = view_version.clone();
+        identical_view_version.version_id = 2;
+        identical_view_version.timestamp_ms = 1573518431293;
+
+        let different_view_version = ViewVersion::builder()
+            .with_version_id(view_version.version_id())
+            .with_schema_id(view_version.schema_id())
+            .with_timestamp_ms(view_version.timestamp_ms())
+            .with_summary(view_version.summary().clone())
+            .with_representations(ViewRepresentations(vec![super::ViewRepresentation::Sql(
+                super::SqlViewRepresentation {
+                    sql: "SELECT * from events".to_string(),
+                    dialect: "spark".to_string(),
+                },
+            )]))
+            .with_default_catalog(view_version.default_catalog().cloned())
+            .with_default_namespace(view_version.default_namespace().clone())
+            .build();
+
+        assert!(view_version.behaves_identical_to(&identical_view_version));
+        assert!(!view_version.behaves_identical_to(&different_view_version));
     }
 }

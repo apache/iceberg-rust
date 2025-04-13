@@ -55,6 +55,7 @@
 
 #[macro_use]
 extern crate derive_builder;
+extern crate core;
 
 mod error;
 pub use error::{Error, ErrorKind, Result};
@@ -72,6 +73,7 @@ mod avro;
 pub mod io;
 pub mod spec;
 
+pub mod inspect;
 pub mod scan;
 
 pub mod expr;
@@ -81,5 +83,9 @@ pub mod transform;
 mod runtime;
 
 pub mod arrow;
+pub(crate) mod delete_file_index;
 mod utils;
 pub mod writer;
+
+mod delete_vector;
+pub mod puffin;

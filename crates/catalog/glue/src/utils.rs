@@ -299,7 +299,9 @@ mod tests {
             .location("my_location".to_string())
             .schema(schema)
             .build();
-        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
+            .build()?
+            .metadata;
 
         Ok(metadata)
     }

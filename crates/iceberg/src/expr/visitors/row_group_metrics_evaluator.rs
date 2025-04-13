@@ -81,8 +81,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
     }
 
     fn null_count(&self, field_id: i32) -> Option<u64> {
-        self.stats_for_field_id(field_id)
-            .map(|stats| stats.null_count())
+        self.stats_for_field_id(field_id)?.null_count_opt()
     }
 
     fn value_count(&self) -> u64 {
@@ -141,10 +140,6 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return Ok(None);
         };
 
-        if !stats.has_min_max_set() {
-            return Ok(None);
-        }
-
         get_parquet_stat_min_as_datum(&primitive_type, stats)
     }
 
@@ -152,10 +147,6 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
             return Ok(None);
         };
-
-        if !stats.has_min_max_set() {
-            return Ok(None);
-        }
 
         get_parquet_stat_max_as_datum(&primitive_type, stats)
     }
@@ -593,7 +584,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 1, false)),
+            Some(Statistics::float(None, None, None, Some(1), false)),
             1,
             None,
         )?;
@@ -620,7 +611,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 1, false)),
+            Some(Statistics::float(None, None, None, Some(1), false)),
             1,
             None,
         )?;
@@ -647,7 +638,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 0, false)),
+            Some(Statistics::float(None, None, None, Some(0), false)),
             1,
             None,
         )?;
@@ -674,7 +665,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 0, false)),
+            Some(Statistics::float(None, None, None, Some(0), false)),
             1,
             None,
         )?;
@@ -701,7 +692,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 1, false)),
+            Some(Statistics::float(None, None, None, Some(1), false)),
             1,
             None,
         )?;
@@ -728,7 +719,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(2.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -755,7 +752,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, Some(2.0), None, 0, false)),
+            Some(Statistics::float(None, Some(2.0), None, Some(0), false)),
             1,
             None,
         )?;
@@ -782,7 +779,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(0.9), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(0.9),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -809,7 +812,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(2.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -836,7 +845,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(None, None, None, 1, false)),
+            Some(Statistics::float(None, None, None, Some(1), false)),
             1,
             None,
         )?;
@@ -863,7 +872,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(f32::NAN), Some(2.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(f32::NAN),
+                Some(2.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -890,7 +905,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(1.5), Some(2.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(1.5),
+                Some(2.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -917,7 +938,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(f32::NAN), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(f32::NAN),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -944,7 +971,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(0.5), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(0.5),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -971,7 +1004,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(2.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(2.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -998,7 +1037,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(1.0), Some(1.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(1.0),
+                Some(1.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -1027,7 +1072,7 @@ mod tests {
             1,
             None,
             1,
-            Some(Statistics::byte_array(None, None, None, 1, false)),
+            Some(Statistics::byte_array(None, None, None, Some(1), false)),
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -1054,7 +1099,7 @@ mod tests {
             1,
             None,
             1,
-            Some(Statistics::byte_array(None, None, None, 0, false)),
+            Some(Statistics::byte_array(None, None, None, Some(0), false)),
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -1086,7 +1131,7 @@ mod tests {
                 Some(ByteArray::from(vec![255u8])),
                 Some(ByteArray::from(vec![32u8])),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1120,7 +1165,7 @@ mod tests {
                 Some(ByteArray::from("ice".as_bytes())),
                 Some(ByteArray::from(vec![255u8])),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1150,7 +1195,7 @@ mod tests {
             None,
             1,
             // Max val of 0xFF is not valid utf8
-            Some(Statistics::byte_array(None, None, None, 1, false)),
+            Some(Statistics::byte_array(None, None, None, Some(1), false)),
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -1182,7 +1227,7 @@ mod tests {
                 Some(ByteArray::from("id".as_bytes())),
                 Some(ByteArray::from("ie".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1216,7 +1261,7 @@ mod tests {
                 Some(ByteArray::from("h".as_bytes())),
                 Some(ByteArray::from("ib".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1250,7 +1295,7 @@ mod tests {
                 Some(ByteArray::from("h".as_bytes())),
                 Some(ByteArray::from("j".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1279,7 +1324,7 @@ mod tests {
             1,
             None,
             1,
-            Some(Statistics::byte_array(None, None, None, 1, false)),
+            Some(Statistics::byte_array(None, None, None, Some(1), false)),
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -1311,7 +1356,7 @@ mod tests {
                 Some(ByteArray::from(vec![255u8])),
                 Some(ByteArray::from(vec![32u8])),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1345,7 +1390,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 Some(ByteArray::from(vec![255u8])),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1379,7 +1424,7 @@ mod tests {
                 None,
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1413,7 +1458,7 @@ mod tests {
                 Some(ByteArray::from("ice".as_bytes())),
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1447,7 +1492,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1481,7 +1526,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 Some(ByteArray::from("icy".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1515,7 +1560,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1548,7 +1593,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
-                1,
+                Some(1),
                 false,
             )),
         )?;
@@ -1577,7 +1622,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(11.0), Some(12.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(11.0),
+                Some(12.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -1606,7 +1657,7 @@ mod tests {
             1,
             None,
             1,
-            Some(Statistics::byte_array(None, None, None, 0, false)),
+            Some(Statistics::byte_array(None, None, None, Some(0), false)),
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
@@ -1633,7 +1684,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(f32::NAN), Some(1.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(f32::NAN),
+                Some(1.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -1660,7 +1717,7 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(4.0), None, None, 0, false)),
+            Some(Statistics::float(Some(4.0), None, None, Some(0), false)),
             1,
             None,
         )?;
@@ -1678,7 +1735,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert!(result);
+        assert!(!result);
         Ok(())
     }
 
@@ -1687,7 +1744,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(f32::NAN), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(f32::NAN),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -1714,7 +1777,13 @@ mod tests {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
-            Some(Statistics::float(Some(0.0), Some(1.0), None, 0, false)),
+            Some(Statistics::float(
+                Some(0.0),
+                Some(1.0),
+                None,
+                Some(0),
+                false,
+            )),
             1,
             None,
         )?;
@@ -1748,7 +1817,7 @@ mod tests {
                 Some(ByteArray::from("iceberg".as_bytes())),
                 Some(ByteArray::from("iceberg".as_bytes())),
                 None,
-                0,
+                Some(0),
                 false,
             )),
         )?;
@@ -1862,7 +1931,7 @@ mod tests {
             .set_num_rows(num_rows)
             .set_column_metadata(vec![
                 col_1_meta.build()?,
-                // .set_statistics(Statistics::float(None, None, None, 1, false))
+                // .set_statistics(Statistics::float(None, None, None, Some(1), false))
                 col_2_meta.build()?,
             ])
             .build();

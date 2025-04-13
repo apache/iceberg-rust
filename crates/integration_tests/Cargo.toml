@@ -15,8 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from pyiceberg_core import hello_world
+[package]
+edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+name = "iceberg-integration-tests"
+repository = { workspace = true }
+rust-version = { workspace = true }
+version = { workspace = true }
 
-
-def test_hello_world():
-    hello_world()
+[dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+ctor = { workspace = true }
+datafusion = { workspace = true }
+futures = { workspace = true }
+iceberg = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
+iceberg-datafusion = { workspace = true }
+iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
+parquet = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }

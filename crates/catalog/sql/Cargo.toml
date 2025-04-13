@@ -16,29 +16,31 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-sql"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg-catalog-sql"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust Sql Catalog"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "sql", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
 iceberg = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 typed-builder = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
 regex = "1.10.5"
-sqlx = { version = "0.8.0", features = [
+sqlx = { version = "0.8.1", features = [
   "tls-rustls",
   "runtime-tokio",
   "any",

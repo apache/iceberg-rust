@@ -34,6 +34,8 @@ use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
+/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
+pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
@@ -52,6 +54,18 @@ pub enum Operation {
     Delete,
 }
 
+impl Operation {
+    /// Returns the string representation (lowercase) of the operation.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Operation::Append => "append",
+            Operation::Replace => "replace",
+            Operation::Overwrite => "overwrite",
+            Operation::Delete => "delete",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Summarises the changes in the snapshot.
 pub struct Summary {
@@ -59,7 +73,7 @@ pub struct Summary {
     pub operation: Operation,
     /// Other summary data.
     #[serde(flatten)]
-    pub other: HashMap<String, String>,
+    pub additional_properties: HashMap<String, String>,
 }
 
 impl Default for Operation {
@@ -93,7 +107,7 @@ pub struct Snapshot {
     /// A string map that summarizes the snapshot changes, including operation.
     summary: Summary,
     /// ID of the table’s current schema when the snapshot was created.
-    #[builder(setter(strip_option), default = None)]
+    #[builder(setter(strip_option(fallback = schema_id_opt)), default = None)]
     schema_id: Option<SchemaId>,
 }
 
@@ -193,6 +207,7 @@ impl Snapshot {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn log(&self) -> SnapshotLog {
         SnapshotLog {
             timestamp_ms: self.timestamp_ms,
@@ -291,7 +306,7 @@ pub(super) mod _serde {
                    },
                 summary: v1.summary.unwrap_or(Summary {
                     operation: Operation::default(),
-                    other: HashMap::new(),
+                    additional_properties: HashMap::new(),
                 }),
                 schema_id: v1.schema_id,
             })
@@ -322,6 +337,13 @@ pub struct SnapshotReference {
     #[serde(flatten)]
     /// Snapshot retention policy
     pub retention: SnapshotRetention,
+}
+
+impl SnapshotReference {
+    /// Returns true if the snapshot reference is a branch.
+    pub fn is_branch(&self) -> bool {
+        matches!(self.retention, SnapshotRetention::Branch { .. })
+    }
 }
 
 impl SnapshotReference {
@@ -365,6 +387,21 @@ pub enum SnapshotRetention {
     },
 }
 
+impl SnapshotRetention {
+    /// Create a new branch retention policy
+    pub fn branch(
+        min_snapshots_to_keep: Option<i32>,
+        max_snapshot_age_ms: Option<i64>,
+        max_ref_age_ms: Option<i64>,
+    ) -> Self {
+        SnapshotRetention::Branch {
+            min_snapshots_to_keep,
+            max_snapshot_age_ms,
+            max_ref_age_ms,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -401,7 +438,7 @@ mod tests {
         assert_eq!(
             Summary {
                 operation: Operation::Append,
-                other: HashMap::new()
+                additional_properties: HashMap::new()
             },
             *result.summary()
         );

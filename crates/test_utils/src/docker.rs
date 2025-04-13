@@ -18,6 +18,8 @@
 use std::net::IpAddr;
 use std::process::Command;
 
+use tracing::error;
+
 use crate::cmd::{get_cmd_output, get_cmd_output_result, run_command};
 
 /// A utility to manage the lifecycle of `docker compose`.
@@ -65,7 +67,7 @@ impl DockerCompose {
         }
     }
 
-    pub fn run(&self) {
+    pub fn up(&self) {
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 
@@ -91,29 +93,7 @@ impl DockerCompose {
         )
     }
 
-    pub fn get_container_ip(&self, service_name: impl AsRef<str>) -> IpAddr {
-        let container_name = format!("{}-{}-1", self.project_name, service_name.as_ref());
-        let mut cmd = Command::new("docker");
-        cmd.arg("inspect")
-            .arg("-f")
-            .arg("{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
-            .arg(&container_name);
-
-        let ip_result = get_cmd_output(cmd, format!("Get container ip of {container_name}"))
-            .trim()
-            .parse::<IpAddr>();
-        match ip_result {
-            Ok(ip) => ip,
-            Err(e) => {
-                log::error!("Invalid IP, {e}");
-                panic!("Failed to parse IP for {container_name}")
-            }
-        }
-    }
-}
-
-impl Drop for DockerCompose {
-    fn drop(&mut self) {
+    pub fn down(&self) {
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 
@@ -133,5 +113,31 @@ impl Drop for DockerCompose {
                 self.docker_compose_dir, self.project_name
             ),
         )
+    }
+
+    pub fn get_container_ip(&self, service_name: impl AsRef<str>) -> IpAddr {
+        let container_name = format!("{}-{}-1", self.project_name, service_name.as_ref());
+        let mut cmd = Command::new("docker");
+        cmd.arg("inspect")
+            .arg("-f")
+            .arg("{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
+            .arg(&container_name);
+
+        let ip_result = get_cmd_output(cmd, format!("Get container ip of {container_name}"))
+            .trim()
+            .parse::<IpAddr>();
+        match ip_result {
+            Ok(ip) => ip,
+            Err(e) => {
+                error!("Invalid IP, {e}");
+                panic!("Failed to parse IP for {container_name}")
+            }
+        }
+    }
+}
+
+impl Drop for DockerCompose {
+    fn drop(&mut self) {
+        self.down()
     }
 }

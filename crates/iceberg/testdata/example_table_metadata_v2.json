@@ -7,7 +7,12 @@
   "last-column-id": 3,
   "current-schema-id": 1,
   "schemas": [
-    {"type": "struct", "schema-id": 0, "fields": [{"id": 1, "name": "x", "required": true, "type": "long"}]},
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {"id": 1, "name": "x", "required": true, "type": "long"}
+      ]},
     {
       "type": "struct",
       "schema-id": 1,
@@ -16,12 +21,23 @@
         {"id": 1, "name": "x", "required": true, "type": "long"},
         {"id": 2, "name": "y", "required": true, "type": "long", "doc": "comment"},
         {"id": 3, "name": "z", "required": true, "type": "long"},
-        {"id": 4, "name": "a", "required": true, "type": "string"}
+        {"id": 4, "name": "a", "required": true, "type": "string"},
+        {"id": 5, "name": "dbl", "required": true, "type": "double"},
+        {"id": 6, "name": "i32", "required": true, "type": "int"},
+        {"id": 7, "name": "i64", "required": true, "type": "long"},
+        {"id": 8, "name": "bool", "required": true, "type": "boolean"}
       ]
     }
   ],
   "default-spec-id": 0,
-  "partition-specs": [{"spec-id": 0, "fields": [{"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000}]}],
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000}
+      ]
+    }
+  ],
   "last-partition-id": 1000,
   "default-sort-order-id": 3,
   "sort-orders": [

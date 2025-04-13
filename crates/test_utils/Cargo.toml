@@ -16,18 +16,18 @@
 # under the License.
 
 [package]
-name = "iceberg_test_utils"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg_test_utils"
 rust-version = { workspace = true }
+version = { workspace = true }
 
-repository = { workspace = true }
 license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
-env_logger = { workspace = true }
-log = "0.4.20"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [features]
 tests = []

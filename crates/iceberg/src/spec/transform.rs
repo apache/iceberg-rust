@@ -30,6 +30,7 @@ use crate::expr::{
     SetExpression, UnaryExpression,
 };
 use crate::spec::datatypes::{PrimitiveType, Type};
+use crate::spec::Literal;
 use crate::transform::{create_transform_function, BoxedTransformFunction};
 use crate::ErrorKind;
 
@@ -133,6 +134,27 @@ pub enum Transform {
 }
 
 impl Transform {
+    /// Returns a human-readable String representation of a transformed value.
+    pub fn to_human_string(&self, field_type: &Type, value: Option<&Literal>) -> String {
+        if let Some(value) = value {
+            if let Some(value) = value.as_primitive_literal() {
+                let field_type = field_type.as_primitive_type().unwrap();
+                let datum = Datum::new(field_type.clone(), value);
+                match self {
+                    Self::Identity => datum.to_string(),
+                    Self::Void => "null".to_string(),
+                    _ => {
+                        todo!()
+                    }
+                }
+            } else {
+                "null".to_string()
+            }
+        } else {
+            "null".to_string()
+        }
+    }
+
     /// Get the return type of transform given the input type.
     /// Returns `None` if it can't be transformed.
     pub fn result_type(&self, input_type: &Type) -> Result<Type> {
@@ -197,7 +219,27 @@ impl Transform {
                     ))
                 }
             }
-            Transform::Year | Transform::Month | Transform::Day => {
+            Transform::Year | Transform::Month => {
+                if let Type::Primitive(p) = input_type {
+                    match p {
+                        PrimitiveType::Timestamp
+                        | PrimitiveType::Timestamptz
+                        | PrimitiveType::TimestampNs
+                        | PrimitiveType::TimestamptzNs
+                        | PrimitiveType::Date => Ok(Type::Primitive(PrimitiveType::Int)),
+                        _ => Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("{input_type} is not a valid input type of {self} transform",),
+                        )),
+                    }
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of {self} transform",),
+                    ))
+                }
+            }
+            Transform::Day => {
                 if let Type::Primitive(p) = input_type {
                     match p {
                         PrimitiveType::Timestamp
@@ -578,14 +620,30 @@ impl Transform {
                     | PredicateOperator::LessThanOrEq
                     | PredicateOperator::In => {
                         if v < 0 {
-                            return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                            // # TODO
+                            // An ugly hack to fix. Refine the increment and decrement logic later.
+                            match self {
+                                Transform::Day => {
+                                    return Some(AdjustedProjection::Single(Datum::date(v + 1)))
+                                }
+                                _ => {
+                                    return Some(AdjustedProjection::Single(Datum::int(v + 1)));
+                                }
+                            }
                         };
                     }
                     PredicateOperator::Eq => {
                         if v < 0 {
                             let new_set = FnvHashSet::from_iter(vec![
                                 transformed.to_owned(),
-                                Datum::int(v + 1),
+                                // # TODO
+                                // An ugly hack to fix. Refine the increment and decrement logic later.
+                                {
+                                    match self {
+                                        Transform::Day => Datum::date(v + 1),
+                                        _ => Datum::int(v + 1),
+                                    }
+                                },
                             ]);
                             return Some(AdjustedProjection::Set(new_set));
                         }

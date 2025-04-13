@@ -106,15 +106,17 @@ impl std::fmt::Debug for ManifestListWriter {
 
 impl ManifestListWriter {
     /// Construct a v1 [`ManifestListWriter`] that writes to a provided [`OutputFile`].
-    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: i64) -> Self {
-        let metadata = HashMap::from_iter([
+    pub fn v1(output_file: OutputFile, snapshot_id: i64, parent_snapshot_id: Option<i64>) -> Self {
+        let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
-            (
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             ("format-version".to_string(), "1".to_string()),
         ]);
+        if let Some(parent_snapshot_id) = parent_snapshot_id {
+            metadata.insert(
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            );
+        }
         Self::new(FormatVersion::V1, output_file, metadata, 0, snapshot_id)
     }
 
@@ -122,18 +124,20 @@ impl ManifestListWriter {
     pub fn v2(
         output_file: OutputFile,
         snapshot_id: i64,
-        parent_snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
         sequence_number: i64,
     ) -> Self {
-        let metadata = HashMap::from_iter([
+        let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
-            (
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
+        metadata.insert(
+            "parent-snapshot-id".to_string(),
+            parent_snapshot_id
+                .map(|v| v.to_string())
+                .unwrap_or("null".to_string()),
+        );
         Self::new(
             FormatVersion::V2,
             output_file,
@@ -503,7 +507,7 @@ mod _const_schema {
 }
 
 /// Entry in a manifest list.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct ManifestFile {
     /// field: 500
     ///
@@ -580,8 +584,25 @@ pub struct ManifestFile {
     pub key_metadata: Vec<u8>,
 }
 
+impl ManifestFile {
+    /// Checks if the manifest file has any added files.
+    pub fn has_added_files(&self) -> bool {
+        self.added_files_count.map(|c| c > 0).unwrap_or(true)
+    }
+
+    /// Checks whether this manifest contains entries with DELETED status.
+    pub fn has_deleted_files(&self) -> bool {
+        self.deleted_files_count.map(|c| c > 0).unwrap_or(true)
+    }
+
+    /// Checks if the manifest file has any existed files.
+    pub fn has_existing_files(&self) -> bool {
+        self.existing_files_count.map(|c| c > 0).unwrap_or(true)
+    }
+}
+
 /// The type of files tracked by the manifest, either data or delete files; Data(0) for all v1 manifests
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum ManifestContentType {
     /// The manifest content is data.
     Data = 0,
@@ -652,7 +673,7 @@ impl ManifestFile {
 /// Field summary for partition field in the spec.
 ///
 /// Each field in the list corresponds to a field in the manifest file’s partition spec.
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Hash)]
 pub struct FieldSummary {
     /// field: 509
     ///
@@ -841,12 +862,16 @@ pub(super) mod _serde {
                 contains_nan: self.contains_nan,
                 lower_bound: self
                     .lower_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
                 upper_bound: self
                     .upper_bound
-                    .map(|v| Datum::try_from_bytes(&v, r#type.clone()))
-                    .transpose()?,
+                    .as_ref()
+                    .map(|v| Datum::try_from_bytes(v, r#type.clone()))
+                    .transpose()
+                    .map_err(|err| err.with_context("type", format!("{:?}", r#type)))?,
             })
         }
     }
@@ -957,21 +982,22 @@ pub(super) mod _serde {
 
     fn convert_to_serde_field_summary(
         partitions: Vec<super::FieldSummary>,
-    ) -> Option<Vec<FieldSummary>> {
+    ) -> Result<Option<Vec<FieldSummary>>> {
         if partitions.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(
-                partitions
-                    .into_iter()
-                    .map(|v| FieldSummary {
-                        contains_null: v.contains_null,
-                        contains_nan: v.contains_nan,
-                        lower_bound: v.lower_bound.map(|v| v.to_bytes()),
-                        upper_bound: v.upper_bound.map(|v| v.to_bytes()),
-                    })
-                    .collect(),
-            )
+            let mut vs = Vec::with_capacity(partitions.len());
+
+            for v in partitions {
+                let fs = FieldSummary {
+                    contains_null: v.contains_null,
+                    contains_nan: v.contains_nan,
+                    lower_bound: v.lower_bound.map(|v| v.to_bytes()).transpose()?,
+                    upper_bound: v.upper_bound.map(|v| v.to_bytes()).transpose()?,
+                };
+                vs.push(fs);
+            }
+            Ok(Some(vs))
         }
     }
 
@@ -987,7 +1013,7 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions);
+            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,
@@ -1061,7 +1087,7 @@ pub(super) mod _serde {
         type Error = Error;
 
         fn try_from(value: ManifestFile) -> std::result::Result<Self, Self::Error> {
-            let partitions = convert_to_serde_field_summary(value.partitions);
+            let partitions = convert_to_serde_field_summary(value.partitions)?;
             let key_metadata = convert_to_serde_key_metadata(value.key_metadata);
             Ok(Self {
                 manifest_path: value.manifest_path,
@@ -1146,7 +1172,7 @@ mod test {
         let mut writer = ManifestListWriter::v1(
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
-            1646658105718557341,
+            Some(1646658105718557341),
         );
 
         writer
@@ -1213,7 +1239,7 @@ mod test {
         let mut writer = ManifestListWriter::v2(
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
-            1646658105718557341,
+            Some(1646658105718557341),
             1,
         );
 
@@ -1335,7 +1361,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, 0);
+        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1391,7 +1417,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, 0, seq_num);
+        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1445,7 +1471,7 @@ mod test {
         let io = FileIOBuilder::new_fs_io().build().unwrap();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
-        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, 0, 1);
+        let mut writer = ManifestListWriter::v2(output_file, 1646658105718557341, Some(0), 1);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

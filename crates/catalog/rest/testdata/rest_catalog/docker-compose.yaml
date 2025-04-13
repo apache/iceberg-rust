@@ -20,12 +20,12 @@ networks:
 
 services:
   rest:
-    image: tabulario/iceberg-rest:0.10.0
+    image: apache/iceberg-rest-fixture
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
-      - CATALOG_CATOLOG__IMPL=org.apache.iceberg.jdbc.JdbcCatalog
+      - CATALOG_CATALOG__IMPL=org.apache.iceberg.jdbc.JdbcCatalog
       - CATALOG_URI=jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory
       - CATALOG_WAREHOUSE=s3://icebergdata/demo
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
@@ -34,8 +34,6 @@ services:
       - minio
     networks:
       rest_bridge:
-        aliases:
-          - icebergdata.minio
     expose:
       - 8181
 

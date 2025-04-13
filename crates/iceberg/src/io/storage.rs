@@ -17,8 +17,11 @@
 
 use std::sync::Arc;
 
+use opendal::layers::RetryLayer;
 #[cfg(feature = "storage-gcs")]
 use opendal::services::GcsConfig;
+#[cfg(feature = "storage-oss")]
+use opendal::services::OssConfig;
 #[cfg(feature = "storage-s3")]
 use opendal::services::S3Config;
 use opendal::{Operator, Scheme};
@@ -30,7 +33,7 @@ use crate::{Error, ErrorKind};
 #[derive(Debug)]
 pub(crate) enum Storage {
     #[cfg(feature = "storage-memory")]
-    Memory,
+    Memory(Operator),
     #[cfg(feature = "storage-fs")]
     LocalFs,
     #[cfg(feature = "storage-s3")]
@@ -38,12 +41,10 @@ pub(crate) enum Storage {
         /// s3 storage could have `s3://` and `s3a://`.
         /// Storing the scheme string here to return the correct path.
         scheme_str: String,
-        /// uses the same client for one FileIO Storage.
-        ///
-        /// TODO: allow users to configure this client.
-        client: reqwest::Client,
         config: Arc<S3Config>,
     },
+    #[cfg(feature = "storage-oss")]
+    Oss { config: Arc<OssConfig> },
     #[cfg(feature = "storage-gcs")]
     Gcs { config: Arc<GcsConfig> },
 }
@@ -56,19 +57,23 @@ impl Storage {
 
         match scheme {
             #[cfg(feature = "storage-memory")]
-            Scheme::Memory => Ok(Self::Memory),
+            Scheme::Memory => Ok(Self::Memory(super::memory_config_build()?)),
             #[cfg(feature = "storage-fs")]
             Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 {
                 scheme_str,
-                client: reqwest::Client::new(),
                 config: super::s3_config_parse(props)?.into(),
             }),
             #[cfg(feature = "storage-gcs")]
             Scheme::Gcs => Ok(Self::Gcs {
                 config: super::gcs_config_parse(props)?.into(),
             }),
+            #[cfg(feature = "storage-oss")]
+            Scheme::Oss => Ok(Self::Oss {
+                config: super::oss_config_parse(props)?.into(),
+            }),
+            // Update doc on [`FileIO`] when adding new schemes.
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("Constructing file io from scheme: {scheme} not supported now",),
@@ -93,15 +98,13 @@ impl Storage {
         path: &'a impl AsRef<str>,
     ) -> crate::Result<(Operator, &'a str)> {
         let path = path.as_ref();
-        match self {
+        let (operator, relative_path): (Operator, &str) = match self {
             #[cfg(feature = "storage-memory")]
-            Storage::Memory => {
-                let op = super::memory_config_build()?;
-
+            Storage::Memory(op) => {
                 if let Some(stripped) = path.strip_prefix("memory:/") {
-                    Ok((op, stripped))
+                    Ok((op.clone(), stripped))
                 } else {
-                    Ok((op, &path[1..]))
+                    Ok((op.clone(), &path[1..]))
                 }
             }
             #[cfg(feature = "storage-fs")]
@@ -115,12 +118,8 @@ impl Storage {
                 }
             }
             #[cfg(feature = "storage-s3")]
-            Storage::S3 {
-                scheme_str,
-                client,
-                config,
-            } => {
-                let op = super::s3_config_build(client, config, path)?;
+            Storage::S3 { scheme_str, config } => {
+                let op = super::s3_config_build(config, path)?;
                 let op_info = op.info();
 
                 // Check prefix of s3 path.
@@ -134,6 +133,7 @@ impl Storage {
                     ))
                 }
             }
+
             #[cfg(feature = "storage-gcs")]
             Storage::Gcs { config } => {
                 let operator = super::gcs_config_build(config, path)?;
@@ -147,16 +147,38 @@ impl Storage {
                     ))
                 }
             }
+            #[cfg(feature = "storage-oss")]
+            Storage::Oss { config } => {
+                let op = super::oss_config_build(config, path)?;
+
+                // Check prefix of oss path.
+                let prefix = format!("oss://{}/", op.info().name());
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid oss url: {}, should start with {}", path, prefix),
+                    ))
+                }
+            }
             #[cfg(all(
                 not(feature = "storage-s3"),
                 not(feature = "storage-fs"),
-                not(feature = "storage-gcs")
+                not(feature = "storage-gcs"),
+                not(feature = "storage-oss")
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 "No storage service has been enabled",
             )),
-        }
+        }?;
+
+        // Transient errors are common for object stores; however there's no
+        // harm in retrying temporary failures for other storage backends as well.
+        let operator = operator.layer(RetryLayer::new());
+
+        Ok((operator, relative_path))
     }
 
     /// Parse scheme.
@@ -165,7 +187,8 @@ impl Storage {
             "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
-            "gs" => Ok(Scheme::Gcs),
+            "gs" | "gcs" => Ok(Scheme::Gcs),
+            "oss" => Ok(Scheme::Oss),
             s => Ok(s.parse::<Scheme>()?),
         }
     }

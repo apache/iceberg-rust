@@ -24,6 +24,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.4.0] - 2024-12-16
+* io: add support for role arn and external id s3 props by @mattheusv in https://github.com/apache/iceberg-rust/pull/553
+* fix: ensure S3 and GCS integ tests are conditionally compiled only when the storage-s3 and storage-gcs features are enabled by @sdd in https://github.com/apache/iceberg-rust/pull/552
+* docs: fix main iceberg example by @jdockerty in https://github.com/apache/iceberg-rust/pull/554
+* io: add support to set assume role session name by @mattheusv in https://github.com/apache/iceberg-rust/pull/555
+* test: refactor datafusion test with memory catalog by @FANNG1 in https://github.com/apache/iceberg-rust/pull/557
+* chore: add clean job in Makefile by @ChinoUkaegbu in https://github.com/apache/iceberg-rust/pull/561
+* docs: Fix build website permission changed by @Xuanwo in https://github.com/apache/iceberg-rust/pull/564
+* Object Cache: caches parsed Manifests and ManifestLists for performance by @sdd in https://github.com/apache/iceberg-rust/pull/512
+* Update the paths by @Fokko in https://github.com/apache/iceberg-rust/pull/569
+* docs: Add links for released crates by @Xuanwo in https://github.com/apache/iceberg-rust/pull/570
+* Python: Use hatch for dependency management by @sungwy in https://github.com/apache/iceberg-rust/pull/572
+* Ensure that RestCatalog passes user config to FileIO by @sdd in https://github.com/apache/iceberg-rust/pull/476
+* Move `zlib` and `unicode` licenses to `allow` by @Fokko in https://github.com/apache/iceberg-rust/pull/566
+* website: Update links for 0.3.0 by @Xuanwo in https://github.com/apache/iceberg-rust/pull/573
+* feat(timestamp_ns): Implement timestamps with nanosecond precision by @Sl1mb0 in https://github.com/apache/iceberg-rust/pull/542
+* fix: correct partition-id to field-id in UnboundPartitionField by @FANNG1 in https://github.com/apache/iceberg-rust/pull/576
+* fix: Update sqlx from 0.8.0 to 0.8.1 by @FANNG1 in https://github.com/apache/iceberg-rust/pull/584
+* chore(deps): Update typed-builder requirement from 0.19 to 0.20 by @dependabot in https://github.com/apache/iceberg-rust/pull/582
+* Expose Transforms to Python Binding by @sungwy in https://github.com/apache/iceberg-rust/pull/556
+* chore(deps): Bump crate-ci/typos from 1.23.6 to 1.24.1 by @dependabot in https://github.com/apache/iceberg-rust/pull/583
+* Table Scan: Add Row Group Skipping by @sdd in https://github.com/apache/iceberg-rust/pull/558
+* chore: bump crate-ci/typos to 1.24.3 by @sdlarsen in https://github.com/apache/iceberg-rust/pull/598
+* feat: SQL Catalog - namespaces by @callum-ryan in https://github.com/apache/iceberg-rust/pull/534
+* feat: Add more fields in FileScanTask by @Xuanwo in https://github.com/apache/iceberg-rust/pull/609
+* chore(deps): Bump crate-ci/typos from 1.24.3 to 1.24.5 by @dependabot in https://github.com/apache/iceberg-rust/pull/616
+* fix: Less Panics for Snapshot timestamps by @c-thiel in https://github.com/apache/iceberg-rust/pull/614
+* feat: partition compatibility by @c-thiel in https://github.com/apache/iceberg-rust/pull/612
+* feat: SortOrder methods should take schema ref if possible by @c-thiel in https://github.com/apache/iceberg-rust/pull/613
+* feat: add `client.region` by @jdockerty in https://github.com/apache/iceberg-rust/pull/623
+* fix: Correctly calculate highest_field_id in schema by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/590
+* Feat: Normalize TableMetadata by @c-thiel in https://github.com/apache/iceberg-rust/pull/611
+* refactor(python): Expose transform as a submodule for pyiceberg_core by @Xuanwo in https://github.com/apache/iceberg-rust/pull/628
+* feat: support projection pushdown for datafusion iceberg by @FANNG1 in https://github.com/apache/iceberg-rust/pull/594
+* chore: Bump opendal to 0.50 by @Xuanwo in https://github.com/apache/iceberg-rust/pull/634
+* feat: add Sync to TransformFunction by @xxchan in https://github.com/apache/iceberg-rust/pull/638
+* feat: expose arrow type <-> iceberg type by @xxchan in https://github.com/apache/iceberg-rust/pull/637
+* doc: improve FileIO doc by @xxchan in https://github.com/apache/iceberg-rust/pull/642
+* chore(deps): Bump crate-ci/typos from 1.24.5 to 1.24.6 by @dependabot in https://github.com/apache/iceberg-rust/pull/640
+* Migrate to arrow-* v53 by @sdd in https://github.com/apache/iceberg-rust/pull/626
+* feat: expose remove_all in FileIO by @xxchan in https://github.com/apache/iceberg-rust/pull/643
+* feat (datafusion integration): convert datafusion expr filters to Iceberg Predicate by @a-agmon in https://github.com/apache/iceberg-rust/pull/588
+* feat: Add NamespaceIdent.parent() by @c-thiel in https://github.com/apache/iceberg-rust/pull/641
+* Table Scan: Add Row Selection Filtering by @sdd in https://github.com/apache/iceberg-rust/pull/565
+* fix: compile error due to merge stale PR by @xxchan in https://github.com/apache/iceberg-rust/pull/646
+* scan: change ErrorKind when table dont have spanshots by @mattheusv in https://github.com/apache/iceberg-rust/pull/608
+* fix: avoid to create operator of memory storage every time by @ZENOTME in https://github.com/apache/iceberg-rust/pull/635
+* feat (datafusion): making IcebergTableProvider public to be used without a catalog by @a-agmon in https://github.com/apache/iceberg-rust/pull/650
+* test (datafusion): add test for table provider creation by @a-agmon in https://github.com/apache/iceberg-rust/pull/651
+* fix: page index evaluator min/max args inverted by @sdd in https://github.com/apache/iceberg-rust/pull/648
+* chore: fix typo in FileIO Schemes  by @wcy-fdu in https://github.com/apache/iceberg-rust/pull/653
+* fix: TableUpdate Snapshot deserialization for v1 by @c-thiel in https://github.com/apache/iceberg-rust/pull/656
+* feat: Reassign field ids for schema by @c-thiel in https://github.com/apache/iceberg-rust/pull/615
+* feat: add gcp oauth support by @twuebi in https://github.com/apache/iceberg-rust/pull/654
+* fix(arrow): Use new ParquetMetaDataReader instead by @Xuanwo in https://github.com/apache/iceberg-rust/pull/661
+* chore(deps): bump typos crate to 1.25.0 by @matthewwillian in https://github.com/apache/iceberg-rust/pull/662
+* RecordBatchTransformer: Handle schema migration and column re-ordering in table scans by @sdd in https://github.com/apache/iceberg-rust/pull/602
+* docs: installation of the new `iceberg_catalog_rest` added to the docs by @nishant-sachdeva in https://github.com/apache/iceberg-rust/pull/355
+* feat(datafusion): Support pushdown more datafusion exprs to Iceberg by @FANNG1 in https://github.com/apache/iceberg-rust/pull/649
+* feat: Derive PartialEq for FileScanTask by @Xuanwo in https://github.com/apache/iceberg-rust/pull/660
+* feat: SQL Catalog - Tables by @callum-ryan in https://github.com/apache/iceberg-rust/pull/610
+* ci: Allow install a non-debian-packaged Python package by @Xuanwo in https://github.com/apache/iceberg-rust/pull/666
+* docs: README uses iceberg-rust instead of we by @caicancai in https://github.com/apache/iceberg-rust/pull/667
+* chore(deps): Bump crate-ci/typos from 1.25.0 to 1.26.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/668
+* feat: Add equality delete writer by @Dysprosium0626 in https://github.com/apache/iceberg-rust/pull/372
+* Revert "feat: Add equality delete writer (#372)" by @Xuanwo in https://github.com/apache/iceberg-rust/pull/672
+* ci: Fix CI for bindings python by @Xuanwo in https://github.com/apache/iceberg-rust/pull/678
+* fix: OpenDAL `is_exist` => `exists` by @sdd in https://github.com/apache/iceberg-rust/pull/680
+* feat: Expose ManifestEntry status by @zheilbron in https://github.com/apache/iceberg-rust/pull/681
+* feat: allow empty projection in table scan by @sundy-li in https://github.com/apache/iceberg-rust/pull/677
+* chore(deps): Bump crate-ci/typos from 1.26.0 to 1.26.8 by @dependabot in https://github.com/apache/iceberg-rust/pull/683
+* fix: bump parquet minor version by @xxchan in https://github.com/apache/iceberg-rust/pull/684
+* fix(type): fix type promote to ignore field name. by @chenzl25 in https://github.com/apache/iceberg-rust/pull/685
+* feat: implement IcebergTableProviderFactory for datafusion by @yukkit in https://github.com/apache/iceberg-rust/pull/600
+* feat: Safer PartitionSpec & SchemalessPartitionSpec by @c-thiel in https://github.com/apache/iceberg-rust/pull/645
+* chore(deps): Bump crate-ci/typos from 1.26.8 to 1.27.0 by @dependabot in https://github.com/apache/iceberg-rust/pull/687
+* feat: TableMetadata accessors for current ids of Schema, Snapshot and SortOrder by @c-thiel in https://github.com/apache/iceberg-rust/pull/688
+* chore: upgrade to DataFusion 43 by @gruuya in https://github.com/apache/iceberg-rust/pull/691
+* chore(deps): Bump crate-ci/typos from 1.27.0 to 1.27.3 by @dependabot in https://github.com/apache/iceberg-rust/pull/693
+* feat: Expose length of Iterators by @c-thiel in https://github.com/apache/iceberg-rust/pull/692
+* feat: Implement TableRequirement checks by @c-thiel in https://github.com/apache/iceberg-rust/pull/689
+* feat: Add ViewUpdate to catalog by @c-thiel in https://github.com/apache/iceberg-rust/pull/690
+* chore: update .asf.yaml by @c-thiel in https://github.com/apache/iceberg-rust/pull/701
+* datafusion: Create table provider for a snapshot. by @ryzhyk in https://github.com/apache/iceberg-rust/pull/707
+* Add Python Release Action to publish `pyiceberg_core` dist to Pypi by @sungwy in https://github.com/apache/iceberg-rust/pull/705
+* chore: Mark `last-field-id` as deprecated by @Fokko in https://github.com/apache/iceberg-rust/pull/715
+* TableMetadataBuilder by @c-thiel in https://github.com/apache/iceberg-rust/pull/587
+* Add `fallback` attribute to all `strip_option`s. by @ryzhyk in https://github.com/apache/iceberg-rust/pull/708
+* fix: Remove check of last_column_id by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/717
+* Fix error running data fusion queries - Physical input schema should be the same as the one converted from logical input schema by @FANNG1 in https://github.com/apache/iceberg-rust/pull/664
+* chore: Typo in test :) by @Fokko in https://github.com/apache/iceberg-rust/pull/727
+* Derive Clone for IcebergTableProvider by @SergeiPatiakin in https://github.com/apache/iceberg-rust/pull/722
+* fix: expand arrow to iceberg schema to handle nanosecond timestamp by @jdockerty in https://github.com/apache/iceberg-rust/pull/710
+* feat: Add equality delete writer by @ZENOTME in https://github.com/apache/iceberg-rust/pull/703
+* chore: Bump upload-artifact@v3 to v4 by @sungwy in https://github.com/apache/iceberg-rust/pull/725
+* feat: support append data file and add e2e test by @ZENOTME in https://github.com/apache/iceberg-rust/pull/349
+* chore(deps): Bump actions/setup-python from 4 to 5 by @dependabot in https://github.com/apache/iceberg-rust/pull/746
+* chore: Align argument name with doc comment by @SergeiPatiakin in https://github.com/apache/iceberg-rust/pull/750
+* fix: equality delete writer field id project by @ZENOTME in https://github.com/apache/iceberg-rust/pull/751
+* feat: expose opendal S3 options for anonymous access by @gruuya in https://github.com/apache/iceberg-rust/pull/757
+* fix: current-snapshot-id serialized to -1 in TableMetadata.json by @c-thiel in https://github.com/apache/iceberg-rust/pull/755
+* feat(puffin): Add Puffin crate and CompressionCodec by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/745
+* Build: Delete branch automatically on PR merge by @manuzhang in https://github.com/apache/iceberg-rust/pull/764
+* chore(deps): bump crate-ci/typos from 1.27.3 to 1.28.1 by @jonathanc-n in https://github.com/apache/iceberg-rust/pull/769
+* chore(deps): Bump crate-ci/typos from 1.27.3 to 1.28.2 by @dependabot in https://github.com/apache/iceberg-rust/pull/767
+* Add Spark for integration tests by @Fokko in https://github.com/apache/iceberg-rust/pull/766
+* refine: refine writer interface by @ZENOTME in https://github.com/apache/iceberg-rust/pull/741
+* Clean up docker Docker by @Fokko in https://github.com/apache/iceberg-rust/pull/770
+* name mapping serde by @barronw in https://github.com/apache/iceberg-rust/pull/740
+* docker: The `archive` seems unstable by @Fokko in https://github.com/apache/iceberg-rust/pull/773
+* doc: add RisingWave to users by @xxchan in https://github.com/apache/iceberg-rust/pull/775
+* feat: Expose disable_config_load opendal S3 option by @gruuya in https://github.com/apache/iceberg-rust/pull/782
+* Support conversion of Arrow Int8 and Int16 to Iceberg Int by @gruuya in https://github.com/apache/iceberg-rust/pull/787
+* infra: Dismiss stale reviews by @liurenjie1024 in https://github.com/apache/iceberg-rust/pull/779
+* fix: return type for year and month transform should be int by @xxchan in https://github.com/apache/iceberg-rust/pull/776
+* feat: Allow for schema evolution by @Fokko in https://github.com/apache/iceberg-rust/pull/786
+* Retry object store reads on temporary errors. by @ryzhyk in https://github.com/apache/iceberg-rust/pull/788
+* refactor(puffin): Move puffin crate contents inside iceberg crate by @fqaiser94 in https://github.com/apache/iceberg-rust/pull/789
+* feat: Implement Decimal from/to bytes represents by @Xuanwo in https://github.com/apache/iceberg-rust/pull/665
+* feat: eagerly project the arrow schema to scope out non-selected fields by @gruuya in https://github.com/apache/iceberg-rust/pull/785
+* fix: wrong compute of partitions in manifest by @ZENOTME in https://github.com/apache/iceberg-rust/pull/794
+* fix: set key_metadata to Null by default by @feniljain in https://github.com/apache/iceberg-rust/pull/800
+* test: append partition data file by @feniljain in https://github.com/apache/iceberg-rust/pull/742
+* chore: Add more debug message inside error by @Xuanwo in https://github.com/apache/iceberg-rust/pull/793
+* fix: Error source from cache has been shadowed by @Xuanwo in https://github.com/apache/iceberg-rust/pull/792
+* fix(catalog/rest): Ensure token been reused correctly by @Xuanwo in https://github.com/apache/iceberg-rust/pull/801
+* feat!: Remove `BoundPartitionSpec` by @c-thiel in https://github.com/apache/iceberg-rust/pull/771
+* chore(deps): Bump crate-ci/typos from 1.28.2 to 1.28.3 by @dependabot in https://github.com/apache/iceberg-rust/pull/805
+* feat: add `DataFileWriter` tests for schema and partition by @jonathanc-n in https://github.com/apache/iceberg-rust/pull/768
+* fix: day transform compute by @ZENOTME in https://github.com/apache/iceberg-rust/pull/796
+* feat: TableMetadata Statistic Files by @c-thiel in https://github.com/apache/iceberg-rust/pull/799
+* Bump `pyiceberg_core` to 0.4.0 by @sungwy in https://github.com/apache/iceberg-rust/pull/808
+* chore(docs): Update Readme - Lakekeeper repository moved by @c-thiel in https://github.com/apache/iceberg-rust/pull/810
+* Prep 0.4.0 release by @sungwy in https://github.com/apache/iceberg-rust/pull/809
+* feat: Add RemovePartitionSpecs table update by @c-thiel in https://github.com/apache/iceberg-rust/pull/804
+* feat: Store file io props to allow re-build it by @Xuanwo in https://github.com/apache/iceberg-rust/pull/802
+* chore: chmod +x on `verify.py` script by @sungwy in https://github.com/apache/iceberg-rust/pull/817
+* fix: Reading a table with positional deletes should fail by @Fokko in https://github.com/apache/iceberg-rust/pull/826
+
 ## [v0.3.0] - 2024-08-14
 
 * Smooth out release steps by @Fokko in https://github.com/apache/iceberg-rust/pull/197

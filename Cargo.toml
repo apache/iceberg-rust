@@ -16,82 +16,99 @@
 # under the License.
 
 [workspace]
-resolver = "2"
+exclude = ["bindings/python"]
 members = [
   "crates/catalog/*",
   "crates/examples",
   "crates/iceberg",
+  "crates/integration_tests",
   "crates/integrations/*",
+  "crates/sqllogictest",
   "crates/test_utils",
 ]
-exclude = ["bindings/python"]
+resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
 edition = "2021"
 homepage = "https://rust.iceberg.apache.org/"
+version = "0.4.0"
 
-repository = "https://github.com/apache/iceberg-rust"
 license = "Apache-2.0"
-rust-version = "1.77.1"
+repository = "https://github.com/apache/iceberg-rust"
+# Check the MSRV policy in README.md before changing this
+rust-version = "1.84"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
 apache-avro = "0.17"
 array-init = "2"
-arrow-arith = { version = "52" }
-arrow-array = { version = "52" }
-arrow-ord = { version = "52" }
-arrow-schema = { version = "52" }
-arrow-select = { version = "52" }
-arrow-string = { version = "52" }
-async-stream = "0.3.5"
-async-trait = "0.1"
+arrow-arith = { version = "54.2.0" }
+arrow-array = { version = "54.2.0" }
+arrow-buffer = { version = "54.2.0" }
+arrow-cast = { version = "54.2.0" }
+arrow-ord = { version = "54.2.0" }
+arrow-schema = { version = "54.2.0" }
+arrow-select = { version = "54.2.0" }
+arrow-string = { version = "54.2.0" }
 async-std = "1.12"
-aws-config = "1.1.8"
-aws-sdk-glue = "1.21"
+async-trait = "0.1.86"
+aws-config = "1.5"
+aws-sdk-glue = "1.39"
 bimap = "0.6"
-bitvec = "1.0.1"
-bytes = "1.5"
-chrono = "0.4.34"
+bytes = "1.6"
+chrono = "0.4.38"
 ctor = "0.2.8"
+clap = { version = "4.5.27", features = ["derive", "cargo"] }
+datafusion = "45"
+datafusion-cli = "45"
 derive_builder = "0.20"
-either = "1"
-env_logger = "0.11.0"
-fnv = "1"
+expect-test = "1"
+dirs = "6"
+faststr = "0.2.31"
+fnv = "1.0.7"
 futures = "0.3"
-iceberg = { version = "0.3.0", path = "./crates/iceberg" }
-iceberg-catalog-rest = { version = "0.3.0", path = "./crates/catalog/rest" }
-iceberg-catalog-hms = { version = "0.3.0", path = "./crates/catalog/hms" }
-iceberg-catalog-memory = { version = "0.3.0", path = "./crates/catalog/memory" }
+hive_metastore = "0.1"
+http = "1.1"
+iceberg = { version = "0.4.0", path = "./crates/iceberg" }
+iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
+iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
+iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 itertools = "0.13"
-log = "0.4"
+linkedbytes = "0.1.8"
+metainfo = "0.7.14"
+mimalloc = "0.1.46"
 mockito = "1"
 murmur3 = "0.5.2"
-once_cell = "1"
-opendal = "0.49"
+num-bigint = "0.4.6"
+once_cell = "1.20"
+opendal = "0.53.0"
 ordered-float = "4"
-parquet = "52"
-paste = "1"
+parquet = "54.2.0"
 pilota = "0.11.2"
-pretty_assertions = "1.4"
 port_scanner = "0.1.5"
-rand = "0.8"
+pretty_assertions = "1.4"
+rand = "0.8.5"
 regex = "1.10.5"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12.2", default-features = false, features = ["json"] }
+roaring = { version = "0.10", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
 rust_decimal = "1.31"
-serde = { version = "1", features = ["rc"] }
-serde_bytes = "0.11.8"
-serde_derive = "1"
-serde_json = "1"
+serde = { version = "1.0.204", features = ["rc"] }
+serde_bytes = "0.11.15"
+serde_derive = "1.0.204"
+serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
-tempfile = "3.8"
-tokio = { version = "1", default-features = false }
-typed-builder = "0.20"
-url = "2"
-urlencoding = "2"
-uuid = { version = "1.6.1", features = ["v7"] }
-volo-thrift = "0.10"
-hive_metastore = "0.1"
+stacker = "0.1.20"
+tap = "1.0.1"
+tempfile = "3.18"
 tera = "1"
+thrift = "0.17.0"
+tokio = { version = "1.44", default-features = false }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.8"
+typed-builder = "0.20"
+toml = "0.8"
+url = "2.5.4"
+uuid = { version = "1.14", features = ["v7"] }
+volo-thrift = "0.10"
+zstd = "0.13.2"

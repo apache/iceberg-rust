@@ -21,4 +21,8 @@ ignore = [
   # Marvin Attack: potential key recovery through timing sidechannels
   # Issues: https://github.com/apache/iceberg-rust/issues/221
   "RUSTSEC-2023-0071",
+  # `derivative` is unmaintained; consider using an alternative
+  #
+  # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
+  "RUSTSEC-2024-0388",
 ]

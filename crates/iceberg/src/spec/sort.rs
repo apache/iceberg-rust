@@ -112,7 +112,7 @@ pub struct SortOrder {
 }
 
 impl SortOrder {
-    const UNSORTED_ORDER_ID: i64 = 0;
+    pub(crate) const UNSORTED_ORDER_ID: i64 = 0;
 
     /// Create sort order builder
     pub fn builder() -> SortOrderBuilder {
@@ -147,7 +147,7 @@ impl SortOrderBuilder {
     /// Creates a new unbound sort order.
     pub fn build_unbound(&self) -> Result<SortOrder> {
         let fields = self.fields.clone().unwrap_or_default();
-        return match (self.order_id, fields.as_slice()) {
+        match (self.order_id, fields.as_slice()) {
             (Some(SortOrder::UNSORTED_ORDER_ID) | None, []) => Ok(SortOrder::unsorted_order()),
             (_, []) => Err(Error::new(
                 ErrorKind::Unexpected,
@@ -164,7 +164,7 @@ impl SortOrderBuilder {
                 order_id: maybe_order_id.unwrap_or(1),
                 fields: fields.to_vec(),
             }),
-        };
+        }
     }
 
     /// Creates a new bound sort order.

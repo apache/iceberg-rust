@@ -194,7 +194,9 @@ impl Catalog for MemoryCatalog {
             }
         };
 
-        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?.build()?;
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
+            .build()?
+            .metadata;
         let metadata_location = format!(
             "{}/metadata/{}-{}.metadata.json",
             &location,
@@ -238,7 +240,8 @@ impl Catalog for MemoryCatalog {
     async fn drop_table(&self, table_ident: &TableIdent) -> Result<()> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        root_namespace_state.remove_existing_table(table_ident)
+        let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
+        self.file_io.delete(&metadata_location).await
     }
 
     /// Check if a table exists in the catalog.
@@ -355,7 +358,7 @@ mod tests {
 
         assert_eq!(metadata.current_schema().as_ref(), expected_schema);
 
-        let expected_partition_spec = PartitionSpec::builder(expected_schema)
+        let expected_partition_spec = PartitionSpec::builder((*expected_schema).clone())
             .with_spec_id(0)
             .build()
             .unwrap();

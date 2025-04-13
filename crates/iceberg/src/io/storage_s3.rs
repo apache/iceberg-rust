@@ -17,11 +17,11 @@
 
 use std::collections::HashMap;
 
-use opendal::raw::HttpClient;
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 use url::Url;
 
+use crate::io::is_truthy;
 use crate::{Error, ErrorKind, Result};
 
 /// Following are arguments for [s3 file io](https://py.iceberg.apache.org/configuration/#s3).
@@ -58,6 +58,13 @@ pub const S3_ASSUME_ROLE_ARN: &str = "client.assume-role.arn";
 pub const S3_ASSUME_ROLE_EXTERNAL_ID: &str = "client.assume-role.external-id";
 /// Optional session name used to assume an IAM role.
 pub const S3_ASSUME_ROLE_SESSION_NAME: &str = "client.assume-role.session-name";
+/// Option to skip signing requests (e.g. for public buckets/folders).
+pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
+/// Option to skip loading the credential from EC2 metadata (typically used in conjunction with
+/// `S3_ALLOW_ANONYMOUS`).
+pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
+/// Option to skip loading configuration from config file and the env.
+pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -81,9 +88,7 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         cfg.region = Some(region);
     };
     if let Some(path_style_access) = m.remove(S3_PATH_STYLE_ACCESS) {
-        if ["true", "True", "1"].contains(&path_style_access.as_str()) {
-            cfg.enable_virtual_host_style = true;
-        }
+        cfg.enable_virtual_host_style = !is_truthy(path_style_access.to_lowercase().as_str());
     };
     if let Some(arn) = m.remove(S3_ASSUME_ROLE_ARN) {
         cfg.role_arn = Some(arn);
@@ -126,15 +131,27 @@ pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config
         }
     };
 
+    if let Some(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS) {
+        if is_truthy(allow_anonymous.to_lowercase().as_str()) {
+            cfg.allow_anonymous = true;
+        }
+    }
+    if let Some(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA) {
+        if is_truthy(disable_ec2_metadata.to_lowercase().as_str()) {
+            cfg.disable_ec2_metadata = true;
+        }
+    };
+    if let Some(disable_config_load) = m.remove(S3_DISABLE_CONFIG_LOAD) {
+        if is_truthy(disable_config_load.to_lowercase().as_str()) {
+            cfg.disable_config_load = true;
+        }
+    };
+
     Ok(cfg)
 }
 
 /// Build new opendal operator from give path.
-pub(crate) fn s3_config_build(
-    client: &reqwest::Client,
-    cfg: &S3Config,
-    path: &str,
-) -> Result<Operator> {
+pub(crate) fn s3_config_build(cfg: &S3Config, path: &str) -> Result<Operator> {
     let url = Url::parse(path)?;
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
@@ -147,9 +164,7 @@ pub(crate) fn s3_config_build(
         .clone()
         .into_builder()
         // Set bucket name.
-        .bucket(bucket)
-        // Set http client we want to use.
-        .http_client(HttpClient::with(client.clone()));
+        .bucket(bucket);
 
     Ok(Operator::new(builder)?.finish())
 }

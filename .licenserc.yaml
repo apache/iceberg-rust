@@ -31,4 +31,6 @@ header:
     - '**/DEPENDENCIES.*.tsv'
     # Release distributions
     - 'dist/*'
+    - 'Cargo.lock'
+    - '.github/PULL_REQUEST_TEMPLATE.md'
   comment: on-failure

@@ -30,6 +30,7 @@ use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
+use tracing::info;
 
 const REST_CATALOG_PORT: u16 = 8181;
 static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
@@ -41,7 +42,7 @@ fn before_all() {
         normalize_test_name(module_path!()),
         format!("{}/testdata/rest_catalog", env!("CARGO_MANIFEST_DIR")),
     );
-    docker_compose.run();
+    docker_compose.up();
     guard.replace(docker_compose);
 }
 
@@ -62,7 +63,7 @@ async fn get_catalog() -> RestCatalog {
 
     let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
     while !scan_port_addr(rest_socket_addr) {
-        log::info!("Waiting for 1s rest catalog to ready...");
+        info!("Waiting for 1s rest catalog to ready...");
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 
@@ -81,10 +82,7 @@ async fn test_get_non_exist_namespace() {
         .await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Namespace does not exist"));
+    assert!(result.unwrap_err().to_string().contains("does not exist"));
 }
 
 #[tokio::test]
@@ -293,12 +291,8 @@ async fn test_create_table() {
     assert_eq!(table.metadata().format_version(), FormatVersion::V2);
     assert!(table.metadata().current_snapshot().is_none());
     assert!(table.metadata().history().is_empty());
-    assert!(table.metadata().default_sort_order().unwrap().is_unsorted());
-    assert!(table
-        .metadata()
-        .default_partition_spec()
-        .unwrap()
-        .is_unpartitioned());
+    assert!(table.metadata().default_sort_order().is_unsorted());
+    assert!(table.metadata().default_partition_spec().is_unpartitioned());
 }
 
 #[tokio::test]

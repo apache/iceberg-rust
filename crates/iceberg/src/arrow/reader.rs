@@ -22,31 +22,37 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
+use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-use arrow_schema::{ArrowError, DataType, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    ArrowError, DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
-use futures::channel::mpsc::{channel, Sender};
 use futures::future::BoxFuture;
-use futures::{try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
-use parquet::arrow::async_reader::{AsyncFileReader, MetadataLoader};
+use futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
+};
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
+use crate::arrow::delete_file_manager::CachingDeleteFileManager;
+use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
+use crate::delete_vector::DeleteVector;
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
+use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::runtime::spawn;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, Schema};
+use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -56,6 +62,7 @@ pub struct ArrowReaderBuilder {
     file_io: FileIO,
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
 }
 
 impl ArrowReaderBuilder {
@@ -68,6 +75,7 @@ impl ArrowReaderBuilder {
             file_io,
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
+            row_selection_enabled: false,
         }
     }
 
@@ -90,13 +98,24 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Determines whether to enable row selection.
+    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
+        self.row_selection_enabled = row_selection_enabled;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
-            file_io: self.file_io,
+            file_io: self.file_io.clone(),
+            delete_file_manager: CachingDeleteFileManager::new(
+                self.file_io.clone(),
+                self.concurrency_limit_data_files,
+            ),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
+            row_selection_enabled: self.row_selection_enabled,
         }
     }
 }
@@ -106,83 +125,67 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
+    delete_file_manager: CachingDeleteFileManager,
 
     /// the maximum number of data files that can be fetched at the same time
     concurrency_limit_data_files: usize,
 
     row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
 }
 
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a stream of Arrow RecordBatches containing the data from the files
-    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
+    pub async fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let file_io = self.file_io.clone();
         let batch_size = self.batch_size;
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
+        let row_selection_enabled = self.row_selection_enabled;
 
-        let (tx, rx) = channel(concurrency_limit_data_files);
-        let mut channel_for_error = tx.clone();
+        let stream = tasks
+            .map_ok(move |task| {
+                let file_io = file_io.clone();
 
-        spawn(async move {
-            let result = tasks
-                .map(|task| Ok((task, file_io.clone(), tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_data_files,
-                    |(file_scan_task, file_io, tx)| async move {
-                        match file_scan_task {
-                            Ok(task) => {
-                                let file_path = task.data_file_path.to_string();
-
-                                spawn(async move {
-                                    Self::process_file_scan_task(
-                                        task,
-                                        batch_size,
-                                        file_io,
-                                        tx,
-                                        row_group_filtering_enabled,
-                                    )
-                                    .await
-                                })
-                                .await
-                                .map_err(|e| e.with_context("file_path", file_path))
-                            }
-                            Err(err) => Err(err),
-                        }
-                    },
+                Self::process_file_scan_task(
+                    task,
+                    batch_size,
+                    file_io,
+                    self.delete_file_manager.clone(),
+                    row_group_filtering_enabled,
+                    row_selection_enabled,
                 )
-                .await;
+            })
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
+            })
+            .try_buffer_unordered(concurrency_limit_data_files)
+            .try_flatten_unordered(concurrency_limit_data_files);
 
-            if let Err(error) = result {
-                let _ = channel_for_error.send(Err(error)).await;
-            }
-        });
-
-        return Ok(rx.boxed());
+        Ok(Box::pin(stream) as ArrowRecordBatchStream)
     }
 
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
         file_io: FileIO,
-        mut tx: Sender<Result<RecordBatch>>,
+        delete_file_manager: CachingDeleteFileManager,
         row_group_filtering_enabled: bool,
-    ) -> Result<()> {
-        // Get the metadata for the Parquet file we need to read and build
-        // a reader for the data within
-        let parquet_file = file_io.new_input(&task.data_file_path)?;
-        let (parquet_metadata, parquet_reader) =
-            try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        row_selection_enabled: bool,
+    ) -> Result<ArrowRecordBatchStream> {
+        let should_load_page_index =
+            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
-        // Start creating the record batch stream, which wraps the parquet file reader
-        let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            parquet_file_reader,
-            // Page index will be required in upcoming row selection PR
-            ArrowReaderOptions::new().with_page_index(false),
-        )
-        .await?;
+        // concurrently retrieve delete files and create RecordBatchStreamBuilder
+        let (_, mut record_batch_stream_builder) = try_join!(
+            delete_file_manager.load_deletes(task.deletes.clone()),
+            Self::create_parquet_record_batch_stream_builder(
+                &task.data_file_path,
+                file_io.clone(),
+                should_load_page_index,
+            )
+        )?;
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
@@ -194,50 +197,256 @@ impl ArrowReader {
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
+        // RecordBatchTransformer performs any transformations required on the RecordBatches
+        // that come back from the file, such as type promotion, default column insertion
+        // and column re-ordering
+        let mut record_batch_transformer =
+            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        if let Some(predicate) = &task.predicate {
+        let delete_predicate = delete_file_manager.build_delete_predicate(task.schema.clone())?;
+
+        // In addition to the optional predicate supplied in the `FileScanTask`,
+        // we also have an optional predicate resulting from equality delete files.
+        // If both are present, we logical-AND them together to form a single filter
+        // predicate that we can pass to the `RecordBatchStreamBuilder`.
+        let final_predicate = match (&task.predicate, delete_predicate) {
+            (None, None) => None,
+            (Some(predicate), None) => Some(predicate.clone()),
+            (None, Some(ref predicate)) => Some(predicate.clone()),
+            (Some(filter_predicate), Some(delete_predicate)) => {
+                Some(filter_predicate.clone().and(delete_predicate))
+            }
+        };
+
+        // There are two possible sources both for potential lists of selected RowGroup indices,
+        // and for `RowSelection`s.
+        // Selected RowGroup index lists can come from two sources:
+        //   * When there are equality delete files that are applicable;
+        //   * When there is a scan predicate and row_group_filtering_enabled = true.
+        // `RowSelection`s can be created in either or both of the following cases:
+        //   * When there are positional delete files that are applicable;
+        //   * When there is a scan predicate and row_selection_enabled = true
+        // Note that, in the former case we only perform row group filtering when
+        // there is a scan predicate AND row_group_filtering_enabled = true,
+        // but we perform row selection filtering if there are applicable
+        // equality delete files OR (there is a scan predicate AND row_selection_enabled),
+        // since the only implemented method of applying positional deletes is
+        // by using a `RowSelection`.
+        let mut selected_row_group_indices = None;
+        let mut row_selection = None;
+
+        if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                predicate,
+                &predicate,
             )?;
 
             let row_filter = Self::get_row_filter(
-                predicate,
+                &predicate,
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
             )?;
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
-            let mut selected_row_groups = None;
             if row_group_filtering_enabled {
                 let result = Self::get_selected_row_group_indices(
-                    predicate,
+                    &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     &task.schema,
                 )?;
 
-                selected_row_groups = Some(result);
+                selected_row_group_indices = Some(result);
             }
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_groups(selected_row_groups);
+            if row_selection_enabled {
+                row_selection = Some(Self::get_row_selection_for_filter_predicate(
+                    &predicate,
+                    record_batch_stream_builder.metadata(),
+                    &selected_row_group_indices,
+                    &field_id_map,
+                    &task.schema,
+                )?);
             }
+        }
+
+        let positional_delete_indexes =
+            delete_file_manager.get_positional_delete_indexes_for_data_file(&task.data_file_path);
+
+        if let Some(positional_delete_indexes) = positional_delete_indexes {
+            let delete_row_selection = Self::build_deletes_row_selection(
+                record_batch_stream_builder.metadata().row_groups(),
+                &selected_row_group_indices,
+                positional_delete_indexes.as_ref(),
+            )?;
+
+            // merge the row selection from the delete files with the row selection
+            // from the filter predicate, if there is one from the filter predicate
+            row_selection = match row_selection {
+                None => Some(delete_row_selection),
+                Some(filter_row_selection) => {
+                    Some(filter_row_selection.intersection(&delete_row_selection))
+                }
+            };
+        }
+
+        if let Some(row_selection) = row_selection {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_selection(row_selection);
+        }
+
+        if let Some(selected_row_group_indices) = selected_row_group_indices {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        let mut record_batch_stream = record_batch_stream_builder.build()?;
-        while let Some(batch) = record_batch_stream.try_next().await? {
-            tx.send(Ok(batch)).await?
+        let record_batch_stream =
+            record_batch_stream_builder
+                .build()?
+                .map(move |batch| match batch {
+                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Err(err) => Err(err.into()),
+                });
+
+        Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
+
+    async fn create_parquet_record_batch_stream_builder(
+        data_file_path: &str,
+        file_io: FileIO,
+        should_load_page_index: bool,
+    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
+        // Get the metadata for the Parquet file we need to read and build
+        // a reader for the data within
+        let parquet_file = file_io.new_input(data_file_path)?;
+        let (parquet_metadata, parquet_reader) =
+            try_join!(parquet_file.metadata(), parquet_file.reader())?;
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+
+        // Create the record batch stream builder, which wraps the parquet file reader
+        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            parquet_file_reader,
+            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+        )
+        .await?;
+        Ok(record_batch_stream_builder)
+    }
+
+    /// computes a `RowSelection` from positional delete indices.
+    ///
+    /// Using the Parquet page index, we build a `RowSelection` that rejects rows that are indicated
+    /// as having been deleted by a positional delete, taking into account any row groups that have
+    /// been skipped entirely by the filter predicate
+    fn build_deletes_row_selection(
+        row_group_metadata_list: &[RowGroupMetaData],
+        selected_row_groups: &Option<Vec<usize>>,
+        positional_deletes: &DeleteVector,
+    ) -> Result<RowSelection> {
+        let mut results: Vec<RowSelector> = Vec::new();
+        let mut selected_row_groups_idx = 0;
+        let mut current_row_group_base_idx: u64 = 0;
+        let mut delete_vector_iter = positional_deletes.iter();
+        let mut next_deleted_row_idx_opt = delete_vector_iter.next();
+
+        for (idx, row_group_metadata) in row_group_metadata_list.iter().enumerate() {
+            let row_group_num_rows = row_group_metadata.num_rows() as u64;
+            let next_row_group_base_idx = current_row_group_base_idx + row_group_num_rows;
+
+            // if row group selection is enabled,
+            if let Some(selected_row_groups) = selected_row_groups {
+                // if we've consumed all the selected row groups, we're done
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+
+                if idx == selected_row_groups[selected_row_groups_idx] {
+                    // we're in a selected row group. Increment selected_row_groups_idx
+                    // so that next time around the for loop we're looking for the next
+                    // selected row group
+                    selected_row_groups_idx += 1;
+                } else {
+                    // remove any positional deletes from the skipped page so that
+                    // `positional.deletes.min()` can be used
+                    delete_vector_iter.advance_to(next_row_group_base_idx);
+                    next_deleted_row_idx_opt = delete_vector_iter.next();
+
+                    // still increment the current page base index but then skip to the next row group
+                    // in the file
+                    current_row_group_base_idx += row_group_num_rows;
+                    continue;
+                }
+            }
+
+            let mut next_deleted_row_idx = match next_deleted_row_idx_opt {
+                Some(next_deleted_row_idx) => {
+                    // if the index of the next deleted row is beyond this row group, add a selection for
+                    // the remainder of this row group and skip to the next row group
+                    if next_deleted_row_idx >= next_row_group_base_idx {
+                        results.push(RowSelector::select(row_group_num_rows as usize));
+                        continue;
+                    }
+
+                    next_deleted_row_idx
+                }
+
+                // If there are no more pos deletes, add a selector for the entirety of this row group.
+                _ => {
+                    results.push(RowSelector::select(row_group_num_rows as usize));
+                    continue;
+                }
+            };
+
+            let mut current_idx = current_row_group_base_idx;
+            'chunks: while next_deleted_row_idx < next_row_group_base_idx {
+                // `select` all rows that precede the next delete index
+                if current_idx < next_deleted_row_idx {
+                    let run_length = next_deleted_row_idx - current_idx;
+                    results.push(RowSelector::select(run_length as usize));
+                    current_idx += run_length;
+                }
+
+                // `skip` all consecutive deleted rows in the current row group
+                let mut run_length = 0;
+                while next_deleted_row_idx == current_idx
+                    && next_deleted_row_idx < next_row_group_base_idx
+                {
+                    run_length += 1;
+                    current_idx += 1;
+
+                    next_deleted_row_idx_opt = delete_vector_iter.next();
+                    next_deleted_row_idx = match next_deleted_row_idx_opt {
+                        Some(next_deleted_row_idx) => next_deleted_row_idx,
+                        _ => {
+                            // We've processed the final positional delete.
+                            // Conclude the skip and then break so that we select the remaining
+                            // rows in the row group and move on to the next row group
+                            results.push(RowSelector::skip(run_length));
+                            break 'chunks;
+                        }
+                    };
+                }
+                if run_length > 0 {
+                    results.push(RowSelector::skip(run_length));
+                }
+            }
+
+            if current_idx < next_row_group_base_idx {
+                results.push(RowSelector::select(
+                    (next_row_group_base_idx - current_idx) as usize,
+                ));
+            }
+
+            current_row_group_base_idx += row_group_num_rows;
         }
 
-        Ok(())
+        Ok(results.into())
     }
 
     fn build_field_id_set_and_map(
@@ -256,35 +465,94 @@ impl ArrowReader {
         Ok((iceberg_field_ids, field_id_map))
     }
 
+    /// Insert the leaf field id into the field_ids using for projection.
+    /// For nested type, it will recursively insert the leaf field id.
+    fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
+        match field.field_type.as_ref() {
+            Type::Primitive(_) => {
+                field_ids.push(field.id);
+            }
+            Type::Struct(struct_type) => {
+                for nested_field in struct_type.fields() {
+                    Self::include_leaf_field_id(nested_field, field_ids);
+                }
+            }
+            Type::List(list_type) => {
+                Self::include_leaf_field_id(&list_type.element_field, field_ids);
+            }
+            Type::Map(map_type) => {
+                Self::include_leaf_field_id(&map_type.key_field, field_ids);
+                Self::include_leaf_field_id(&map_type.value_field, field_ids);
+            }
+        }
+    }
+
     fn get_arrow_projection_mask(
         field_ids: &[i32],
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
     ) -> Result<ProjectionMask> {
-        if field_ids.is_empty() {
+        fn type_promotion_is_valid(
+            file_type: Option<&PrimitiveType>,
+            projected_type: Option<&PrimitiveType>,
+        ) -> bool {
+            match (file_type, projected_type) {
+                (Some(lhs), Some(rhs)) if lhs == rhs => true,
+                (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
+                (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
+                (
+                    Some(PrimitiveType::Decimal {
+                        precision: file_precision,
+                        scale: file_scale,
+                    }),
+                    Some(PrimitiveType::Decimal {
+                        precision: requested_precision,
+                        scale: requested_scale,
+                    }),
+                ) if requested_precision >= file_precision && file_scale == requested_scale => true,
+                // Uuid will be store as Fixed(16) in parquet file, so the read back type will be Fixed(16).
+                (Some(PrimitiveType::Fixed(16)), Some(PrimitiveType::Uuid)) => true,
+                _ => false,
+            }
+        }
+
+        let mut leaf_field_ids = vec![];
+        for field_id in field_ids {
+            let field = iceberg_schema_of_task.field_by_id(*field_id);
+            if let Some(field) = field {
+                Self::include_leaf_field_id(field, &mut leaf_field_ids);
+            }
+        }
+
+        if leaf_field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
             // Build the map between field id and column index in Parquet schema.
             let mut column_map = HashMap::new();
 
             let fields = arrow_schema.fields();
-            let iceberg_schema = arrow_schema_to_schema(arrow_schema)?;
+            // Pre-project only the fields that have been selected, possibly avoiding converting
+            // some Arrow types that are not yet supported.
+            let mut projected_fields: HashMap<FieldRef, i32> = HashMap::new();
+            let projected_arrow_schema = ArrowSchema::new_with_metadata(
+                fields.filter_leaves(|_, f| {
+                    f.metadata()
+                        .get(PARQUET_FIELD_ID_META_KEY)
+                        .and_then(|field_id| i32::from_str(field_id).ok())
+                        .is_some_and(|field_id| {
+                            projected_fields.insert((*f).clone(), field_id);
+                            leaf_field_ids.contains(&field_id)
+                        })
+                }),
+                arrow_schema.metadata().clone(),
+            );
+            let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
+
             fields.filter_leaves(|idx, field| {
-                let field_id = field.metadata().get(PARQUET_FIELD_ID_META_KEY);
-                if field_id.is_none() {
+                let Some(field_id) = projected_fields.get(field).cloned() else {
                     return false;
-                }
-
-                let field_id = i32::from_str(field_id.unwrap());
-                if field_id.is_err() {
-                    return false;
-                }
-                let field_id = field_id.unwrap();
-
-                if !field_ids.contains(&field_id) {
-                    return false;
-                }
+                };
 
                 let iceberg_field = iceberg_schema_of_task.field_by_id(field_id);
                 let parquet_iceberg_field = iceberg_schema.field_by_id(field_id);
@@ -293,7 +561,13 @@ impl ArrowReader {
                     return false;
                 }
 
-                if iceberg_field.unwrap().field_type != parquet_iceberg_field.unwrap().field_type {
+                if !type_promotion_is_valid(
+                    parquet_iceberg_field
+                        .unwrap()
+                        .field_type
+                        .as_primitive_type(),
+                    iceberg_field.unwrap().field_type.as_primitive_type(),
+                ) {
                     return false;
                 }
 
@@ -301,19 +575,26 @@ impl ArrowReader {
                 true
             });
 
-            if column_map.len() != field_ids.len() {
+            if column_map.len() != leaf_field_ids.len() {
+                let missing_fields = leaf_field_ids
+                    .iter()
+                    .filter(|field_id| !column_map.contains_key(field_id))
+                    .collect::<Vec<_>>();
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Parquet schema {} and Iceberg schema {} do not match.",
                         iceberg_schema, iceberg_schema_of_task
                     ),
-                ));
+                )
+                .with_context("column_map", format! {"{:?}", column_map})
+                .with_context("field_ids", format! {"{:?}", leaf_field_ids})
+                .with_context("missing_fields", format! {"{:?}", missing_fields}));
             }
 
             let mut indices = vec![];
-            for field_id in field_ids {
-                if let Some(col_idx) = column_map.get(field_id) {
+            for field_id in leaf_field_ids {
+                if let Some(col_idx) = column_map.get(&field_id) {
                     indices.push(*col_idx);
                 } else {
                     return Err(Error::new(
@@ -376,6 +657,67 @@ impl ArrowReader {
         }
 
         Ok(results)
+    }
+
+    fn get_row_selection_for_filter_predicate(
+        predicate: &BoundPredicate,
+        parquet_metadata: &Arc<ParquetMetaData>,
+        selected_row_groups: &Option<Vec<usize>>,
+        field_id_map: &HashMap<i32, usize>,
+        snapshot_schema: &Schema,
+    ) -> Result<RowSelection> {
+        let Some(column_index) = parquet_metadata.column_index() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Parquet file metadata does not contain a column index",
+            ));
+        };
+
+        let Some(offset_index) = parquet_metadata.offset_index() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Parquet file metadata does not contain an offset index",
+            ));
+        };
+
+        let mut selected_row_groups_idx = 0;
+
+        let page_index = column_index
+            .iter()
+            .enumerate()
+            .zip(offset_index)
+            .zip(parquet_metadata.row_groups());
+
+        let mut results = Vec::new();
+        for (((idx, column_index), offset_index), row_group_metadata) in page_index {
+            if let Some(selected_row_groups) = selected_row_groups {
+                // skip row groups that aren't present in selected_row_groups
+                if idx == selected_row_groups[selected_row_groups_idx] {
+                    selected_row_groups_idx += 1;
+                } else {
+                    continue;
+                }
+            }
+
+            let selections_for_page = PageIndexEvaluator::eval(
+                predicate,
+                column_index,
+                offset_index,
+                row_group_metadata,
+                field_id_map,
+                snapshot_schema,
+            )?;
+
+            results.push(selections_for_page);
+
+            if let Some(selected_row_groups) = selected_row_groups {
+                if selected_row_groups_idx == selected_row_groups.len() {
+                    break;
+                }
+            }
+        }
+
+        Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
     }
 }
 
@@ -601,10 +943,14 @@ impl PredicateConverter<'_> {
             let index = self
                 .column_indices
                 .iter()
-                .position(|&idx| idx == *column_idx).ok_or(Error::new(ErrorKind::DataInvalid, format!(
-                    "Leave column `{}` in predicates cannot be found in the required column indices.",
-                    reference.field().name
-                )))?;
+                .position(|&idx| idx == *column_idx)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                reference.field().name
+            ),
+                ))?;
 
             Ok(Some(index))
         } else {
@@ -646,7 +992,7 @@ fn project_column(
 type PredicateResult =
     dyn FnMut(RecordBatch) -> std::result::Result<BooleanArray, ArrowError> + Send + 'static;
 
-impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
+impl BoundPredicateVisitor for PredicateConverter<'_> {
     type T = Box<PredicateResult>;
 
     fn always_true(&mut self) -> Result<Box<PredicateResult>> {
@@ -665,7 +1011,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         Ok(Box::new(move |batch| {
             let left = lhs(batch.clone())?;
             let right = rhs(batch)?;
-            and(&left, &right)
+            and_kleene(&left, &right)
         }))
     }
 
@@ -677,7 +1023,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         Ok(Box::new(move |batch| {
             let left = lhs(batch.clone())?;
             let right = rhs(batch)?;
-            or(&left, &right)
+            or_kleene(&left, &right)
         }))
     }
 
@@ -958,24 +1304,45 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 }
 
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-///
-/// # TODO
-///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
-/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
-///
-/// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
-/// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
-/// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
-struct ArrowFileReader<R: FileRead> {
+pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
+    preload_column_index: bool,
+    preload_offset_index: bool,
+    metadata_size_hint: Option<usize>,
     r: R,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
     /// Create a new ArrowFileReader
-    fn new(meta: FileMetadata, r: R) -> Self {
-        Self { meta, r }
+    pub fn new(meta: FileMetadata, r: R) -> Self {
+        Self {
+            meta,
+            preload_column_index: false,
+            preload_offset_index: false,
+            metadata_size_hint: None,
+            r,
+        }
+    }
+
+    /// Enable or disable preloading of the column index
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.preload_column_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the offset index
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.preload_offset_index = preload;
+        self
+    }
+
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
+        self.metadata_size_hint = Some(hint);
+        self
     }
 }
 
@@ -989,24 +1356,51 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        Box::pin(async move {
-            let file_size = self.meta.size;
-            let mut loader = MetadataLoader::load(self, file_size as usize, None).await?;
-            loader.load_page_index(false, false).await?;
-            Ok(Arc::new(loader.finish()))
-        })
+        async move {
+            let reader = ParquetMetaDataReader::new()
+                .with_prefetch_hint(self.metadata_size_hint)
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index);
+            let size = self.meta.size as usize;
+            let meta = reader.load_and_finish(self, size).await?;
+
+            Ok(Arc::new(meta))
+        }
+        .boxed()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    use std::fs::File;
     use std::sync::Arc;
 
-    use crate::arrow::reader::CollectFieldIdVisitor;
+    use arrow_array::cast::AsArray;
+    use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use futures::TryStreamExt;
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+    use parquet::arrow::{ArrowWriter, ProjectionMask};
+    use parquet::basic::Compression;
+    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use parquet::file::properties::WriterProperties;
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
+    use roaring::RoaringTreemap;
+    use tempfile::TempDir;
+
+    use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
+    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::delete_vector::DeleteVector;
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::expr::{Bind, Predicate, Reference};
+    use crate::io::FileIO;
+    use crate::scan::{FileScanTask, FileScanTaskStream};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
+    use crate::ErrorKind;
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -1079,5 +1473,368 @@ mod tests {
         expected.insert(3);
 
         assert_eq!(visitor.field_ids, expected);
+    }
+
+    #[test]
+    fn test_arrow_projection_mask() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_identifier_field_ids(vec![1])
+                .with_fields(vec![
+                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(2, "c2", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        3,
+                        "c3",
+                        Type::Primitive(PrimitiveType::Decimal {
+                            precision: 38,
+                            scale: 3,
+                        }),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("c1", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            // Type not supported
+            Field::new("c2", DataType::Duration(TimeUnit::Microsecond), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+            ),
+            // Precision is beyond the supported range
+            Field::new("c3", DataType::Decimal128(39, 3), true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "3".to_string(),
+            )])),
+        ]));
+
+        let message_type = "
+message schema {
+  required binary c1 (STRING) = 1;
+  optional int32 c2 (INTEGER(8,true)) = 2;
+  optional fixed_len_byte_array(17) c3 (DECIMAL(39,3)) = 3;
+}
+    ";
+        let parquet_type = parse_message_type(message_type).expect("should parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        // Try projecting the fields c2 and c3 with the unsupported data types
+        let err = ArrowReader::get_arrow_projection_mask(
+            &[1, 2, 3],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.to_string(),
+            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+        );
+
+        // Omitting field c2, we still get an error due to c3 being selected
+        let err = ArrowReader::get_arrow_projection_mask(
+            &[1, 3],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.to_string(),
+            "DataInvalid => Failed to create decimal type, source: DataInvalid => Decimals with precision larger than 38 are not supported: 39".to_string()
+        );
+
+        // Finally avoid selecting fields with unsupported data types
+        let mask =
+            ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
+                .expect("Some ProjectionMask");
+        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[tokio::test]
+    async fn test_kleene_logic_or_behaviour() {
+        // a IS NULL OR a = 'foo'
+        let predicate = Reference::new("a")
+            .is_null()
+            .or(Reference::new("a").equal_to(Datum::string("foo")));
+
+        // Table data: [NULL, "foo", "bar"]
+        let data_for_col_a = vec![None, Some("foo".to_string()), Some("bar".to_string())];
+
+        // Expected: [NULL, "foo"].
+        let expected = vec![None, Some("foo".to_string())];
+
+        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let result_data = test_perform_read(predicate, schema, table_location, reader).await;
+
+        assert_eq!(result_data, expected);
+    }
+
+    #[tokio::test]
+    async fn test_kleene_logic_and_behaviour() {
+        // a IS NOT NULL AND a != 'foo'
+        let predicate = Reference::new("a")
+            .is_not_null()
+            .and(Reference::new("a").not_equal_to(Datum::string("foo")));
+
+        // Table data: [NULL, "foo", "bar"]
+        let data_for_col_a = vec![None, Some("foo".to_string()), Some("bar".to_string())];
+
+        // Expected: ["bar"].
+        let expected = vec![Some("bar".to_string())];
+
+        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let result_data = test_perform_read(predicate, schema, table_location, reader).await;
+
+        assert_eq!(result_data, expected);
+    }
+
+    async fn test_perform_read(
+        predicate: Predicate,
+        schema: SchemaRef,
+        table_location: String,
+        reader: ArrowReader,
+    ) -> Vec<Option<String>> {
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_content: DataContentType::Data,
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1],
+                predicate: Some(predicate.bind(schema, true).unwrap()),
+                deletes: vec![],
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .await
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let result_data = result[0].columns()[0]
+            .as_string_opt::<i32>()
+            .unwrap()
+            .iter()
+            .map(|v| v.map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+
+        result_data
+    }
+
+    fn setup_kleene_logic(
+        data_for_col_a: Vec<Option<String>>,
+    ) -> (FileIO, SchemaRef, String, TempDir) {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "a",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Utf8,
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]))]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        let col = Arc::new(StringArray::from(data_for_col_a)) as ArrayRef;
+
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+
+        // Write the Parquet files
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
+
+        writer.write(&to_write).expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        (file_io, schema, table_location, tmp_dir)
+    }
+
+    #[test]
+    fn test_build_deletes_row_selection() {
+        let schema_descr = get_test_schema_descr();
+
+        let mut columns = vec![];
+        for ptr in schema_descr.columns() {
+            let column = ColumnChunkMetaData::builder(ptr.clone()).build().unwrap();
+            columns.push(column);
+        }
+
+        let row_groups_metadata = vec![
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 1000, 0),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 1),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 2),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 1000, 3),
+            build_test_row_group_meta(schema_descr.clone(), columns.clone(), 500, 4),
+        ];
+
+        let selected_row_groups = Some(vec![1, 3]);
+
+        /* cases to cover:
+           * {skip|select} {first|intermediate|last} {one row|multiple rows} in
+             {first|imtermediate|last} {skipped|selected} row group
+           * row group selection disabled
+        */
+
+        let positional_deletes = RoaringTreemap::from_iter(&[
+            1, // in skipped rg 0, should be ignored
+            3, // run of three consecutive items in skipped rg0
+            4, 5, 998, // two consecutive items at end of skipped rg0
+            999, 1000, // solitary row at start of selected rg1 (1, 9)
+            1010, // run of 3 rows in selected rg1
+            1011, 1012, // (3, 485)
+            1498, // run of two items at end of selected rg1
+            1499, 1500, // run of two items at start of skipped rg2
+            1501, 1600, // should ignore, in skipped rg2
+            1999, // single row at end of skipped rg2
+            2000, // run of two items at start of selected rg3
+            2001, // (4, 98)
+            2100, // single row in selected row group 3 (1, 99)
+            2200, // run of 3 consecutive rows in selected row group 3
+            2201, 2202, // (3, 796)
+            2999, // single item at end of selected rg3 (1)
+            3000, // single item at start of skipped rg4
+        ]);
+
+        let positional_deletes = DeleteVector::new(positional_deletes);
+
+        // using selected row groups 1 and 3
+        let result = ArrowReader::build_deletes_row_selection(
+            &row_groups_metadata,
+            &selected_row_groups,
+            &positional_deletes,
+        )
+        .unwrap();
+
+        let expected = RowSelection::from(vec![
+            RowSelector::skip(1),
+            RowSelector::select(9),
+            RowSelector::skip(3),
+            RowSelector::select(485),
+            RowSelector::skip(4),
+            RowSelector::select(98),
+            RowSelector::skip(1),
+            RowSelector::select(99),
+            RowSelector::skip(3),
+            RowSelector::select(796),
+            RowSelector::skip(1),
+        ]);
+
+        assert_eq!(result, expected);
+
+        // selecting all row groups
+        let result = ArrowReader::build_deletes_row_selection(
+            &row_groups_metadata,
+            &None,
+            &positional_deletes,
+        )
+        .unwrap();
+
+        let expected = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(3),
+            RowSelector::select(992),
+            RowSelector::skip(3),
+            RowSelector::select(9),
+            RowSelector::skip(3),
+            RowSelector::select(485),
+            RowSelector::skip(4),
+            RowSelector::select(98),
+            RowSelector::skip(1),
+            RowSelector::select(398),
+            RowSelector::skip(3),
+            RowSelector::select(98),
+            RowSelector::skip(1),
+            RowSelector::select(99),
+            RowSelector::skip(3),
+            RowSelector::select(796),
+            RowSelector::skip(2),
+            RowSelector::select(499),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    fn build_test_row_group_meta(
+        schema_descr: SchemaDescPtr,
+        columns: Vec<ColumnChunkMetaData>,
+        num_rows: i64,
+        ordinal: i16,
+    ) -> RowGroupMetaData {
+        RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(num_rows)
+            .set_total_byte_size(2000)
+            .set_column_metadata(columns)
+            .set_ordinal(ordinal)
+            .build()
+            .unwrap()
+    }
+
+    fn get_test_schema_descr() -> SchemaDescPtr {
+        use parquet::schema::types::Type as SchemaType;
+
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![
+                Arc::new(
+                    SchemaType::primitive_type_builder("a", parquet::basic::Type::INT32)
+                        .build()
+                        .unwrap(),
+                ),
+                Arc::new(
+                    SchemaType::primitive_type_builder("b", parquet::basic::Type::INT32)
+                        .build()
+                        .unwrap(),
+                ),
+            ])
+            .build()
+            .unwrap();
+
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 }

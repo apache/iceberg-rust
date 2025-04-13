@@ -235,7 +235,7 @@ mod tests {
     use crate::expr::visitors::inclusive_projection::InclusiveProjection;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{
-        Datum, NestedField, PartitionField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
+        Datum, NestedField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
         UnboundPartitionField,
     };
 
@@ -265,13 +265,13 @@ mod tests {
     #[test]
     fn test_inclusive_projection_logic_ops() {
         let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .build()
             .unwrap();
 
-        let arc_schema = Arc::new(schema);
         let arc_partition_spec = Arc::new(partition_spec);
 
         // this predicate contains only logic operators,
@@ -295,8 +295,9 @@ mod tests {
     #[test]
     fn test_inclusive_projection_identity_transform() {
         let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -310,7 +311,6 @@ mod tests {
             .build()
             .unwrap();
 
-        let arc_schema = Arc::new(schema);
         let arc_partition_spec = Arc::new(partition_spec);
 
         let unbound_predicate = Reference::new("a").less_than(Datum::int(10));
@@ -321,7 +321,7 @@ mod tests {
         // should result in the same Predicate as the original
         // `unbound_predicate`, since we have just a single partition field,
         // and it has an Identity transform
-        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
         let expected = "a < 10".to_string();
@@ -330,34 +330,22 @@ mod tests {
     }
 
     #[test]
-    fn test_inclusive_projection_date_transforms() {
+    fn test_inclusive_projection_date_year_transform() {
         let schema = build_test_schema();
-
-        let partition_spec = PartitionSpec {
-            spec_id: 1,
-            fields: vec![
-                PartitionField {
-                    source_id: 2,
-                    name: "year".to_string(),
-                    field_id: 1000,
-                    transform: Transform::Year,
-                },
-                PartitionField {
-                    source_id: 2,
-                    name: "month".to_string(),
-                    field_id: 1001,
-                    transform: Transform::Month,
-                },
-                PartitionField {
-                    source_id: 2,
-                    name: "day".to_string(),
-                    field_id: 1002,
-                    transform: Transform::Day,
-                },
-            ],
-        };
-
         let arc_schema = Arc::new(schema);
+
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(1)
+            .add_unbound_fields(vec![UnboundPartitionField {
+                source_id: 2,
+                name: "year".to_string(),
+                field_id: Some(1000),
+                transform: Transform::Year,
+            }])
+            .unwrap()
+            .build()
+            .unwrap();
+
         let arc_partition_spec = Arc::new(partition_spec);
 
         let unbound_predicate =
@@ -368,10 +356,80 @@ mod tests {
         // applying InclusiveProjection to bound_predicate
         // should result in a predicate that correctly handles
         // year, month and date
-        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
-        let expected = "((year <= 53) AND (month <= 647)) AND (day <= 19722)".to_string();
+        let expected = "year <= 53".to_string();
+
+        assert_eq!(result.to_string(), expected);
+    }
+
+    #[test]
+    fn test_inclusive_projection_date_month_transform() {
+        let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
+
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(1)
+            .add_unbound_fields(vec![UnboundPartitionField {
+                source_id: 2,
+                name: "month".to_string(),
+                field_id: Some(1000),
+                transform: Transform::Month,
+            }])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let arc_partition_spec = Arc::new(partition_spec);
+
+        let unbound_predicate =
+            Reference::new("date").less_than(Datum::date_from_str("2024-01-01").unwrap());
+
+        let bound_predicate = unbound_predicate.bind(arc_schema.clone(), false).unwrap();
+
+        // applying InclusiveProjection to bound_predicate
+        // should result in a predicate that correctly handles
+        // year, month and date
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
+        let result = inclusive_projection.project(&bound_predicate).unwrap();
+
+        let expected = "month <= 647".to_string();
+
+        assert_eq!(result.to_string(), expected);
+    }
+
+    #[test]
+    fn test_inclusive_projection_date_day_transform() {
+        let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
+
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
+            .with_spec_id(1)
+            .add_unbound_fields(vec![UnboundPartitionField {
+                source_id: 2,
+                name: "day".to_string(),
+                field_id: Some(1000),
+                transform: Transform::Day,
+            }])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let arc_partition_spec = Arc::new(partition_spec);
+
+        let unbound_predicate =
+            Reference::new("date").less_than(Datum::date_from_str("2024-01-01").unwrap());
+
+        let bound_predicate = unbound_predicate.bind(arc_schema.clone(), false).unwrap();
+
+        // applying InclusiveProjection to bound_predicate
+        // should result in a predicate that correctly handles
+        // year, month and date
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
+        let result = inclusive_projection.project(&bound_predicate).unwrap();
+
+        let expected = "day <= 2023-12-31".to_string();
 
         assert_eq!(result.to_string(), expected);
     }
@@ -379,8 +437,9 @@ mod tests {
     #[test]
     fn test_inclusive_projection_truncate_transform() {
         let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -394,7 +453,6 @@ mod tests {
             .build()
             .unwrap();
 
-        let arc_schema = Arc::new(schema);
         let arc_partition_spec = Arc::new(partition_spec);
 
         let unbound_predicate = Reference::new("name").starts_with(Datum::string("Testy McTest"));
@@ -408,7 +466,7 @@ mod tests {
         // name that start with "Testy McTest" into a partition
         // for values of name that start with the first four letters
         // of that, ie "Test".
-        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
         let expected = "name_truncate STARTS WITH \"Test\"".to_string();
@@ -419,8 +477,9 @@ mod tests {
     #[test]
     fn test_inclusive_projection_bucket_transform() {
         let schema = build_test_schema();
+        let arc_schema = Arc::new(schema);
 
-        let partition_spec = PartitionSpec::builder(&schema)
+        let partition_spec = PartitionSpec::builder(arc_schema.clone())
             .with_spec_id(1)
             .add_unbound_field(
                 UnboundPartitionField::builder()
@@ -434,7 +493,6 @@ mod tests {
             .build()
             .unwrap();
 
-        let arc_schema = Arc::new(schema);
         let arc_partition_spec = Arc::new(partition_spec);
 
         let unbound_predicate = Reference::new("a").equal_to(Datum::int(10));
@@ -445,7 +503,7 @@ mod tests {
         // should result in the "a = 10" predicate being
         // transformed into "a = 2", since 10 gets bucketed
         // to 2 with a Bucket(7) partition
-        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec.clone());
+        let mut inclusive_projection = InclusiveProjection::new(arc_partition_spec);
         let result = inclusive_projection.project(&bound_predicate).unwrap();
 
         let expected = "a_bucket[7] = 2".to_string();
