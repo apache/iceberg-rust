@@ -172,12 +172,12 @@
 
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::collections::HashMap;
-<span class="kw">use </span>std::fs::read_to_string;
 <span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::anyhow;
 <span class="kw">use </span>datafusion::catalog::{CatalogProvider, CatalogProviderList};
+<span class="kw">use </span>fs_err::read_to_string;
 <span class="kw">use </span>iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 <span class="kw">use </span>iceberg_datafusion::IcebergCatalogProvider;
 <span class="kw">use </span>toml::{Table <span class="kw">as </span>TomlTable, Value};
