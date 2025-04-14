@@ -115,6 +115,17 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          root-reserve-mb: 10240
+          temp-reserve-mb: 10240
+
       - uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
@@ -144,7 +155,7 @@ jobs:
           cargo generate-lockfile -Z direct-minimal-versions -Z minimal-versions
           # Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build.
           # So we update these transitive dependencies here.
-          cargo update tap faststr metainfo linkedbytes
+          cargo update faststr metainfo linkedbytes
           # munge 0.4.2 will cause fail to use 1.7.1 so specify the correct version here.
           cargo update -p munge --precise 0.4.1
       - name: Setup MSRV Rust toolchain
@@ -153,4 +164,4 @@ jobs:
           rust-version: ${{ env.rust_msrv }}
       - name: Check MSRV
         run: |
-          cargo +${{ env.rust_msrv }} check --locked --workspace --exclude iceberg-datafusion --exclude iceberg-catalog-s3tables --exclude iceberg-integration-tests
+          cargo +${{ env.rust_msrv }} check --locked --workspace
