@@ -318,8 +318,8 @@ impl FileMetadata {
             }
 
             // Read footer bytes
-            let footer_start = footer_bytes.len() as usize - footer_length;
-            let footer_end = footer_bytes.len() as usize;
+            let footer_start = footer_bytes.len() - footer_length;
+            let footer_end = footer_bytes.len();
             let footer_bytes = &footer_bytes[footer_start..footer_end];
 
             let magic_length = FileMetadata::MAGIC_LENGTH as usize;
