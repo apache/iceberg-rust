@@ -2535,6 +2535,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-err"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f89bda4c2a21204059a977ed3bfe746677dfd137b83c339e702b0ac91d482aa"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3286,6 +3295,7 @@ dependencies = [
  "datafusion",
  "datafusion-cli",
  "dirs",
+ "fs-err",
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "mimalloc",
