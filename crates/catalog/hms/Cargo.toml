@@ -44,7 +44,7 @@ volo-thrift = { workspace = true }
 
 # Transitive dependencies below
 
-# Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build.
+# Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build in minimal versions build.
 # So we specify the version of these transitive dependencies here.
 # They can be removed when the direct dependencies are updated.
 
