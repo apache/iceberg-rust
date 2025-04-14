@@ -61,9 +61,11 @@ clap = { version = "4.5.27", features = ["derive", "cargo"] }
 ctor = "0.2.8"
 datafusion = "45"
 datafusion-cli = "45"
+datafusion-sqllogictest = "45"
 derive_builder = "0.20"
 dirs = "6"
 expect-test = "1"
+enum-ordinalize = "4.3.0"
 faststr = "0.2.31"
 fnv = "1.0.7"
 fs-err = "3.1.0"
@@ -74,6 +76,7 @@ iceberg = { version = "0.4.0", path = "./crates/iceberg" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
+indicatif = "0.17"
 itertools = "0.13"
 linkedbytes = "0.1.8"
 metainfo = "0.7.14"
@@ -92,13 +95,14 @@ rand = "0.8.5"
 regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.10", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
-rust_decimal = "1.31"
+rust_decimal = "1.36"
 serde = { version = "1.0.204", features = ["rc"] }
 serde_bytes = "0.11.15"
 serde_derive = "1.0.204"
 serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
+sqllogictest = "0.26.4"
 stacker = "0.1.20"
 tempfile = "3.18"
 tera = "1"
