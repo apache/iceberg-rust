@@ -3799,7 +3799,23 @@
 <a href="#3798" id="3798">3798</a>
 <a href="#3799" id="3799">3799</a>
 <a href="#3800" id="3800">3800</a>
-<a href="#3801" id="3801">3801</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#3801" id="3801">3801</a>
+<a href="#3802" id="3802">3802</a>
+<a href="#3803" id="3803">3803</a>
+<a href="#3804" id="3804">3804</a>
+<a href="#3805" id="3805">3805</a>
+<a href="#3806" id="3806">3806</a>
+<a href="#3807" id="3807">3807</a>
+<a href="#3808" id="3808">3808</a>
+<a href="#3809" id="3809">3809</a>
+<a href="#3810" id="3810">3810</a>
+<a href="#3811" id="3811">3811</a>
+<a href="#3812" id="3812">3812</a>
+<a href="#3813" id="3813">3813</a>
+<a href="#3814" id="3814">3814</a>
+<a href="#3815" id="3815">3815</a>
+<a href="#3816" id="3816">3816</a>
+<a href="#3817" id="3817">3817</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -5028,6 +5044,22 @@
 /// It used in Literal::Map, to make it hashable, the order of key-value pairs is stored in a separate vector
 /// so that we can hash the map in a deterministic way. But it also means that the order of key-value pairs is matter
 /// for the hash value.
+///
+/// When converting to Arrow (e.g., for Iceberg), the map should be represented using
+/// the default field name "key_value".
+///
+/// Example:
+///
+/// ```text
+/// let key_value_field = Field::new(
+///     DEFAULT_MAP_FIELD_NAME,
+///     arrow_schema::DataType::Struct(vec![
+///         Arc::new(key_field.clone()),
+///         Arc::new(value_field.clone()),
+///     ].into()),
+///     false
+/// );
+/// '''
 </span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq)]
 </span><span class="kw">pub struct </span>Map {
     index: HashMap&lt;Literal, usize&gt;,
