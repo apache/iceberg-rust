@@ -3151,7 +3151,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "serde_with",
- "tap",
  "tempfile",
  "tera",
  "thrift",
@@ -3202,6 +3201,7 @@ dependencies = [
  "tracing",
  "typed-builder 0.20.1",
  "uuid",
+ "volo",
  "volo-thrift",
 ]
 
@@ -6890,9 +6890,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "volo"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac20a85aab7ec8c48f7ba97d66b97c6a6e33af03196ac34992421d60b49ac099"
+checksum = "13832c5e356d13ae8944fa06ef9cf64ea24ea14c0a2e347c4ead078c927d4ade"
 dependencies = [
  "async-broadcast",
  "dashmap",
