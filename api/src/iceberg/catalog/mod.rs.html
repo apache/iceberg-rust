@@ -2050,7 +2050,29 @@
 <a href="#2049" id="2049">2049</a>
 <a href="#2050" id="2050">2050</a>
 <a href="#2051" id="2051">2051</a>
-<a href="#2052" id="2052">2052</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2052" id="2052">2052</a>
+<a href="#2053" id="2053">2053</a>
+<a href="#2054" id="2054">2054</a>
+<a href="#2055" id="2055">2055</a>
+<a href="#2056" id="2056">2056</a>
+<a href="#2057" id="2057">2057</a>
+<a href="#2058" id="2058">2058</a>
+<a href="#2059" id="2059">2059</a>
+<a href="#2060" id="2060">2060</a>
+<a href="#2061" id="2061">2061</a>
+<a href="#2062" id="2062">2062</a>
+<a href="#2063" id="2063">2063</a>
+<a href="#2064" id="2064">2064</a>
+<a href="#2065" id="2065">2065</a>
+<a href="#2066" id="2066">2066</a>
+<a href="#2067" id="2067">2067</a>
+<a href="#2068" id="2068">2068</a>
+<a href="#2069" id="2069">2069</a>
+<a href="#2070" id="2070">2070</a>
+<a href="#2071" id="2071">2071</a>
+<a href="#2072" id="2072">2072</a>
+<a href="#2073" id="2073">2073</a>
+<a href="#2074" id="2074">2074</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -2535,6 +2557,12 @@
         <span class="doccomment">/// Snapshot id to remove partition statistics for.
         </span>snapshot_id: i64,
     },
+    <span class="doccomment">/// Remove schemas
+    </span><span class="attr">#[serde(rename_all = <span class="string">"kebab-case"</span>)]
+    </span>RemoveSchemas {
+        <span class="doccomment">/// Schema IDs to remove.
+        </span>schema_ids: Vec&lt;i32&gt;,
+    },
 }
 
 <span class="kw">impl </span>TableUpdate {
@@ -2578,6 +2606,7 @@
             TableUpdate::RemovePartitionStatistics { snapshot_id } =&gt; {
                 <span class="prelude-val">Ok</span>(builder.remove_partition_statistics(snapshot_id))
             }
+            TableUpdate::RemoveSchemas { schema_ids } =&gt; builder.remove_schemas(<span class="kw-2">&amp;</span>schema_ids),
         }
     }
 }
@@ -4100,6 +4129,21 @@
                 snapshot_id: <span class="number">1940541653261589030</span>,
             },
         )
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_remove_schema_update() {
+        test_serde_json(
+            <span class="string">r#"
+                {
+                    "action": "remove-schemas",
+                    "schema-ids": [1, 2]
+                }        
+            "#</span>,
+            TableUpdate::RemoveSchemas {
+                schema_ids: <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>],
+            },
+        );
     }
 }
 </code></pre></div></section></main></body></html>

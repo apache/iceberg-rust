@@ -2413,7 +2413,88 @@
 <a href="#2412" id="2412">2412</a>
 <a href="#2413" id="2413">2413</a>
 <a href="#2414" id="2414">2414</a>
-<a href="#2415" id="2415">2415</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2415" id="2415">2415</a>
+<a href="#2416" id="2416">2416</a>
+<a href="#2417" id="2417">2417</a>
+<a href="#2418" id="2418">2418</a>
+<a href="#2419" id="2419">2419</a>
+<a href="#2420" id="2420">2420</a>
+<a href="#2421" id="2421">2421</a>
+<a href="#2422" id="2422">2422</a>
+<a href="#2423" id="2423">2423</a>
+<a href="#2424" id="2424">2424</a>
+<a href="#2425" id="2425">2425</a>
+<a href="#2426" id="2426">2426</a>
+<a href="#2427" id="2427">2427</a>
+<a href="#2428" id="2428">2428</a>
+<a href="#2429" id="2429">2429</a>
+<a href="#2430" id="2430">2430</a>
+<a href="#2431" id="2431">2431</a>
+<a href="#2432" id="2432">2432</a>
+<a href="#2433" id="2433">2433</a>
+<a href="#2434" id="2434">2434</a>
+<a href="#2435" id="2435">2435</a>
+<a href="#2436" id="2436">2436</a>
+<a href="#2437" id="2437">2437</a>
+<a href="#2438" id="2438">2438</a>
+<a href="#2439" id="2439">2439</a>
+<a href="#2440" id="2440">2440</a>
+<a href="#2441" id="2441">2441</a>
+<a href="#2442" id="2442">2442</a>
+<a href="#2443" id="2443">2443</a>
+<a href="#2444" id="2444">2444</a>
+<a href="#2445" id="2445">2445</a>
+<a href="#2446" id="2446">2446</a>
+<a href="#2447" id="2447">2447</a>
+<a href="#2448" id="2448">2448</a>
+<a href="#2449" id="2449">2449</a>
+<a href="#2450" id="2450">2450</a>
+<a href="#2451" id="2451">2451</a>
+<a href="#2452" id="2452">2452</a>
+<a href="#2453" id="2453">2453</a>
+<a href="#2454" id="2454">2454</a>
+<a href="#2455" id="2455">2455</a>
+<a href="#2456" id="2456">2456</a>
+<a href="#2457" id="2457">2457</a>
+<a href="#2458" id="2458">2458</a>
+<a href="#2459" id="2459">2459</a>
+<a href="#2460" id="2460">2460</a>
+<a href="#2461" id="2461">2461</a>
+<a href="#2462" id="2462">2462</a>
+<a href="#2463" id="2463">2463</a>
+<a href="#2464" id="2464">2464</a>
+<a href="#2465" id="2465">2465</a>
+<a href="#2466" id="2466">2466</a>
+<a href="#2467" id="2467">2467</a>
+<a href="#2468" id="2468">2468</a>
+<a href="#2469" id="2469">2469</a>
+<a href="#2470" id="2470">2470</a>
+<a href="#2471" id="2471">2471</a>
+<a href="#2472" id="2472">2472</a>
+<a href="#2473" id="2473">2473</a>
+<a href="#2474" id="2474">2474</a>
+<a href="#2475" id="2475">2475</a>
+<a href="#2476" id="2476">2476</a>
+<a href="#2477" id="2477">2477</a>
+<a href="#2478" id="2478">2478</a>
+<a href="#2479" id="2479">2479</a>
+<a href="#2480" id="2480">2480</a>
+<a href="#2481" id="2481">2481</a>
+<a href="#2482" id="2482">2482</a>
+<a href="#2483" id="2483">2483</a>
+<a href="#2484" id="2484">2484</a>
+<a href="#2485" id="2485">2485</a>
+<a href="#2486" id="2486">2486</a>
+<a href="#2487" id="2487">2487</a>
+<a href="#2488" id="2488">2488</a>
+<a href="#2489" id="2489">2489</a>
+<a href="#2490" id="2490">2490</a>
+<a href="#2491" id="2491">2491</a>
+<a href="#2492" id="2492">2492</a>
+<a href="#2493" id="2493">2493</a>
+<a href="#2494" id="2494">2494</a>
+<a href="#2495" id="2495">2495</a>
+<a href="#2496" id="2496">2496</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -3625,6 +3706,37 @@
     <span class="kw">fn </span>highest_sort_order_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;i64&gt; {
         <span class="self">self</span>.metadata.sort_orders.keys().max().copied()
     }
+
+    <span class="doccomment">/// Remove schemas by their ids from the table metadata.
+    /// Does nothing if a schema id is not present. Active schemas should not be removed.
+    </span><span class="kw">pub fn </span>remove_schemas(<span class="kw-2">mut </span><span class="self">self</span>, schema_id_to_remove: <span class="kw-2">&amp;</span>[i32]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">if </span>schema_id_to_remove.contains(<span class="kw-2">&amp;</span><span class="self">self</span>.metadata.current_schema_id) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+                ErrorKind::DataInvalid,
+                <span class="string">"Cannot remove current schema"</span>,
+            ));
+        }
+
+        <span class="kw">if </span>schema_id_to_remove.is_empty() {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">self</span>);
+        }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>removed_schemas = Vec::with_capacity(schema_id_to_remove.len());
+        <span class="self">self</span>.metadata.schemas.retain(|id, _schema| {
+            <span class="kw">if </span>schema_id_to_remove.contains(id) {
+                removed_schemas.push(<span class="kw-2">*</span>id);
+                <span class="bool-val">false
+            </span>} <span class="kw">else </span>{
+                <span class="bool-val">true
+            </span>}
+        });
+
+        <span class="self">self</span>.changes.push(TableUpdate::RemoveSchemas {
+            schema_ids: removed_schemas,
+        });
+
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>)
+    }
 }
 
 <span class="kw">impl </span>From&lt;TableMetadataBuildResult&gt; <span class="kw">for </span>TableMetadata {
@@ -4826,6 +4938,56 @@
             table.metadata().refs.get(MAIN_BRANCH).unwrap().snapshot_id,
             table.metadata().current_snapshot_id().unwrap()
         );
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_active_schema_cannot_be_removed() {
+        <span class="kw">let </span>builder = builder_without_changes(FormatVersion::V2);
+        builder.remove_schemas(<span class="kw-2">&amp;</span>[<span class="number">0</span>]).unwrap_err();
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_remove_schemas() {
+        <span class="kw">let </span>file = File::open(<span class="macro">format!</span>(
+            <span class="string">"{}/testdata/table_metadata/{}"</span>,
+            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+            <span class="string">"TableMetadataV2Valid.json"
+        </span>))
+        .unwrap();
+        <span class="kw">let </span>reader = BufReader::new(file);
+        <span class="kw">let </span>resp = serde_json::from_reader::&lt;<span class="kw">_</span>, TableMetadata&gt;(reader).unwrap();
+
+        <span class="kw">let </span>table = Table::builder()
+            .metadata(resp)
+            .metadata_location(<span class="string">"s3://bucket/test/location/metadata/v1.json"</span>.to_string())
+            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
+            .file_io(FileIOBuilder::new(<span class="string">"memory"</span>).build().unwrap())
+            .build()
+            .unwrap();
+
+        <span class="macro">assert_eq!</span>(<span class="number">2</span>, table.metadata().schemas.len());
+
+        {
+            <span class="comment">// can not remove active schema
+            </span><span class="kw">let </span>meta_data_builder = table.metadata().clone().into_builder(<span class="prelude-val">None</span>);
+            meta_data_builder.remove_schemas(<span class="kw-2">&amp;</span>[<span class="number">1</span>]).unwrap_err();
+        }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>meta_data_builder = table.metadata().clone().into_builder(<span class="prelude-val">None</span>);
+        meta_data_builder = meta_data_builder.remove_schemas(<span class="kw-2">&amp;</span>[<span class="number">0</span>]).unwrap();
+        <span class="kw">let </span>build_result = meta_data_builder.build().unwrap();
+        <span class="macro">assert_eq!</span>(<span class="number">1</span>, build_result.metadata.schemas.len());
+        <span class="macro">assert_eq!</span>(<span class="number">1</span>, build_result.metadata.current_schema_id);
+        <span class="macro">assert_eq!</span>(<span class="number">1</span>, build_result.metadata.current_schema().schema_id());
+        <span class="macro">assert_eq!</span>(<span class="number">1</span>, build_result.changes.len());
+
+        <span class="kw">let </span>remove_schema_ids =
+            <span class="kw">if let </span>TableUpdate::RemoveSchemas { schema_ids } = <span class="kw-2">&amp;</span>build_result.changes[<span class="number">0</span>] {
+                schema_ids
+            } <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>(<span class="string">"Expected RemoveSchema change"</span>)
+            };
+        <span class="macro">assert_eq!</span>(remove_schema_ids, <span class="kw-2">&amp;</span>[<span class="number">0</span>]);
     }
 }
 </code></pre></div></section></main></body></html>
