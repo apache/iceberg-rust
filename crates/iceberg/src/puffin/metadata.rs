@@ -361,7 +361,7 @@ impl FileMetadata {
 
         let footer_payload_str =
             FileMetadata::extract_footer_payload_as_str(&footer_bytes, payload_length)?;
-        
+
         FileMetadata::from_json_str(&footer_payload_str)
     }
 
