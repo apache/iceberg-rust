@@ -275,7 +275,9 @@ impl FileMetadata {
 
     /// Returns the file metadata about a Puffin file
     ///
-    /// `prefetch_hint` is used to try to fetch the entire footer in one read.
+    /// `prefetch_hint` is used to try to fetch the entire footer in one read. If
+    /// the entire footer isn't fetched in one read the function will call the `read_no_prefetch`
+    /// option.
     pub(crate) async fn read(
         input_file: &InputFile,
         prefetch_hint: Option<u8>,
