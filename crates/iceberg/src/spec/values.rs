@@ -1227,6 +1227,22 @@ impl Datum {
 /// It used in Literal::Map, to make it hashable, the order of key-value pairs is stored in a separate vector
 /// so that we can hash the map in a deterministic way. But it also means that the order of key-value pairs is matter
 /// for the hash value.
+///
+/// When converting to Arrow (e.g., for Iceberg), the map should be represented using
+/// the default field name "key_value".
+///
+/// Example:
+///
+/// ```text
+/// let key_value_field = Field::new(
+///     DEFAULT_MAP_FIELD_NAME,
+///     arrow_schema::DataType::Struct(vec![
+///         Arc::new(key_field.clone()),
+///         Arc::new(value_field.clone()),
+///     ].into()),
+///     false
+/// );
+/// '''
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Map {
     index: HashMap<Literal, usize>,
