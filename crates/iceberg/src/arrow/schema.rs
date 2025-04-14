@@ -28,7 +28,6 @@ use arrow_array::{
     Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
-use bitvec::macros::internal::funty::Fundamental;
 use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
@@ -662,10 +661,10 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
             Ok(Box::new(Int64Array::new_scalar(*value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
-            Ok(Box::new(Float32Array::new_scalar(value.as_f32())))
+            Ok(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
-            Ok(Box::new(Float64Array::new_scalar(value.as_f64())))
+            Ok(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Box::new(StringArray::new_scalar(value.as_str())))

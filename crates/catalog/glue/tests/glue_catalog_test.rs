@@ -32,6 +32,7 @@ use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
+use tracing::info;
 
 const GLUE_CATALOG_PORT: u16 = 5000;
 const MINIO_PORT: u16 = 9000;
@@ -68,7 +69,7 @@ async fn get_catalog() -> GlueCatalog {
     let glue_socket_addr = SocketAddr::new(glue_catalog_ip, GLUE_CATALOG_PORT);
     let minio_socket_addr = SocketAddr::new(minio_ip, MINIO_PORT);
     while !scan_port_addr(glue_socket_addr) {
-        log::info!("Waiting for 1s glue catalog to ready...");
+        info!("Waiting for 1s glue catalog to ready...");
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 

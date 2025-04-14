@@ -214,14 +214,23 @@ impl<'a> TableScanBuilder<'a> {
                     )
                 })?
                 .clone(),
-            None => self
-                .table
-                .metadata()
-                .current_snapshot()
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::Unexpected, "Can't scan table without snapshots")
-                })?
-                .clone(),
+            None => {
+                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                    return Ok(TableScan {
+                        batch_size: self.batch_size,
+                        column_names: self.column_names,
+                        file_io: self.table.file_io().clone(),
+                        plan_context: None,
+                        concurrency_limit_data_files: self.concurrency_limit_data_files,
+                        concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                        concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                        row_group_filtering_enabled: self.row_group_filtering_enabled,
+                        row_selection_enabled: self.row_selection_enabled,
+                        delete_file_processing_enabled: self.delete_file_processing_enabled,
+                    });
+                };
+                current_snapshot_id.clone()
+            }
         };
 
         let schema = snapshot.schema(self.table.metadata())?;
@@ -302,7 +311,7 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
-            plan_context,
+            plan_context: Some(plan_context),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
@@ -316,7 +325,10 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
-    plan_context: PlanContext,
+    /// A [PlanContext], if this table has at least one snapshot, otherwise None.
+    ///
+    /// If this is None, then the scan contains no rows.
+    plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
@@ -340,6 +352,10 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        let Some(plan_context) = self.plan_context.as_ref() else {
+            return Ok(Box::pin(futures::stream::empty()));
+        };
+
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
@@ -359,12 +375,12 @@ impl TableScan {
                 None
             };
 
-        let manifest_list = self.plan_context.get_manifest_list().await?;
+        let manifest_list = plan_context.get_manifest_list().await?;
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
         // scan's filter
-        let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
+        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
             delete_file_idx_and_tx.as_ref().map(|(delete_file_idx, _)| {
@@ -437,7 +453,7 @@ impl TableScan {
             }
         });
 
-        return Ok(file_scan_task_rx.boxed());
+        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -463,8 +479,8 @@ impl TableScan {
     }
 
     /// Returns a reference to the snapshot of the table scan.
-    pub fn snapshot(&self) -> &SnapshotRef {
-        &self.plan_context.snapshot
+    pub fn snapshot(&self) -> Option<&SnapshotRef> {
+        self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
     async fn process_data_manifest_entry(
@@ -575,6 +591,9 @@ pub(crate) struct BoundPredicates {
 
 #[cfg(test)]
 pub mod tests {
+    //! shared tests for the table scan API
+    #![allow(missing_docs)]
+
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -632,6 +651,45 @@ pub mod tests {
                 context.insert("table_location", &table_location);
                 context.insert("manifest_list_1_location", &manifest_list1_location);
                 context.insert("manifest_list_2_location", &manifest_list2_location);
+                context.insert("table_metadata_1_location", &table_metadata1_location);
+
+                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        #[allow(clippy::new_without_default)]
+        pub fn new_empty() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+                .unwrap()
+                .build()
+                .unwrap();
+
+            let table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_empty_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let mut context = Context::new();
+                context.insert("table_location", &table_location);
                 context.insert("table_metadata_1_location", &table_metadata1_location);
 
                 let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
@@ -1178,7 +1236,7 @@ pub mod tests {
         let table_scan = table.scan().build().unwrap();
         assert_eq!(
             table.metadata().current_snapshot().unwrap().snapshot_id(),
-            table_scan.snapshot().snapshot_id()
+            table_scan.snapshot().unwrap().snapshot_id()
         );
     }
 
@@ -1200,7 +1258,18 @@ pub mod tests {
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
-        assert_eq!(table_scan.snapshot().snapshot_id(), 3051729675574597004);
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            3051729675574597004
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_on_table_without_any_snapshots() {
+        let table = TableTestFixture::new_empty().table;
+        let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert!(batches.is_empty());
     }
 
     #[tokio::test]

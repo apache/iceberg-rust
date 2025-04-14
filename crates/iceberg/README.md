@@ -57,3 +57,26 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## IO Support
+
+Iceberg Rust provides various storage backends through feature flags. Here are the currently supported storage backends:
+
+| Storage Backend | Feature Flag | Status | Description |
+|----------------|--------------|--------|-------------|
+| Memory | `storage-memory` | ✅ Stable | In-memory storage for testing and development |
+| Local Filesystem | `storage-fs` | ✅ Stable | Local filesystem storage |
+| Amazon S3 | `storage-s3` | ✅ Stable | Amazon S3 storage |
+| Google Cloud Storage | `storage-gcs` | ✅ Stable | Google Cloud Storage |
+| Alibaba Cloud OSS | `storage-oss` | 🧪 Experimental | Alibaba Cloud Object Storage Service |
+
+You can enable all stable storage backends at once using the `storage-all` feature flag. 
+
+> Note that `storage-oss` is currently experimental and not included in `storage-all`.
+
+Example usage in `Cargo.toml`:
+
+```toml
+[dependencies]
+iceberg = { version = "x.y.z", features = ["storage-s3", "storage-fs"] }
+```

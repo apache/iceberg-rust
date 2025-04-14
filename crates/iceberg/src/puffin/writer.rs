@@ -26,7 +26,7 @@ use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 use crate::Result;
 
 /// Puffin writer
-pub(crate) struct PuffinWriter {
+pub struct PuffinWriter {
     writer: Box<dyn FileWrite>,
     is_header_written: bool,
     num_bytes_written: u64,
@@ -38,7 +38,7 @@ pub(crate) struct PuffinWriter {
 
 impl PuffinWriter {
     /// Returns a new Puffin writer
-    pub(crate) async fn new(
+    pub async fn new(
         output_file: &OutputFile,
         properties: HashMap<String, String>,
         compress_footer: bool,
@@ -63,11 +63,7 @@ impl PuffinWriter {
     }
 
     /// Adds blob to Puffin file
-    pub(crate) async fn add(
-        &mut self,
-        blob: Blob,
-        compression_codec: CompressionCodec,
-    ) -> Result<()> {
+    pub async fn add(&mut self, blob: Blob, compression_codec: CompressionCodec) -> Result<()> {
         self.write_header_once().await?;
 
         let offset = self.num_bytes_written;
@@ -89,7 +85,7 @@ impl PuffinWriter {
     }
 
     /// Finalizes the Puffin file
-    pub(crate) async fn close(mut self) -> Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.write_header_once().await?;
         self.write_footer().await?;
         self.writer.close().await?;

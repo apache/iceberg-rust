@@ -44,10 +44,11 @@ use crate::arrow::{
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
-    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
-    TableMetadata, Type,
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
+    MapType, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
+    Struct, StructType, TableMetadata, Type,
 };
+use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
@@ -457,6 +458,54 @@ impl ParquetWriter {
             );
 
         Ok(builder)
+    }
+
+    #[allow(dead_code)]
+    fn partition_value_from_bounds(
+        table_spec: Arc<PartitionSpec>,
+        lower_bounds: &HashMap<i32, Datum>,
+        upper_bounds: &HashMap<i32, Datum>,
+    ) -> Result<Struct> {
+        let mut partition_literals: Vec<Option<Literal>> = Vec::new();
+
+        for field in table_spec.fields() {
+            if let (Some(lower), Some(upper)) = (
+                lower_bounds.get(&field.source_id),
+                upper_bounds.get(&field.source_id),
+            ) {
+                if !field.transform.preserves_order() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
+                            field.name, field.transform
+                        ),
+                    ));
+                }
+
+                if lower != upper {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "multiple partition values for field {}: lower: {:?}, upper: {:?}",
+                            field.name, lower, upper
+                        ),
+                    ));
+                }
+
+                let transform_fn = create_transform_function(&field.transform)?;
+                let transform_literal =
+                    Literal::from(transform_fn.transform_literal_result(lower)?);
+
+                partition_literals.push(Some(transform_literal));
+            } else {
+                partition_literals.push(None);
+            }
+        }
+
+        let partition_struct = Struct::from_iter(partition_literals);
+
+        Ok(partition_struct)
     }
 }
 
