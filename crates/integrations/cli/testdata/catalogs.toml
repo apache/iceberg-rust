@@ -1,0 +1,24 @@
+[[catalogs]]
+name = "demo"
+type = "rest"
+
+[catalogs.config]
+url = "http://localhost:8080"
+warehouse = "s3://iceberg-demo"
+
+[catalogs.config.props]
+"s3.endpoint" = "http://localhost:9000"
+"s3.access_key_id" = "admin"
+
+
+[[catalogs]]
+name = "demo2"
+type = "rest"
+
+[catalogs.config]
+url = "http://localhost:8080"
+warehouse = "s3://iceberg-demo"
+
+[catalogs.config.props]
+"s3.endpoint" = "http://localhost:9000"
+"s3.access_key_id" = "admin"

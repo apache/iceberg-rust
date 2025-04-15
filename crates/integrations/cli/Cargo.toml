@@ -41,6 +41,7 @@ dirs = {workspace = true}
 stacker = {workspace = true}
 mimalloc = {workspace = true}
 fs-err = {workspace = true}
+serde = {workspace = true}
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version

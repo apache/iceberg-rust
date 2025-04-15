@@ -32,6 +32,7 @@ use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
 use reqwest::{Method, StatusCode, Url};
+use serde_derive::Deserialize;
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -49,7 +50,7 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, Debug, TypedBuilder, Deserialize)]
 pub struct RestCatalogConfig {
     uri: String,
 
@@ -2248,5 +2249,34 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_config_parse_toml() {
+        let config_str = r#"
+            uri = "http://localhost:8080"
+            warehouse = "s3://demo"
+            [props]
+            "s3.endpoint" = "http://localhost:9000"
+            "s3.access_key_id" = "kfc_crazy_thursday"
+        "#;
+
+        let toml_table: toml::Table = toml::de::from_str(config_str).unwrap();
+        let config: RestCatalogConfig = toml_table.try_into().unwrap();
+
+        assert_eq!(config.uri, "http://localhost:8080");
+        assert_eq!(config.warehouse, Some("s3://demo".to_string()));
+
+        let expect_props = HashMap::from([
+            (
+                "s3.endpoint".to_string(),
+                "http://localhost:9000".to_string(),
+            ),
+            (
+                "s3.access_key_id".to_string(),
+                "kfc_crazy_thursday".to_string(),
+            ),
+        ]);
+        assert_eq!(expect_props, config.props);
     }
 }
