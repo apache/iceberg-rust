@@ -511,7 +511,11 @@
 <a href="#510" id="510">510</a>
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -535,7 +539,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 <span class="kw">use </span><span class="kw">crate</span>::expr::{BoundPredicate, BoundReference, Predicate};
 <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, PartitionField, PartitionSpecRef};
-<span class="kw">use </span><span class="kw">crate</span>::Error;
+<span class="kw">use crate</span>::{Error, ErrorKind};
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>InclusiveProjection {
     partition_spec: PartitionSpecRef,
@@ -615,7 +619,11 @@
     }
 
     <span class="kw">fn </span>not(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _inner: <span class="self">Self</span>::T) -&gt; <span class="kw">crate</span>::Result&lt;<span class="self">Self</span>::T&gt; {
-        <span class="macro">panic!</span>(<span class="string">"InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it."</span>)
+        <span class="prelude-val">Err</span>(
+            Error::new(
+            ErrorKind::Unexpected,
+            <span class="string">"InclusiveProjection should not be performed against Predicates that contain a Not operator. Ensure that \"Rewrite Not\" gets applied to the originating Predicate before binding it."</span>,   )
+        )
     }
 
     <span class="kw">fn </span>is_null(
