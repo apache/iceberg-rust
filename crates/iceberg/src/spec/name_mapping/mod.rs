@@ -67,8 +67,8 @@ impl NameMapping {
         }
         Ok(Self {
             root: fields,
-            name_to_id: HashMap::default(),
-            id_to_field: HashMap::default(),
+            name_to_id,
+            id_to_field,
         })
     }
 
@@ -132,6 +132,7 @@ impl MappedField {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorKind;
 
     #[test]
     fn test_json_mapped_field_deserialization() {
@@ -395,5 +396,69 @@ mod tests {
         };
         let expected = r#"[{"names":["foo"]},{"field-id":2,"names":["bar"]},{"field-id":3,"names":["baz"]},{"field-id":4,"names":["qux"],"fields":[{"field-id":5,"names":["element"]}]},{"field-id":6,"names":["quux"],"fields":[{"field-id":7,"names":["key"]},{"field-id":8,"names":["value"],"fields":[{"field-id":9,"names":["key"]},{"field-id":10,"names":["value"]}]}]},{"field-id":11,"names":["location"],"fields":[{"field-id":12,"names":["element"],"fields":[{"field-id":13,"names":["latitude"]},{"field-id":14,"names":["longitude"]}]}]},{"field-id":15,"names":["person"],"fields":[{"field-id":16,"names":["name"]},{"field-id":17,"names":["age"]}]}]"#;
         assert_eq!(serde_json::to_string(&name_mapping).unwrap(), expected);
+    }
+
+    #[test]
+    fn name_mapping_internal_fields() {
+        let my_fields = vec![
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+            MappedField::new(
+                Some(2),
+                vec!["field_two".to_string(), "field_foo".to_string()],
+                Vec::new(),
+            ),
+        ];
+
+        let name_mapping = NameMapping::try_new(my_fields).expect("valid mapped fields for test");
+        assert!(
+            name_mapping.field(1000).is_none(),
+            "Field with ID '1000' was not inserted to the collection"
+        );
+        assert_eq!(
+            *name_mapping.field(1).unwrap(),
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+        );
+        assert_eq!(
+            *name_mapping.field(2).unwrap(),
+            MappedField::new(
+                Some(2),
+                vec!["field_two".to_string(), "field_foo".to_string()],
+                Vec::new(),
+            )
+        );
+
+        assert!(
+            name_mapping.id("not_exist").is_none(),
+            "Field was not expected to exist in the collection"
+        );
+        assert_eq!(name_mapping.id("field_two"), Some(2));
+        assert_eq!(
+            name_mapping.id("field_foo"),
+            Some(2),
+            "Field with another name shares the same ID of '2'"
+        );
+        assert_eq!(name_mapping.id("field_one"), Some(1));
+    }
+
+    #[test]
+    fn name_mapping_internal_fields_invalid() {
+        let duplicate_ids = vec![
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+            MappedField::new(Some(1), vec!["field_two".to_string()], Vec::new()),
+        ];
+
+        assert_eq!(
+            NameMapping::try_new(duplicate_ids).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+
+        let duplicate_names = vec![
+            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
+            MappedField::new(Some(2), vec!["field_one".to_string()], Vec::new()),
+        ];
+        assert_eq!(
+            NameMapping::try_new(duplicate_names).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
     }
 }
