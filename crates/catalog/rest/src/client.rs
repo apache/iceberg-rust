@@ -17,13 +17,13 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Mutex;
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 
 use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
@@ -79,10 +79,7 @@ impl HttpClient {
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
-            token: Mutex::new(
-                cfg.token()
-                    .or_else(|| self.token.into_inner().ok().flatten()),
-            ),
+            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
             token_endpoint: (!cfg.get_token_endpoint().is_empty())
                 .then(|| cfg.get_token_endpoint())
                 .unwrap_or(self.token_endpoint),
@@ -102,7 +99,7 @@ impl HttpClient {
             .build()
             .unwrap();
         self.authenticate(&mut req).await.ok();
-        self.token.lock().unwrap().clone()
+        self.token.lock().await.clone()
     }
 
     /// Authenticate the request by filling token.
@@ -116,7 +113,7 @@ impl HttpClient {
     /// Support refreshing token while needed.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
         // Clone the token from lock without holding the lock for entire function.
-        let token = { self.token.lock().expect("lock poison").clone() };
+        let token = self.token.lock().await.clone();
 
         if self.credential.is_none() && token.is_none() {
             return Ok(());
@@ -197,7 +194,7 @@ impl HttpClient {
         }?;
         let token = auth_res.access_token;
         // Update token.
-        *self.token.lock().expect("lock poison") = Some(token.clone());
+        *self.token.lock().await = Some(token.clone());
         // Insert token in request.
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
