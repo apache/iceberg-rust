@@ -265,10 +265,7 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
-<a href="#267" id="267">267</a>
-<a href="#268" id="268">268</a>
-<a href="#269" id="269">269</a>
-<a href="#270" id="270">270</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#267" id="267">267</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -287,13 +284,13 @@
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::fmt::{Debug, Formatter};
-<span class="kw">use </span>std::sync::Mutex;
 
 <span class="kw">use </span>http::StatusCode;
 <span class="kw">use </span>iceberg::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>reqwest::header::HeaderMap;
 <span class="kw">use </span>reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 <span class="kw">use </span>serde::de::DeserializeOwned;
+<span class="kw">use </span>tokio::sync::Mutex;
 
 <span class="kw">use </span><span class="kw">crate</span>::types::{ErrorResponse, TokenResponse};
 <span class="kw">use </span><span class="kw">crate</span>::RestCatalogConfig;
@@ -349,10 +346,7 @@
             </span>.unwrap_or(<span class="self">self</span>.extra_headers);
         <span class="prelude-val">Ok</span>(HttpClient {
             client: cfg.client().unwrap_or(<span class="self">self</span>.client),
-            token: Mutex::new(
-                cfg.token()
-                    .or_else(|| <span class="self">self</span>.token.into_inner().ok().flatten()),
-            ),
+            token: Mutex::new(cfg.token().or_else(|| <span class="self">self</span>.token.into_inner())),
             token_endpoint: (!cfg.get_token_endpoint().is_empty())
                 .then(|| cfg.get_token_endpoint())
                 .unwrap_or(<span class="self">self</span>.token_endpoint),
@@ -372,7 +366,7 @@
             .build()
             .unwrap();
         <span class="self">self</span>.authenticate(<span class="kw-2">&amp;mut </span>req).<span class="kw">await</span>.ok();
-        <span class="self">self</span>.token.lock().unwrap().clone()
+        <span class="self">self</span>.token.lock().<span class="kw">await</span>.clone()
     }
 
     <span class="doccomment">/// Authenticate the request by filling token.
@@ -386,7 +380,7 @@
     /// Support refreshing token while needed.
     </span><span class="kw">async fn </span>authenticate(<span class="kw-2">&amp;</span><span class="self">self</span>, req: <span class="kw-2">&amp;mut </span>Request) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="comment">// Clone the token from lock without holding the lock for entire function.
-        </span><span class="kw">let </span>token = { <span class="self">self</span>.token.lock().expect(<span class="string">"lock poison"</span>).clone() };
+        </span><span class="kw">let </span>token = <span class="self">self</span>.token.lock().<span class="kw">await</span>.clone();
 
         <span class="kw">if </span><span class="self">self</span>.credential.is_none() &amp;&amp; token.is_none() {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(());
@@ -467,7 +461,7 @@
         }<span class="question-mark">?</span>;
         <span class="kw">let </span>token = auth_res.access_token;
         <span class="comment">// Update token.
-        </span><span class="kw-2">*</span><span class="self">self</span>.token.lock().expect(<span class="string">"lock poison"</span>) = <span class="prelude-val">Some</span>(token.clone());
+        </span><span class="kw-2">*</span><span class="self">self</span>.token.lock().<span class="kw">await </span>= <span class="prelude-val">Some</span>(token.clone());
         <span class="comment">// Insert token in request.
         </span>req.headers_mut().insert(
             http::header::AUTHORIZATION,
