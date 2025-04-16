@@ -89,9 +89,6 @@ impl TryFrom<TomlTable> for CatalogConfigDef {
     }
 }
 
-
-
-
 #[derive(Debug)]
 pub struct IcebergCatalogList {
     catalogs: HashMap<String, Arc<IcebergCatalogProvider>>,
@@ -140,19 +137,19 @@ impl CatalogProviderList for IcebergCatalogList {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
     use fs_err::read_to_string;
-    use toml::{Table as TomlTable};
     use iceberg_catalog_rest::RestCatalogConfig;
+    use toml::Table as TomlTable;
+
     use crate::{CatalogConfig, CatalogConfigDef};
 
     #[test]
     fn test_parse_config() {
-        let config_file_path = format!(
-            "{}/testdata/catalogs.toml",
-            env!("CARGO_MANIFEST_DIR"));
+        let config_file_path = format!("{}/testdata/catalogs.toml", env!("CARGO_MANIFEST_DIR"));
 
-        let root_config: TomlTable = toml::from_str(&read_to_string(config_file_path).unwrap())
-            .unwrap();
+        let root_config: TomlTable =
+            toml::from_str(&read_to_string(config_file_path).unwrap()).unwrap();
 
         let catalog_configs = CatalogConfigDef::parse(&root_config).unwrap();
 
@@ -161,14 +158,18 @@ mod tests {
         let catalog1 = catalog_configs.get("demo").unwrap();
         let expected_catalog1 = CatalogConfigDef {
             name: "demo".to_string(),
-            config: CatalogConfig::Rest(RestCatalogConfig::builder()
-                .uri("http://localhost:8080".to_string())
-                .warehouse("s3://iceberg-demo".to_string())
-                .props(HashMap::from([
-                    ("s3.endpoint".to_string(), "http://localhost:9000".to_string()),
-                    ("s3.access_key_id".to_string(), "admin".to_string()),
-                ]))
-                .build()
+            config: CatalogConfig::Rest(
+                RestCatalogConfig::builder()
+                    .uri("http://localhost:8080".to_string())
+                    .warehouse("s3://iceberg-demo".to_string())
+                    .props(HashMap::from([
+                        (
+                            "s3.endpoint".to_string(),
+                            "http://localhost:9000".to_string(),
+                        ),
+                        ("s3.access_key_id".to_string(), "admin".to_string()),
+                    ]))
+                    .build(),
             ),
         };
 
@@ -177,14 +178,18 @@ mod tests {
         let catalog2 = catalog_configs.get("demo2").unwrap();
         let expected_catalog2 = CatalogConfigDef {
             name: "demo2".to_string(),
-            config: CatalogConfig::Rest(RestCatalogConfig::builder()
-                .uri("http://localhost2:8080".to_string())
-                .warehouse("s3://iceberg-demo2".to_string())
-                .props(HashMap::from([
-                    ("s3.endpoint".to_string(), "http://localhost2:9090".to_string()),
-                    ("s3.access_key_id".to_string(), "admin2".to_string()),
-                ]))
-                .build()
+            config: CatalogConfig::Rest(
+                RestCatalogConfig::builder()
+                    .uri("http://localhost2:8080".to_string())
+                    .warehouse("s3://iceberg-demo2".to_string())
+                    .props(HashMap::from([
+                        (
+                            "s3.endpoint".to_string(),
+                            "http://localhost2:9090".to_string(),
+                        ),
+                        ("s3.access_key_id".to_string(), "admin2".to_string()),
+                    ]))
+                    .build(),
             ),
         };
 
