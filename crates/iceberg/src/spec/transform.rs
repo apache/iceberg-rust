@@ -17,6 +17,7 @@
 
 //! Transforms in iceberg.
 
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -318,6 +319,143 @@ impl Transform {
         }
     }
 
+    /// Strictly projects a given predicate according to the transformation
+    /// specified by the `Transform` instance.
+    ///
+    /// This method ensures that the projected predicate is strictly aligned
+    /// with the transformation logic, providing a more precise filtering
+    /// mechanism for transformed data.
+    ///
+    /// # Example
+    /// Suppose, we have row filter `a = 10`, and a partition spec
+    /// `bucket(a, 37) as bs`, if one row matches `a = 10`, then its partition
+    /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
+    /// `bs = bucket(10, 37)`
+    pub fn strict_project(
+        &self,
+        name: &str,
+        predicate: &BoundPredicate,
+    ) -> Result<Option<Predicate>> {
+        let func = create_transform_function(self)?;
+
+        match self {
+            Transform::Identity => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literal().to_owned(),
+                )))),
+                BoundPredicate::Set(expr) => Ok(Some(Predicate::Set(SetExpression::new(
+                    expr.op(),
+                    Reference::new(name),
+                    expr.literals().to_owned(),
+                )))),
+                _ => Ok(None),
+            },
+            Transform::Bucket(_) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => {
+                    self.project_binary_expr(name, PredicateOperator::NotEq, expr, &func)
+                }
+                BoundPredicate::Set(expr) => {
+                    self.project_set_expr(expr, PredicateOperator::NotIn, name, &func)
+                }
+                _ => Ok(None),
+            },
+            Transform::Truncate(width) => match predicate {
+                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                BoundPredicate::Binary(expr) => {
+                    if matches!(
+                        expr.term().field().field_type.as_primitive_type(),
+                        Some(&PrimitiveType::Int)
+                            | Some(&PrimitiveType::Long)
+                            | Some(&PrimitiveType::Decimal { .. })
+                    ) {
+                        self.truncate_number_strict(name, expr, &func)
+                    } else if expr.op() == PredicateOperator::StartsWith {
+                        let len = match expr.literal().literal() {
+                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::Binary(b) => b.len(),
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Expected a string or binary literal, got: {:?}",
+                                        expr.literal()
+                                    ),
+                                ))
+                            }
+                        };
+                        match len.cmp(&(*width as usize)) {
+                            Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::StartsWith,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::Eq,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Greater => Ok(None),
+                        }
+                    } else if expr.op() == PredicateOperator::NotStartsWith {
+                        let len = match expr.literal().literal() {
+                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::Binary(b) => b.len(),
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Expected a string or binary literal, got: {:?}",
+                                        expr.literal()
+                                    ),
+                                ))
+                            }
+                        };
+                        match len.cmp(&(*width as usize)) {
+                            Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::NotStartsWith,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                PredicateOperator::NotEq,
+                                Reference::new(name),
+                                expr.literal().to_owned(),
+                            )))),
+                            Ordering::Greater => {
+                                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                    expr.op(),
+                                    Reference::new(name),
+                                    func.transform_literal_result(expr.literal())?,
+                                ))))
+                            }
+                        }
+                    } else {
+                        self.truncate_array_strict(name, expr, &func)
+                    }
+                }
+                BoundPredicate::Set(expr) => {
+                    self.project_set_expr(expr, PredicateOperator::NotIn, name, &func)
+                }
+                _ => Ok(None),
+            },
+            Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                match predicate {
+                    BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
+                    BoundPredicate::Binary(expr) => self.truncate_number_strict(name, expr, &func),
+                    BoundPredicate::Set(expr) => {
+                        self.project_set_expr(expr, PredicateOperator::NotIn, name, &func)
+                    }
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Projects a given predicate according to the transformation
     /// specified by the `Transform` instance.
     ///
@@ -350,8 +488,12 @@ impl Transform {
             },
             Transform::Bucket(_) => match predicate {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                BoundPredicate::Binary(expr) => self.project_eq_operator(name, expr, &func),
-                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                BoundPredicate::Binary(expr) => {
+                    self.project_binary_expr(name, PredicateOperator::Eq, expr, &func)
+                }
+                BoundPredicate::Set(expr) => {
+                    self.project_set_expr(expr, PredicateOperator::In, name, &func)
+                }
                 _ => Ok(None),
             },
             Transform::Truncate(width) => match predicate {
@@ -359,7 +501,9 @@ impl Transform {
                 BoundPredicate::Binary(expr) => {
                     self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
                 }
-                BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                BoundPredicate::Set(expr) => {
+                    self.project_set_expr(expr, PredicateOperator::In, name, &func)
+                }
                 _ => Ok(None),
             },
             Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
@@ -368,7 +512,9 @@ impl Transform {
                     BoundPredicate::Binary(expr) => {
                         self.project_binary_with_adjusted_boundary(name, expr, &func, None)
                     }
-                    BoundPredicate::Set(expr) => self.project_in_operator(expr, name, &func),
+                    BoundPredicate::Set(expr) => {
+                        self.project_set_expr(expr, PredicateOperator::In, name, &func)
+                    }
                     _ => Ok(None),
                 }
             }
@@ -394,15 +540,16 @@ impl Transform {
     /// if applicable.
     ///
     /// This method evaluates a given binary expression and, if the operation
-    /// is equality (`Eq`) and the literal can be transformed, constructs a
+    /// is the given operator and the literal can be transformed, constructs a
     /// `Predicate::Binary`variant representing the binary operation.
-    fn project_eq_operator(
+    fn project_binary_expr(
         &self,
         name: &str,
+        op: PredicateOperator,
         expr: &BinaryExpression<BoundReference>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
-        if expr.op() != PredicateOperator::Eq || !self.can_transform(expr.literal()) {
+        if expr.op() != op || !self.can_transform(expr.literal()) {
             return Ok(None);
         }
 
@@ -468,15 +615,14 @@ impl Transform {
 
     /// Projects a set expression to a predicate,
     /// applying a transformation to each literal in the set.
-    fn project_in_operator(
+    fn project_set_expr(
         &self,
         expr: &SetExpression<BoundReference>,
+        op: PredicateOperator,
         name: &str,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
-        if expr.op() != PredicateOperator::In
-            || expr.literals().iter().any(|d| !self.can_transform(d))
-        {
+        if expr.op() != op || expr.literals().iter().any(|d| !self.can_transform(d)) {
             return Ok(None);
         }
 
@@ -486,7 +632,7 @@ impl Transform {
             let datum = func.transform_literal_result(lit)?;
 
             if let Some(AdjustedProjection::Single(d)) =
-                self.adjust_time_projection(&PredicateOperator::In, lit, &datum)
+                self.adjust_time_projection(&op, lit, &datum)
             {
                 new_set.insert(d);
             };
@@ -655,6 +801,167 @@ impl Transform {
             };
         }
         None
+    }
+
+    // Increment for Int, Long, Decimal, Date, Timestamp
+    // Ignore other types
+    #[inline]
+    fn try_increment_number(datum: &Datum) -> Result<Datum> {
+        match (datum.data_type(), datum.literal()) {
+            (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v + 1)),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v + 1)),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => Datum::decimal(v + 1),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v + 1)),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamp_micros(v + 1))
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamp_nanos(v + 1))
+            }
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamptz_micros(v + 1))
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamptz_nanos(v + 1))
+            }
+            (PrimitiveType::Int, _)
+            | (PrimitiveType::Long, _)
+            | (PrimitiveType::Decimal { .. }, _)
+            | (PrimitiveType::Date, _)
+            | (PrimitiveType::Timestamp, _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Unsupported literal increment for type: {:?}",
+                    datum.data_type()
+                ),
+            )),
+            _ => Ok(datum.to_owned()),
+        }
+    }
+
+    // Decrement for Int, Long, Decimal, Date, Timestamp
+    // Ignore other types
+    #[inline]
+    fn try_decrement_number(datum: &Datum) -> Result<Datum> {
+        match (datum.data_type(), datum.literal()) {
+            (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v - 1)),
+            (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v - 1)),
+            (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => Datum::decimal(v - 1),
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v - 1)),
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamp_micros(v - 1))
+            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamp_nanos(v - 1))
+            }
+            (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamptz_micros(v - 1))
+            }
+            (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                Ok(Datum::timestamptz_nanos(v - 1))
+            }
+            (PrimitiveType::Int, _)
+            | (PrimitiveType::Long, _)
+            | (PrimitiveType::Decimal { .. }, _)
+            | (PrimitiveType::Date, _)
+            | (PrimitiveType::Timestamp, _) => Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Unsupported literal decrement for type: {:?}",
+                    datum.data_type()
+                ),
+            )),
+            _ => Ok(datum.to_owned()),
+        }
+    }
+
+    fn truncate_number_strict(
+        &self,
+        name: &str,
+        expr: &BinaryExpression<BoundReference>,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        let boundary = expr.literal();
+
+        if !matches!(
+            boundary.data_type(),
+            &PrimitiveType::Int
+                | &PrimitiveType::Long
+                | &PrimitiveType::Decimal { .. }
+                | &PrimitiveType::Date
+                | &PrimitiveType::Timestamp
+                | &PrimitiveType::Timestamptz
+                | &PrimitiveType::TimestampNs
+                | &PrimitiveType::TimestamptzNs
+        ) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Expected a numeric literal, got: {:?}", boundary),
+            ));
+        }
+
+        let predicate = match expr.op() {
+            PredicateOperator::LessThan => Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::LessThan,
+                Reference::new(name),
+                func.transform_literal_result(boundary)?,
+            ))),
+            PredicateOperator::LessThanOrEq => Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::LessThan,
+                Reference::new(name),
+                func.transform_literal_result(&Self::try_increment_number(boundary)?)?,
+            ))),
+            PredicateOperator::GreaterThan => Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::GreaterThan,
+                Reference::new(name),
+                func.transform_literal_result(boundary)?,
+            ))),
+            PredicateOperator::GreaterThanOrEq => Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::GreaterThan,
+                Reference::new(name),
+                func.transform_literal_result(&Self::try_decrement_number(boundary)?)?,
+            ))),
+            PredicateOperator::NotEq => Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::NotEq,
+                Reference::new(name),
+                func.transform_literal_result(boundary)?,
+            ))),
+            _ => None,
+        };
+
+        Ok(predicate)
+    }
+
+    fn truncate_array_strict(
+        &self,
+        name: &str,
+        expr: &BinaryExpression<BoundReference>,
+        func: &BoxedTransformFunction,
+    ) -> Result<Option<Predicate>> {
+        let boundary = expr.literal();
+
+        match expr.op() {
+            PredicateOperator::LessThan | PredicateOperator::LessThanOrEq => {
+                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    PredicateOperator::LessThan,
+                    Reference::new(name),
+                    func.transform_literal_result(boundary)?,
+                ))))
+            }
+            PredicateOperator::GreaterThan | PredicateOperator::GreaterThanOrEq => {
+                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                    PredicateOperator::GreaterThan,
+                    Reference::new(name),
+                    func.transform_literal_result(boundary)?,
+                ))))
+            }
+            PredicateOperator::NotEq => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::NotEq,
+                Reference::new(name),
+                func.transform_literal_result(boundary)?,
+            )))),
+            _ => Ok(None),
+        }
     }
 }
 

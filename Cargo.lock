@@ -262,9 +262,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "54.3.0"
+version = "54.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc6ed265c73f134a583d02c3cab5e16afab9446d8048ede8707e31f85fad58a0"
+checksum = "263f4801ff1839ef53ebd06f99a56cecd1dbaf314ec893d93168e2e860e0291c"
 dependencies = [
  "bytes",
  "half",
@@ -382,9 +382,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "54.3.0"
+version = "54.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5c53775bba63f319189f366d2b86e9a8889373eb198f07d8544938fc9f8ed9a"
+checksum = "39cfaf5e440be44db5413b75b72c2a87c1f8f0627117d110264048f2969b99e9"
 
 [[package]]
 name = "arrow-select"
@@ -2535,6 +2535,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-err"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f89bda4c2a21204059a977ed3bfe746677dfd137b83c339e702b0ac91d482aa"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3151,7 +3160,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "serde_with",
- "tap",
  "tempfile",
  "tera",
  "thrift",
@@ -3202,6 +3210,7 @@ dependencies = [
  "tracing",
  "typed-builder 0.20.1",
  "uuid",
+ "volo",
  "volo-thrift",
 ]
 
@@ -3286,6 +3295,7 @@ dependencies = [
  "datafusion",
  "datafusion-cli",
  "dirs",
+ "fs-err",
  "iceberg-catalog-rest",
  "iceberg-datafusion",
  "mimalloc",
@@ -5282,8 +5292,8 @@ checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 
 [[package]]
 name = "roaring"
-version = "0.10.10"
-source = "git+https://github.com/RoaringBitmap/roaring-rs.git#6cfeb8830f181a1f0a9fd9c3423175db6462fb2d"
+version = "0.10.12"
+source = "git+https://github.com/RoaringBitmap/roaring-rs.git#9496afe1e6ad93a8875f901c2579761f7acdc5b0"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -6890,9 +6900,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "volo"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac20a85aab7ec8c48f7ba97d66b97c6a6e33af03196ac34992421d60b49ac099"
+checksum = "13832c5e356d13ae8944fa06ef9cf64ea24ea14c0a2e347c4ead078c927d4ade"
 dependencies = [
  "async-broadcast",
  "dashmap",

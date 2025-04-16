@@ -266,7 +266,7 @@ impl InputFile {
 
     /// Read and returns whole content of file.
     ///
-    /// For continues reading, use [`Self::reader`] instead.
+    /// For continuous reading, use [`Self::reader`] instead.
     pub async fn read(&self) -> crate::Result<Bytes> {
         Ok(self
             .op
@@ -275,7 +275,7 @@ impl InputFile {
             .to_bytes())
     }
 
-    /// Creates [`FileRead`] for continues reading.
+    /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
     pub async fn reader(&self) -> crate::Result<impl FileRead> {
@@ -349,14 +349,14 @@ impl OutputFile {
     /// # Notes
     ///
     /// Calling `write` will overwrite the file if it exists.
-    /// For continues writing, use [`Self::writer`].
+    /// For continuous writing, use [`Self::writer`].
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
         let mut writer = self.writer().await?;
         writer.write(bs).await?;
         writer.close().await
     }
 
-    /// Creates output file for continues writing.
+    /// Creates output file for continuous writing.
     ///
     /// # Notes
     ///

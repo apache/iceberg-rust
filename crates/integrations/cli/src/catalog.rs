@@ -17,12 +17,12 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use fs_err::read_to_string;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_datafusion::IcebergCatalogProvider;
 use toml::{Table as TomlTable, Value};
