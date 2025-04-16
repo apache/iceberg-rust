@@ -30,16 +30,17 @@ use toml::{Table as TomlTable, Value};
 
 const CONFIG_NAME_CATALOGS: &str = "catalogs";
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum CatalogConfig {
     #[serde(rename = "rest")]
     Rest(RestCatalogConfig),
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq)]
 pub struct CatalogConfigDef {
     name: String,
+    #[serde(flatten)]
     config: CatalogConfig,
 }
 
@@ -54,42 +55,15 @@ impl CatalogConfigDef {
             }
         }
     }
-}
 
-#[derive(Debug)]
-pub struct IcebergCatalogList {
-    catalogs: HashMap<String, Arc<IcebergCatalogProvider>>,
-}
-
-impl IcebergCatalogList {
-    pub async fn parse(path: &Path) -> anyhow::Result<Self> {
-        let root_config: TomlTable = toml::from_str(&read_to_string(path)?)?;
-        let catalog_configs = Self::parse_catalogs(&root_config)?;
-
-        let mut catalogs = HashMap::with_capacity(catalog_configs.len());
-        for (name, config) in catalog_configs {
-            let catalog = config.try_into_catalog().await?;
-            catalogs.insert(name, catalog);
-        }
-
-        Ok(Self { catalogs })
-    }
-
-    fn parse_catalog(table: TomlTable) -> anyhow::Result<CatalogConfigDef> {
-        table
-            .try_into::<CatalogConfigDef>()
-            .with_context(|| "Failed to parse catalog config".to_string())
-    }
-
-    pub(crate) fn parse_catalogs(root: &TomlTable) -> anyhow::Result<HashMap<String,
-        CatalogConfigDef>> {
+    pub fn parse(root: &TomlTable) -> anyhow::Result<HashMap<String, Self>> {
         if let Value::Array(catalog_configs) = root.get(CONFIG_NAME_CATALOGS).ok_or_else(|| {
             anyhow::Error::msg(format!("{CONFIG_NAME_CATALOGS} entry not found in config"))
         })? {
             let mut catalogs = HashMap::with_capacity(catalog_configs.len());
             for value in catalog_configs {
                 if let Value::Table(table) = value {
-                    let catalog = Self::parse_catalog(table.clone())?;
+                    let catalog: CatalogConfigDef = table.clone().try_into()?;
                     if catalogs.contains_key(&catalog.name) {
                         return Err(anyhow!("Duplicate catalog name: {}", catalog.name));
                     }
@@ -102,6 +76,39 @@ impl IcebergCatalogList {
         } else {
             Err(anyhow!("{CONFIG_NAME_CATALOGS} must be an array of table!"))
         }
+    }
+}
+
+impl TryFrom<TomlTable> for CatalogConfigDef {
+    type Error = anyhow::Error;
+
+    fn try_from(table: TomlTable) -> Result<Self, Self::Error> {
+        table
+            .try_into::<CatalogConfigDef>()
+            .with_context(|| "Failed to parse catalog config".to_string())
+    }
+}
+
+
+
+
+#[derive(Debug)]
+pub struct IcebergCatalogList {
+    catalogs: HashMap<String, Arc<IcebergCatalogProvider>>,
+}
+
+impl IcebergCatalogList {
+    pub async fn parse(path: &Path) -> anyhow::Result<Self> {
+        let root_config: TomlTable = toml::from_str(&read_to_string(path)?)?;
+        let catalog_configs = CatalogConfigDef::parse(&root_config)?;
+
+        let mut catalogs = HashMap::with_capacity(catalog_configs.len());
+        for (name, config) in catalog_configs {
+            let catalog = config.try_into_catalog().await?;
+            catalogs.insert(name, catalog);
+        }
+
+        Ok(Self { catalogs })
     }
 }
 
@@ -132,9 +139,11 @@ impl CatalogProviderList for IcebergCatalogList {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use fs_err::read_to_string;
     use toml::{Table as TomlTable};
-    use iceberg_datafusion::IcebergCatalogProvider;
+    use iceberg_catalog_rest::RestCatalogConfig;
+    use crate::{CatalogConfig, CatalogConfigDef};
 
     #[test]
     fn test_parse_config() {
@@ -145,6 +154,40 @@ mod tests {
         let root_config: TomlTable = toml::from_str(&read_to_string(config_file_path).unwrap())
             .unwrap();
 
-        let catalog_configs = IcebergCatalogProvider::parse_catalogs(&root_config).unwrap();
+        let catalog_configs = CatalogConfigDef::parse(&root_config).unwrap();
+
+        assert_eq!(catalog_configs.len(), 2);
+
+        let catalog1 = catalog_configs.get("demo").unwrap();
+        let expected_catalog1 = CatalogConfigDef {
+            name: "demo".to_string(),
+            config: CatalogConfig::Rest(RestCatalogConfig::builder()
+                .uri("http://localhost:8080".to_string())
+                .warehouse("s3://iceberg-demo".to_string())
+                .props(HashMap::from([
+                    ("s3.endpoint".to_string(), "http://localhost:9000".to_string()),
+                    ("s3.access_key_id".to_string(), "admin".to_string()),
+                ]))
+                .build()
+            ),
+        };
+
+        assert_eq!(catalog1, &expected_catalog1);
+
+        let catalog2 = catalog_configs.get("demo2").unwrap();
+        let expected_catalog2 = CatalogConfigDef {
+            name: "demo2".to_string(),
+            config: CatalogConfig::Rest(RestCatalogConfig::builder()
+                .uri("http://localhost2:8080".to_string())
+                .warehouse("s3://iceberg-demo2".to_string())
+                .props(HashMap::from([
+                    ("s3.endpoint".to_string(), "http://localhost2:9090".to_string()),
+                    ("s3.access_key_id".to_string(), "admin2".to_string()),
+                ]))
+                .build()
+            ),
+        };
+
+        assert_eq!(catalog2, &expected_catalog2);
     }
 }

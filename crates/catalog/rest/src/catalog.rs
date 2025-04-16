@@ -50,7 +50,7 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder, Deserialize)]
+#[derive(Clone, Debug, TypedBuilder, Deserialize, PartialEq)]
 pub struct RestCatalogConfig {
     uri: String,
 
