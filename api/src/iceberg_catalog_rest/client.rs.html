@@ -265,7 +265,10 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
-<a href="#267" id="267">267</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -326,9 +329,7 @@
     </span><span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>RestCatalogConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>extra_headers = cfg.extra_headers()<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()<span class="question-mark">?</span>,
+            client: cfg.client().unwrap_or_default(),
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -347,9 +348,7 @@
             .transpose()<span class="question-mark">?
             </span>.unwrap_or(<span class="self">self</span>.extra_headers);
         <span class="prelude-val">Ok</span>(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()<span class="question-mark">?</span>,
+            client: cfg.client().unwrap_or(<span class="self">self</span>.client),
             token: Mutex::new(
                 cfg.token()
                     .or_else(|| <span class="self">self</span>.token.into_inner().ok().flatten()),
@@ -429,12 +428,11 @@
         );
 
         <span class="kw">let </span>auth_req = <span class="self">self
-            </span>.client
-            .request(Method::POST, <span class="kw-2">&amp;</span><span class="self">self</span>.token_endpoint)
+            </span>.request(Method::POST, <span class="kw-2">&amp;</span><span class="self">self</span>.token_endpoint)
             .form(<span class="kw-2">&amp;</span>params)
             .build()<span class="question-mark">?</span>;
         <span class="kw">let </span>auth_url = auth_req.url().clone();
-        <span class="kw">let </span>auth_resp = <span class="self">self</span>.client.execute(auth_req).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>auth_resp = <span class="self">self</span>.execute(auth_req).<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>auth_res: TokenResponse = <span class="kw">if </span>auth_resp.status() == StatusCode::OK {
             <span class="kw">let </span>text = auth_resp
@@ -487,15 +485,23 @@
 
     <span class="attr">#[inline]
     </span><span class="kw">pub fn </span>request&lt;U: IntoUrl&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, method: Method, url: U) -&gt; RequestBuilder {
-        <span class="self">self</span>.client.request(method, url)
+        <span class="self">self</span>.client
+            .request(method, url)
+            .headers(<span class="self">self</span>.extra_headers.clone())
+    }
+
+    <span class="doccomment">/// Executes the given `Request` and returns a `Response`.
+    </span><span class="kw">pub async fn </span>execute(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>request: Request) -&gt; <span class="prelude-ty">Result</span>&lt;Response&gt; {
+        request.headers_mut().extend(<span class="self">self</span>.extra_headers.clone());
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.client.execute(request).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="comment">// Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
     </span><span class="kw">pub async fn </span>query_catalog(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>request: Request) -&gt; <span class="prelude-ty">Result</span>&lt;Response&gt; {
         <span class="self">self</span>.authenticate(<span class="kw-2">&amp;mut </span>request).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.client.execute(request).<span class="kw">await</span><span class="question-mark">?</span>)
-    }
+        <span class="self">self</span>.execute(request).<span class="kw">await
+    </span>}
 }
 
 <span class="doccomment">/// Deserializes a catalog response into the given [`DeserializedOwned`] type.

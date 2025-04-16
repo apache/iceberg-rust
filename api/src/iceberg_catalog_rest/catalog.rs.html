@@ -2250,7 +2250,15 @@
 <a href="#2249" id="2249">2249</a>
 <a href="#2250" id="2250">2250</a>
 <a href="#2251" id="2251">2251</a>
-<a href="#2252" id="2252">2252</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2252" id="2252">2252</a>
+<a href="#2253" id="2253">2253</a>
+<a href="#2254" id="2254">2254</a>
+<a href="#2255" id="2255">2255</a>
+<a href="#2256" id="2256">2256</a>
+<a href="#2257" id="2257">2257</a>
+<a href="#2258" id="2258">2258</a>
+<a href="#2259" id="2259">2259</a>
+<a href="#2260" id="2260">2260</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -2283,7 +2291,7 @@
 <span class="kw">use </span>reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {<span class="self">self</span>},
 };
-<span class="kw">use </span>reqwest::{Method, StatusCode, Url};
+<span class="kw">use </span>reqwest::{Client, Method, StatusCode, Url};
 <span class="kw">use </span>tokio::sync::OnceCell;
 <span class="kw">use </span>typed_builder::TypedBuilder;
 
@@ -2310,6 +2318,9 @@
 
     <span class="attr">#[builder(default)]
     </span>props: HashMap&lt;String, String&gt;,
+
+    <span class="attr">#[builder(default)]
+    </span>client: <span class="prelude-ty">Option</span>&lt;Client&gt;,
 }
 
 <span class="kw">impl </span>RestCatalogConfig {
@@ -2356,6 +2367,11 @@
             <span class="string">"tables"</span>,
             <span class="kw-2">&amp;</span>table.name,
         ])
+    }
+
+    <span class="doccomment">/// Get the client from the config.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Client&gt; {
+        <span class="self">self</span>.client.clone()
     }
 
     <span class="doccomment">/// Get the token from the config.
