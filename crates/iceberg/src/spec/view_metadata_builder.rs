@@ -225,8 +225,7 @@ impl ViewMetadataBuilder {
         let version_added_in_this_changes = self
             .changes
             .iter()
-            .find(|update| matches!(update, ViewUpdate::AddViewVersion { view_version } if view_version.version_id() == version_id))
-            .is_some();
+            .any(|update| matches!(update, ViewUpdate::AddViewVersion { view_version } if view_version.version_id() == version_id));
 
         let mut log = version.log();
         if !version_added_in_this_changes {
