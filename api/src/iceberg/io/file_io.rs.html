@@ -784,7 +784,7 @@
 
     <span class="doccomment">/// Read and returns whole content of file.
     ///
-    /// For continues reading, use [`Self::reader`] instead.
+    /// For continuous reading, use [`Self::reader`] instead.
     </span><span class="kw">pub async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Bytes&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self
             </span>.op
@@ -793,7 +793,7 @@
             </span>.to_bytes())
     }
 
-    <span class="doccomment">/// Creates [`FileRead`] for continues reading.
+    <span class="doccomment">/// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
     </span><span class="kw">pub async fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;<span class="kw">impl </span>FileRead&gt; {
@@ -867,14 +867,14 @@
     /// # Notes
     ///
     /// Calling `write` will overwrite the file if it exists.
-    /// For continues writing, use [`Self::writer`].
+    /// For continuous writing, use [`Self::writer`].
     </span><span class="kw">pub async fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, bs: Bytes) -&gt; <span class="kw">crate</span>::Result&lt;()&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>writer = <span class="self">self</span>.writer().<span class="kw">await</span><span class="question-mark">?</span>;
         writer.write(bs).<span class="kw">await</span><span class="question-mark">?</span>;
         writer.close().<span class="kw">await
     </span>}
 
-    <span class="doccomment">/// Creates output file for continues writing.
+    <span class="doccomment">/// Creates output file for continuous writing.
     ///
     /// # Notes
     ///
