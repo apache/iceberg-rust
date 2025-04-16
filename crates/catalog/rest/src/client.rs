@@ -59,9 +59,7 @@ impl HttpClient {
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()?,
+            client: cfg.client().unwrap_or_default(),
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -80,9 +78,7 @@ impl HttpClient {
             .transpose()?
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()?,
+            client: cfg.client().unwrap_or(self.client),
             token: Mutex::new(
                 cfg.token()
                     .or_else(|| self.token.into_inner().ok().flatten()),
@@ -162,12 +158,11 @@ impl HttpClient {
         );
 
         let auth_req = self
-            .client
             .request(Method::POST, &self.token_endpoint)
             .form(&params)
             .build()?;
         let auth_url = auth_req.url().clone();
-        let auth_resp = self.client.execute(auth_req).await?;
+        let auth_resp = self.execute(auth_req).await?;
 
         let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
             let text = auth_resp
@@ -220,14 +215,22 @@ impl HttpClient {
 
     #[inline]
     pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
-        self.client.request(method, url)
+        self.client
+            .request(method, url)
+            .headers(self.extra_headers.clone())
+    }
+
+    /// Executes the given `Request` and returns a `Response`.
+    pub async fn execute(&self, mut request: Request) -> Result<Response> {
+        request.headers_mut().extend(self.extra_headers.clone());
+        Ok(self.client.execute(request).await?)
     }
 
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
         self.authenticate(&mut request).await?;
-        Ok(self.client.execute(request).await?)
+        self.execute(request).await
     }
 }
 
