@@ -17,13 +17,10 @@
 
 //! Iceberg name mapping.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DefaultOnNull};
-
-use crate::Error;
 
 /// Property name for name mapping.
 pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
@@ -33,60 +30,17 @@ pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
 #[serde(transparent)]
 pub struct NameMapping {
     root: Vec<MappedField>,
-    #[serde(skip)]
-    name_to_id: HashMap<String, i32>,
-    #[serde(skip)]
-    id_to_field: HashMap<i32, MappedField>,
 }
 
 impl NameMapping {
     /// Create a new [`NameMapping`] given a collection of mapped fields.
-    pub fn try_new(fields: Vec<MappedField>) -> Result<NameMapping, Error> {
-        let mut name_to_id = HashMap::new();
-        let mut id_to_field = HashMap::new();
-
-        for field in &fields {
-            if let Some(id) = field.field_id() {
-                if id_to_field.contains_key(&id) {
-                    return Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
-                        format!("duplicate id '{id}' is not allowed"),
-                    ));
-                }
-
-                id_to_field.insert(id, field.clone());
-                for name in field.names() {
-                    if name_to_id.contains_key(name) {
-                        return Err(Error::new(
-                            crate::ErrorKind::DataInvalid,
-                            format!("duplicate name '{name}' is not allowed"),
-                        ));
-                    }
-                    name_to_id.insert(name.to_string(), id);
-                }
-            }
-        }
-        Ok(Self {
-            root: fields,
-            name_to_id,
-            id_to_field,
-        })
+    pub fn new(fields: Vec<MappedField>) -> Self {
+        Self { root: fields }
     }
 
     /// Get a reference to fields which are to be mapped from name to field ID.
     pub fn root(&self) -> &[MappedField] {
         &self.root
-    }
-
-    /// Get a field, by name, returning its ID if it exists, otherwise `None`.
-    pub fn id(&self, field_name: &str) -> Option<i32> {
-        self.name_to_id.get(field_name).copied()
-    }
-
-    /// Get a field, by ID, returning the underlying [`MappedField`] if it exists,
-    /// otherwise `None`.
-    pub fn field(&self, id: i32) -> Option<&MappedField> {
-        self.id_to_field.get(&id)
     }
 }
 
@@ -133,7 +87,6 @@ impl MappedField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ErrorKind;
 
     #[test]
     fn test_json_mapped_field_deserialization() {
@@ -297,8 +250,6 @@ mod tests {
                     ]
                 }
             ],
-            id_to_field: HashMap::default(),
-            name_to_id: HashMap::default()
         });
     }
 
@@ -404,74 +355,8 @@ mod tests {
                     ],
                 },
             ],
-            id_to_field: HashMap::default(),
-            name_to_id: HashMap::default(),
         };
         let expected = r#"[{"names":["foo"]},{"field-id":2,"names":["bar"]},{"field-id":3,"names":["baz"]},{"field-id":4,"names":["qux"],"fields":[{"field-id":5,"names":["element"]}]},{"field-id":6,"names":["quux"],"fields":[{"field-id":7,"names":["key"]},{"field-id":8,"names":["value"],"fields":[{"field-id":9,"names":["key"]},{"field-id":10,"names":["value"]}]}]},{"field-id":11,"names":["location"],"fields":[{"field-id":12,"names":["element"],"fields":[{"field-id":13,"names":["latitude"]},{"field-id":14,"names":["longitude"]}]}]},{"field-id":15,"names":["person"],"fields":[{"field-id":16,"names":["name"]},{"field-id":17,"names":["age"]}]}]"#;
         assert_eq!(serde_json::to_string(&name_mapping).unwrap(), expected);
-    }
-
-    #[test]
-    fn name_mapping_internal_fields() {
-        let my_fields = vec![
-            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
-            MappedField::new(
-                Some(2),
-                vec!["field_two".to_string(), "field_foo".to_string()],
-                Vec::new(),
-            ),
-        ];
-
-        let name_mapping = NameMapping::try_new(my_fields).expect("valid mapped fields for test");
-        assert!(
-            name_mapping.field(1000).is_none(),
-            "Field with ID '1000' was not inserted to the collection"
-        );
-        assert_eq!(
-            *name_mapping.field(1).unwrap(),
-            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
-        );
-        assert_eq!(
-            *name_mapping.field(2).unwrap(),
-            MappedField::new(
-                Some(2),
-                vec!["field_two".to_string(), "field_foo".to_string()],
-                Vec::new(),
-            )
-        );
-
-        assert!(
-            name_mapping.id("not_exist").is_none(),
-            "Field was not expected to exist in the collection"
-        );
-        assert_eq!(name_mapping.id("field_two"), Some(2));
-        assert_eq!(
-            name_mapping.id("field_foo"),
-            Some(2),
-            "Field with another name shares the same ID of '2'"
-        );
-        assert_eq!(name_mapping.id("field_one"), Some(1));
-    }
-
-    #[test]
-    fn name_mapping_internal_fields_invalid() {
-        let duplicate_ids = vec![
-            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
-            MappedField::new(Some(1), vec!["field_two".to_string()], Vec::new()),
-        ];
-
-        assert_eq!(
-            NameMapping::try_new(duplicate_ids).unwrap_err().kind(),
-            ErrorKind::DataInvalid
-        );
-
-        let duplicate_names = vec![
-            MappedField::new(Some(1), vec!["field_one".to_string()], Vec::new()),
-            MappedField::new(Some(2), vec!["field_one".to_string()], Vec::new()),
-        ];
-        assert_eq!(
-            NameMapping::try_new(duplicate_names).unwrap_err().kind(),
-            ErrorKind::DataInvalid
-        );
     }
 }
