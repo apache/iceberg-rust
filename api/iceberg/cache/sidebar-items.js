@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"trait":["ObjectCache","ObjectCacheProvide"],"type":["ObjectCacheProvider"]};
