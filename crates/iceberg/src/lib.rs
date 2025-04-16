@@ -70,6 +70,7 @@ pub use catalog::{
 pub mod table;
 
 mod avro;
+pub mod cache;
 pub mod io;
 pub mod spec;
 
