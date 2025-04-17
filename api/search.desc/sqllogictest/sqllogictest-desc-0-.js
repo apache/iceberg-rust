@@ -1,1 +1,0 @@
-searchState.loadedDescShard("sqllogictest", 0, "")
