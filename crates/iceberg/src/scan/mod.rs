@@ -294,13 +294,15 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         let plan_context = PlanContext {
+            file_io: self.table.file_io().clone(),
+            object_cache: self.table.object_cache().cloned(),
+
             snapshot,
             table_metadata: self.table.metadata_ref(),
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),

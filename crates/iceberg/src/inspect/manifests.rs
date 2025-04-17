@@ -162,7 +162,11 @@ impl<'a> ManifestsTable<'a> {
 
         if let Some(snapshot) = self.table.metadata().current_snapshot() {
             let manifest_list = snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
+                .load_manifest_list(
+                    &self.table.metadata_ref(),
+                    self.table.file_io(),
+                    self.table.object_cache(),
+                )
                 .await?;
             for manifest in manifest_list.entries() {
                 content.append_value(manifest.content as i32);
@@ -326,7 +330,7 @@ mod tests {
                 partition_summaries: ListArray
                 [
                   StructArray
-                -- validity: 
+                -- validity:
                 [
                   valid,
                 ]

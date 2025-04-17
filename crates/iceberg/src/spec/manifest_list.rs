@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use apache_avro::types::Value;
 use apache_avro::{from_value, Reader, Writer};
@@ -27,6 +28,7 @@ use bytes::Bytes;
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{Datum, FormatVersion, Manifest, StructType};
+use crate::cache::ObjectCacheProvider;
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::{Error, ErrorKind};
@@ -656,7 +658,29 @@ impl ManifestFile {
     /// Load [`Manifest`].
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`], such as `sequence_number`.
-    pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
+    ///
+    /// If `object_cache` is provided, it will be used to cache the manifest.
+    pub async fn load_manifest(
+        &self,
+        file_io: &FileIO,
+        object_cache: Option<&ObjectCacheProvider>,
+    ) -> Result<Arc<Manifest>> {
+        let Some(object_cache) = object_cache else {
+            return self.load_manifest_inner(file_io).await;
+        };
+
+        if let Some(manifest) = object_cache.manifest_cache().get(&self.manifest_path) {
+            return Ok(manifest);
+        }
+
+        let manifest = self.load_manifest_inner(file_io).await?;
+        object_cache
+            .manifest_cache()
+            .set(self.manifest_path.clone(), manifest.clone());
+        Ok(manifest)
+    }
+
+    async fn load_manifest_inner(&self, file_io: &FileIO) -> Result<Arc<Manifest>> {
         let avro = file_io.new_input(&self.manifest_path)?.read().await?;
 
         let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
@@ -666,7 +690,7 @@ impl ManifestFile {
             entry.inherit_data(self);
         }
 
-        Ok(Manifest::new(metadata, entries))
+        Ok(Arc::new(Manifest::new(metadata, entries)))
     }
 }
 
