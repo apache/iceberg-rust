@@ -3171,6 +3171,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-cache-moka"
+version = "0.4.0"
+dependencies = [
+ "iceberg",
+ "moka",
+]
+
+[[package]]
 name = "iceberg-catalog-glue"
 version = "0.4.0"
 dependencies = [
