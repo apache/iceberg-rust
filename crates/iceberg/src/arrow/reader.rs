@@ -308,7 +308,7 @@ impl ArrowReader {
         if let Some(positional_delete_indexes) = positional_delete_indexes {
             let delete_row_selection = {
                 let positional_delete_indexes = positional_delete_indexes.read().unwrap();
-                
+
                 Self::build_deletes_row_selection(
                     record_batch_stream_builder.metadata().row_groups(),
                     &selected_row_group_indices,

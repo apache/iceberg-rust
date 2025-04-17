@@ -359,7 +359,10 @@ impl CachingDeleteFileManager {
     ) -> Result<HashMap<String, DeleteVector>> {
         // TODO
 
-        Ok(HashMap::default())
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "parsing of positional deletes is not yet supported",
+        ))
     }
 
     /// Parses record batch streams from individual equality delete files
@@ -370,7 +373,10 @@ impl CachingDeleteFileManager {
     ) -> Result<Predicate> {
         // TODO
 
-        Ok(AlwaysTrue)
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "parsing of equality deletes is not yet supported",
+        ))
     }
 
     /// Builds eq delete predicate for the provided task.
@@ -471,15 +477,16 @@ mod tests {
             .unwrap();
 
         // Note that with the delete file parsing not yet in place, all we can test here is that
-        // the call to the loader does not fail.
+        // the call to the loader fails with the expected FeatureUnsupportedError.
         let delete_file_manager = CachingDeleteFileManager::new(file_io.clone(), 10);
 
         let file_scan_tasks = setup(table_location);
 
-        delete_file_manager
+        let result = delete_file_manager
             .load_deletes(&file_scan_tasks[0].deletes)
-            .await
-            .unwrap();
+            .await;
+
+        assert!(result.is_err_and(|e| e.kind() == ErrorKind::FeatureUnsupported));
     }
 
     fn setup(table_location: &Path) -> Vec<FileScanTask> {

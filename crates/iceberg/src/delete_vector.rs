@@ -39,7 +39,7 @@ impl DeleteVector {
         DeleteVectorIterator { outer, inner: None }
     }
 
-    pub fn intersect_assign(&mut self, other: &DeleteVector) {
+    pub(crate) fn intersect_assign(&mut self, other: &DeleteVector) {
         self.inner.bitor_assign(&other.inner);
     }
 }
