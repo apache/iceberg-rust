@@ -89,6 +89,10 @@ mod storage_gcs;
 #[cfg(feature = "storage-gcs")]
 pub use storage_gcs::*;
 
+#[cfg(feature = "storage-azblob")]
+mod storage_azblob;
+#[cfg(feature = "storage-azblob")]
+pub use storage_azblob::*;
 fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
 }
