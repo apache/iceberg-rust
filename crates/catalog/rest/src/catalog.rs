@@ -31,8 +31,8 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use serde_derive::Deserialize;
 use reqwest::{Client, Method, StatusCode, Url};
+use serde_derive::Deserialize;
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -50,7 +50,7 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder, Deserialize, PartialEq)]
+#[derive(Clone, Debug, TypedBuilder, Deserialize)]
 pub struct RestCatalogConfig {
     uri: String,
 
@@ -63,6 +63,12 @@ pub struct RestCatalogConfig {
     #[serde(skip)]
     #[builder(default)]
     client: Option<Client>,
+}
+
+impl PartialEq for RestCatalogConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.uri == other.uri && self.warehouse == other.warehouse && self.props == other.props
+    }
 }
 
 impl RestCatalogConfig {
