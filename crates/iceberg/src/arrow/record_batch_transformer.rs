@@ -140,8 +140,8 @@ impl RecordBatchTransformer {
         Ok(match &self.batch_transform {
             Some(BatchTransform::PassThrough) => record_batch,
             Some(BatchTransform::Modify {
-                ref target_schema,
-                ref operations,
+                target_schema,
+                operations,
             }) => {
                 let options = RecordBatchOptions::default()
                     .with_match_field_names(false)
@@ -294,7 +294,7 @@ impl RecordBatchTransformer {
                     Error::new(ErrorKind::Unexpected, "Field not found in snapshot schema")
                 )?;
 
-                let default_value = if let Some(ref iceberg_default_value) =
+                let default_value = if let Some(iceberg_default_value) =
                     &iceberg_field.initial_default
                 {
                     let Literal::Primitive(primitive_literal) = iceberg_default_value else {

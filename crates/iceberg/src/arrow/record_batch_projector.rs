@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
+use arrow_array::{make_array, ArrayRef, RecordBatch, StructArray};
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
 use crate::error::Result;
@@ -42,7 +43,7 @@ impl RecordBatchProjector {
     /// This function will iterate through the nested fields if the field is a struct, `searchable_field_func` can be used to control whether
     /// iterate into the nested fields.
     pub(crate) fn new<F1, F2>(
-        original_schema: SchemaRef,
+        original_schema: &Schema,
         field_ids: &[i32],
         field_id_fetch_func: F1,
         searchable_field_func: F2,
@@ -138,6 +139,7 @@ impl RecordBatchProjector {
     fn get_column_by_field_index(batch: &[ArrayRef], field_index: &[usize]) -> Result<ArrayRef> {
         let mut rev_iterator = field_index.iter().rev();
         let mut array = batch[*rev_iterator.next().unwrap()].clone();
+        let mut null_buffer = array.logical_nulls();
         for idx in rev_iterator {
             array = array
                 .as_any()
@@ -148,8 +150,11 @@ impl RecordBatchProjector {
                 ))?
                 .column(*idx)
                 .clone();
+            null_buffer = NullBuffer::union(null_buffer.as_ref(), array.logical_nulls().as_ref());
         }
-        Ok(array)
+        Ok(make_array(
+            array.to_data().into_builder().nulls(null_buffer).build()?,
+        ))
     }
 }
 
@@ -187,10 +192,9 @@ mod test {
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
         let projector =
-            RecordBatchProjector::new(schema.clone(), &[1, 3], field_id_fetch_func, |_| true)
-                .unwrap();
+            RecordBatchProjector::new(&schema, &[1, 3], field_id_fetch_func, |_| true).unwrap();
 
-        assert!(projector.field_indices.len() == 2);
+        assert_eq!(projector.field_indices.len(), 2);
         assert_eq!(projector.field_indices[0], vec![0]);
         assert_eq!(projector.field_indices[1], vec![0, 1]);
 
@@ -250,8 +254,7 @@ mod test {
             "inner_field2" => Ok(Some(4)),
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[1, 5], field_id_fetch_func, |_| true);
+        let projector = RecordBatchProjector::new(&schema, &[1, 5], field_id_fetch_func, |_| true);
 
         assert!(projector.is_err());
     }
@@ -280,12 +283,10 @@ mod test {
             "inner_field2" => Ok(Some(4)),
             _ => Err(Error::new(ErrorKind::Unexpected, "Field id not found")),
         };
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| false);
+        let projector = RecordBatchProjector::new(&schema, &[3], field_id_fetch_func, |_| false);
         assert!(projector.is_err());
 
-        let projector =
-            RecordBatchProjector::new(schema.clone(), &[3], field_id_fetch_func, |_| true);
+        let projector = RecordBatchProjector::new(&schema, &[3], field_id_fetch_func, |_| true);
         assert!(projector.is_ok());
     }
 }

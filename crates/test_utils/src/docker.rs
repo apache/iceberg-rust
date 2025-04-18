@@ -65,7 +65,7 @@ impl DockerCompose {
         }
     }
 
-    pub fn run(&self) {
+    pub fn up(&self) {
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 
@@ -86,6 +86,28 @@ impl DockerCompose {
             cmd,
             format!(
                 "Starting docker compose in {}, project name: {}",
+                self.docker_compose_dir, self.project_name
+            ),
+        )
+    }
+
+    pub fn down(&self) {
+        let mut cmd = Command::new("docker");
+        cmd.current_dir(&self.docker_compose_dir);
+
+        cmd.args(vec![
+            "compose",
+            "-p",
+            self.project_name.as_str(),
+            "down",
+            "-v",
+            "--remove-orphans",
+        ]);
+
+        run_command(
+            cmd,
+            format!(
+                "Stopping docker compose in {}, project name: {}",
                 self.docker_compose_dir, self.project_name
             ),
         )
@@ -114,24 +136,6 @@ impl DockerCompose {
 
 impl Drop for DockerCompose {
     fn drop(&mut self) {
-        let mut cmd = Command::new("docker");
-        cmd.current_dir(&self.docker_compose_dir);
-
-        cmd.args(vec![
-            "compose",
-            "-p",
-            self.project_name.as_str(),
-            "down",
-            "-v",
-            "--remove-orphans",
-        ]);
-
-        run_command(
-            cmd,
-            format!(
-                "Stopping docker compose in {}, project name: {}",
-                self.docker_compose_dir, self.project_name
-            ),
-        )
+        self.down()
     }
 }

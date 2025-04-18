@@ -34,6 +34,8 @@ use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
+/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
+pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
@@ -50,6 +52,18 @@ pub enum Operation {
     Overwrite,
     /// Data files were removed and their contents logically deleted and/or delete files were added to delete rows.
     Delete,
+}
+
+impl Operation {
+    /// Returns the string representation (lowercase) of the operation.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Operation::Append => "append",
+            Operation::Replace => "replace",
+            Operation::Overwrite => "overwrite",
+            Operation::Delete => "delete",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -161,7 +175,6 @@ impl Snapshot {
     }
 
     /// Get parent snapshot.
-    #[cfg(test)]
     pub(crate) fn parent_snapshot(&self, table_metadata: &TableMetadata) -> Option<SnapshotRef> {
         match self.parent_snapshot_id {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
@@ -384,6 +397,33 @@ impl SnapshotRetention {
             max_snapshot_age_ms,
             max_ref_age_ms,
         }
+    }
+}
+
+/// An iterator over the ancestors of a snapshot.
+pub struct AncestorIterator<'a> {
+    current: Option<SnapshotRef>,
+    table_metadata: &'a TableMetadata,
+}
+
+impl<'a> Iterator for AncestorIterator<'a> {
+    type Item = SnapshotRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current.take()?;
+
+        let next = current.parent_snapshot(self.table_metadata);
+        self.current = next;
+
+        Some(current)
+    }
+}
+
+/// Returns an iterator over the ancestors of a snapshot.
+pub fn ancestors_of(snapshot: SnapshotRef, table_metadata: &TableMetadata) -> AncestorIterator<'_> {
+    AncestorIterator {
+        current: Some(snapshot),
+        table_metadata,
     }
 }
 

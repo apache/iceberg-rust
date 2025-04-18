@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pyarrow as pa
 import pytest
@@ -63,6 +63,18 @@ def test_year_transform():
     assert result == expected
 
 
+def test_year_transform_with_tz():
+    arr = pa.array(
+        [
+            datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2000, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        ]
+    )
+    result = transform.year(arr)
+    expected = pa.array([0, 30], type=pa.int32())
+    assert result == expected
+
+
 def test_month_transform():
     arr = pa.array([date(1970, 1, 1), date(2000, 4, 1)])
     result = transform.month(arr)
@@ -78,9 +90,15 @@ def test_day_transform():
 
 
 def test_hour_transform():
-    arr = pa.array([datetime(1970, 1, 1, 19, 1, 23), datetime(2000, 3, 1, 12, 1, 23)])
+    arr = pa.array(
+        [
+            datetime(1970, 1, 1, 19, 1, 23),
+            datetime(2000, 3, 1, 12, 1, 23),
+            datetime(22, 5, 1, 22, 1, 1),  # Negative
+        ]
+    )
     result = transform.hour(arr)
-    expected = pa.array([19, 264420], type=pa.int32())
+    expected = pa.array([19, 264420, -17072905], type=pa.int32())
     assert result == expected
 
 

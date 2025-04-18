@@ -41,7 +41,7 @@ fn before_all() {
         normalize_test_name(module_path!()),
         format!("{}/testdata/rest_catalog", env!("CARGO_MANIFEST_DIR")),
     );
-    docker_compose.run();
+    docker_compose.up();
     guard.replace(docker_compose);
 }
 
@@ -81,10 +81,7 @@ async fn test_get_non_exist_namespace() {
         .await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Namespace does not exist"));
+    assert!(result.unwrap_err().to_string().contains("does not exist"));
 }
 
 #[tokio::test]

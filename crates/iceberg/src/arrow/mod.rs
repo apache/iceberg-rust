@@ -19,8 +19,17 @@
 
 mod schema;
 pub use schema::*;
+
+mod nan_val_cnt_visitor;
+pub(crate) use nan_val_cnt_visitor::*;
+
+pub(crate) mod delete_file_manager;
+
 mod reader;
 pub(crate) mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
-
+mod value;
 pub use reader::*;
+pub use value::*;
+mod record_batch_partition_spliter;
+pub(crate) use record_batch_partition_spliter::*;

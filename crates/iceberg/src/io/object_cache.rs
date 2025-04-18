@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use crate::io::FileIO;
@@ -191,9 +192,8 @@ mod tests {
     use super::*;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, Manifest,
-        ManifestContentType, ManifestEntry, ManifestListWriter, ManifestMetadata, ManifestStatus,
-        ManifestWriter, Struct, TableMetadata,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
     };
     use crate::table::Table;
     use crate::TableIdent;
@@ -263,37 +263,34 @@ mod tests {
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
-            let data_file_manifest = ManifestWriter::new(
+            let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
-                current_snapshot.snapshot_id(),
+                Some(current_snapshot.snapshot_id()),
                 vec![],
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
             )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema(current_schema.clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((**current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
-                    .build(),
-                vec![ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFileBuilder::default()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/1.parquet", &self.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(100))]))
-                            .key_metadata(None)
-                            .build()
-                            .unwrap(),
-                    )
-                    .build()],
-            ))
-            .await
-            .unwrap();
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
             let mut manifest_list_write = ManifestListWriter::v2(

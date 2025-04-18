@@ -61,7 +61,7 @@ const LONG_MAX: i64 = 9223372036854775807;
 const LONG_MIN: i64 = -9223372036854775808;
 
 /// Values present in iceberg type
-#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Hash, Eq)]
 pub enum PrimitiveLiteral {
     /// 0x00 for false, non-zero byte for true
     Boolean(bool),
@@ -1564,6 +1564,16 @@ impl Literal {
         Self::Primitive(PrimitiveLiteral::Long(value))
     }
 
+    /// Creates a timestamp from unix epoch in nanoseconds.
+    pub(crate) fn timestamp_nano(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
+    /// Creates a timestamp with timezone from unix epoch in nanoseconds.
+    pub(crate) fn timestamptz_nano(value: i64) -> Self {
+        Self::Primitive(PrimitiveLiteral::Long(value))
+    }
+
     /// Creates a timestamp from [`DateTime`].
     pub fn timestamp_from_datetime<T: TimeZone>(dt: DateTime<T>) -> Self {
         Self::timestamp(dt.with_timezone(&Utc).timestamp_micros())
@@ -2221,6 +2231,8 @@ mod timestamptz {
 }
 
 mod _serde {
+    use std::collections::HashMap;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
@@ -2231,7 +2243,7 @@ mod _serde {
     use crate::spec::{PrimitiveType, Type, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME};
     use crate::{Error, ErrorKind};
 
-    #[derive(SerializeDerive, DeserializeDerive, Debug)]
+    #[derive(SerializeDerive, DeserializeDerive, Debug, Clone)]
     #[serde(transparent)]
     /// Raw literal representation used for serde. The serialize way is used for Avro serializer.
     pub struct RawLiteral(RawLiteralEnum);
@@ -2816,22 +2828,24 @@ mod _serde {
                     optional: _,
                 }) => match ty {
                     Type::Struct(struct_ty) => {
-                        let iters: Vec<Option<Literal>> = required
-                            .into_iter()
-                            .map(|(field_name, value)| {
-                                let field = struct_ty
-                                    .field_by_name(field_name.as_str())
-                                    .ok_or_else(|| {
-                                        invalid_err_with_reason(
-                                            "record",
-                                            &format!("field {} is not exist", &field_name),
-                                        )
-                                    })?;
-                                let value = value.try_into(&field.field_type)?;
-                                Ok(value)
+                        let mut value_map: HashMap<String, RawLiteralEnum> =
+                            required.into_iter().collect();
+                        let values = struct_ty
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                if let Some(raw_value) = value_map.remove(&f.name) {
+                                    let value = raw_value.try_into(&f.field_type)?;
+                                    Ok(value)
+                                } else {
+                                    Err(invalid_err_with_reason(
+                                        "record",
+                                        &format!("field {} is not exist", &f.name),
+                                    ))
+                                }
                             })
-                            .collect::<Result<_, Error>>()?;
-                        Ok(Some(Literal::Struct(super::Struct::from_iter(iters))))
+                            .collect::<Result<Vec<_>, Error>>()?;
+                        Ok(Some(Literal::Struct(super::Struct::from_iter(values))))
                     }
                     Type::Map(map_ty) => {
                         if *map_ty.key_field.field_type != Type::Primitive(PrimitiveType::String) {
@@ -3568,6 +3582,9 @@ mod tests {
     fn test_parse_timestamp() {
         let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899").unwrap();
         assert_eq!(&format!("{value}"), "2021-08-01 01:09:00.089900");
+
+        let value = Datum::timestamp_from_str("2023-01-06T00:00:00").unwrap();
+        assert_eq!(&format!("{value}"), "2023-01-06 00:00:00");
 
         let value = Datum::timestamp_from_str("2021-08-01T01:09:00.0899+0800");
         assert!(value.is_err(), "Parse timestamp with timezone should fail!");

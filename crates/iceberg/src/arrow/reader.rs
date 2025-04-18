@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_arith::boolean::{and, is_not_null, is_null, not, or};
+use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{
@@ -36,11 +36,13 @@ use futures::{try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+use super::record_batch_transformer::RecordBatchTransformer;
+use crate::arrow::delete_file_manager::CachingDeleteFileManager;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
+use crate::delete_vector::DeleteVector;
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::{visit, BoundPredicateVisitor};
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
@@ -48,7 +50,7 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, PrimitiveType, Schema};
+use crate::spec::{DataContentType, Datum, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
@@ -104,7 +106,11 @@ impl ArrowReaderBuilder {
     pub fn build(self) -> ArrowReader {
         ArrowReader {
             batch_size: self.batch_size,
-            file_io: self.file_io,
+            file_io: self.file_io.clone(),
+            delete_file_manager: CachingDeleteFileManager::new(
+                self.file_io.clone(),
+                self.concurrency_limit_data_files,
+            ),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
@@ -117,6 +123,7 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
+    delete_file_manager: CachingDeleteFileManager,
 
     /// the maximum number of data files that can be fetched at the same time
     concurrency_limit_data_files: usize,
@@ -143,6 +150,7 @@ impl ArrowReader {
                     task,
                     batch_size,
                     file_io,
+                    self.delete_file_manager.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
                 )
@@ -160,22 +168,18 @@ impl ArrowReader {
         task: FileScanTask,
         batch_size: Option<usize>,
         file_io: FileIO,
+        delete_file_manager: CachingDeleteFileManager,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
     ) -> Result<ArrowRecordBatchStream> {
-        // Get the metadata for the Parquet file we need to read and build
-        // a reader for the data within
-        let parquet_file = file_io.new_input(&task.data_file_path)?;
-        let (parquet_metadata, parquet_reader) =
-            try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+        let should_load_page_index =
+            (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
-        let should_load_page_index = row_selection_enabled && task.predicate.is_some();
-
-        // Start creating the record batch stream, which wraps the parquet file reader
-        let mut record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            parquet_file_reader,
-            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+        // concurrently retrieve delete files and create RecordBatchStreamBuilder
+        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
+            &task.data_file_path,
+            file_io.clone(),
+            should_load_page_index,
         )
         .await?;
 
@@ -189,7 +193,7 @@ impl ArrowReader {
         )?;
         record_batch_stream_builder = record_batch_stream_builder.with_projection(projection_mask);
 
-        // RecordBatchTransformer performs any required transformations on the RecordBatches
+        // RecordBatchTransformer performs any transformations required on the RecordBatches
         // that come back from the file, such as type promotion, default column insertion
         // and column re-ordering
         let mut record_batch_transformer =
@@ -199,62 +203,155 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        if let Some(predicate) = &task.predicate {
+        let delete_predicate = delete_file_manager.build_delete_predicate(task.schema.clone())?;
+
+        // In addition to the optional predicate supplied in the `FileScanTask`,
+        // we also have an optional predicate resulting from equality delete files.
+        // If both are present, we logical-AND them together to form a single filter
+        // predicate that we can pass to the `RecordBatchStreamBuilder`.
+        let final_predicate = match (&task.predicate, delete_predicate) {
+            (None, None) => None,
+            (Some(predicate), None) => Some(predicate.clone()),
+            (None, Some(ref predicate)) => Some(predicate.clone()),
+            (Some(filter_predicate), Some(delete_predicate)) => {
+                Some(filter_predicate.clone().and(delete_predicate))
+            }
+        };
+
+        // There are two possible sources both for potential lists of selected RowGroup indices,
+        // and for `RowSelection`s.
+        // Selected RowGroup index lists can come from two sources:
+        //   * When there are equality delete files that are applicable;
+        //   * When there is a scan predicate and row_group_filtering_enabled = true.
+        // `RowSelection`s can be created in either or both of the following cases:
+        //   * When there are positional delete files that are applicable;
+        //   * When there is a scan predicate and row_selection_enabled = true
+        // Note that, in the former case we only perform row group filtering when
+        // there is a scan predicate AND row_group_filtering_enabled = true,
+        // but we perform row selection filtering if there are applicable
+        // equality delete files OR (there is a scan predicate AND row_selection_enabled),
+        // since the only implemented method of applying positional deletes is
+        // by using a `RowSelection`.
+        let mut selected_row_group_indices = None;
+        let mut row_selection = None;
+
+        if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = Self::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                predicate,
+                &predicate,
             )?;
 
             let row_filter = Self::get_row_filter(
-                predicate,
+                &predicate,
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
             )?;
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
-            let mut selected_row_groups = None;
             if row_group_filtering_enabled {
                 let result = Self::get_selected_row_group_indices(
-                    predicate,
+                    &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     &task.schema,
                 )?;
 
-                selected_row_groups = Some(result);
+                selected_row_group_indices = Some(result);
             }
 
             if row_selection_enabled {
-                let row_selection = Self::get_row_selection(
-                    predicate,
+                row_selection = Some(Self::get_row_selection_for_filter_predicate(
+                    &predicate,
                     record_batch_stream_builder.metadata(),
-                    &selected_row_groups,
+                    &selected_row_group_indices,
                     &field_id_map,
                     &task.schema,
-                )?;
-
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_selection(row_selection);
+                )?);
             }
+        }
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                record_batch_stream_builder =
-                    record_batch_stream_builder.with_row_groups(selected_row_groups);
-            }
+        let positional_delete_indexes =
+            delete_file_manager.get_positional_delete_indexes_for_data_file(&task.data_file_path);
+
+        if let Some(positional_delete_indexes) = positional_delete_indexes {
+            let delete_row_selection = Self::build_deletes_row_selection(
+                record_batch_stream_builder.metadata().row_groups(),
+                &selected_row_group_indices,
+                positional_delete_indexes,
+            )?;
+
+            // merge the row selection from the delete files with the row selection
+            // from the filter predicate, if there is one from the filter predicate
+            row_selection = match row_selection {
+                None => Some(delete_row_selection),
+                Some(filter_row_selection) => {
+                    Some(filter_row_selection.intersection(&delete_row_selection))
+                }
+            };
+        }
+
+        if let Some(row_selection) = row_selection {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_selection(row_selection);
+        }
+
+        if let Some(selected_row_group_indices) = selected_row_group_indices {
+            record_batch_stream_builder =
+                record_batch_stream_builder.with_row_groups(selected_row_group_indices);
         }
 
         // Build the batch stream and send all the RecordBatches that it generates
         // to the requester.
-        let record_batch_stream =
-            record_batch_stream_builder
-                .build()?
-                .map(move |batch| match batch {
+        let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
+            if matches!(task.data_file_content, DataContentType::PositionDeletes) {
+                Ok(batch?)
+            } else {
+                match batch {
                     Ok(batch) => record_batch_transformer.process_record_batch(batch),
                     Err(err) => Err(err.into()),
-                });
+                }
+            }
+        });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
+
+    async fn create_parquet_record_batch_stream_builder(
+        data_file_path: &str,
+        file_io: FileIO,
+        should_load_page_index: bool,
+    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
+        // Get the metadata for the Parquet file we need to read and build
+        // a reader for the data within
+        let parquet_file = file_io.new_input(data_file_path)?;
+        let (parquet_metadata, parquet_reader) =
+            try_join!(parquet_file.metadata(), parquet_file.reader())?;
+        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader);
+
+        // Create the record batch stream builder, which wraps the parquet file reader
+        let record_batch_stream_builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            parquet_file_reader,
+            ArrowReaderOptions::new().with_page_index(should_load_page_index),
+        )
+        .await?;
+        Ok(record_batch_stream_builder)
+    }
+
+    /// computes a `RowSelection` from positional delete indices.
+    ///
+    /// Using the Parquet page index, we build a `RowSelection` that rejects rows that are indicated
+    /// as having been deleted by a positional delete, taking into account any row groups that have
+    /// been skipped entirely by the filter predicate
+    #[allow(unused)]
+    fn build_deletes_row_selection(
+        row_group_metadata: &[RowGroupMetaData],
+        selected_row_groups: &Option<Vec<usize>>,
+        mut positional_deletes: DeleteVector,
+    ) -> Result<RowSelection> {
+        // TODO
+
+        Ok(RowSelection::default())
     }
 
     fn build_field_id_set_and_map(
@@ -271,6 +368,28 @@ impl ArrowReader {
         let field_id_map = build_field_id_map(parquet_schema)?;
 
         Ok((iceberg_field_ids, field_id_map))
+    }
+
+    /// Insert the leaf field id into the field_ids using for projection.
+    /// For nested type, it will recursively insert the leaf field id.
+    fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
+        match field.field_type.as_ref() {
+            Type::Primitive(_) => {
+                field_ids.push(field.id);
+            }
+            Type::Struct(struct_type) => {
+                for nested_field in struct_type.fields() {
+                    Self::include_leaf_field_id(nested_field, field_ids);
+                }
+            }
+            Type::List(list_type) => {
+                Self::include_leaf_field_id(&list_type.element_field, field_ids);
+            }
+            Type::Map(map_type) => {
+                Self::include_leaf_field_id(&map_type.key_field, field_ids);
+                Self::include_leaf_field_id(&map_type.value_field, field_ids);
+            }
+        }
     }
 
     fn get_arrow_projection_mask(
@@ -297,11 +416,21 @@ impl ArrowReader {
                         scale: requested_scale,
                     }),
                 ) if requested_precision >= file_precision && file_scale == requested_scale => true,
+                // Uuid will be store as Fixed(16) in parquet file, so the read back type will be Fixed(16).
+                (Some(PrimitiveType::Fixed(16)), Some(PrimitiveType::Uuid)) => true,
                 _ => false,
             }
         }
 
-        if field_ids.is_empty() {
+        let mut leaf_field_ids = vec![];
+        for field_id in field_ids {
+            let field = iceberg_schema_of_task.field_by_id(*field_id);
+            if let Some(field) = field {
+                Self::include_leaf_field_id(field, &mut leaf_field_ids);
+            }
+        }
+
+        if leaf_field_ids.is_empty() {
             Ok(ProjectionMask::all())
         } else {
             // Build the map between field id and column index in Parquet schema.
@@ -318,7 +447,7 @@ impl ArrowReader {
                         .and_then(|field_id| i32::from_str(field_id).ok())
                         .map_or(false, |field_id| {
                             projected_fields.insert((*f).clone(), field_id);
-                            field_ids.contains(&field_id)
+                            leaf_field_ids.contains(&field_id)
                         })
                 }),
                 arrow_schema.metadata().clone(),
@@ -351,19 +480,26 @@ impl ArrowReader {
                 true
             });
 
-            if column_map.len() != field_ids.len() {
+            if column_map.len() != leaf_field_ids.len() {
+                let missing_fields = leaf_field_ids
+                    .iter()
+                    .filter(|field_id| !column_map.contains_key(field_id))
+                    .collect::<Vec<_>>();
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Parquet schema {} and Iceberg schema {} do not match.",
                         iceberg_schema, iceberg_schema_of_task
                     ),
-                ));
+                )
+                .with_context("column_map", format! {"{:?}", column_map})
+                .with_context("field_ids", format! {"{:?}", leaf_field_ids})
+                .with_context("missing_fields", format! {"{:?}", missing_fields}));
             }
 
             let mut indices = vec![];
-            for field_id in field_ids {
-                if let Some(col_idx) = column_map.get(field_id) {
+            for field_id in leaf_field_ids {
+                if let Some(col_idx) = column_map.get(&field_id) {
                     indices.push(*col_idx);
                 } else {
                     return Err(Error::new(
@@ -428,7 +564,7 @@ impl ArrowReader {
         Ok(results)
     }
 
-    fn get_row_selection(
+    fn get_row_selection_for_filter_predicate(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
         selected_row_groups: &Option<Vec<usize>>,
@@ -712,10 +848,14 @@ impl PredicateConverter<'_> {
             let index = self
                 .column_indices
                 .iter()
-                .position(|&idx| idx == *column_idx).ok_or(Error::new(ErrorKind::DataInvalid, format!(
-                    "Leave column `{}` in predicates cannot be found in the required column indices.",
-                    reference.field().name
-                )))?;
+                .position(|&idx| idx == *column_idx)
+                .ok_or(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                reference.field().name
+            ),
+                ))?;
 
             Ok(Some(index))
         } else {
@@ -776,7 +916,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         Ok(Box::new(move |batch| {
             let left = lhs(batch.clone())?;
             let right = rhs(batch)?;
-            and(&left, &right)
+            and_kleene(&left, &right)
         }))
     }
 
@@ -788,7 +928,7 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
         Ok(Box::new(move |batch| {
             let left = lhs(batch.clone())?;
             let right = rhs(batch)?;
-            or(&left, &right)
+            or_kleene(&left, &right)
         }))
     }
 
@@ -1069,24 +1209,45 @@ impl<'a> BoundPredicateVisitor for PredicateConverter<'a> {
 }
 
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-///
-/// # TODO
-///
-/// [ParquetObjectReader](https://docs.rs/parquet/latest/src/parquet/arrow/async_reader/store.rs.html#64)
-/// contains the following hints to speed up metadata loading, we can consider adding them to this struct:
-///
-/// - `metadata_size_hint`: Provide a hint as to the size of the parquet file's footer.
-/// - `preload_column_index`: Load the Column Index  as part of [`Self::get_metadata`].
-/// - `preload_offset_index`: Load the Offset Index as part of [`Self::get_metadata`].
-struct ArrowFileReader<R: FileRead> {
+pub struct ArrowFileReader<R: FileRead> {
     meta: FileMetadata,
+    preload_column_index: bool,
+    preload_offset_index: bool,
+    metadata_size_hint: Option<usize>,
     r: R,
 }
 
 impl<R: FileRead> ArrowFileReader<R> {
     /// Create a new ArrowFileReader
-    fn new(meta: FileMetadata, r: R) -> Self {
-        Self { meta, r }
+    pub fn new(meta: FileMetadata, r: R) -> Self {
+        Self {
+            meta,
+            preload_column_index: false,
+            preload_offset_index: false,
+            metadata_size_hint: None,
+            r,
+        }
+    }
+
+    /// Enable or disable preloading of the column index
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.preload_column_index = preload;
+        self
+    }
+
+    /// Enable or disable preloading of the offset index
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.preload_offset_index = preload;
+        self
+    }
+
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
+        self.metadata_size_hint = Some(hint);
+        self
     }
 }
 
@@ -1101,7 +1262,10 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
-            let reader = ParquetMetaDataReader::new();
+            let reader = ParquetMetaDataReader::new()
+                .with_prefetch_hint(self.metadata_size_hint)
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index);
             let size = self.meta.size as usize;
             let meta = reader.load_and_finish(self, size).await?;
 
@@ -1114,18 +1278,29 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::fs::File;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
+    use arrow_array::{ArrayRef, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
-    use parquet::arrow::ProjectionMask;
+    use futures::TryStreamExt;
+    use parquet::arrow::{ArrowWriter, ProjectionMask};
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
+    use tempfile::TempDir;
 
     use crate::arrow::reader::{CollectFieldIdVisitor, PARQUET_FIELD_ID_META_KEY};
-    use crate::arrow::ArrowReader;
+    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::expr::{Bind, Predicate, Reference};
+    use crate::io::FileIO;
+    use crate::scan::{FileScanTask, FileScanTaskStream};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
     use crate::ErrorKind;
 
     fn table_schema_simple() -> SchemaRef {
@@ -1284,5 +1459,141 @@ message schema {
             ArrowReader::get_arrow_projection_mask(&[1], &schema, &parquet_schema, &arrow_schema)
                 .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[tokio::test]
+    async fn test_kleene_logic_or_behaviour() {
+        // a IS NULL OR a = 'foo'
+        let predicate = Reference::new("a")
+            .is_null()
+            .or(Reference::new("a").equal_to(Datum::string("foo")));
+
+        // Table data: [NULL, "foo", "bar"]
+        let data_for_col_a = vec![None, Some("foo".to_string()), Some("bar".to_string())];
+
+        // Expected: [NULL, "foo"].
+        let expected = vec![None, Some("foo".to_string())];
+
+        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let result_data = test_perform_read(predicate, schema, table_location, reader).await;
+
+        assert_eq!(result_data, expected);
+    }
+
+    #[tokio::test]
+    async fn test_kleene_logic_and_behaviour() {
+        // a IS NOT NULL AND a != 'foo'
+        let predicate = Reference::new("a")
+            .is_not_null()
+            .and(Reference::new("a").not_equal_to(Datum::string("foo")));
+
+        // Table data: [NULL, "foo", "bar"]
+        let data_for_col_a = vec![None, Some("foo".to_string()), Some("bar".to_string())];
+
+        // Expected: ["bar"].
+        let expected = vec![Some("bar".to_string())];
+
+        let (file_io, schema, table_location, _temp_dir) = setup_kleene_logic(data_for_col_a);
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let result_data = test_perform_read(predicate, schema, table_location, reader).await;
+
+        assert_eq!(result_data, expected);
+    }
+
+    async fn test_perform_read(
+        predicate: Predicate,
+        schema: SchemaRef,
+        table_location: String,
+        reader: ArrowReader,
+    ) -> Vec<Option<String>> {
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_content: DataContentType::Data,
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1],
+                predicate: Some(predicate.bind(schema, true).unwrap()),
+                deletes: vec![],
+                sequence_number: 0,
+                equality_ids: vec![],
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .await
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let result_data = result[0].columns()[0]
+            .as_string_opt::<i32>()
+            .unwrap()
+            .iter()
+            .map(|v| v.map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+
+        result_data
+    }
+
+    fn setup_kleene_logic(
+        data_for_col_a: Vec<Option<String>>,
+    ) -> (FileIO, SchemaRef, String, TempDir) {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "a",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into()])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Utf8,
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]))]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        let col = Arc::new(StringArray::from(data_for_col_a)) as ArrayRef;
+
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+
+        // Write the Parquet files
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
+
+        writer.write(&to_write).expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+
+        (file_io, schema, table_location, tmp_dir)
     }
 }

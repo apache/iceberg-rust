@@ -47,8 +47,10 @@ apache-avro = { workspace = true }
 array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
+arrow-row = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
@@ -62,7 +64,7 @@ derive_builder = { workspace = true }
 fnv = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
-moka = { version = "0.12.8", features = ["future"] }
+moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 num-bigint = { workspace = true }
 once_cell = { workspace = true }
@@ -72,6 +74,7 @@ parquet = { workspace = true, features = ["async"] }
 paste = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+roaring = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
@@ -79,7 +82,8 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
-tokio = { workspace = true, optional = true }
+thrift = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -87,6 +91,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+expect-test = { workspace = true }
 iceberg-catalog-memory = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 pretty_assertions = { workspace = true }

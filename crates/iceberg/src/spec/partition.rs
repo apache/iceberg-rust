@@ -20,11 +20,13 @@
  */
 use std::sync::Arc;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
 use super::{NestedField, Schema, SchemaRef, StructType};
+use crate::spec::Struct;
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
@@ -151,6 +153,30 @@ impl PartitionSpec {
         }
 
         true
+    }
+
+    pub(crate) fn partition_to_path(&self, data: &Struct, schema: SchemaRef) -> String {
+        let partition_type = self.partition_type(&schema).unwrap();
+        let field_types = partition_type.fields();
+
+        self.fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let value = if data.is_null_at_index(i) {
+                    None
+                } else {
+                    Some(&data.fields()[i])
+                };
+                format!(
+                    "{}={}",
+                    field.name,
+                    field
+                        .transform
+                        .to_human_string(&field_types[i].field_type, value)
+                )
+            })
+            .join("/")
     }
 }
 
@@ -660,7 +686,7 @@ impl CorePartitionSpecValidator for UnboundPartitionSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{PrimitiveType, Type};
+    use crate::spec::{Literal, PrimitiveType, Type};
 
     #[test]
     fn test_partition_spec() {
@@ -1732,5 +1758,31 @@ mod tests {
         assert_eq!(1000, spec.fields[0].field_id);
         assert_eq!(1002, spec.fields[1].field_id);
         assert!(!spec.has_sequential_ids());
+    }
+
+    #[test]
+    fn test_partition_to_path() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .add_partition_field("name", "name", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([Some(Literal::int(42)), Some(Literal::string("alice"))]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "id=42/name=\"alice\""
+        );
     }
 }

@@ -18,7 +18,7 @@
 //! Catalog API for Apache Iceberg
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::ops::Deref;
 
@@ -192,6 +192,12 @@ impl Namespace {
     }
 }
 
+impl Display for NamespaceIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.join("."))
+    }
+}
+
 /// TableIdent represents the identifier of a table in the catalog.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableIdent {
@@ -229,6 +235,12 @@ impl TableIdent {
             namespace: namespace_ident,
             name: table_name,
         })
+    }
+}
+
+impl Display for TableIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.namespace, self.name)
     }
 }
 
@@ -285,7 +297,7 @@ impl TableCommit {
 }
 
 /// TableRequirement represents a requirement for a table in the catalog.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum TableRequirement {
     /// The table must not already exist; used for create transactions
@@ -470,6 +482,12 @@ pub enum TableUpdate {
         /// Snapshot id to remove partition statistics for.
         snapshot_id: i64,
     },
+    /// Remove schemas
+    #[serde(rename_all = "kebab-case")]
+    RemoveSchemas {
+        /// Schema IDs to remove.
+        schema_ids: Vec<i32>,
+    },
 }
 
 impl TableUpdate {
@@ -513,6 +531,7 @@ impl TableUpdate {
             TableUpdate::RemovePartitionStatistics { snapshot_id } => {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
+            TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
         }
     }
 }
@@ -2034,5 +2053,20 @@ mod tests {
                 snapshot_id: 1940541653261589030,
             },
         )
+    }
+
+    #[test]
+    fn test_remove_schema_update() {
+        test_serde_json(
+            r#"
+{
+    "action": "remove-schemas",
+    "schema-ids": [1, 2]
+}        
+        "#,
+            TableUpdate::RemoveSchemas {
+                schema_ids: vec![1, 2],
+            },
+        );
     }
 }

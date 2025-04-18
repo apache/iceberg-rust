@@ -64,6 +64,7 @@ pub(crate) struct PageIndexEvaluator<'a> {
     row_group_metadata: &'a RowGroupMetaData,
     iceberg_field_id_to_parquet_column_index: &'a HashMap<i32, usize>,
     snapshot_schema: &'a Schema,
+    row_count_cache: HashMap<usize, Vec<usize>>,
 }
 
 impl<'a> PageIndexEvaluator<'a> {
@@ -80,6 +81,7 @@ impl<'a> PageIndexEvaluator<'a> {
             row_group_metadata,
             iceberg_field_id_to_parquet_column_index: field_id_map,
             snapshot_schema,
+            row_count_cache: HashMap::new(),
         }
     }
 
@@ -126,7 +128,7 @@ impl<'a> PageIndexEvaluator<'a> {
     }
 
     fn calc_row_selection<F>(
-        &self,
+        &mut self,
         field_id: i32,
         predicate: F,
         missing_col_behavior: MissingColBehavior,
@@ -168,17 +170,28 @@ impl<'a> PageIndexEvaluator<'a> {
             return self.select_all_rows();
         };
 
-        let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
-            // if we have a column index, we should always have an offset index.
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Missing offset index for field id {}", field_id),
-            ));
-        };
+        let row_counts = {
+            // Caches row count calculations for columns that appear multiple times in
+            // the predicate
+            match self.row_count_cache.get(&parquet_column_index) {
+                Some(count) => count.clone(),
+                None => {
+                    let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
+                        // if we have a column index, we should always have an offset index.
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Missing offset index for field id {}", field_id),
+                        ));
+                    };
 
-        // TODO: cache row_counts to avoid recalcing if the same column
-        //       appears multiple times in the filter predicate
-        let row_counts = self.calc_row_counts(offset_index);
+                    let count = self.calc_row_counts(offset_index);
+                    self.row_count_cache
+                        .insert(parquet_column_index, count.clone());
+
+                    count
+                }
+            }
+        };
 
         let Some(page_filter) = Self::apply_predicate_to_column_index(
             predicate,
@@ -205,7 +218,7 @@ impl<'a> PageIndexEvaluator<'a> {
         Ok(row_selectors.into())
     }
 
-    /// returns a list of row counts per page
+    /// Returns a list of row counts per page
     fn calc_row_counts(&self, offset_index: &OffsetIndexMetaData) -> Vec<usize> {
         let mut remaining_rows = self.row_group_metadata.num_rows() as usize;
         let mut row_counts = Vec::with_capacity(self.offset_index.len());
@@ -425,7 +438,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
     }
 
     fn or(&mut self, lhs: RowSelection, rhs: RowSelection) -> Result<RowSelection> {
-        Ok(union_row_selections(&lhs, &rhs))
+        Ok(lhs.union(&rhs))
     }
 
     fn not(&mut self, _: RowSelection) -> Result<RowSelection> {
@@ -772,99 +785,12 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
     }
 }
 
-/// Combine two lists of `RowSelection` return the union of them
-/// For example:
-/// self:      NNYYYYNNYYNYN
-/// other:     NYNNNNNNY
-///
-/// returned:  NYYYYYNNYYNYN
-///
-/// This can be removed from here once RowSelection::union is in parquet::arrow
-/// (Hopefully once https://github.com/apache/arrow-rs/pull/6308 gets merged)
-fn union_row_selections(left: &RowSelection, right: &RowSelection) -> RowSelection {
-    let mut l_iter = left.iter().copied().peekable();
-    let mut r_iter = right.iter().copied().peekable();
-
-    let iter = std::iter::from_fn(move || {
-        loop {
-            let l = l_iter.peek_mut();
-            let r = r_iter.peek_mut();
-
-            match (l, r) {
-                (Some(a), _) if a.row_count == 0 => {
-                    l_iter.next().unwrap();
-                }
-                (_, Some(b)) if b.row_count == 0 => {
-                    r_iter.next().unwrap();
-                }
-                (Some(l), Some(r)) => {
-                    return match (l.skip, r.skip) {
-                        // Skip both ranges
-                        (true, true) => {
-                            if l.row_count < r.row_count {
-                                let skip = l.row_count;
-                                r.row_count -= l.row_count;
-                                l_iter.next();
-                                Some(RowSelector::skip(skip))
-                            } else {
-                                let skip = r.row_count;
-                                l.row_count -= skip;
-                                r_iter.next();
-                                Some(RowSelector::skip(skip))
-                            }
-                        }
-                        // Keep rows from left
-                        (false, true) => {
-                            if l.row_count < r.row_count {
-                                r.row_count -= l.row_count;
-                                l_iter.next()
-                            } else {
-                                let r_row_count = r.row_count;
-                                l.row_count -= r_row_count;
-                                r_iter.next();
-                                Some(RowSelector::select(r_row_count))
-                            }
-                        }
-                        // Keep rows from right
-                        (true, false) => {
-                            if l.row_count < r.row_count {
-                                let l_row_count = l.row_count;
-                                r.row_count -= l_row_count;
-                                l_iter.next();
-                                Some(RowSelector::select(l_row_count))
-                            } else {
-                                l.row_count -= r.row_count;
-                                r_iter.next()
-                            }
-                        }
-                        // Keep at least one
-                        _ => {
-                            if l.row_count < r.row_count {
-                                r.row_count -= l.row_count;
-                                l_iter.next()
-                            } else {
-                                l.row_count -= r.row_count;
-                                r_iter.next()
-                            }
-                        }
-                    };
-                }
-                (Some(_), None) => return l_iter.next(),
-                (None, Some(_)) => return r_iter.next(),
-                (None, None) => return None,
-            }
-        }
-    });
-
-    iter.collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+    use parquet::arrow::arrow_reader::RowSelector;
     use parquet::basic::{LogicalType as ParquetLogicalType, Type as ParquetPhysicalType};
     use parquet::data_type::ByteArray;
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
@@ -877,40 +803,10 @@ mod tests {
     };
     use rand::{thread_rng, Rng};
 
-    use super::{union_row_selections, PageIndexEvaluator};
+    use super::PageIndexEvaluator;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
-
-    #[test]
-    fn test_union_row_selections() {
-        let selection = RowSelection::from(vec![RowSelector::select(1048576)]);
-        let result = union_row_selections(&selection, &selection);
-        assert_eq!(result, selection);
-
-        // NYNYY
-        let a = RowSelection::from(vec![
-            RowSelector::skip(10),
-            RowSelector::select(10),
-            RowSelector::skip(10),
-            RowSelector::select(20),
-        ]);
-
-        // NNYYN
-        let b = RowSelection::from(vec![
-            RowSelector::skip(20),
-            RowSelector::select(20),
-            RowSelector::skip(10),
-        ]);
-
-        let result = union_row_selections(&a, &b);
-
-        // NYYYY
-        assert_eq!(result.iter().collect::<Vec<_>>(), vec![
-            &RowSelector::skip(10),
-            &RowSelector::select(40)
-        ]);
-    }
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {

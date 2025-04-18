@@ -24,6 +24,7 @@ mod name_mapping;
 mod partition;
 mod schema;
 mod snapshot;
+mod snapshot_summary;
 mod sort;
 mod statistic_file;
 mod table_metadata;
@@ -31,6 +32,7 @@ mod table_metadata_builder;
 mod transform;
 mod values;
 mod view_metadata;
+mod view_metadata_builder;
 mod view_version;
 
 pub use datatypes::*;

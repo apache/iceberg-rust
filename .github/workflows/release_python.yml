@@ -62,7 +62,7 @@ jobs:
           - { os: windows-latest }
           - { os: macos-latest, target: "universal2-apple-darwin" }
           - { os: ubuntu-latest, target: "x86_64" }
-          - { os: ubuntu-latest, target: "aarch64" }
+          - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28" }
           - { os: ubuntu-latest, target: "armv7l" }
     steps:
         - uses: actions/checkout@v4
@@ -76,13 +76,10 @@ jobs:
         - uses: PyO3/maturin-action@v1
           with:
             target: ${{ matrix.target }}
-            manylinux: auto
+            manylinux: ${{ matrix.manylinux || 'auto' }}
             working-directory: "bindings/python"
             command: build
             args: --release -o dist
-          env:
-            # Workaround ring 0.17 build issue
-            CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
         - name: Upload wheels
           uses: actions/upload-artifact@v4
           with:
@@ -98,7 +95,7 @@ jobs:
 
     environment:
       name: pypi
-      url: https://pypi.org/p/pyiceberg_core
+      url: https://pypi.org/p/pyiceberg-core
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
@@ -114,33 +111,5 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
 
       with:
-        skip-existing: true
-        packages-dir: bindings/python/dist
-
-  testpypi-publish:
-    name: Publish Python 🐍 distribution 📦 to TestPypi
-    needs: [ sdist, wheels ]
-    runs-on: ubuntu-latest
-    # Only publish to TestPyPi if the tag is a pre-release
-    if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')}}
-
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/pyiceberg_core
-
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        pattern: wheels-*
-        merge-multiple: true
-        path: bindings/python/dist
-    - name: Publish to TestPyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/
         skip-existing: true
         packages-dir: bindings/python/dist

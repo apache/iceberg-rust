@@ -147,12 +147,12 @@ impl<T> UnaryExpression<T> {
     }
 
     /// Return the operator of this predicate.
-    pub(crate) fn op(&self) -> PredicateOperator {
+    pub fn op(&self) -> PredicateOperator {
         self.op
     }
 
     /// Return the term of this predicate.
-    pub(crate) fn term(&self) -> &T {
+    pub fn term(&self) -> &T {
         &self.term
     }
 }
@@ -199,17 +199,18 @@ impl<T> BinaryExpression<T> {
         Self { op, term, literal }
     }
 
-    pub(crate) fn op(&self) -> PredicateOperator {
+    /// Return the operator used by this predicate expression.
+    pub fn op(&self) -> PredicateOperator {
         self.op
     }
 
     /// Return the literal of this predicate.
-    pub(crate) fn literal(&self) -> &Datum {
+    pub fn literal(&self) -> &Datum {
         &self.literal
     }
 
     /// Return the term of this predicate.
-    pub(crate) fn term(&self) -> &T {
+    pub fn term(&self) -> &T {
         &self.term
     }
 }
@@ -261,16 +262,17 @@ impl<T> SetExpression<T> {
     }
 
     /// Return the operator of this predicate.
-    pub(crate) fn op(&self) -> PredicateOperator {
+    pub fn op(&self) -> PredicateOperator {
         self.op
     }
 
-    pub(crate) fn literals(&self) -> &FnvHashSet<Datum> {
+    /// Return the hash set of values compared against the term in this expression.
+    pub fn literals(&self) -> &FnvHashSet<Datum> {
         &self.literals
     }
 
     /// Return the term of this predicate.
-    pub(crate) fn term(&self) -> &T {
+    pub fn term(&self) -> &T {
         &self.term
     }
 }
@@ -724,6 +726,12 @@ pub enum BoundPredicate {
     Set(SetExpression<BoundReference>),
 }
 
+impl BoundPredicate {
+    pub(crate) fn and(self, other: BoundPredicate) -> BoundPredicate {
+        BoundPredicate::And(LogicalExpression::new([Box::new(self), Box::new(other)]))
+    }
+}
+
 impl Display for BoundPredicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -943,7 +951,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    fn table_schema_simple() -> SchemaRef {
+    pub fn table_schema_simple() -> SchemaRef {
         Arc::new(
             Schema::builder()
                 .with_schema_id(1)

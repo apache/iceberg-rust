@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg_catalog_rest::RestCatalogConfig;
 use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 
@@ -26,23 +26,24 @@ const REST_CATALOG_PORT: u16 = 8181;
 
 pub struct TestFixture {
     pub _docker_compose: DockerCompose,
-    pub rest_catalog: RestCatalog,
+    pub catalog_config: RestCatalogConfig,
 }
 
-pub async fn set_test_fixture(func: &str) -> TestFixture {
+pub fn set_test_fixture(func: &str) -> TestFixture {
     set_up();
     let docker_compose = DockerCompose::new(
         normalize_test_name(format!("{}_{func}", module_path!())),
         format!("{}/testdata", env!("CARGO_MANIFEST_DIR")),
     );
 
-    // Start docker compose
-    docker_compose.run();
+    // Stop any containers from previous runs and start new ones
+    docker_compose.down();
+    docker_compose.up();
 
     let rest_catalog_ip = docker_compose.get_container_ip("rest");
     let minio_ip = docker_compose.get_container_ip("minio");
 
-    let config = RestCatalogConfig::builder()
+    let catalog_config = RestCatalogConfig::builder()
         .uri(format!("http://{}:{}", rest_catalog_ip, REST_CATALOG_PORT))
         .props(HashMap::from([
             (
@@ -54,10 +55,9 @@ pub async fn set_test_fixture(func: &str) -> TestFixture {
             (S3_REGION.to_string(), "us-east-1".to_string()),
         ]))
         .build();
-    let rest_catalog = RestCatalog::new(config);
 
     TestFixture {
         _docker_compose: docker_compose,
-        rest_catalog,
+        catalog_config,
     }
 }

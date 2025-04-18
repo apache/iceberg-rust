@@ -33,13 +33,13 @@ cargo-sort: install-cargo-sort
 	cargo sort -c -w
 
 install-cargo-machete:
-	cargo install cargo-machete
+	cargo install cargo-machete@0.7.0
 
 cargo-machete: install-cargo-machete
 	cargo machete
 
 install-taplo-cli:
-	cargo install taplo-cli@0.9.0
+	cargo install taplo-cli@0.9.3
 
 fix-toml: install-taplo-cli
 	taplo fmt

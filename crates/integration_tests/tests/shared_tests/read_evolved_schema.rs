@@ -22,15 +22,16 @@ use futures::TryStreamExt;
 use iceberg::expr::Reference;
 use iceberg::spec::Datum;
 use iceberg::{Catalog, TableIdent};
-use iceberg_integration_tests::set_test_fixture;
+use iceberg_catalog_rest::RestCatalog;
+
+use crate::get_shared_containers;
 
 #[tokio::test]
 async fn test_evolved_schema() {
-    let fixture = set_test_fixture("read_evolved_schema").await;
+    let fixture = get_shared_containers();
+    let rest_catalog = RestCatalog::new(fixture.catalog_config.clone());
 
-    let catalog = fixture.rest_catalog;
-
-    let table = catalog
+    let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "test_rename_column"]).unwrap())
         .await
         .unwrap();
@@ -64,7 +65,7 @@ async fn test_evolved_schema() {
     assert_eq!(actual, vec!["Java", "Python"]);
 
     // Evolve column
-    let table = catalog
+    let table = rest_catalog
         .load_table(&TableIdent::from_strs(["default", "test_promote_column"]).unwrap())
         .await
         .unwrap();

@@ -29,6 +29,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use bitvec::macros::internal::funty::Fundamental;
+use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use rust_decimal::prelude::ToPrimitive;
@@ -42,7 +43,9 @@ use crate::spec::{
 use crate::{Error, ErrorKind};
 
 /// When iceberg map type convert to Arrow map type, the default map field name is "key_value".
-pub(crate) const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
+/// UTC time zone for Arrow timestamp type.
+pub const UTC_TIME_ZONE: &str = "+00:00";
 
 /// A post order arrow schema visitor.
 ///
@@ -119,8 +122,10 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                 DataType::Boolean
                     | DataType::Utf8
                     | DataType::LargeUtf8
+                    | DataType::Utf8View
                     | DataType::Binary
                     | DataType::LargeBinary
+                    | DataType::BinaryView
                     | DataType::FixedSizeBinary(_)
             ) =>
         {
@@ -221,7 +226,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-fn get_field_id(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id(field: &Field) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -402,7 +407,9 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             {
                 Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
             }
-            DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                Ok(Type::Primitive(PrimitiveType::Binary))
+            }
             DataType::FixedSizeBinary(width) => {
                 Ok(Type::Primitive(PrimitiveType::Fixed(*width as u64)))
             }
@@ -593,14 +600,14 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             )),
             crate::spec::PrimitiveType::Timestamptz => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Timestampz always stored as UTC
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(UTC_TIME_ZONE.into())),
             )),
             crate::spec::PrimitiveType::TimestampNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             crate::spec::PrimitiveType::TimestamptzNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Store timestamptz_ns as UTC
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(UTC_TIME_ZONE.into())),
             )),
             crate::spec::PrimitiveType::String => {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))
@@ -670,11 +677,11 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
                 .with_timezone("UTC"),
         ))),
 
-        (typ, _) => Err(Error::new(
+        (primitive_type, _) => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!(
                 "Converting datum from type {:?} to arrow not supported yet.",
-                typ
+                primitive_type
             ),
         )),
     }
@@ -739,9 +746,15 @@ macro_rules! get_parquet_stat_as_datum {
                     let Some(bytes) = stats.[<$limit_type _bytes_opt>]() else {
                         return Ok(None);
                     };
+                    let unscaled_value = BigInt::from_signed_bytes_be(bytes);
                     Some(Datum::new(
                         primitive_type.clone(),
-                        PrimitiveLiteral::Int128(i128::from_be_bytes(bytes.try_into()?)),
+                        PrimitiveLiteral::Int128(unscaled_value.to_i128().ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!("Can't convert bytes to i128: {:?}", bytes),
+                            )
+                        })?),
                     ))
                 }
                 (
