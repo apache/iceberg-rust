@@ -83,7 +83,7 @@ impl<'a> FastAppendAction<'a> {
         if !self
             .snapshot_produce_action
             .tx
-            .table
+            .current_table
             .metadata()
             .default_spec
             .is_unpartitioned()
@@ -94,10 +94,10 @@ impl<'a> FastAppendAction<'a> {
             ));
         }
 
-        let table_metadata = self.snapshot_produce_action.tx.table.metadata();
+        let table_metadata = self.snapshot_produce_action.tx.current_table.metadata();
 
         let data_files = ParquetWriter::parquet_files_to_data_files(
-            self.snapshot_produce_action.tx.table.file_io(),
+            self.snapshot_produce_action.tx.current_table.file_io(),
             file_path,
             table_metadata,
         )
@@ -122,7 +122,7 @@ impl<'a> FastAppendAction<'a> {
             let mut manifest_stream = self
                 .snapshot_produce_action
                 .tx
-                .table
+                .current_table
                 .inspect()
                 .manifests()
                 .scan()
@@ -184,14 +184,19 @@ impl SnapshotProduceOperation for FastAppendOperation {
         &self,
         snapshot_produce: &SnapshotProduceAction<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce.tx.table.metadata().current_snapshot() else {
+        let Some(snapshot) = snapshot_produce
+            .tx
+            .current_table
+            .metadata()
+            .current_snapshot()
+        else {
             return Ok(vec![]);
         };
 
         let manifest_list = snapshot
             .load_manifest_list(
-                snapshot_produce.tx.table.file_io(),
-                &snapshot_produce.tx.table.metadata_ref(),
+                snapshot_produce.tx.current_table.file_io(),
+                &snapshot_produce.tx.current_table.metadata_ref(),
             )
             .await?;
 
@@ -253,11 +258,11 @@ mod tests {
         assert_eq!(
             vec![
                 TableRequirement::UuidMatch {
-                    uuid: tx.table.metadata().uuid()
+                    uuid: table.metadata().uuid()
                 },
                 TableRequirement::RefSnapshotIdMatch {
                     r#ref: MAIN_BRANCH.to_string(),
-                    snapshot_id: tx.table.metadata().current_snapshot_id
+                    snapshot_id: table.metadata().current_snapshot_id
                 }
             ],
             tx.requirements
