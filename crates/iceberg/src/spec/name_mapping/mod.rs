@@ -39,7 +39,7 @@ impl NameMapping {
     }
 
     /// Get a reference to fields which are to be mapped from name to field ID.
-    pub fn root(&self) -> &[MappedField] {
+    pub fn fields(&self) -> &[MappedField] {
         &self.root
     }
 }
