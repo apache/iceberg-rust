@@ -77,56 +77,116 @@ impl IcebergCatalogList {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("type is not string"))?;
 
-        if r#type != "rest" {
-            return Err(anyhow::anyhow!("Only rest catalog is supported for now!"));
+        match r#type {
+            "rest" => parse_rest_catalog(name, config).await,
+            "s3tables" => parse_s3tables_catalog(name, config).await,
+            _ => Err(anyhow::anyhow!("Unsupported catalog type: {}", r#type)),
         }
-
-        let catalog_config = config
-            .get("config")
-            .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
-            .as_table()
-            .ok_or_else(|| anyhow::anyhow!("config is not table for catalog {name}"))?;
-
-        let uri = catalog_config
-            .get("uri")
-            .ok_or_else(|| anyhow::anyhow!("uri not found for catalog {name}"))?
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("uri is not string"))?;
-
-        let warehouse = catalog_config
-            .get("warehouse")
-            .ok_or_else(|| anyhow::anyhow!("warehouse not found for catalog {name}"))?
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("warehouse is not string for catalog {name}"))?;
-
-        let props_table = catalog_config
-            .get("props")
-            .ok_or_else(|| anyhow::anyhow!("props not found for catalog {name}"))?
-            .as_table()
-            .ok_or_else(|| anyhow::anyhow!("props is not table for catalog {name}"))?;
-
-        let mut props = HashMap::with_capacity(props_table.len());
-        for (key, value) in props_table {
-            let value_str = value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
-            props.insert(key.to_string(), value_str.to_string());
-        }
-
-        let rest_catalog_config = RestCatalogConfig::builder()
-            .uri(uri.to_string())
-            .warehouse(warehouse.to_string())
-            .props(props)
-            .build();
-
-        Ok((
-            name.to_string(),
-            Arc::new(
-                IcebergCatalogProvider::try_new(Arc::new(RestCatalog::new(rest_catalog_config)))
-                    .await?,
-            ),
-        ))
     }
+}
+
+async fn parse_rest_catalog(
+    name: &str,
+    config: &TomlTable,
+) -> anyhow::Result<(String, Arc<IcebergCatalogProvider>)> {
+    let catalog_config = config
+        .get("config")
+        .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("config is not table for catalog {name}"))?;
+
+    let uri = catalog_config
+        .get("uri")
+        .ok_or_else(|| anyhow::anyhow!("uri not found for catalog {name}"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("uri is not string"))?;
+
+    let warehouse = catalog_config
+        .get("warehouse")
+        .ok_or_else(|| anyhow::anyhow!("warehouse not found for catalog {name}"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("warehouse is not string for catalog {name}"))?;
+
+    let props_table = catalog_config
+        .get("props")
+        .ok_or_else(|| anyhow::anyhow!("props not found for catalog {name}"))?
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("props is not table for catalog {name}"))?;
+
+    let mut props = HashMap::with_capacity(props_table.len());
+    for (key, value) in props_table {
+        let value_str = value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
+        props.insert(key.to_string(), value_str.to_string());
+    }
+
+    let rest_catalog_config = RestCatalogConfig::builder()
+        .uri(uri.to_string())
+        .warehouse(warehouse.to_string())
+        .props(props)
+        .build();
+
+    Ok((
+        name.to_string(),
+        Arc::new(
+            IcebergCatalogProvider::try_new(Arc::new(RestCatalog::new(rest_catalog_config)))
+                .await?,
+        ),
+    ))
+}
+
+async fn parse_s3tables_catalog(
+    name: &str,
+    config: &TomlTable,
+) -> anyhow::Result<(String, Arc<IcebergCatalogProvider>)> {
+    use iceberg_catalog_s3tables::{S3TablesCatalog, S3TablesCatalogConfig};
+
+    let catalog_config = config
+        .get("config")
+        .ok_or_else(|| anyhow::anyhow!("config not found for catalog {name}"))?
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("config is not table for catalog {name}"))?;
+
+    let table_bucket_arn = catalog_config
+        .get("table_bucket_arn")
+        .ok_or_else(|| anyhow::anyhow!("table_bucket_arn not found for catalog {name}"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("table_bucket_arn is not string"))?;
+
+    let endpoint_url = catalog_config
+        .get("endpoint_url")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+    let props_table = catalog_config
+        .get("props")
+        .and_then(|v| v.as_table())
+        .cloned()
+        .unwrap_or_else(toml::Table::new);
+
+    let mut props = HashMap::with_capacity(props_table.len());
+    for (key, value) in props_table.iter() {
+        let value_str = value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("props {key} is not string"))?;
+        props.insert(key.to_string(), value_str.to_string());
+    }
+
+    let builder = S3TablesCatalogConfig::builder()
+        .table_bucket_arn(table_bucket_arn.to_string())
+        .properties(props);
+
+    let s3tables_config = match endpoint_url {
+        Some(url) => builder.endpoint_url(url).build(),
+        None => builder.build(),
+    };
+
+    let s3tables_catalog = S3TablesCatalog::new(s3tables_config).await?;
+
+    Ok((
+        name.to_string(),
+        Arc::new(IcebergCatalogProvider::try_new(Arc::new(s3tables_catalog)).await?),
+    ))
 }
 
 impl CatalogProviderList for IcebergCatalogList {

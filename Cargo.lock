@@ -3396,6 +3396,7 @@ dependencies = [
  "dirs",
  "fs-err",
  "iceberg-catalog-rest",
+ "iceberg-catalog-s3tables",
  "iceberg-datafusion",
  "mimalloc",
  "stacker",
