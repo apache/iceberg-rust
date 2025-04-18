@@ -24,8 +24,6 @@ use url::Url;
 
 use crate::{Error, ErrorKind, Result};
 
-// Reference: https://github.com/apache/iceberg/blob/main/gcp/src/main/java/org/apache/iceberg/gcp/GCPProperties.java
-
 /// Azure blob account name.
 pub const AZBLOB_ACCOUNT_NAME: &str = "azblob.account-name";
 /// Azure blob account key.
