@@ -17,11 +17,11 @@
 
 //! Table API for Apache Iceberg
 
-use std::sync::Arc;
+use std::fmt::Debug;
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::cache::ObjectCacheProvider;
 use crate::inspect::MetadataTable;
-use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::scan::TableScanBuilder;
 use crate::spec::{TableMetadata, TableMetadataRef};
@@ -30,30 +30,36 @@ use crate::{Error, ErrorKind, Result, TableIdent};
 /// Builder to create table scan.
 pub struct TableBuilder {
     file_io: Option<FileIO>,
+    object_cache: Option<ObjectCacheProvider>,
+
     metadata_location: Option<String>,
     metadata: Option<TableMetadataRef>,
     identifier: Option<TableIdent>,
     readonly: bool,
-    disable_cache: bool,
-    cache_size_bytes: Option<u64>,
 }
 
 impl TableBuilder {
     pub(crate) fn new() -> Self {
         Self {
             file_io: None,
+            object_cache: None,
+
             metadata_location: None,
             metadata: None,
             identifier: None,
             readonly: false,
-            disable_cache: false,
-            cache_size_bytes: None,
         }
     }
 
     /// required - sets the necessary FileIO to use for the table
     pub fn file_io(mut self, file_io: FileIO) -> Self {
         self.file_io = Some(file_io);
+        self
+    }
+
+    /// optional - sets and enables the object cache for table.
+    pub fn object_cache(mut self, object_cache: ObjectCacheProvider) -> Self {
+        self.object_cache = Some(object_cache);
         self
     }
 
@@ -81,30 +87,15 @@ impl TableBuilder {
         self
     }
 
-    /// specifies if the Table's metadata cache will be disabled,
-    /// so that reads of Manifests and ManifestLists will never
-    /// get cached.
-    pub fn disable_cache(mut self) -> Self {
-        self.disable_cache = true;
-        self
-    }
-
-    /// optionally set a non-default metadata cache size
-    pub fn cache_size_bytes(mut self, cache_size_bytes: u64) -> Self {
-        self.cache_size_bytes = Some(cache_size_bytes);
-        self
-    }
-
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
             file_io,
+            object_cache,
             metadata_location,
             metadata,
             identifier,
             readonly,
-            disable_cache,
-            cache_size_bytes,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -128,24 +119,14 @@ impl TableBuilder {
             ));
         };
 
-        let object_cache = if disable_cache {
-            Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
-        } else if let Some(cache_size_bytes) = cache_size_bytes {
-            Arc::new(ObjectCache::new_with_capacity(
-                file_io.clone(),
-                cache_size_bytes,
-            ))
-        } else {
-            Arc::new(ObjectCache::new(file_io.clone()))
-        };
-
         Ok(Table {
             file_io,
+            object_cache,
+
             metadata_location,
             metadata,
             identifier,
             readonly,
-            object_cache,
         })
     }
 }
@@ -154,11 +135,12 @@ impl TableBuilder {
 #[derive(Debug, Clone)]
 pub struct Table {
     file_io: FileIO,
+    object_cache: Option<ObjectCacheProvider>,
+
     metadata_location: Option<String>,
     metadata: TableMetadataRef,
     identifier: TableIdent,
     readonly: bool,
-    object_cache: Arc<ObjectCache>,
 }
 
 impl Table {
@@ -192,8 +174,8 @@ impl Table {
     }
 
     /// Returns this table's object cache
-    pub(crate) fn object_cache(&self) -> Arc<ObjectCache> {
-        self.object_cache.clone()
+    pub(crate) fn object_cache(&self) -> Option<&ObjectCacheProvider> {
+        self.object_cache.as_ref()
     }
 
     /// Creates a table scan.

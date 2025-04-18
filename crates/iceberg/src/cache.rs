@@ -17,6 +17,7 @@
 
 //! Cache management for Iceberg.
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::spec::{Manifest, ManifestList};
@@ -44,11 +45,21 @@ pub trait ObjectCache<K, V>: Send + Sync {
 /// which contains `Schema`. Please ensure that the cache stores the
 /// object in memory as-is, without attempting to serialize it, as
 /// serialization could be extremely expensive.
-pub trait ObjectCacheProvide: Send + Sync {
+pub trait ObjectCacheProvide: Send + Sync + Debug {
     /// Gets a cache for manifests.
     fn manifest_cache(&self) -> &dyn ObjectCache<String, Arc<Manifest>>;
     /// Gets a cache for manifest lists.
     fn manifest_list_cache(&self) -> &dyn ObjectCache<String, Arc<ManifestList>>;
+}
+
+impl<T: ObjectCacheProvide + ?Sized> ObjectCacheProvide for T {
+    fn manifest_cache(&self) -> &dyn ObjectCache<String, Arc<Manifest>> {
+        (*self).manifest_cache()
+    }
+
+    fn manifest_list_cache(&self) -> &dyn ObjectCache<String, Arc<ManifestList>> {
+        (*self).manifest_list_cache()
+    }
 }
 
 /// CacheProvider is a type alias for a thread-safe reference-counted pointer to a CacheProvide trait object.

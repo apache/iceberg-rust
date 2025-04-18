@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
+use crate::cache::ObjectCacheProvider;
 use crate::error::{timestamp_ms_to_utc, Result};
 use crate::io::FileIO;
 use crate::spec::{ManifestList, SchemaId, SchemaRef, StructType, TableMetadata};
@@ -186,9 +187,35 @@ impl Snapshot {
     /// Load manifest list.
     pub async fn load_manifest_list(
         &self,
-        file_io: &FileIO,
         table_metadata: &TableMetadata,
-    ) -> Result<ManifestList> {
+        file_io: &FileIO,
+        object_cache: Option<&ObjectCacheProvider>,
+    ) -> Result<Arc<ManifestList>> {
+        if let Some(cache) = object_cache {
+            if let Some(manifest_list) = cache.manifest_list_cache().get(&self.manifest_list) {
+                return Ok(manifest_list);
+            }
+        }
+
+        let manifest_list = self
+            .load_manifest_list_inner(table_metadata, file_io)
+            .await?;
+
+        if let Some(cache) = object_cache {
+            cache
+                .manifest_list_cache()
+                .set(self.manifest_list.clone(), manifest_list.clone());
+        }
+
+        Ok(manifest_list)
+    }
+
+    /// Load manifest list.
+    async fn load_manifest_list_inner(
+        &self,
+        table_metadata: &TableMetadata,
+        file_io: &FileIO,
+    ) -> Result<Arc<ManifestList>> {
         let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
 
         let schema = self.schema(table_metadata)?;
@@ -200,11 +227,12 @@ impl Snapshot {
                 .transpose()
         };
 
-        ManifestList::parse_with_version(
+        Ok(ManifestList::parse_with_version(
             &manifest_list_content,
             table_metadata.format_version(),
             partition_type_provider,
-        )
+        )?
+        .into())
     }
 
     #[allow(dead_code)]

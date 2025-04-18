@@ -20,9 +20,10 @@ use std::sync::Arc;
 use futures::channel::mpsc::Sender;
 use futures::{SinkExt, TryFutureExt};
 
+use crate::cache::ObjectCacheProvider;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
-use crate::io::object_cache::ObjectCache;
+use crate::io::FileIO;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
     PartitionFilterCache,
@@ -36,13 +37,15 @@ use crate::{Error, ErrorKind, Result};
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
+    file_io: FileIO,
+    object_cache: Option<ObjectCacheProvider>,
+
     manifest_file: ManifestFile,
 
     sender: Sender<ManifestEntryContext>,
 
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
-    object_cache: Arc<ObjectCache>,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: Option<DeleteFileIndex>,
@@ -66,6 +69,7 @@ impl ManifestFileContext {
     /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
+            file_io,
             object_cache,
             manifest_file,
             bound_predicates,
@@ -77,7 +81,9 @@ impl ManifestFileContext {
             ..
         } = self;
 
-        let manifest = object_cache.get_manifest(&manifest_file).await?;
+        let manifest = manifest_file
+            .load_manifest(&file_io, object_cache.as_ref())
+            .await?;
 
         for manifest_entry in manifest.entries() {
             let manifest_entry_context = ManifestEntryContext {
@@ -140,6 +146,9 @@ impl ManifestEntryContext {
 /// objects that are required to perform a scan file plan.
 #[derive(Debug)]
 pub(crate) struct PlanContext {
+    pub file_io: FileIO,
+    pub object_cache: Option<ObjectCacheProvider>,
+
     pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
@@ -147,7 +156,6 @@ pub(crate) struct PlanContext {
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
-    pub object_cache: Arc<ObjectCache>,
     pub field_ids: Arc<Vec<i32>>,
 
     pub partition_filter_cache: Arc<PartitionFilterCache>,
@@ -157,9 +165,12 @@ pub(crate) struct PlanContext {
 
 impl PlanContext {
     pub(crate) async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
-        self.object_cache
-            .as_ref()
-            .get_manifest_list(&self.snapshot, &self.table_metadata)
+        self.snapshot
+            .load_manifest_list(
+                &self.table_metadata,
+                &self.file_io,
+                self.object_cache.as_ref(),
+            )
             .await
     }
 
@@ -262,10 +273,12 @@ impl PlanContext {
             };
 
         ManifestFileContext {
+            file_io: self.file_io.clone(),
+            object_cache: self.object_cache.clone(),
+
             manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
-            object_cache: self.object_cache.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
