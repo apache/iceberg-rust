@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::BitOrAssign;
+
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 use roaring::RoaringTreemap;
 
-#[allow(unused)]
+#[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
@@ -35,6 +37,10 @@ impl DeleteVector {
     pub fn iter(&self) -> DeleteVectorIterator {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
+    }
+
+    pub(crate) fn intersect_assign(&mut self, other: &DeleteVector) {
+        self.inner.bitor_assign(&other.inner);
     }
 }
 
