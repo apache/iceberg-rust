@@ -2219,7 +2219,58 @@
 <a href="#2218" id="2218">2218</a>
 <a href="#2219" id="2219">2219</a>
 <a href="#2220" id="2220">2220</a>
-<a href="#2221" id="2221">2221</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2221" id="2221">2221</a>
+<a href="#2222" id="2222">2222</a>
+<a href="#2223" id="2223">2223</a>
+<a href="#2224" id="2224">2224</a>
+<a href="#2225" id="2225">2225</a>
+<a href="#2226" id="2226">2226</a>
+<a href="#2227" id="2227">2227</a>
+<a href="#2228" id="2228">2228</a>
+<a href="#2229" id="2229">2229</a>
+<a href="#2230" id="2230">2230</a>
+<a href="#2231" id="2231">2231</a>
+<a href="#2232" id="2232">2232</a>
+<a href="#2233" id="2233">2233</a>
+<a href="#2234" id="2234">2234</a>
+<a href="#2235" id="2235">2235</a>
+<a href="#2236" id="2236">2236</a>
+<a href="#2237" id="2237">2237</a>
+<a href="#2238" id="2238">2238</a>
+<a href="#2239" id="2239">2239</a>
+<a href="#2240" id="2240">2240</a>
+<a href="#2241" id="2241">2241</a>
+<a href="#2242" id="2242">2242</a>
+<a href="#2243" id="2243">2243</a>
+<a href="#2244" id="2244">2244</a>
+<a href="#2245" id="2245">2245</a>
+<a href="#2246" id="2246">2246</a>
+<a href="#2247" id="2247">2247</a>
+<a href="#2248" id="2248">2248</a>
+<a href="#2249" id="2249">2249</a>
+<a href="#2250" id="2250">2250</a>
+<a href="#2251" id="2251">2251</a>
+<a href="#2252" id="2252">2252</a>
+<a href="#2253" id="2253">2253</a>
+<a href="#2254" id="2254">2254</a>
+<a href="#2255" id="2255">2255</a>
+<a href="#2256" id="2256">2256</a>
+<a href="#2257" id="2257">2257</a>
+<a href="#2258" id="2258">2258</a>
+<a href="#2259" id="2259">2259</a>
+<a href="#2260" id="2260">2260</a>
+<a href="#2261" id="2261">2261</a>
+<a href="#2262" id="2262">2262</a>
+<a href="#2263" id="2263">2263</a>
+<a href="#2264" id="2264">2264</a>
+<a href="#2265" id="2265">2265</a>
+<a href="#2266" id="2266">2266</a>
+<a href="#2267" id="2267">2267</a>
+<a href="#2268" id="2268">2268</a>
+<a href="#2269" id="2269">2269</a>
+<a href="#2270" id="2270">2270</a>
+<a href="#2271" id="2271">2271</a>
+<a href="#2272" id="2272">2272</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -2775,7 +2826,7 @@
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Vec&lt;<span class="kw">crate</span>::spec::DataFileBuilder&gt;&gt; {
+    <span class="kw">async fn </span>close(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;DataFileBuilder&gt;&gt; {
         <span class="kw">let </span>writer = <span class="kw">match </span><span class="self">self</span>.inner_writer.take() {
             <span class="prelude-val">Some</span>(writer) =&gt; writer,
             <span class="prelude-val">None </span>=&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[]),
@@ -2787,22 +2838,33 @@
 
         <span class="kw">let </span>written_size = <span class="self">self</span>.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
-        <span class="kw">let </span>parquet_metadata =
-            Arc::new(<span class="self">self</span>.thrift_to_parquet_metadata(metadata).map_err(|err| {
+        <span class="kw">if </span><span class="self">self</span>.current_row_num == <span class="number">0 </span>{
+            <span class="self">self</span>.out_file.delete().<span class="kw">await</span>.map_err(|err| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    <span class="string">"Failed to convert metadata from thrift to parquet."</span>,
+                    <span class="string">"Failed to delete empty parquet file."</span>,
                 )
                 .with_source(err)
-            })<span class="question-mark">?</span>);
+            })<span class="question-mark">?</span>;
+            <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[])
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>parquet_metadata =
+                Arc::new(<span class="self">self</span>.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        <span class="string">"Failed to convert metadata from thrift to parquet."</span>,
+                    )
+                    .with_source(err)
+                })<span class="question-mark">?</span>);
 
-        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="self">Self</span>::parquet_to_data_file_builder(
-            <span class="self">self</span>.schema,
-            parquet_metadata,
-            written_size <span class="kw">as </span>usize,
-            <span class="self">self</span>.out_file.location().to_string(),
-            <span class="self">self</span>.nan_value_count_visitor.nan_value_counts,
-        )<span class="question-mark">?</span>])
+            <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="self">Self</span>::parquet_to_data_file_builder(
+                <span class="self">self</span>.schema,
+                parquet_metadata,
+                written_size <span class="kw">as </span>usize,
+                <span class="self">self</span>.out_file.location().to_string(),
+                <span class="self">self</span>.nan_value_count_visitor.nan_value_counts,
+            )<span class="question-mark">?</span>])
+        }
     }
 }
 
@@ -4438,6 +4500,46 @@
         check_parquet_data_file(<span class="kw-2">&amp;</span>file_io, <span class="kw-2">&amp;</span>data_file, <span class="kw-2">&amp;</span>expect_batch).<span class="kw">await</span>;
 
         <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_write_empty_parquet_file() {
+        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+        <span class="kw">let </span>file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        <span class="kw">let </span>location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        <span class="kw">let </span>file_name_gen =
+            DefaultFileNameGenerator::new(<span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, DataFileFormat::Parquet);
+
+        <span class="comment">// write data
+        </span><span class="kw">let </span>pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(<span class="number">1</span>)
+                    .with_fields(<span class="macro">vec!</span>[NestedField::required(
+                        <span class="number">0</span>,
+                        <span class="string">"col"</span>,
+                        Type::Primitive(PrimitiveType::Long),
+                    )
+                    .with_id(<span class="number">0</span>)
+                    .into()])
+                    .build()
+                    .expect(<span class="string">"Failed to create schema"</span>),
+            ),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .<span class="kw">await
+        </span>.unwrap();
+
+        <span class="kw">let </span>res = pw.close().<span class="kw">await</span>.unwrap();
+        <span class="macro">assert_eq!</span>(res.len(), <span class="number">0</span>);
+
+        <span class="comment">// Check that file should have been deleted.
+        </span><span class="macro">assert_eq!</span>(std::fs::read_dir(temp_dir.path()).unwrap().count(), <span class="number">0</span>);
     }
 }
 </code></pre></div></section></main></body></html>
