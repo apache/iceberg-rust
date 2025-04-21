@@ -18,14 +18,15 @@
 //! This module contains the iceberg REST catalog implementation.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::str::FromStr;
 
 use async_trait::async_trait;
 use iceberg::io::FileIO;
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -51,6 +52,8 @@ const PATH_V1: &str = "v1";
 /// Rest catalog configuration.
 #[derive(Clone, Debug, TypedBuilder)]
 pub struct RestCatalogConfig {
+    #[builder(default, setter(strip_option))]
+    name: Option<String>,
     uri: String,
 
     #[builder(default, setter(strip_option(fallback = warehouse_opt)))]
@@ -219,6 +222,74 @@ impl RestCatalogConfig {
         props.extend(config.overrides);
 
         self.props = props;
+        self
+    }
+}
+
+/// Builder for [`RestCatalog`].
+#[derive(Debug)]
+pub struct RestCatalogBuilder(RestCatalogConfig);
+
+impl Default for RestCatalogBuilder {
+    fn default() -> Self {
+        Self(RestCatalogConfig {
+            name: None,
+            uri: "".to_string(),
+            warehouse: None,
+            props: HashMap::new(),
+            client: None,
+        })
+    }
+}
+
+impl CatalogBuilder for RestCatalogBuilder {
+    type C = RestCatalog;
+
+    fn name(mut self, name: impl Into<String>) -> Self {
+        self.0.name = Some(name.into());
+        self
+    }
+
+    fn uri(mut self, uri: impl Into<String>) -> Self {
+        self.0.uri = uri.into();
+        self
+    }
+
+    fn warehouse(mut self, warehouse: impl Into<String>) -> Self {
+        self.0.warehouse = Some(warehouse.into());
+        self
+    }
+
+    fn with_prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.0.props.insert(key.into(), value.into());
+        self
+    }
+
+    fn build(self) -> impl Future<Output = Result<Self::C>> {
+        let result = {
+            if self.0.name.is_none() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name is required",
+                ))
+            } else if self.0.uri.is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog uri is required",
+                ))
+            } else {
+                Ok(RestCatalog::new(self.0))
+            }
+        };
+
+        std::future::ready(result)
+    }
+}
+
+impl RestCatalogBuilder {
+    /// Configures the catalog with a custom HTTP client.
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.0.client = Some(client);
         self
     }
 }
@@ -2256,5 +2327,18 @@ mod tests {
 
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_rest_catalog() {
+        let catalog = RestCatalogBuilder::default()
+            .name("test")
+            .uri("http://localhost:8080")
+            .with_client(Client::new())
+            .with_prop("a", "b")
+            .build()
+            .await;
+
+        assert!(catalog.is_ok());
     }
 }
