@@ -337,7 +337,7 @@ impl OutputFile {
 
     /// Deletes file.
     ///
-    /// If the file does not exist, it will return not return error.
+    /// If the file does not exist, it will not return error.
     pub async fn delete(&self) -> Result<()> {
         Ok(self.op.delete(&self.path[self.relative_path_pos..]).await?)
     }
