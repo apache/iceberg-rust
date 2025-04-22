@@ -2072,7 +2072,29 @@
 <a href="#2071" id="2071">2071</a>
 <a href="#2072" id="2072">2072</a>
 <a href="#2073" id="2073">2073</a>
-<a href="#2074" id="2074">2074</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#2074" id="2074">2074</a>
+<a href="#2075" id="2075">2075</a>
+<a href="#2076" id="2076">2076</a>
+<a href="#2077" id="2077">2077</a>
+<a href="#2078" id="2078">2078</a>
+<a href="#2079" id="2079">2079</a>
+<a href="#2080" id="2080">2080</a>
+<a href="#2081" id="2081">2081</a>
+<a href="#2082" id="2082">2082</a>
+<a href="#2083" id="2083">2083</a>
+<a href="#2084" id="2084">2084</a>
+<a href="#2085" id="2085">2085</a>
+<a href="#2086" id="2086">2086</a>
+<a href="#2087" id="2087">2087</a>
+<a href="#2088" id="2088">2088</a>
+<a href="#2089" id="2089">2089</a>
+<a href="#2090" id="2090">2090</a>
+<a href="#2091" id="2091">2091</a>
+<a href="#2092" id="2092">2092</a>
+<a href="#2093" id="2093">2093</a>
+<a href="#2094" id="2094">2094</a>
+<a href="#2095" id="2095">2095</a>
+<a href="#2096" id="2096">2096</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -2335,7 +2357,9 @@
     </span><span class="attr">#[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     </span><span class="kw">pub </span>sort_order: <span class="prelude-ty">Option</span>&lt;SortOrder&gt;,
     <span class="doccomment">/// The properties of the table.
-    </span><span class="attr">#[builder(default)]
+    </span><span class="attr">#[builder(default, setter(transform = |props: <span class="kw">impl </span>IntoIterator&lt;Item=(String, String)&gt;| {
+        props.into_iter().collect()
+    }))]
     </span><span class="kw">pub </span>properties: HashMap&lt;String, String&gt;,
 }
 
@@ -2973,6 +2997,26 @@
         };
 
         <span class="macro">assert_eq!</span>(table_id, TableIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"ns1"</span>, <span class="string">"t1"</span>]).unwrap());
+    }
+
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_table_creation_iterator_properties() {
+        <span class="kw">let </span>builder = TableCreation::builder()
+            .name(<span class="string">"table"</span>.to_string())
+            .schema(Schema::builder().build().unwrap());
+
+        <span class="kw">fn </span>s(k: <span class="kw-2">&amp;</span>str, v: <span class="kw-2">&amp;</span>str) -&gt; (String, String) {
+            (k.to_string(), v.to_string())
+        }
+
+        <span class="kw">let </span>table_creation = builder
+            .properties([s(<span class="string">"key"</span>, <span class="string">"value"</span>), s(<span class="string">"foo"</span>, <span class="string">"bar"</span>)])
+            .build();
+
+        <span class="macro">assert_eq!</span>(
+            HashMap::from([s(<span class="string">"key"</span>, <span class="string">"value"</span>), s(<span class="string">"foo"</span>, <span class="string">"bar"</span>)]),
+            table_creation.properties
+        );
     }
 
     <span class="kw">fn </span>test_serde_json&lt;T: Serialize + DeserializeOwned + PartialEq + Debug&gt;(
