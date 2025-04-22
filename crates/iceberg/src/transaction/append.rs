@@ -74,7 +74,7 @@ impl<'a> FastAppendAction<'a> {
 
     /// Adds existing parquet files
     ///
-    /// Note: This API is not yet fully supported in version 0.5.0.  
+    /// Note: This API is not yet fully supported in version 0.5.0.
     /// It is currently incomplete and should not be used in production.
     /// Specifically, schema compatibility checks and support for adding to partitioned tables
     /// have not yet been implemented.
@@ -190,8 +190,9 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
         let manifest_list = snapshot
             .load_manifest_list(
-                snapshot_produce.tx.table.file_io(),
                 &snapshot_produce.tx.table.metadata_ref(),
+                snapshot_produce.tx.table.file_io(),
+                snapshot_produce.tx.table.object_cache(),
             )
             .await?;
 
@@ -270,7 +271,7 @@ mod tests {
             unreachable!()
         };
         let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+            .load_manifest_list(table.metadata(), table.file_io(), table.object_cache())
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());
@@ -281,7 +282,7 @@ mod tests {
 
         // check manifset
         let manifest = manifest_list.entries()[0]
-            .load_manifest(table.file_io())
+            .load_manifest(table.file_io(), table.object_cache())
             .await
             .unwrap();
         assert_eq!(1, manifest.entries().len());
@@ -347,7 +348,11 @@ mod tests {
         };
 
         let manifest_list = new_snapshot
-            .load_manifest_list(fixture.table.file_io(), fixture.table.metadata())
+            .load_manifest_list(
+                fixture.table.metadata(),
+                fixture.table.file_io(),
+                fixture.table.object_cache(),
+            )
             .await
             .expect("Failed to load manifest list");
 
@@ -360,7 +365,7 @@ mod tests {
 
         // Load the manifest from the manifest list
         let manifest = manifest_list.entries()[0]
-            .load_manifest(fixture.table.file_io())
+            .load_manifest(fixture.table.file_io(), fixture.table.object_cache())
             .await
             .expect("Failed to load manifest");
 
