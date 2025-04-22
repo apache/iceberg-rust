@@ -16,20 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-datafusion"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-# kept the same as DataFusion's MSRV
-# https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
-# https://github.com/apache/datafusion/blob/main/Cargo.toml#L68
-rust-version = "1.80.1"
+name = "iceberg-datafusion"
+version = { workspace = true }
+rust-version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg DataFusion Integration"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "integrations", "datafusion"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
@@ -41,4 +38,5 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 iceberg-catalog-memory = { workspace = true }
+parquet = { workspace = true }
 tempfile = { workspace = true }

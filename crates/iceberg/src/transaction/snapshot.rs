@@ -24,9 +24,11 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention, Struct,
-    StructType, Summary, MAIN_BRANCH,
+    update_snapshot_summaries, DataFile, DataFileFormat, FormatVersion, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
+    MAIN_BRANCH, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -103,21 +105,19 @@ impl<'a> SnapshotProduceAction<'a> {
         }
 
         for (value, field) in partition_value.fields().iter().zip(partition_type.fields()) {
-            if !field
-                .field_type
-                .as_primitive_type()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Partition field should only be primitive type.",
-                    )
-                })?
-                .compatible(&value.as_primitive_literal().unwrap())
-            {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Partition value is not compatible partition type",
-                ));
+            let field = field.field_type.as_primitive_type().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Partition field should only be primitive type.",
+                )
+            })?;
+            if let Some(value) = value {
+                if !field.compatible(&value.as_primitive_literal().unwrap()) {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Partition value is not compatible partition type",
+                    ));
+                }
             }
         }
         Ok(())
@@ -227,13 +227,55 @@ impl<'a> SnapshotProduceAction<'a> {
         Ok(manifest_files)
     }
 
-    // # TODO
-    // Fulfill this function
-    fn summary<OP: SnapshotProduceOperation>(&self, snapshot_produce_operation: &OP) -> Summary {
-        Summary {
-            operation: snapshot_produce_operation.operation(),
-            additional_properties: self.snapshot_properties.clone(),
+    // Returns a `Summary` of the current snapshot
+    fn summary<OP: SnapshotProduceOperation>(
+        &self,
+        snapshot_produce_operation: &OP,
+    ) -> Result<Summary> {
+        let mut summary_collector = SnapshotSummaryCollector::default();
+        let table_metadata = self.tx.table.metadata_ref();
+
+        let partition_summary_limit = if let Some(limit) = table_metadata
+            .properties()
+            .get(PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT)
+        {
+            if let Ok(limit) = limit.parse::<u64>() {
+                limit
+            } else {
+                PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+            }
+        } else {
+            PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT
+        };
+
+        summary_collector.set_partition_summary_limit(partition_summary_limit);
+
+        for data_file in &self.added_data_files {
+            summary_collector.add_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
         }
+
+        let previous_snapshot = table_metadata
+            .snapshot_by_id(self.snapshot_id)
+            .and_then(|snapshot| snapshot.parent_snapshot_id())
+            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id));
+
+        let mut additional_properties = summary_collector.build();
+        additional_properties.extend(self.snapshot_properties.clone());
+
+        let summary = Summary {
+            operation: snapshot_produce_operation.operation(),
+            additional_properties,
+        };
+
+        update_snapshot_summaries(
+            summary,
+            previous_snapshot.map(|s| s.summary()),
+            snapshot_produce_operation.operation() == Operation::Overwrite,
+        )
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
@@ -259,7 +301,13 @@ impl<'a> SnapshotProduceAction<'a> {
             .await?;
         let next_seq_num = self.tx.current_table.metadata().next_sequence_number();
 
-        let summary = self.summary(&snapshot_produce_operation);
+        let summary = self
+            .summary(&snapshot_produce_operation)
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
+                    .with_source(err)
+            })
+            .unwrap();
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
 

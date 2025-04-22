@@ -17,35 +17,31 @@
 
 //! Table scan api.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+mod cache;
+use cache::*;
+mod context;
+use context::*;
+mod task;
+
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{channel, Sender};
 use futures::stream::BoxStream;
-use futures::{SinkExt, StreamExt, TryFutureExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
+use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
 use crate::delete_file_index::DeleteFileIndex;
-use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
-use crate::expr::visitors::inclusive_projection::InclusiveProjection;
-use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
-use crate::io::object_cache::ObjectCache;
 use crate::io::FileIO;
 use crate::runtime::spawn;
-use crate::spec::{
-    DataContentType, DataFileFormat, ManifestContentType, ManifestEntryRef, ManifestFile,
-    ManifestList, Schema, SchemaRef, SnapshotRef, TableMetadataRef,
-};
+use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
-/// A stream of [`FileScanTask`].
-pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
@@ -218,14 +214,23 @@ impl<'a> TableScanBuilder<'a> {
                     )
                 })?
                 .clone(),
-            None => self
-                .table
-                .metadata()
-                .current_snapshot()
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::Unexpected, "Can't scan table without snapshots")
-                })?
-                .clone(),
+            None => {
+                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                    return Ok(TableScan {
+                        batch_size: self.batch_size,
+                        column_names: self.column_names,
+                        file_io: self.table.file_io().clone(),
+                        plan_context: None,
+                        concurrency_limit_data_files: self.concurrency_limit_data_files,
+                        concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                        concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                        row_group_filtering_enabled: self.row_group_filtering_enabled,
+                        row_selection_enabled: self.row_selection_enabled,
+                        delete_file_processing_enabled: self.delete_file_processing_enabled,
+                    });
+                };
+                current_snapshot_id.clone()
+            }
         };
 
         let schema = snapshot.schema(self.table.metadata())?;
@@ -306,7 +311,7 @@ impl<'a> TableScanBuilder<'a> {
             batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
-            plan_context,
+            plan_context: Some(plan_context),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
@@ -320,7 +325,10 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
-    plan_context: PlanContext,
+    /// A [PlanContext], if this table has at least one snapshot, otherwise None.
+    ///
+    /// If this is None, then the scan contains no rows.
+    plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
@@ -341,28 +349,13 @@ pub struct TableScan {
     delete_file_processing_enabled: bool,
 }
 
-/// PlanContext wraps a [`SnapshotRef`] alongside all the other
-/// objects that are required to perform a scan file plan.
-#[derive(Debug)]
-struct PlanContext {
-    snapshot: SnapshotRef,
-
-    table_metadata: TableMetadataRef,
-    snapshot_schema: SchemaRef,
-    case_sensitive: bool,
-    predicate: Option<Arc<Predicate>>,
-    snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
-    object_cache: Arc<ObjectCache>,
-    field_ids: Arc<Vec<i32>>,
-
-    partition_filter_cache: Arc<PartitionFilterCache>,
-    manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
-    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-}
-
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        let Some(plan_context) = self.plan_context.as_ref() else {
+            return Ok(Box::pin(futures::stream::empty()));
+        };
+
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
@@ -382,12 +375,12 @@ impl TableScan {
                 None
             };
 
-        let manifest_list = self.plan_context.get_manifest_list().await?;
+        let manifest_list = plan_context.get_manifest_list().await?;
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
         // scan's filter
-        let manifest_file_contexts = self.plan_context.build_manifest_file_contexts(
+        let manifest_file_contexts = plan_context.build_manifest_file_contexts(
             manifest_list,
             manifest_entry_data_ctx_tx,
             delete_file_idx_and_tx.as_ref().map(|(delete_file_idx, _)| {
@@ -460,7 +453,7 @@ impl TableScan {
             }
         });
 
-        return Ok(file_scan_task_rx.boxed());
+        Ok(file_scan_task_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -486,8 +479,8 @@ impl TableScan {
     }
 
     /// Returns a reference to the snapshot of the table scan.
-    pub fn snapshot(&self) -> &SnapshotRef {
-        &self.plan_context.snapshot
+    pub fn snapshot(&self) -> Option<&SnapshotRef> {
+        self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
     async fn process_data_manifest_entry(
@@ -591,532 +584,16 @@ impl TableScan {
     }
 }
 
-struct BoundPredicates {
+pub(crate) struct BoundPredicates {
     partition_bound_predicate: BoundPredicate,
     snapshot_bound_predicate: BoundPredicate,
 }
 
-/// Wraps a [`ManifestFile`] alongside the objects that are needed
-/// to process it in a thread-safe manner
-struct ManifestFileContext {
-    manifest_file: ManifestFile,
-
-    sender: Sender<ManifestEntryContext>,
-
-    field_ids: Arc<Vec<i32>>,
-    bound_predicates: Option<Arc<BoundPredicates>>,
-    object_cache: Arc<ObjectCache>,
-    snapshot_schema: SchemaRef,
-    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    delete_file_index: Option<DeleteFileIndex>,
-}
-
-/// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
-/// to process it in a thread-safe manner
-struct ManifestEntryContext {
-    manifest_entry: ManifestEntryRef,
-
-    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    field_ids: Arc<Vec<i32>>,
-    bound_predicates: Option<Arc<BoundPredicates>>,
-    partition_spec_id: i32,
-    snapshot_schema: SchemaRef,
-    delete_file_index: Option<DeleteFileIndex>,
-}
-
-impl ManifestFileContext {
-    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
-    async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
-        let ManifestFileContext {
-            object_cache,
-            manifest_file,
-            bound_predicates,
-            snapshot_schema,
-            field_ids,
-            mut sender,
-            expression_evaluator_cache,
-            delete_file_index,
-            ..
-        } = self;
-
-        let manifest = object_cache.get_manifest(&manifest_file).await?;
-
-        for manifest_entry in manifest.entries() {
-            let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
-                expression_evaluator_cache: expression_evaluator_cache.clone(),
-                field_ids: field_ids.clone(),
-                partition_spec_id: manifest_file.partition_spec_id,
-                bound_predicates: bound_predicates.clone(),
-                snapshot_schema: snapshot_schema.clone(),
-                delete_file_index: delete_file_index.clone(),
-            };
-
-            sender
-                .send(manifest_entry_context)
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-impl ManifestEntryContext {
-    /// consume this `ManifestEntryContext`, returning a `FileScanTask`
-    /// created from it
-    async fn into_file_scan_task(self) -> Result<FileScanTask> {
-        let deletes = if let Some(delete_file_index) = self.delete_file_index {
-            delete_file_index
-                .get_deletes_for_data_file(
-                    self.manifest_entry.data_file(),
-                    self.manifest_entry.sequence_number(),
-                )
-                .await?
-        } else {
-            vec![]
-        };
-
-        Ok(FileScanTask {
-            start: 0,
-            length: self.manifest_entry.file_size_in_bytes(),
-            record_count: Some(self.manifest_entry.record_count()),
-
-            data_file_path: self.manifest_entry.file_path().to_string(),
-            data_file_content: self.manifest_entry.content_type(),
-            data_file_format: self.manifest_entry.file_format(),
-
-            schema: self.snapshot_schema,
-            project_field_ids: self.field_ids.to_vec(),
-            predicate: self
-                .bound_predicates
-                .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
-
-            deletes,
-        })
-    }
-}
-
-impl PlanContext {
-    async fn get_manifest_list(&self) -> Result<Arc<ManifestList>> {
-        self.object_cache
-            .as_ref()
-            .get_manifest_list(&self.snapshot, &self.table_metadata)
-            .await
-    }
-
-    fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
-        let partition_spec_id = manifest_file.partition_spec_id;
-
-        let partition_filter = self.partition_filter_cache.get(
-            partition_spec_id,
-            &self.table_metadata,
-            &self.snapshot_schema,
-            self.case_sensitive,
-            self.predicate
-                .as_ref()
-                .ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "Expected a predicate but none present",
-                ))?
-                .as_ref()
-                .bind(self.snapshot_schema.clone(), self.case_sensitive)?,
-        )?;
-
-        Ok(partition_filter)
-    }
-
-    fn build_manifest_file_contexts(
-        &self,
-        manifest_list: Arc<ManifestList>,
-        tx_data: Sender<ManifestEntryContext>,
-        delete_file_idx_and_tx: Option<(DeleteFileIndex, Sender<ManifestEntryContext>)>,
-    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let manifest_files = manifest_list.entries().iter();
-
-        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
-        let mut filtered_mfcs = vec![];
-
-        for manifest_file in manifest_files {
-            let (delete_file_idx, tx) = if manifest_file.content == ManifestContentType::Deletes {
-                let Some((delete_file_idx, tx)) = delete_file_idx_and_tx.as_ref() else {
-                    continue;
-                };
-                (Some(delete_file_idx.clone()), tx.clone())
-            } else {
-                (
-                    delete_file_idx_and_tx.as_ref().map(|x| x.0.clone()),
-                    tx_data.clone(),
-                )
-            };
-
-            let partition_bound_predicate = if self.predicate.is_some() {
-                let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
-
-                // evaluate the ManifestFile against the partition filter. Skip
-                // if it cannot contain any matching rows
-                if !self
-                    .manifest_evaluator_cache
-                    .get(
-                        manifest_file.partition_spec_id,
-                        partition_bound_predicate.clone(),
-                    )
-                    .eval(manifest_file)?
-                {
-                    continue;
-                }
-
-                Some(partition_bound_predicate)
-            } else {
-                None
-            };
-
-            let mfc = self.create_manifest_file_context(
-                manifest_file,
-                partition_bound_predicate,
-                tx,
-                delete_file_idx,
-            );
-
-            filtered_mfcs.push(Ok(mfc));
-        }
-
-        Ok(Box::new(filtered_mfcs.into_iter()))
-    }
-
-    fn create_manifest_file_context(
-        &self,
-        manifest_file: &ManifestFile,
-        partition_filter: Option<Arc<BoundPredicate>>,
-        sender: Sender<ManifestEntryContext>,
-        delete_file_index: Option<DeleteFileIndex>,
-    ) -> ManifestFileContext {
-        let bound_predicates =
-            if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
-                (partition_filter, &self.snapshot_bound_predicate)
-            {
-                Some(Arc::new(BoundPredicates {
-                    partition_bound_predicate: partition_bound_predicate.as_ref().clone(),
-                    snapshot_bound_predicate: snapshot_bound_predicate.as_ref().clone(),
-                }))
-            } else {
-                None
-            };
-
-        ManifestFileContext {
-            manifest_file: manifest_file.clone(),
-            bound_predicates,
-            sender,
-            object_cache: self.object_cache.clone(),
-            snapshot_schema: self.snapshot_schema.clone(),
-            field_ids: self.field_ids.clone(),
-            expression_evaluator_cache: self.expression_evaluator_cache.clone(),
-            delete_file_index,
-        }
-    }
-}
-
-/// Manages the caching of [`BoundPredicate`] objects
-/// for [`PartitionSpec`]s based on partition spec id.
-#[derive(Debug)]
-struct PartitionFilterCache(RwLock<HashMap<i32, Arc<BoundPredicate>>>);
-
-impl PartitionFilterCache {
-    /// Creates a new [`PartitionFilterCache`]
-    /// with an empty internal HashMap.
-    fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
-    }
-
-    /// Retrieves a [`BoundPredicate`] from the cache
-    /// or computes it if not present.
-    fn get(
-        &self,
-        spec_id: i32,
-        table_metadata: &TableMetadataRef,
-        schema: &Schema,
-        case_sensitive: bool,
-        filter: BoundPredicate,
-    ) -> Result<Arc<BoundPredicate>> {
-        // we need a block here to ensure that the `read()` gets dropped before we hit the `write()`
-        // below, otherwise we hit deadlock
-        {
-            let read = self.0.read().map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "PartitionFilterCache RwLock was poisoned",
-                )
-            })?;
-
-            if read.contains_key(&spec_id) {
-                return Ok(read.get(&spec_id).unwrap().clone());
-            }
-        }
-
-        let partition_spec = table_metadata
-            .partition_spec_by_id(spec_id)
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Could not find partition spec for id {}", spec_id),
-            ))?;
-
-        let partition_type = partition_spec.partition_type(schema)?;
-        let partition_fields = partition_type.fields().to_owned();
-        let partition_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(partition_spec.spec_id())
-                .with_fields(partition_fields)
-                .build()?,
-        );
-
-        let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
-
-        let partition_filter = inclusive_projection
-            .project(&filter)?
-            .rewrite_not()
-            .bind(partition_schema.clone(), case_sensitive)?;
-
-        self.0
-            .write()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "PartitionFilterCache RwLock was poisoned",
-                )
-            })?
-            .insert(spec_id, Arc::new(partition_filter));
-
-        let read = self.0.read().map_err(|_| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "PartitionFilterCache RwLock was poisoned",
-            )
-        })?;
-
-        Ok(read.get(&spec_id).unwrap().clone())
-    }
-}
-
-/// Manages the caching of [`ManifestEvaluator`] objects
-/// for [`PartitionSpec`]s based on partition spec id.
-#[derive(Debug)]
-struct ManifestEvaluatorCache(RwLock<HashMap<i32, Arc<ManifestEvaluator>>>);
-
-impl ManifestEvaluatorCache {
-    /// Creates a new [`ManifestEvaluatorCache`]
-    /// with an empty internal HashMap.
-    fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
-    }
-
-    /// Retrieves a [`ManifestEvaluator`] from the cache
-    /// or computes it if not present.
-    fn get(&self, spec_id: i32, partition_filter: Arc<BoundPredicate>) -> Arc<ManifestEvaluator> {
-        // we need a block here to ensure that the `read()` gets dropped before we hit the `write()`
-        // below, otherwise we hit deadlock
-        {
-            let read = self
-                .0
-                .read()
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "ManifestEvaluatorCache RwLock was poisoned",
-                    )
-                })
-                .unwrap();
-
-            if read.contains_key(&spec_id) {
-                return read.get(&spec_id).unwrap().clone();
-            }
-        }
-
-        self.0
-            .write()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "ManifestEvaluatorCache RwLock was poisoned",
-                )
-            })
-            .unwrap()
-            .insert(
-                spec_id,
-                Arc::new(ManifestEvaluator::new(partition_filter.as_ref().clone())),
-            );
-
-        let read = self
-            .0
-            .read()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "ManifestEvaluatorCache RwLock was poisoned",
-                )
-            })
-            .unwrap();
-
-        read.get(&spec_id).unwrap().clone()
-    }
-}
-
-/// Manages the caching of [`ExpressionEvaluator`] objects
-/// for [`PartitionSpec`]s based on partition spec id.
-#[derive(Debug)]
-struct ExpressionEvaluatorCache(RwLock<HashMap<i32, Arc<ExpressionEvaluator>>>);
-
-impl ExpressionEvaluatorCache {
-    /// Creates a new [`ExpressionEvaluatorCache`]
-    /// with an empty internal HashMap.
-    fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
-    }
-
-    /// Retrieves a [`ExpressionEvaluator`] from the cache
-    /// or computes it if not present.
-    fn get(
-        &self,
-        spec_id: i32,
-        partition_filter: &BoundPredicate,
-    ) -> Result<Arc<ExpressionEvaluator>> {
-        // we need a block here to ensure that the `read()` gets dropped before we hit the `write()`
-        // below, otherwise we hit deadlock
-        {
-            let read = self.0.read().map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "PartitionFilterCache RwLock was poisoned",
-                )
-            })?;
-
-            if read.contains_key(&spec_id) {
-                return Ok(read.get(&spec_id).unwrap().clone());
-            }
-        }
-
-        self.0
-            .write()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "ManifestEvaluatorCache RwLock was poisoned",
-                )
-            })
-            .unwrap()
-            .insert(
-                spec_id,
-                Arc::new(ExpressionEvaluator::new(partition_filter.clone())),
-            );
-
-        let read = self
-            .0
-            .read()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "ManifestEvaluatorCache RwLock was poisoned",
-                )
-            })
-            .unwrap();
-
-        Ok(read.get(&spec_id).unwrap().clone())
-    }
-}
-
-/// A task to scan part of file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FileScanTask {
-    /// The start offset of the file to scan.
-    pub start: u64,
-    /// The length of the file to scan.
-    pub length: u64,
-    /// The number of records in the file to scan.
-    ///
-    /// This is an optional field, and only available if we are
-    /// reading the entire data file.
-    pub record_count: Option<u64>,
-
-    /// The data file path corresponding to the task.
-    pub data_file_path: String,
-
-    /// The content type of the file to scan.
-    pub data_file_content: DataContentType,
-
-    /// The format of the file to scan.
-    pub data_file_format: DataFileFormat,
-
-    /// The schema of the file to scan.
-    pub schema: SchemaRef,
-    /// The field ids to project.
-    pub project_field_ids: Vec<i32>,
-    /// The predicate to filter.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub predicate: Option<BoundPredicate>,
-
-    /// The list of delete files that may need to be applied to this data file
-    pub deletes: Vec<FileScanTaskDeleteFile>,
-}
-
-/// A task to scan part of file.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FileScanTaskDeleteFile {
-    /// The delete file path
-    pub file_path: String,
-
-    /// delete file type
-    pub file_type: DataContentType,
-
-    /// partition id
-    pub partition_spec_id: i32,
-}
-
-#[derive(Debug)]
-pub(crate) struct DeleteFileContext {
-    pub(crate) manifest_entry: ManifestEntryRef,
-    pub(crate) partition_spec_id: i32,
-}
-
-impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
-    fn from(ctx: &DeleteFileContext) -> Self {
-        FileScanTaskDeleteFile {
-            file_path: ctx.manifest_entry.file_path().to_string(),
-            file_type: ctx.manifest_entry.content_type(),
-            partition_spec_id: ctx.partition_spec_id,
-        }
-    }
-}
-
-impl FileScanTask {
-    /// Returns the data file path of this file scan task.
-    pub fn data_file_path(&self) -> &str {
-        &self.data_file_path
-    }
-
-    /// Returns the project field id of this file scan task.
-    pub fn project_field_ids(&self) -> &[i32] {
-        &self.project_field_ids
-    }
-
-    /// Returns the predicate of this file scan task.
-    pub fn predicate(&self) -> Option<&BoundPredicate> {
-        self.predicate.as_ref()
-    }
-
-    /// Returns the schema of this file scan task as a reference
-    pub fn schema(&self) -> &Schema {
-        &self.schema
-    }
-
-    /// Returns the schema of this file scan task as a SchemaRef
-    pub fn schema_ref(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
+    //! shared tests for the table scan API
+    #![allow(missing_docs)]
+
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -1174,6 +651,45 @@ pub mod tests {
                 context.insert("table_location", &table_location);
                 context.insert("manifest_list_1_location", &manifest_list1_location);
                 context.insert("manifest_list_2_location", &manifest_list2_location);
+                context.insert("table_metadata_1_location", &table_metadata1_location);
+
+                let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        #[allow(clippy::new_without_default)]
+        pub fn new_empty() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
+                .unwrap()
+                .build()
+                .unwrap();
+
+            let table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_empty_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let mut context = Context::new();
+                context.insert("table_location", &table_location);
                 context.insert("table_metadata_1_location", &table_metadata1_location);
 
                 let metadata_json = Tera::one_off(&template_json_str, &context, false).unwrap();
@@ -1720,7 +1236,7 @@ pub mod tests {
         let table_scan = table.scan().build().unwrap();
         assert_eq!(
             table.metadata().current_snapshot().unwrap().snapshot_id(),
-            table_scan.snapshot().snapshot_id()
+            table_scan.snapshot().unwrap().snapshot_id()
         );
     }
 
@@ -1742,7 +1258,18 @@ pub mod tests {
             .with_row_selection_enabled(true)
             .build()
             .unwrap();
-        assert_eq!(table_scan.snapshot().snapshot_id(), 3051729675574597004);
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            3051729675574597004
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_on_table_without_any_snapshots() {
+        let table = TableTestFixture::new_empty().table;
+        let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert!(batches.is_empty());
     }
 
     #[tokio::test]

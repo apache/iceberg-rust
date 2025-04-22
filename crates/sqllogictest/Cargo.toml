@@ -16,13 +16,24 @@
 # under the License.
 
 [package]
-name = "sqllogictest"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
 license = { workspace = true }
+name = "iceberg-sqllogictest"
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = {workspace = true}
+toml = {workspace = true}
+datafusion = {workspace = true}
+datafusion-sqllogictest = {workspace = true}
+enum-ordinalize = {workspace = true}
+sqllogictest = {workspace = true}
+indicatif = {workspace = true}
+
+[package.metadata.cargo-machete]
+# These dependencies are added to ensure minimal dependency version
+ignored = ["enum-ordinalize"]

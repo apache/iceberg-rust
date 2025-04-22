@@ -16,14 +16,10 @@
 # under the License.
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
+requires = ["maturin>=1.0,<2.0"]
 
 [project]
-name = "pyiceberg_core"
-version = "0.4.0"
-readme = "project-description.md"
-requires-python = "~=3.9"
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -34,11 +30,15 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
+name = "pyiceberg-core"
+readme = "project-description.md"
+requires-python = "~=3.9"
+version = "0.4.0"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-python-source = "python"
 module-name = "pyiceberg_core.pyiceberg_core_rust"
+python-source = "python"
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
@@ -47,6 +47,6 @@ ignore = ["F403", "F405"]
 dependencies = ["maturin>=1.0,<2.0", "pytest>=8.3.2", "pyarrow>=17.0.0"]
 
 [tool.hatch.envs.dev.scripts]
-develop = "maturin develop"
 build = "maturin build --out dist --sdist"
+develop = "maturin develop"
 test = "pytest"
