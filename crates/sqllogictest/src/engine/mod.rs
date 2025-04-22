@@ -15,38 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Spec for Iceberg.
+mod datafusion;
 
-mod datatypes;
-mod manifest;
-mod manifest_list;
-mod name_mapping;
-mod partition;
-mod schema;
-mod snapshot;
-mod snapshot_summary;
-mod sort;
-mod statistic_file;
-mod table_metadata;
-mod table_metadata_builder;
-mod transform;
-mod values;
-mod view_metadata;
-mod view_metadata_builder;
-mod view_version;
+use std::path::Path;
 
-pub use datatypes::*;
-pub use manifest::*;
-pub use manifest_list::*;
-pub use name_mapping::*;
-pub use partition::*;
-pub use schema::*;
-pub use snapshot::*;
-pub use snapshot_summary::*;
-pub use sort::*;
-pub use statistic_file::*;
-pub use table_metadata::*;
-pub use transform::*;
-pub use values::*;
-pub use view_metadata::*;
-pub use view_version::*;
+use toml::Table as TomlTable;
+
+use crate::error::Result;
+
+#[async_trait::async_trait]
+pub trait Engine: Sized {
+    async fn new(config: TomlTable) -> Result<Self>;
+    async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
+}
