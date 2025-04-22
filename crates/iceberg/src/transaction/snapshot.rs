@@ -233,7 +233,7 @@ impl<'a> SnapshotProduceAction<'a> {
         snapshot_produce_operation: &OP,
     ) -> Result<Summary> {
         let mut summary_collector = SnapshotSummaryCollector::default();
-        let table_metadata = self.tx.table.metadata_ref();
+        let table_metadata = self.tx.current_table.metadata_ref();
 
         let partition_summary_limit = if let Some(limit) = table_metadata
             .properties()
