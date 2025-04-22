@@ -38,9 +38,10 @@ impl PuffinReader {
     }
 
     /// Returns file metadata
-    pub async fn file_metadata(&self, prefetch_hint: Option<u8>) -> Result<&FileMetadata> {
+    pub async fn file_metadata(&self) -> Result<&FileMetadata> {
+        let file_metadata = FileMetadata::default();
         self.file_metadata
-            .get_or_try_init(|| FileMetadata::read(&self.input_file, prefetch_hint))
+            .get_or_try_init(|| file_metadata.read(&self.input_file))
             .await
     }
 
@@ -78,7 +79,7 @@ mod tests {
         let input_file = java_uncompressed_metric_input_file();
         let puffin_reader = PuffinReader::new(input_file);
 
-        let file_metadata = puffin_reader.file_metadata(None).await.unwrap().clone();
+        let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, uncompressed_metric_file_metadata());
 
         assert_eq!(
@@ -103,7 +104,7 @@ mod tests {
         let input_file = java_zstd_compressed_metric_input_file();
         let puffin_reader = PuffinReader::new(input_file);
 
-        let file_metadata = puffin_reader.file_metadata(None).await.unwrap().clone();
+        let file_metadata = puffin_reader.file_metadata().await.unwrap().clone();
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata());
 
         assert_eq!(

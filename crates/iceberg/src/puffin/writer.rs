@@ -112,6 +112,7 @@ impl PuffinWriter {
         let file_metadata = FileMetadata {
             blobs: self.written_blobs_metadata.clone(),
             properties: self.properties.clone(),
+            prefetch_hint: None,
         };
         let json = serde_json::to_string::<FileMetadata>(&file_metadata)?;
         let bytes = json.as_bytes();
@@ -185,12 +186,7 @@ mod tests {
     async fn read_all_blobs_from_puffin_file(input_file: InputFile) -> Vec<Blob> {
         let puffin_reader = PuffinReader::new(input_file);
         let mut blobs = Vec::new();
-        let blobs_metadata = puffin_reader
-            .file_metadata(None)
-            .await
-            .unwrap()
-            .clone()
-            .blobs;
+        let blobs_metadata = puffin_reader.file_metadata().await.unwrap().clone().blobs;
         for blob_metadata in blobs_metadata {
             blobs.push(puffin_reader.blob(&blob_metadata).await.unwrap());
         }
@@ -205,9 +201,10 @@ mod tests {
             .await
             .unwrap()
             .to_input_file();
+        let file_metadata = FileMetadata::default();
 
         assert_eq!(
-            FileMetadata::read(&input_file, None).await.unwrap(),
+            file_metadata.read(&input_file).await.unwrap(),
             empty_footer_payload()
         );
 
@@ -242,8 +239,9 @@ mod tests {
             .unwrap()
             .to_input_file();
 
+        let file_metadata = FileMetadata::default();
         assert_eq!(
-            FileMetadata::read(&input_file, None).await.unwrap(),
+            file_metadata.read(&input_file).await.unwrap(),
             uncompressed_metric_file_metadata()
         );
 
@@ -260,9 +258,10 @@ mod tests {
             .await
             .unwrap()
             .to_input_file();
+        let file_metadata = FileMetadata::default();
 
         assert_eq!(
-            FileMetadata::read(&input_file, None).await.unwrap(),
+            file_metadata.read(&input_file).await.unwrap(),
             zstd_compressed_metric_file_metadata()
         );
 

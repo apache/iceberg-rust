@@ -51,6 +51,7 @@ pub(crate) fn empty_footer_payload() -> FileMetadata {
     FileMetadata {
         blobs: Vec::new(),
         properties: HashMap::new(),
+        prefetch_hint: None,
     }
 }
 
@@ -170,6 +171,7 @@ pub(crate) fn uncompressed_metric_file_metadata() -> FileMetadata {
             uncompressed_metric_blob_1_metadata(),
         ],
         properties: file_properties(),
+        prefetch_hint: None,
     }
 }
 
@@ -180,5 +182,6 @@ pub(crate) fn zstd_compressed_metric_file_metadata() -> FileMetadata {
             zstd_compressed_metric_blob_1_metadata(),
         ],
         properties: file_properties(),
+        prefetch_hint: None,
     }
 }
