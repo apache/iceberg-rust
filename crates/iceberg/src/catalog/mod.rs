@@ -261,7 +261,9 @@ pub struct TableCreation {
     #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
     /// The properties of the table.
-    #[builder(default)]
+    #[builder(default, setter(transform = |props: impl IntoIterator<Item=(String, String)>| {
+        props.into_iter().collect()
+    }))]
     pub properties: HashMap<String, String>,
 }
 
@@ -899,6 +901,26 @@ mod tests {
         };
 
         assert_eq!(table_id, TableIdent::from_strs(vec!["ns1", "t1"]).unwrap());
+    }
+
+    #[test]
+    fn test_table_creation_iterator_properties() {
+        let builder = TableCreation::builder()
+            .name("table".to_string())
+            .schema(Schema::builder().build().unwrap());
+
+        fn s(k: &str, v: &str) -> (String, String) {
+            (k.to_string(), v.to_string())
+        }
+
+        let table_creation = builder
+            .properties([s("key", "value"), s("foo", "bar")])
+            .build();
+
+        assert_eq!(
+            HashMap::from([s("key", "value"), s("foo", "bar")]),
+            table_creation.properties
+        );
     }
 
     fn test_serde_json<T: Serialize + DeserializeOwned + PartialEq + Debug>(
