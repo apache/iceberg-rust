@@ -362,7 +362,16 @@
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
 <a href="#363" id="363">363</a>
-<a href="#364" id="364">364</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -501,7 +510,9 @@
                 ));
             }
             <span class="comment">// Check if the data file partition spec id matches the table default partition spec id.
-            </span><span class="kw">if </span><span class="self">self</span>.tx.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
+            </span><span class="kw">if </span><span class="self">self</span>.tx.current_table.metadata().default_partition_spec_id()
+                != data_file.partition_spec_id
+            {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
                     ErrorKind::DataInvalid,
                     <span class="string">"Data file partition spec id does not match table default partition spec id"</span>,
@@ -509,7 +520,7 @@
             }
             <span class="self">Self</span>::validate_partition_value(
                 data_file.partition(),
-                <span class="self">self</span>.tx.table.metadata().default_partition_type(),
+                <span class="self">self</span>.tx.current_table.metadata().default_partition_type(),
             )<span class="question-mark">?</span>;
         }
         <span class="self">self</span>.added_data_files.extend(data_files);
@@ -519,24 +530,28 @@
     <span class="kw">fn </span>new_manifest_output(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;OutputFile&gt; {
         <span class="kw">let </span>new_manifest_path = <span class="macro">format!</span>(
             <span class="string">"{}/{}/{}-m{}.{}"</span>,
-            <span class="self">self</span>.tx.table.metadata().location(),
+            <span class="self">self</span>.tx.current_table.metadata().location(),
             META_ROOT_PATH,
             <span class="self">self</span>.commit_uuid,
             <span class="self">self</span>.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
-        <span class="self">self</span>.tx.table.file_io().new_output(new_manifest_path)
+        <span class="self">self</span>.tx
+            .current_table
+            .file_io()
+            .new_output(new_manifest_path)
     }
 
     <span class="comment">// Write manifest file for added data files and return the ManifestFile for ManifestList.
     </span><span class="kw">async fn </span>write_added_manifest(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ManifestFile&gt; {
         <span class="kw">let </span>added_data_files = std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.added_data_files);
         <span class="kw">let </span>snapshot_id = <span class="self">self</span>.snapshot_id;
+        <span class="kw">let </span>format_version = <span class="self">self</span>.tx.current_table.metadata().format_version();
         <span class="kw">let </span>manifest_entries = added_data_files.into_iter().map(|data_file| {
             <span class="kw">let </span>builder = ManifestEntry::builder()
                 .status(<span class="kw">crate</span>::spec::ManifestStatus::Added)
                 .data_file(data_file);
-            <span class="kw">if </span><span class="self">self</span>.tx.table.metadata().format_version() == FormatVersion::V1 {
+            <span class="kw">if </span>format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
             } <span class="kw">else </span>{
                 <span class="comment">// For format version &gt; 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
@@ -549,15 +564,15 @@
                 <span class="self">self</span>.new_manifest_output()<span class="question-mark">?</span>,
                 <span class="prelude-val">Some</span>(<span class="self">self</span>.snapshot_id),
                 <span class="self">self</span>.key_metadata.clone(),
-                <span class="self">self</span>.tx.table.metadata().current_schema().clone(),
+                <span class="self">self</span>.tx.current_table.metadata().current_schema().clone(),
                 <span class="self">self</span>.tx
-                    .table
+                    .current_table
                     .metadata()
                     .default_partition_spec()
                     .as_ref()
                     .clone(),
             );
-            <span class="kw">if </span><span class="self">self</span>.tx.table.metadata().format_version() == FormatVersion::V1 {
+            <span class="kw">if </span><span class="self">self</span>.tx.current_table.metadata().format_version() == FormatVersion::V1 {
                 builder.build_v1()
             } <span class="kw">else </span>{
                 builder.build_v2_data()
@@ -591,7 +606,7 @@
         snapshot_produce_operation: <span class="kw-2">&amp;</span>OP,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Summary&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>summary_collector = SnapshotSummaryCollector::default();
-        <span class="kw">let </span>table_metadata = <span class="self">self</span>.tx.table.metadata_ref();
+        <span class="kw">let </span>table_metadata = <span class="self">self</span>.tx.current_table.metadata_ref();
 
         <span class="kw">let </span>partition_summary_limit = <span class="kw">if let </span><span class="prelude-val">Some</span>(limit) = table_metadata
             .properties()
@@ -639,7 +654,7 @@
     <span class="kw">fn </span>generate_manifest_list_file_path(<span class="kw-2">&amp;</span><span class="self">self</span>, attempt: i64) -&gt; String {
         <span class="macro">format!</span>(
             <span class="string">"{}/{}/snap-{}-{}-{}.{}"</span>,
-            <span class="self">self</span>.tx.table.metadata().location(),
+            <span class="self">self</span>.tx.current_table.metadata().location(),
             META_ROOT_PATH,
             <span class="self">self</span>.snapshot_id,
             attempt,
@@ -657,7 +672,7 @@
         <span class="kw">let </span>new_manifests = <span class="self">self
             </span>.manifest_file(<span class="kw-2">&amp;</span>snapshot_produce_operation, <span class="kw-2">&amp;</span>process)
             .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>next_seq_num = <span class="self">self</span>.tx.table.metadata().next_sequence_number();
+        <span class="kw">let </span>next_seq_num = <span class="self">self</span>.tx.current_table.metadata().next_sequence_number();
 
         <span class="kw">let </span>summary = <span class="self">self
             </span>.summary(<span class="kw-2">&amp;</span>snapshot_produce_operation)
@@ -669,22 +684,22 @@
 
         <span class="kw">let </span>manifest_list_path = <span class="self">self</span>.generate_manifest_list_file_path(<span class="number">0</span>);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>manifest_list_writer = <span class="kw">match </span><span class="self">self</span>.tx.table.metadata().format_version() {
+        <span class="kw">let </span><span class="kw-2">mut </span>manifest_list_writer = <span class="kw">match </span><span class="self">self</span>.tx.current_table.metadata().format_version() {
             FormatVersion::V1 =&gt; ManifestListWriter::v1(
                 <span class="self">self</span>.tx
-                    .table
+                    .current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
                 <span class="self">self</span>.snapshot_id,
-                <span class="self">self</span>.tx.table.metadata().current_snapshot_id(),
+                <span class="self">self</span>.tx.current_table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 =&gt; ManifestListWriter::v2(
                 <span class="self">self</span>.tx
-                    .table
+                    .current_table
                     .file_io()
                     .new_output(manifest_list_path.clone())<span class="question-mark">?</span>,
                 <span class="self">self</span>.snapshot_id,
-                <span class="self">self</span>.tx.table.metadata().current_snapshot_id(),
+                <span class="self">self</span>.tx.current_table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
         };
@@ -695,34 +710,37 @@
         <span class="kw">let </span>new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
             .with_snapshot_id(<span class="self">self</span>.snapshot_id)
-            .with_parent_snapshot_id(<span class="self">self</span>.tx.table.metadata().current_snapshot_id())
+            .with_parent_snapshot_id(<span class="self">self</span>.tx.current_table.metadata().current_snapshot_id())
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
-            .with_schema_id(<span class="self">self</span>.tx.table.metadata().current_schema_id())
+            .with_schema_id(<span class="self">self</span>.tx.current_table.metadata().current_schema_id())
             .with_timestamp_ms(commit_ts)
             .build();
 
-        <span class="self">self</span>.tx.append_updates(<span class="macro">vec!</span>[
-            TableUpdate::AddSnapshot {
-                snapshot: new_snapshot,
-            },
-            TableUpdate::SetSnapshotRef {
-                ref_name: MAIN_BRANCH.to_string(),
-                reference: SnapshotReference::new(
-                    <span class="self">self</span>.snapshot_id,
-                    SnapshotRetention::branch(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
-                ),
-            },
-        ])<span class="question-mark">?</span>;
-        <span class="self">self</span>.tx.append_requirements(<span class="macro">vec!</span>[
-            TableRequirement::UuidMatch {
-                uuid: <span class="self">self</span>.tx.table.metadata().uuid(),
-            },
-            TableRequirement::RefSnapshotIdMatch {
-                r#ref: MAIN_BRANCH.to_string(),
-                snapshot_id: <span class="self">self</span>.tx.table.metadata().current_snapshot_id(),
-            },
-        ])<span class="question-mark">?</span>;
+        <span class="self">self</span>.tx.apply(
+            <span class="macro">vec!</span>[
+                TableUpdate::AddSnapshot {
+                    snapshot: new_snapshot,
+                },
+                TableUpdate::SetSnapshotRef {
+                    ref_name: MAIN_BRANCH.to_string(),
+                    reference: SnapshotReference::new(
+                        <span class="self">self</span>.snapshot_id,
+                        SnapshotRetention::branch(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
+                    ),
+                },
+            ],
+            <span class="macro">vec!</span>[
+                TableRequirement::UuidMatch {
+                    uuid: <span class="self">self</span>.tx.current_table.metadata().uuid(),
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: MAIN_BRANCH.to_string(),
+                    snapshot_id: <span class="self">self</span>.tx.current_table.metadata().current_snapshot_id(),
+                },
+            ],
+        )<span class="question-mark">?</span>;
+
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.tx)
     }
 }

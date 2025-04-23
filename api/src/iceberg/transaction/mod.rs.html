@@ -324,7 +324,36 @@
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
-<a href="#326" id="326">326</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -350,6 +379,7 @@
 <span class="kw">use </span>std::cmp::Ordering;
 <span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::mem::discriminant;
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>uuid::Uuid;
 
@@ -363,7 +393,8 @@
 
 <span class="doccomment">/// Table transaction.
 </span><span class="kw">pub struct </span>Transaction&lt;<span class="lifetime">'a</span>&gt; {
-    table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table,
+    base_table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table,
+    current_table: Table,
     updates: Vec&lt;TableUpdate&gt;,
     requirements: Vec&lt;TableRequirement&gt;,
 }
@@ -372,38 +403,60 @@
     <span class="doccomment">/// Creates a new transaction.
     </span><span class="kw">pub fn </span>new(table: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Table) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            table,
+            base_table: table,
+            current_table: table.clone(),
             updates: <span class="macro">vec!</span>[],
             requirements: <span class="macro">vec!</span>[],
         }
     }
 
-    <span class="kw">fn </span>append_updates(<span class="kw-2">&amp;mut </span><span class="self">self</span>, updates: Vec&lt;TableUpdate&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">for </span>update <span class="kw">in </span><span class="kw-2">&amp;</span>updates {
-            <span class="kw">for </span>up <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.updates {
-                <span class="kw">if </span>discriminant(up) == discriminant(update) {
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-                        ErrorKind::DataInvalid,
-                        <span class="macro">format!</span>(
-                            <span class="string">"Cannot apply update with same type at same time: {:?}"</span>,
-                            update
-                        ),
-                    ));
-                }
-            }
+    <span class="kw">fn </span>update_table_metadata(<span class="kw-2">&amp;mut </span><span class="self">self</span>, updates: <span class="kw-2">&amp;</span>[TableUpdate]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>metadata_builder = <span class="self">self</span>.current_table.metadata().clone().into_builder(<span class="prelude-val">None</span>);
+        <span class="kw">for </span>update <span class="kw">in </span>updates {
+            metadata_builder = update.clone().apply(metadata_builder)<span class="question-mark">?</span>;
         }
-        <span class="self">self</span>.updates.extend(updates);
+
+        <span class="self">self</span>.current_table
+            .with_metadata(Arc::new(metadata_builder.build()<span class="question-mark">?</span>.metadata));
+
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>append_requirements(<span class="kw-2">&amp;mut </span><span class="self">self</span>, requirements: Vec&lt;TableRequirement&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="self">self</span>.requirements.extend(requirements);
-        <span class="prelude-val">Ok</span>(())
+    <span class="kw">fn </span>apply(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        updates: Vec&lt;TableUpdate&gt;,
+        requirements: Vec&lt;TableRequirement&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">for </span>requirement <span class="kw">in </span><span class="kw-2">&amp;</span>requirements {
+            requirement.check(<span class="prelude-val">Some</span>(<span class="self">self</span>.current_table.metadata()))<span class="question-mark">?</span>;
+        }
+
+        <span class="self">self</span>.update_table_metadata(<span class="kw-2">&amp;</span>updates)<span class="question-mark">?</span>;
+
+        <span class="self">self</span>.updates.extend(updates);
+
+        <span class="comment">// For the requirements, it does not make sense to add a requirement more than once
+        // For example, you cannot assert that the current schema has two different IDs
+        </span><span class="kw">for </span>new_requirement <span class="kw">in </span>requirements {
+            <span class="kw">if </span><span class="self">self
+                </span>.requirements
+                .iter()
+                .map(discriminant)
+                .all(|d| d != discriminant(<span class="kw-2">&amp;</span>new_requirement))
+            {
+                <span class="self">self</span>.requirements.push(new_requirement);
+            }
+        }
+
+        <span class="comment">// # TODO
+        // Support auto commit later.
+
+        </span><span class="prelude-val">Ok</span>(())
     }
 
     <span class="doccomment">/// Sets table to a new version.
     </span><span class="kw">pub fn </span>upgrade_table_version(<span class="kw-2">mut </span><span class="self">self</span>, format_version: FormatVersion) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>current_version = <span class="self">self</span>.table.metadata().format_version();
+        <span class="kw">let </span>current_version = <span class="self">self</span>.current_table.metadata().format_version();
         <span class="kw">match </span>current_version.cmp(<span class="kw-2">&amp;</span>format_version) {
             Ordering::Greater =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
@@ -415,7 +468,7 @@
                 ));
             }
             Ordering::Less =&gt; {
-                <span class="self">self</span>.append_updates(<span class="macro">vec!</span>[UpgradeFormatVersion { format_version }])<span class="question-mark">?</span>;
+                <span class="self">self</span>.apply(<span class="macro">vec!</span>[UpgradeFormatVersion { format_version }], <span class="macro">vec!</span>[])<span class="question-mark">?</span>;
             }
             Ordering::Equal =&gt; {
                 <span class="comment">// Do nothing.
@@ -426,7 +479,7 @@
 
     <span class="doccomment">/// Update table's property.
     </span><span class="kw">pub fn </span>set_properties(<span class="kw-2">mut </span><span class="self">self</span>, props: HashMap&lt;String, String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="self">self</span>.append_updates(<span class="macro">vec!</span>[TableUpdate::SetProperties { updates: props }])<span class="question-mark">?</span>;
+        <span class="self">self</span>.apply(<span class="macro">vec!</span>[TableUpdate::SetProperties { updates: props }], <span class="macro">vec!</span>[])<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">self</span>)
     }
 
@@ -442,7 +495,7 @@
         };
         <span class="kw">let </span><span class="kw-2">mut </span>snapshot_id = generate_random_id();
         <span class="kw">while </span><span class="self">self
-            </span>.table
+            </span>.current_table
             .metadata()
             .snapshots()
             .any(|s| s.snapshot_id() == snapshot_id)
@@ -478,14 +531,17 @@
 
     <span class="doccomment">/// Remove properties in table.
     </span><span class="kw">pub fn </span>remove_properties(<span class="kw-2">mut </span><span class="self">self</span>, keys: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="self">self</span>.append_updates(<span class="macro">vec!</span>[TableUpdate::RemoveProperties { removals: keys }])<span class="question-mark">?</span>;
+        <span class="self">self</span>.apply(
+            <span class="macro">vec!</span>[TableUpdate::RemoveProperties { removals: keys }],
+            <span class="macro">vec!</span>[],
+        )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">self</span>)
     }
 
     <span class="doccomment">/// Commit transaction.
     </span><span class="kw">pub async fn </span>commit(<span class="self">self</span>, catalog: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Catalog) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
         <span class="kw">let </span>table_commit = TableCommit::builder()
-            .ident(<span class="self">self</span>.table.identifier().clone())
+            .ident(<span class="self">self</span>.base_table.identifier().clone())
             .updates(<span class="self">self</span>.updates)
             .requirements(<span class="self">self</span>.requirements)
             .build();
@@ -634,20 +690,22 @@
         );
     }
 
-    <span class="attr">#[test]
-    </span><span class="kw">fn </span>test_do_same_update_in_same_transaction() {
-        <span class="kw">let </span>table = make_v2_table();
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_transaction_apply_upgrade() {
+        <span class="kw">let </span>table = make_v1_table();
         <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-        <span class="kw">let </span>tx = tx
-            .remove_properties(<span class="macro">vec!</span>[<span class="string">"a"</span>.to_string(), <span class="string">"b"</span>.to_string()])
-            .unwrap();
-
-        <span class="kw">let </span>tx = tx.remove_properties(<span class="macro">vec!</span>[<span class="string">"c"</span>.to_string(), <span class="string">"d"</span>.to_string()]);
-
-        <span class="macro">assert!</span>(
-            tx.is_err(),
-            <span class="string">"Should not allow to do same kinds update in same transaction"
-        </span>);
+        <span class="comment">// Upgrade v1 to v1, do nothing.
+        </span><span class="kw">let </span>tx = tx.upgrade_table_version(FormatVersion::V1).unwrap();
+        <span class="comment">// Upgrade v1 to v2, success.
+        </span><span class="kw">let </span>tx = tx.upgrade_table_version(FormatVersion::V2).unwrap();
+        <span class="macro">assert_eq!</span>(
+            <span class="macro">vec!</span>[TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V2
+            }],
+            tx.updates
+        );
+        <span class="comment">// Upgrade v2 to v1, return error.
+        </span><span class="macro">assert!</span>(tx.upgrade_table_version(FormatVersion::V1).is_err());
     }
 }
 </code></pre></div></section></main></body></html>

@@ -378,7 +378,12 @@
 <a href="#377" id="377">377</a>
 <a href="#378" id="378">378</a>
 <a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -463,7 +468,7 @@
         <span class="kw">if </span>!<span class="self">self
             </span>.snapshot_produce_action
             .tx
-            .table
+            .current_table
             .metadata()
             .default_spec
             .is_unpartitioned()
@@ -474,10 +479,10 @@
             ));
         }
 
-        <span class="kw">let </span>table_metadata = <span class="self">self</span>.snapshot_produce_action.tx.table.metadata();
+        <span class="kw">let </span>table_metadata = <span class="self">self</span>.snapshot_produce_action.tx.current_table.metadata();
 
         <span class="kw">let </span>data_files = ParquetWriter::parquet_files_to_data_files(
-            <span class="self">self</span>.snapshot_produce_action.tx.table.file_io(),
+            <span class="self">self</span>.snapshot_produce_action.tx.current_table.file_io(),
             file_path,
             table_metadata,
         )
@@ -502,7 +507,7 @@
             <span class="kw">let </span><span class="kw-2">mut </span>manifest_stream = <span class="self">self
                 </span>.snapshot_produce_action
                 .tx
-                .table
+                .current_table
                 .inspect()
                 .manifests()
                 .scan()
@@ -564,14 +569,19 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         snapshot_produce: <span class="kw-2">&amp;</span>SnapshotProduceAction&lt;<span class="lifetime">'_</span>&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;ManifestFile&gt;&gt; {
-        <span class="kw">let </span><span class="prelude-val">Some</span>(snapshot) = snapshot_produce.tx.table.metadata().current_snapshot() <span class="kw">else </span>{
+        <span class="kw">let </span><span class="prelude-val">Some</span>(snapshot) = snapshot_produce
+            .tx
+            .current_table
+            .metadata()
+            .current_snapshot()
+        <span class="kw">else </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[]);
         };
 
         <span class="kw">let </span>manifest_list = snapshot
             .load_manifest_list(
-                snapshot_produce.tx.table.file_io(),
-                <span class="kw-2">&amp;</span>snapshot_produce.tx.table.metadata_ref(),
+                snapshot_produce.tx.current_table.file_io(),
+                <span class="kw-2">&amp;</span>snapshot_produce.tx.current_table.metadata_ref(),
             )
             .<span class="kw">await</span><span class="question-mark">?</span>;
 
@@ -633,11 +643,11 @@
         <span class="macro">assert_eq!</span>(
             <span class="macro">vec!</span>[
                 TableRequirement::UuidMatch {
-                    uuid: tx.table.metadata().uuid()
+                    uuid: table.metadata().uuid()
                 },
                 TableRequirement::RefSnapshotIdMatch {
                     r#ref: MAIN_BRANCH.to_string(),
-                    snapshot_id: tx.table.metadata().current_snapshot_id
+                    snapshot_id: table.metadata().current_snapshot_id
                 }
             ],
             tx.requirements
