@@ -22,18 +22,20 @@ use std::ops::RangeFrom;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::io::OutputFile;
 use crate::spec::{
-    update_snapshot_summaries, DataFile, DataFileFormat, FormatVersion, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    MAIN_BRANCH, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
+    update_snapshot_summaries, DataFile, DataFileFormat, FormatVersion, ManifestContentType,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
+    StructType, Summary, MAIN_BRANCH, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
     PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
+/// Whether allow to inherit snapshot id.
+pub const SNAPSHOT_ID_INHERITANCE_ENABLED: &str = "compatibility.snapshot-id-inheritance.enabled";
+const SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT: bool = false;
 
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
@@ -46,31 +48,36 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
         &self,
         snapshot_produce: &SnapshotProduceAction,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
-}
-
-pub(crate) struct DefaultManifestProcess;
-
-impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile> {
-        manifests
+    fn summary(&self) -> HashMap<String, String> {
+        HashMap::new()
     }
 }
 
 pub(crate) trait ManifestProcess: Send + Sync {
-    fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile>;
+    fn process_manifeset(&self, manifests: Vec<ManifestFile>) -> Vec<ManifestFile> {
+        manifests
+    }
+    fn summary(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
+
+pub(crate) struct DefaultManifestProcess;
+
+impl ManifestProcess for DefaultManifestProcess {}
 
 pub(crate) struct SnapshotProduceAction<'a> {
     pub tx: Transaction<'a>,
-    snapshot_id: i64,
-    key_metadata: Vec<u8>,
-    commit_uuid: Uuid,
-    snapshot_properties: HashMap<String, String>,
+    pub snapshot_id: i64,
+    pub key_metadata: Vec<u8>,
+    pub commit_uuid: Uuid,
+    pub snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
-    manifest_counter: RangeFrom<u64>,
+    pub manifest_counter: RangeFrom<u64>,
+    pub enable_inherit_snapshot_id: bool,
 }
 
 impl<'a> SnapshotProduceAction<'a> {
@@ -81,6 +88,15 @@ impl<'a> SnapshotProduceAction<'a> {
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
     ) -> Result<Self> {
+        let enable_inherit_snapshot_id = tx.current_table.metadata().format_version()
+            > FormatVersion::V1
+            || tx
+                .current_table
+                .metadata()
+                .properties()
+                .get(SNAPSHOT_ID_INHERITANCE_ENABLED)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT);
         Ok(Self {
             tx,
             snapshot_id,
@@ -89,6 +105,7 @@ impl<'a> SnapshotProduceAction<'a> {
             added_data_files: vec![],
             manifest_counter: (0..),
             key_metadata,
+            enable_inherit_snapshot_id,
         })
     }
 
@@ -154,7 +171,11 @@ impl<'a> SnapshotProduceAction<'a> {
         Ok(self)
     }
 
-    fn new_manifest_output(&mut self) -> Result<OutputFile> {
+    pub fn new_manifest_writer(
+        &mut self,
+        content_type: &ManifestContentType,
+        partition_spec_id: i32,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.tx.current_table.metadata().location(),
@@ -163,10 +184,40 @@ impl<'a> SnapshotProduceAction<'a> {
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
-        self.tx
+        let output = self
+            .tx
             .current_table
             .file_io()
-            .new_output(new_manifest_path)
+            .new_output(new_manifest_path)?;
+        let partition_spec = self
+            .tx
+            .current_table
+            .metadata()
+            .partition_spec_by_id(partition_spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid partition spec id for new manifest writer",
+                )
+                .with_context("partition spec id", partition_spec_id.to_string())
+            })?
+            .as_ref()
+            .clone();
+        let builder = ManifestWriterBuilder::new(
+            output,
+            Some(self.snapshot_id),
+            self.key_metadata.clone(),
+            self.tx.current_table.metadata().current_schema().clone(),
+            partition_spec,
+        );
+        if self.tx.current_table.metadata().format_version() == FormatVersion::V1 {
+            Ok(builder.build_v1())
+        } else {
+            match content_type {
+                ManifestContentType::Data => Ok(builder.build_v2_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
+            }
+        }
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
@@ -186,25 +237,10 @@ impl<'a> SnapshotProduceAction<'a> {
                 builder.build()
             }
         });
-        let mut writer = {
-            let builder = ManifestWriterBuilder::new(
-                self.new_manifest_output()?,
-                Some(self.snapshot_id),
-                self.key_metadata.clone(),
-                self.tx.current_table.metadata().current_schema().clone(),
-                self.tx
-                    .current_table
-                    .metadata()
-                    .default_partition_spec()
-                    .as_ref()
-                    .clone(),
-            );
-            if self.tx.current_table.metadata().format_version() == FormatVersion::V1 {
-                builder.build_v1()
-            } else {
-                builder.build_v2_data()
-            }
-        };
+        let mut writer = self.new_manifest_writer(
+            &ManifestContentType::Data,
+            self.tx.current_table.metadata().default_partition_spec_id(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
@@ -228,9 +264,10 @@ impl<'a> SnapshotProduceAction<'a> {
     }
 
     // Returns a `Summary` of the current snapshot
-    fn summary<OP: SnapshotProduceOperation>(
+    fn summary<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &self,
         snapshot_produce_operation: &OP,
+        manifest_process: &MP,
     ) -> Result<Summary> {
         let mut summary_collector = SnapshotSummaryCollector::default();
         let table_metadata = self.tx.current_table.metadata_ref();
@@ -265,6 +302,10 @@ impl<'a> SnapshotProduceAction<'a> {
 
         let mut additional_properties = summary_collector.build();
         additional_properties.extend(self.snapshot_properties.clone());
+
+        // Included the summary from the snapshot produce operation and manifest process.
+        additional_properties.extend(snapshot_produce_operation.summary());
+        additional_properties.extend(manifest_process.summary());
 
         let summary = Summary {
             operation: snapshot_produce_operation.operation(),
@@ -302,7 +343,7 @@ impl<'a> SnapshotProduceAction<'a> {
         let next_seq_num = self.tx.current_table.metadata().next_sequence_number();
 
         let summary = self
-            .summary(&snapshot_produce_operation)
+            .summary(&snapshot_produce_operation, &process)
             .map_err(|err| {
                 Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
                     .with_source(err)

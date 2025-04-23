@@ -18,14 +18,20 @@
 //! This module contains transaction api.
 
 mod append;
+mod rewrite_manifest;
+pub use rewrite_manifest::{
+    CREATED_MANIFESTS_COUNT, KEPT_MANIFESTS_COUNT, PROCESSED_ENTRY_COUNT, REPLACED_MANIFESTS_COUNT,
+};
 mod snapshot;
 mod sort_order;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::mem::discriminant;
 use std::sync::Arc;
 
+use rewrite_manifest::{ClusterFunc, PredicateFunc, RewriteManifsetAction};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -159,6 +165,42 @@ impl<'a> Transaction<'a> {
         let snapshot_id = self.generate_unique_snapshot_id();
         FastAppendAction::new(
             self,
+            snapshot_id,
+            commit_uuid.unwrap_or_else(Uuid::now_v7),
+            key_metadata,
+            HashMap::new(),
+        )
+    }
+
+    /// Rewrite manifest file.
+    pub fn rewrite_manifest<T: Hash + Eq>(
+        self,
+        cluster_by_func: Option<ClusterFunc<T>>,
+        manifest_predicate: Option<PredicateFunc>,
+        snapshot_id: Option<i64>,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> Result<RewriteManifsetAction<'a, T>> {
+        let snapshot_id = if let Some(snapshot_id) = snapshot_id {
+            if self
+                .current_table
+                .metadata()
+                .snapshots()
+                .any(|s| s.snapshot_id() == snapshot_id)
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot id {} already exists", snapshot_id),
+                ));
+            }
+            snapshot_id
+        } else {
+            self.generate_unique_snapshot_id()
+        };
+        RewriteManifsetAction::new(
+            self,
+            cluster_by_func,
+            manifest_predicate,
             snapshot_id,
             commit_uuid.unwrap_or_else(Uuid::now_v7),
             key_metadata,
