@@ -25,13 +25,14 @@ use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
 
+use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::ArrowReader;
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile};
-use crate::spec::DataContentType;
+use crate::spec::{DataContentType, Schema, SchemaRef};
 use crate::{Error, ErrorKind, Result};
 
 #[allow(unused)]
@@ -164,7 +165,7 @@ impl CachingDeleteFileManager {
     ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
     ///      channel to store them in the right place in the delete file managers state.
     ///  * The results of all of these futures are awaited on in parallel with the specified
-    ///      level of concurrency and collected into a vec. We then combine all of the delete
+    ///      level of concurrency and collected into a vec. We then combine all the delete
     ///      vector maps that resulted from any positional delete or delete vector files into a
     ///      single map and persist it in the state.
     ///
@@ -206,10 +207,18 @@ impl CachingDeleteFileManager {
     pub(crate) async fn load_deletes(
         &self,
         delete_file_entries: &[FileScanTaskDeleteFile],
+        schema: SchemaRef,
     ) -> Result<()> {
         let stream_items = delete_file_entries
             .iter()
-            .map(|t| (t.clone(), self.file_io.clone(), self.state.clone()))
+            .map(|t| {
+                (
+                    t.clone(),
+                    self.file_io.clone(),
+                    self.state.clone(),
+                    schema.clone(),
+                )
+            })
             .collect::<Vec<_>>();
         // NOTE: removing the collect and just passing the iterator to futures::stream:iter
         // results in an error 'implementation of `std::ops::FnOnce` is not general enough'
@@ -217,8 +226,8 @@ impl CachingDeleteFileManager {
         let task_stream = futures::stream::iter(stream_items.into_iter());
 
         let results: Vec<ParsedDeleteFileContext> = task_stream
-            .map(move |(task, file_io, state_ref)| async {
-                Self::load_file_for_task(task, file_io, state_ref).await
+            .map(move |(task, file_io, state_ref, schema)| async {
+                Self::load_file_for_task(task, file_io, state_ref, schema).await
             })
             .map(move |ctx| Ok(async { Self::parse_file_content_for_task(ctx.await?).await }))
             .try_buffer_unordered(self.concurrency_limit_data_files)
@@ -248,6 +257,7 @@ impl CachingDeleteFileManager {
         task: FileScanTaskDeleteFile,
         file_io: FileIO,
         state: StateRef,
+        schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
         match task.file_type {
             DataContentType::PositionDeletes => Ok(DeleteFileContext::PosDels(
@@ -271,7 +281,11 @@ impl CachingDeleteFileManager {
                 };
 
                 Ok(DeleteFileContext::FreshEqDel {
-                    batch_stream: Self::parquet_to_batch_stream(&task.file_path, file_io).await?,
+                    batch_stream: Self::evolve_schema(
+                        Self::parquet_to_batch_stream(&task.file_path, file_io).await?,
+                        schema,
+                    )
+                    .await?,
                     sender,
                 })
             }
@@ -347,6 +361,30 @@ impl CachingDeleteFileManager {
         .await?
         .build()?
         .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{}", e)));
+
+        Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
+
+    /// Evolves the schema of the RecordBatches from an equality delete file
+    async fn evolve_schema(
+        record_batch_stream: ArrowRecordBatchStream,
+        target_schema: Arc<Schema>,
+    ) -> Result<ArrowRecordBatchStream> {
+        let eq_ids = target_schema
+            .as_ref()
+            .field_id_to_name_map()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut record_batch_transformer =
+            RecordBatchTransformer::build(target_schema.clone(), &eq_ids);
+
+        let record_batch_stream = record_batch_stream.map(move |record_batch| {
+            record_batch.and_then(|record_batch| {
+                record_batch_transformer.process_record_batch(record_batch)
+            })
+        });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -483,7 +521,7 @@ mod tests {
         let file_scan_tasks = setup(table_location);
 
         let result = delete_file_manager
-            .load_deletes(&file_scan_tasks[0].deletes)
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await;
 
         assert!(result.is_err_and(|e| e.kind() == ErrorKind::FeatureUnsupported));
