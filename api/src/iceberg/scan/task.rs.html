@@ -114,7 +114,11 @@
 <a href="#113" id="113">113</a>
 <a href="#114" id="114">114</a>
 <a href="#115" id="115">115</a>
-<a href="#116" id="116">116</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -214,6 +218,7 @@
             file_path: ctx.manifest_entry.file_path().to_string(),
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
+            equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
         }
     }
 }
@@ -229,5 +234,8 @@
 
     <span class="doccomment">/// partition id
     </span><span class="kw">pub </span>partition_spec_id: i32,
+
+    <span class="doccomment">/// equality ids for equality deletes (empty for positional deletes)
+    </span><span class="kw">pub </span>equality_ids: Vec&lt;i32&gt;,
 }
 </code></pre></div></section></main></body></html>
