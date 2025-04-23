@@ -201,11 +201,14 @@ impl ArrowReader {
 
         // concurrently retrieve delete files and create RecordBatchStreamBuilder
         let (_, mut record_batch_stream_builder) = try_join!(
-            delete_file_manager.load_deletes(if delete_file_support_enabled {
-                &task.deletes
-            } else {
-                &[]
-            },),
+            delete_file_manager.load_deletes(
+                if delete_file_support_enabled {
+                    &task.deletes
+                } else {
+                    &[]
+                },
+                task.schema.clone()
+            ),
             Self::create_parquet_record_batch_stream_builder(
                 &task.data_file_path,
                 file_io.clone(),
