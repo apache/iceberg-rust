@@ -452,7 +452,7 @@ impl Catalog for GlueCatalog {
 
         match glue_table_output.table() {
             None => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NotFound,
                 format!(
                     "Table object for database: {} and table: {} does not exist",
                     db_name, table_name
@@ -566,7 +566,7 @@ impl Catalog for GlueCatalog {
 
         match glue_table_output.table() {
             None => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NotFound,
                 format!(
                     "'Table' object for database: {} and table: {} does not exist",
                     src_db_name, src_table_name
