@@ -41,6 +41,7 @@ use crate::{Error, ErrorKind, Result};
 /// | Memory             | `storage-memory`  | `memory`   |
 /// | S3                 | `storage-s3`      | `s3`, `s3a`|
 /// | GCS                | `storage-gcs`     | `gs`, `gcs`|
+/// | AZBLOB             | `storage-azblob`  | `azblob`   |
 #[derive(Clone, Debug)]
 pub struct FileIO {
     builder: FileIOBuilder,
