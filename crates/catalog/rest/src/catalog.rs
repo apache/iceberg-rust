@@ -101,7 +101,6 @@ impl RestCatalogConfig {
             };
 
             let config = AwsConfig::default().from_profile().from_env();
-            println!("access_key_id {:?}", config.access_key_id);
             let loader = AwsDefaultLoader::new(self.client().unwrap_or_default(), config);
             let signer = AwsV4Signer::new(signing_name, signing_region);
             Ok(Some((loader, signer)))
@@ -644,10 +643,7 @@ impl Catalog for RestCatalog {
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let context = self.context().await?;
-        println!(
-            "table_endpoint: {:?}",
-            context.config.table_endpoint(table_ident)
-        );
+
         let request = context
             .client
             .request(Method::GET, context.config.table_endpoint(table_ident))
