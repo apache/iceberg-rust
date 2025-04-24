@@ -403,7 +403,7 @@ impl Catalog for RestCatalog {
                     deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
                 Namespace::try_from(response)
             }
-            StatusCode::NOT_FOUND => Err(Error::new(
+            StatusCode::CONFLICT => Err(Error::new(
                 ErrorKind::Unexpected,
                 "Tried to create a namespace that already exists",
             )),
