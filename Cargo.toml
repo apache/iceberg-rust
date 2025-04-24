@@ -64,8 +64,8 @@ datafusion-cli = "45"
 datafusion-sqllogictest = "45"
 derive_builder = "0.20"
 dirs = "6"
-expect-test = "1"
 enum-ordinalize = "4.3.0"
+expect-test = "1"
 faststr = "0.2.31"
 fnv = "1.0.7"
 fs-err = "3.1.0"
@@ -93,6 +93,7 @@ port_scanner = "0.1.5"
 pretty_assertions = "1.4"
 rand = "0.8.5"
 regex = "1.10.5"
+reqsign = { version = "0.16.3" }
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.10", git = "https://github.com/RoaringBitmap/roaring-rs.git" }
 rust_decimal = "1.36"

@@ -43,6 +43,7 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+reqsign = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }

@@ -28,6 +28,7 @@ use iceberg::{
     TableIdent,
 };
 use itertools::Itertools;
+use reqsign::{AwsConfig, AwsDefaultLoader, AwsV4Signer};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
@@ -84,6 +85,30 @@ impl RestCatalogConfig {
         }
     }
 
+    pub(crate) fn get_signer(&self) -> Result<Option<(AwsDefaultLoader, AwsV4Signer)>> {
+        if let Some("true") = self.props.get("rest.sigv4-enabled").map(|s| s.as_str()) {
+            let Some(signing_region) = self.props.get("rest.signing-region") else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "rest.signing-region is not set when rest.sigv4-enabled is true",
+                ));
+            };
+            let Some(signing_name) = self.props.get("rest.signing-name") else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "rest.signing-name is not set when rest.sigv4-enabled is true",
+                ));
+            };
+
+            let config = AwsConfig::default().from_profile().from_env();
+            println!("access_key_id {:?}", config.access_key_id);
+            let loader = AwsDefaultLoader::new(self.client().unwrap_or_default(), config);
+            let signer = AwsV4Signer::new(signing_name, signing_region);
+            Ok(Some((loader, signer)))
+        } else {
+            Ok(None)
+        }
+    }
     fn namespaces_endpoint(&self) -> String {
         self.url_prefixed(&["namespaces"])
     }
@@ -305,6 +330,13 @@ impl RestCatalog {
             Some(_) => None,
             None => None,
         };
+
+        if let Some(warehouse_path) = warehouse_path {
+            if warehouse_path.starts_with("arn:aws:") {
+                let file_io = FileIOBuilder::new("s3").with_props(&props).build()?;
+                return Ok(file_io);
+            }
+        }
 
         let file_io = match warehouse_path.or(metadata_location) {
             Some(url) => FileIO::from_path(url)?.with_props(props).build()?,
@@ -612,7 +644,10 @@ impl Catalog for RestCatalog {
     /// provided locally to the `RestCatalog` will take precedence.
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let context = self.context().await?;
-
+        println!(
+            "table_endpoint: {:?}",
+            context.config.table_endpoint(table_ident)
+        );
         let request = context
             .client
             .request(Method::GET, context.config.table_endpoint(table_ident))
