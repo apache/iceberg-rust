@@ -1,0 +1,16 @@
+[package]
+name = "iceberg-catalog-loader"
+edition = { workspace = true }
+homepage = { workspace = true }
+rust-version = { workspace = true }
+version = { workspace = true }
+
+categories = ["database"]
+description = "Apache Iceberg Catalog Loader API"
+keywords = ["iceberg", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+iceberg = { workspace = true }
+iceberg-catalog-rest = {workspace = true}
