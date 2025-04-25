@@ -31,7 +31,7 @@ pub struct Schedule {
 pub struct Step {
     /// Engine name
     engine: String,
-    /// Stl file path
+    /// Slt file path
     slt: String,
 }
 
@@ -55,9 +55,7 @@ impl Schedule {
                 .get_mut(&step.engine)
                 .ok_or_else(|| anyhow::anyhow!("Engine {} not found", step.engine))?;
 
-            engine
-                .run_slt_file(&PathBuf::from(step.slt.clone()))
-                .await?;
+            engine.run_slt_file(&PathBuf::from(&step.slt)).await?;
             tracing::info!(
                 "Step {}/{}, engine {}, slt file path: {} finished",
                 idx + 1,
