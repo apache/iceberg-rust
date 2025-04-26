@@ -2663,7 +2663,7 @@
                     deserialize_catalog_response::&lt;NamespaceSerde&gt;(http_response).<span class="kw">await</span><span class="question-mark">?</span>;
                 Namespace::try_from(response)
             }
-            StatusCode::NOT_FOUND =&gt; <span class="prelude-val">Err</span>(Error::new(
+            StatusCode::CONFLICT =&gt; <span class="prelude-val">Err</span>(Error::new(
                 ErrorKind::Unexpected,
                 <span class="string">"Tried to create a namespace that already exists"</span>,
             )),
