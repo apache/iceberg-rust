@@ -107,6 +107,18 @@ For MacOS users, you can install [OrbStack as a docker alternative](docs/contrib
 
 For podman, refer to [Using Podman instead of Docker](docs/contributing/podman.md)
 
+#### Install precommit hook
+
+We're configured precommit hook which does formating and linting to catch common mistakes and improve rust code quality.
+
+To install,
+```sh
+pip install pre-commit
+pre-commit install
+```
+
+This will install pre-commit into the current environment, and enable pre-commit checks every time you commit new code changes with git. To temporarily skip pre-commit checks, use the `-n` or `--no-verify` flag when committing.
+
 ## Build
 
 * To compile the project: `make build`
