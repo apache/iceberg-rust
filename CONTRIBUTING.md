@@ -109,7 +109,7 @@ For podman, refer to [Using Podman instead of Docker](docs/contributing/podman.m
 
 #### Install precommit hook
 
-We're configured precommit hook which does formating and linting to catch common mistakes and improve rust code quality.
+We're configured precommit hook which does formatting and linting to catch common mistakes and improve rust code quality.
 
 To install,
 ```sh
