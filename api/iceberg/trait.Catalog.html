@@ -144,7 +144,7 @@
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="type" href="type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
-    'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Drop a namespace from the catalog.</p>
+    'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Drop a namespace from the catalog, or returns error if it doesn’t exist.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="tymethod.list_tables" class="method"><a class="src rightside" href="../src/iceberg/catalog/mod.rs.html#74">Source</a><h4 class="code-header">fn <a href="#tymethod.list_tables" class="fn">list_tables</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 self,
     namespace: &amp;'life1 <a class="struct" href="struct.NamespaceIdent.html" title="struct iceberg::NamespaceIdent">NamespaceIdent</a>,
@@ -173,7 +173,7 @@
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="type" href="type.Result.html" title="type iceberg::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
-    'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Drop a table from the catalog.</p>
+    'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Drop a table from the catalog, or returns error if it doesn’t exist.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="tymethod.table_exists" class="method"><a class="src rightside" href="../src/iceberg/catalog/mod.rs.html#90">Source</a><h4 class="code-header">fn <a href="#tymethod.table_exists" class="fn">table_exists</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 self,
     table: &amp;'life1 <a class="struct" href="struct.TableIdent.html" title="struct iceberg::TableIdent">TableIdent</a>,

@@ -2163,7 +2163,7 @@
         properties: HashMap&lt;String, String&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 
-    <span class="doccomment">/// Drop a namespace from the catalog.
+    <span class="doccomment">/// Drop a namespace from the catalog, or returns error if it doesn't exist.
     </span><span class="kw">async fn </span>drop_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 
     <span class="doccomment">/// List tables from namespace.
@@ -2179,7 +2179,7 @@
     <span class="doccomment">/// Load table from the catalog.
     </span><span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt;;
 
-    <span class="doccomment">/// Drop a table from the catalog.
+    <span class="doccomment">/// Drop a table from the catalog, or returns error if it doesn't exist.
     </span><span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 
     <span class="doccomment">/// Check if a table exists in the catalog.
