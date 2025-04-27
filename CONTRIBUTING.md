@@ -115,6 +115,9 @@ To install,
 ```sh
 pip install pre-commit
 pre-commit install
+
+# Install necessary tools for precommit hook.
+make install-taplo-cli
 ```
 
 This will install pre-commit into the current environment, and enable pre-commit checks every time you commit new code changes with git. To temporarily skip pre-commit checks, use the `-n` or `--no-verify` flag when committing.

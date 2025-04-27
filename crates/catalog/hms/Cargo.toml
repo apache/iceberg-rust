@@ -49,10 +49,10 @@ volo-thrift = { workspace = true }
 # They can be removed when the direct dependencies are updated.
 
 # transitive dependencies of pilota/volo-thrift
-volo = { workspace = true }
 faststr = { workspace = true }
 linkedbytes = { workspace = true }
 metainfo = { workspace = true }
+volo = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
