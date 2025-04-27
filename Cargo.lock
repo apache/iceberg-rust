@@ -5472,7 +5472,7 @@ checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 [[package]]
 name = "roaring"
 version = "0.10.12"
-source = "git+https://github.com/RoaringBitmap/roaring-rs.git#9496afe1e6ad93a8875f901c2579761f7acdc5b0"
+source = "git+https://github.com/RoaringBitmap/roaring-rs.git#a0155299105f32b65ddf3c6d70151bb0edbe9014"
 dependencies = [
  "bytemuck",
  "byteorder",
