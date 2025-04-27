@@ -598,7 +598,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "AlreadyExists => Cannot create namespace {:?}. Namespace already exists.",
+                "NamespaceAlreadyExists => Cannot create namespace {:?}. Namespace already exists.",
                 &namespace_ident
             )
         );
@@ -667,7 +667,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 NamespaceIdent::new("a".into())
             )
         );
@@ -692,7 +692,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 NamespaceIdent::from_strs(vec!["a", "b"]).unwrap()
             )
         );
@@ -773,7 +773,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             )
         )
@@ -860,7 +860,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             )
         )
@@ -937,7 +937,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             )
         )
@@ -957,7 +957,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             )
         )
@@ -1257,7 +1257,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "AlreadyExists => Cannot create table {:?}. Table already exists.",
+                "TableAlreadyExists => Cannot create table {:?}. Table already exists.",
                 &table_ident
             )
         );
@@ -1359,7 +1359,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             ),
         );
@@ -1409,7 +1409,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             ),
         );
@@ -1429,7 +1429,10 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("NotFound => No such table: {:?}", non_existent_table_ident),
+            format!(
+                "TableNotFound => No such table: {:?}",
+                non_existent_table_ident
+            ),
         );
     }
 
@@ -1491,7 +1494,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_namespace_ident
             ),
         );
@@ -1606,7 +1609,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_src_namespace_ident
             ),
         );
@@ -1630,7 +1633,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "NotFound => No such namespace: {:?}",
+                "NamespaceNotFound => No such namespace: {:?}",
                 non_existent_dst_namespace_ident
             ),
         );
@@ -1650,7 +1653,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string(),
-            format!("NotFound => No such table: {:?}", src_table_ident),
+            format!("TableNotFound => No such table: {:?}", src_table_ident),
         );
     }
 
@@ -1670,7 +1673,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "AlreadyExists => Cannot create table {:? }. Table already exists.",
+                "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
         );
