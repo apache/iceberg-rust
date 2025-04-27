@@ -265,7 +265,10 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
-<a href="#267" id="267">267</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -517,19 +520,22 @@
 }
 
 <span class="doccomment">/// Deserializes a unexpected catalog response into an error.
-///
-/// TODO: Eventually, this function should return an error response that is custom to the error
-/// codes that all endpoints share (400, 404, etc.).
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>deserialize_unexpected_catalog_error(response: Response) -&gt; Error {
-    <span class="kw">let </span>(status, headers) = (response.status(), response.headers().clone());
+    <span class="kw">let </span>err = Error::new(
+        ErrorKind::Unexpected,
+        <span class="string">"Received response with unexpected status code"</span>,
+    )
+    .with_context(<span class="string">"status"</span>, response.status().to_string())
+    .with_context(<span class="string">"headers"</span>, <span class="macro">format!</span>(<span class="string">"{:?}"</span>, response.headers()));
+
     <span class="kw">let </span>bytes = <span class="kw">match </span>response.bytes().<span class="kw">await </span>{
         <span class="prelude-val">Ok</span>(bytes) =&gt; bytes,
         <span class="prelude-val">Err</span>(err) =&gt; <span class="kw">return </span>err.into(),
     };
 
-    Error::new(ErrorKind::Unexpected, <span class="string">"Received unexpected response"</span>)
-        .with_context(<span class="string">"status"</span>, status.to_string())
-        .with_context(<span class="string">"headers"</span>, <span class="macro">format!</span>(<span class="string">"{:?}"</span>, headers))
-        .with_context(<span class="string">"json"</span>, String::from_utf8_lossy(<span class="kw-2">&amp;</span>bytes))
+    <span class="kw">if </span>bytes.is_empty() {
+        <span class="kw">return </span>err;
+    }
+    err.with_context(<span class="string">"json"</span>, String::from_utf8_lossy(<span class="kw-2">&amp;</span>bytes))
 }
 </code></pre></div></section></main></body></html>
