@@ -18,8 +18,9 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
 use iceberg::{Error, ErrorKind, Result};
+use reqsign::{AwsDefaultLoader, AwsV4Signer};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
@@ -43,6 +44,8 @@ pub(crate) struct HttpClient {
     extra_headers: HeaderMap,
     /// Extra oauth parameters to be added to each authentication request.
     extra_oauth_params: HashMap<String, String>,
+
+    signer: Option<(AwsDefaultLoader, AwsV4Signer)>,
 }
 
 impl Debug for HttpClient {
@@ -65,6 +68,7 @@ impl HttpClient {
             credential: cfg.credential(),
             extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
+            signer: cfg.get_signer()?,
         })
     }
 
@@ -88,6 +92,7 @@ impl HttpClient {
             extra_oauth_params: (!cfg.extra_oauth_params().is_empty())
                 .then(|| cfg.extra_oauth_params())
                 .unwrap_or(self.extra_oauth_params),
+            signer: cfg.get_signer()?,
         })
     }
 
@@ -220,6 +225,39 @@ impl HttpClient {
     /// Executes the given `Request` and returns a `Response`.
     pub async fn execute(&self, mut request: Request) -> Result<Response> {
         request.headers_mut().extend(self.extra_headers.clone());
+
+        if let Some((loader, signer)) = &self.signer {
+            match loader.load().await {
+                Ok(Some(credential)) => {
+                    const EMPTY_STRING_SHA256: &str =
+                        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+                    request.headers_mut().insert(
+                        "x-amz-content-sha256",
+                        HeaderValue::from_str(EMPTY_STRING_SHA256).unwrap(),
+                    );
+                    if let Err(e) = signer.sign(&mut request, &credential) {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            "Failed to sign request for sigv4 signing",
+                        )
+                        .with_source(e));
+                    }
+                }
+                Ok(None) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "Credential not found for sigv4 signing",
+                    ));
+                }
+                Err(e) => {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to load credential for sigv4 signing",
+                    )
+                    .with_source(e));
+                }
+            }
+        }
         Ok(self.client.execute(request).await?)
     }
 
@@ -255,6 +293,7 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 /// codes that all endpoints share (400, 404, etc.).
 pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
     let (status, headers) = (response.status(), response.headers().clone());
+    let url = response.url().to_string();
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => return err.into(),
@@ -264,4 +303,5 @@ pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> 
         .with_context("status", status.to_string())
         .with_context("headers", format!("{:?}", headers))
         .with_context("json", String::from_utf8_lossy(&bytes))
+        .with_context("url", url)
 }
