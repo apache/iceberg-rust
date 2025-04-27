@@ -2279,7 +2279,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; Cannot create namespace {:?}. Namespace already exists."</span>,
+                <span class="string">"NamespaceAlreadyExists =&gt; Cannot create namespace {:?}. Namespace already exists."</span>,
                 <span class="kw-2">&amp;</span>namespace_ident
             )
         );
@@ -2348,7 +2348,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 NamespaceIdent::new(<span class="string">"a"</span>.into())
             )
         );
@@ -2373,7 +2373,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 NamespaceIdent::from_strs(<span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"b"</span>]).unwrap()
             )
         );
@@ -2454,7 +2454,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             )
         )
@@ -2541,7 +2541,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             )
         )
@@ -2618,7 +2618,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             )
         )
@@ -2638,7 +2638,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             )
         )
@@ -2938,7 +2938,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; Cannot create table {:?}. Table already exists."</span>,
+                <span class="string">"TableAlreadyExists =&gt; Cannot create table {:?}. Table already exists."</span>,
                 <span class="kw-2">&amp;</span>table_ident
             )
         );
@@ -3040,7 +3040,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             ),
         );
@@ -3090,7 +3090,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             ),
         );
@@ -3111,7 +3111,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such table: {:?}"</span>,
+                <span class="string">"TableNotFound =&gt; No such table: {:?}"</span>,
                 non_existent_table_ident
             ),
         );
@@ -3175,7 +3175,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_namespace_ident
             ),
         );
@@ -3290,7 +3290,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_src_namespace_ident
             ),
         );
@@ -3314,7 +3314,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; No such namespace: {:?}"</span>,
+                <span class="string">"NamespaceNotFound =&gt; No such namespace: {:?}"</span>,
                 non_existent_dst_namespace_ident
             ),
         );
@@ -3334,7 +3334,7 @@
                 .<span class="kw">await
                 </span>.unwrap_err()
                 .to_string(),
-            <span class="macro">format!</span>(<span class="string">"Unexpected =&gt; No such table: {:?}"</span>, src_table_ident),
+            <span class="macro">format!</span>(<span class="string">"TableNotFound =&gt; No such table: {:?}"</span>, src_table_ident),
         );
     }
 
@@ -3354,7 +3354,7 @@
                 </span>.unwrap_err()
                 .to_string(),
             <span class="macro">format!</span>(
-                <span class="string">"Unexpected =&gt; Cannot create table {:? }. Table already exists."</span>,
+                <span class="string">"TableAlreadyExists =&gt; Cannot create table {:? }. Table already exists."</span>,
                 <span class="kw-2">&amp;</span>dst_table_ident
             ),
         );

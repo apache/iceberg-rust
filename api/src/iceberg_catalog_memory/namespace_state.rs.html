@@ -331,21 +331,21 @@
 
 <span class="kw">fn </span>no_such_namespace_err&lt;T&gt;(namespace_ident: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;T&gt; {
     <span class="prelude-val">Err</span>(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::NamespaceNotFound,
         <span class="macro">format!</span>(<span class="string">"No such namespace: {:?}"</span>, namespace_ident),
     ))
 }
 
 <span class="kw">fn </span>no_such_table_err&lt;T&gt;(table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;T&gt; {
     <span class="prelude-val">Err</span>(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableNotFound,
         <span class="macro">format!</span>(<span class="string">"No such table: {:?}"</span>, table_ident),
     ))
 }
 
 <span class="kw">fn </span>namespace_already_exists_err&lt;T&gt;(namespace_ident: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;T&gt; {
     <span class="prelude-val">Err</span>(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::NamespaceAlreadyExists,
         <span class="macro">format!</span>(
             <span class="string">"Cannot create namespace {:?}. Namespace already exists."</span>,
             namespace_ident
@@ -355,7 +355,7 @@
 
 <span class="kw">fn </span>table_already_exists_err&lt;T&gt;(table_ident: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;T&gt; {
     <span class="prelude-val">Err</span>(Error::new(
-        ErrorKind::Unexpected,
+        ErrorKind::TableAlreadyExists,
         <span class="macro">format!</span>(
             <span class="string">"Cannot create table {:?}. Table already exists."</span>,
             table_ident

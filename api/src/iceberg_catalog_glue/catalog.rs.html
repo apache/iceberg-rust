@@ -1087,7 +1087,7 @@
 
         <span class="kw">match </span>glue_table_output.table() {
             <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 <span class="macro">format!</span>(
                     <span class="string">"Table object for database: {} and table: {} does not exist"</span>,
                     db_name, table_name
@@ -1201,7 +1201,7 @@
 
         <span class="kw">match </span>glue_table_output.table() {
             <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 <span class="macro">format!</span>(
                     <span class="string">"'Table' object for database: {} and table: {} does not exist"</span>,
                     src_db_name, src_table_name
