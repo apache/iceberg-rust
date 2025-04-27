@@ -41,15 +41,17 @@ pub enum ErrorKind {
     /// The table could be invalid or corrupted.
     DataInvalid,
 
-    /// Iceberg entity already exists.
-    ///
-    /// This error is returned when we try to create an entity (i.e. namespace or table) that already exists.
-    AlreadyExists,
+    /// Iceberg namespace already exists at creation.
+    NamespaceAlreadyExists,
 
-    /// Iceberg entity not found.
-    ///
-    /// This error is returned when we try to access an entity (i.e. namespace or table) that does not exist.
-    NotFound,
+    /// Iceberg table already exists at creation.
+    TableAlreadyExists,
+
+    /// Iceberg namespace already exists at creation.
+    NamespaceNotFound,
+
+    /// Iceberg table already exists at creation.
+    TableNotFound,
 
     /// Iceberg feature is not supported.
     ///
@@ -70,8 +72,10 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
-            ErrorKind::AlreadyExists => "AlreadyExists",
-            ErrorKind::NotFound => "NotFound",
+            ErrorKind::TableAlreadyExists => "TableAlreadyExists",
+            ErrorKind::TableNotFound => "TableNotFound",
+            ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
+            ErrorKind::NamespaceNotFound => "NamespaceNotFound",
         }
     }
 }
