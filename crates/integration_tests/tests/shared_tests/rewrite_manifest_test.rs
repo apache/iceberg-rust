@@ -65,7 +65,11 @@ async fn generate_data_file(table: &Table, name: &str) -> Vec<DataFile> {
         location_generator.clone(),
         file_name_generator.clone(),
     );
-    let data_file_writer_builder = DataFileWriterBuilder::new(parquet_writer_builder, None, 1);
+    let data_file_writer_builder = DataFileWriterBuilder::new(
+        parquet_writer_builder,
+        None,
+        table.metadata().default_partition_spec_id(),
+    );
     let mut data_file_writer = data_file_writer_builder.build().await.unwrap();
     let col1 = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
     let col2 = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
@@ -256,7 +260,7 @@ async fn test_rewrite_manifest_append_directly_combine() {
         .await
         .unwrap();
 
-    // Append data file twice to generate two manifset file
+    // Append data file twice to generate two manifest file
     for i in 0..2 {
         let data_file = generate_data_file(&table, &i.to_string()).await;
         let tx = Transaction::new(&table);
@@ -482,7 +486,7 @@ async fn test_rewrite_manifest_filter() {
     let file_io_clone = table.file_io().clone();
     let rewrite_action = tx
         .rewrite_manifest(
-            Some(Box::new(|data_file| data_file.file_path().to_string())),
+            Some(Box::new(|_data_file| "file".to_string())),
             Some(Box::new(move |entry| {
                 let entry_clone = entry.clone();
                 let file_io = file_io_clone.clone();
@@ -524,7 +528,7 @@ async fn test_rewrite_manifest_filter() {
             let entry = manifest.entries()[0].clone();
             assert_eq!(entry.file_path(), expect_entry3[0].file_path());
             assert_eq!(entry.snapshot_id(), expect_entry3[0].snapshot_id());
-            assert_eq!(entry.status(), ManifestStatus::Existing);
+            assert_eq!(entry.status(), ManifestStatus::Added);
         } else {
             for entry in manifest.entries() {
                 expect_entries
@@ -628,7 +632,7 @@ async fn test_basic_manifest_replacement() {
     let mut rewrite_manifest = Transaction::new(&table)
         .rewrite_manifest::<()>(None, None, None, None, vec![])
         .unwrap();
-    rewrite_manifest.delete_manifset(delete_manifest).unwrap();
+    rewrite_manifest.delete_manifest(delete_manifest).unwrap();
     rewrite_manifest.add_manifest(added_manifest1).unwrap();
     rewrite_manifest.add_manifest(added_manifest2).unwrap();
     let table = rewrite_manifest

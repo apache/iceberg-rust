@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::mem;
 use std::ops::RangeFrom;
 
 use uuid::Uuid;
@@ -221,8 +222,10 @@ impl<'a> SnapshotProduceAction<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
+    async fn write_added_manifest(
+        &mut self,
+        added_data_files: Vec<DataFile>,
+    ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
@@ -252,13 +255,15 @@ impl<'a> SnapshotProduceAction<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        let added_manifest = self.write_added_manifest().await?;
-        let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
+        let mut manifest_files = vec![];
+        if !self.added_data_files.is_empty() {
+            let added_data_files = mem::take(&mut self.added_data_files);
+            let added_manifest = self.write_added_manifest(added_data_files).await?;
+            manifest_files.push(added_manifest);
+        }
         // # TODO
         // Support process delete entries.
-
-        let mut manifest_files = vec![added_manifest];
-        manifest_files.extend(existing_manifests);
+        manifest_files.extend(snapshot_produce_operation.existing_manifest(self).await?);
         let manifest_files = manifest_process.process_manifeset(manifest_files);
         Ok(manifest_files)
     }
@@ -347,8 +352,7 @@ impl<'a> SnapshotProduceAction<'a> {
             .map_err(|err| {
                 Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.")
                     .with_source(err)
-            })
-            .unwrap();
+            })?;
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
 

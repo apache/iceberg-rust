@@ -31,7 +31,7 @@ use std::hash::Hash;
 use std::mem::discriminant;
 use std::sync::Arc;
 
-use rewrite_manifest::{ClusterFunc, PredicateFunc, RewriteManifsetAction};
+use rewrite_manifest::{ClusterFunc, PredicateFunc, RewriteManifestAction};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -180,7 +180,7 @@ impl<'a> Transaction<'a> {
         snapshot_id: Option<i64>,
         commit_uuid: Option<Uuid>,
         key_metadata: Vec<u8>,
-    ) -> Result<RewriteManifsetAction<'a, T>> {
+    ) -> Result<RewriteManifestAction<'a, T>> {
         let snapshot_id = if let Some(snapshot_id) = snapshot_id {
             if self
                 .current_table
@@ -197,7 +197,7 @@ impl<'a> Transaction<'a> {
         } else {
             self.generate_unique_snapshot_id()
         };
-        RewriteManifsetAction::new(
+        RewriteManifestAction::new(
             self,
             cluster_by_func,
             manifest_predicate,

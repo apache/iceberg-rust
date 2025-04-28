@@ -45,10 +45,10 @@ pub type ClusterFunc<T> = Box<dyn Fn(&DataFile) -> T>;
 pub type PredicateFunc = Box<dyn Fn(&ManifestFile) -> Pin<Box<dyn Future<Output = bool> + Send>>>;
 
 /// Action used for rewriting manifests for a table.
-pub struct RewriteManifsetAction<'a, T> {
+pub struct RewriteManifestAction<'a, T> {
     cluster_by_func: Option<ClusterFunc<T>>,
-    manifset_predicate: Option<PredicateFunc>,
-    manifset_writers: HashMap<(T, i32), ManifestWriter>,
+    manifest_predicate: Option<PredicateFunc>,
+    manifest_writers: HashMap<(T, i32), ManifestWriter>,
 
     // Manifest file that user added to the snapshot
     added_manifests: Vec<ManifestFile>,
@@ -68,7 +68,7 @@ pub struct RewriteManifsetAction<'a, T> {
     process_entry_count: usize,
 }
 
-impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
+impl<'a, T: Hash + Eq> RewriteManifestAction<'a, T> {
     pub(crate) fn new(
         tx: Transaction<'a>,
         cluster_by_func: Option<ClusterFunc<T>>,
@@ -80,8 +80,8 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
     ) -> Result<Self> {
         Ok(Self {
             cluster_by_func,
-            manifset_predicate: manifest_predicate,
-            manifset_writers: HashMap::new(),
+            manifest_predicate,
+            manifest_writers: HashMap::new(),
             added_manifests: vec![],
             deleted_manifests: vec![],
             new_manifests: vec![],
@@ -98,7 +98,7 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
         })
     }
 
-    /// Add the manifset file for new snapshot
+    /// Add the manifest file for new snapshot
     pub fn add_manifest(&mut self, manifest: ManifestFile) -> Result<()> {
         if manifest.has_added_files() {
             return Err(Error::new(
@@ -139,9 +139,9 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
         Ok(())
     }
 
-    /// Delete the manifset file from snapshot
-    pub fn delete_manifset(&mut self, manifset: ManifestFile) -> Result<()> {
-        self.deleted_manifests.push(manifset);
+    /// Delete the manifest file from snapshot
+    pub fn delete_manifest(&mut self, manifest: ManifestFile) -> Result<()> {
+        self.deleted_manifests.push(manifest);
         Ok(())
     }
 
@@ -152,7 +152,7 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
     #[inline]
     async fn if_rewrite(&self, manifest: &ManifestFile) -> bool {
         // Always rewrite if not predicate is provided
-        if let Some(predicate) = self.manifset_predicate.as_ref() {
+        if let Some(predicate) = self.manifest_predicate.as_ref() {
             predicate(manifest).await
         } else {
             true
@@ -174,8 +174,6 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
                     .load_manifest(self.snapshot_produce_action.tx.current_table.file_io())
                     .await?
                     .into_parts();
-                // # TODO
-                // If we ignore delete entry here, how to clean the file?
                 for entry in manifest_entries.into_iter().filter(|e| e.is_alive()) {
                     let key = (
                         self.cluster_by_func
@@ -185,7 +183,7 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
                         ),
                         manifest.partition_spec_id,
                     );
-                    match self.manifset_writers.entry(key) {
+                    match self.manifest_writers.entry(key) {
                         Entry::Occupied(mut e) => {
                             // # TODO
                             // Close when file reach target size and reset the writer
@@ -205,7 +203,7 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
             }
         }
         // write all manifest files
-        for (_, writer) in self.manifset_writers.drain() {
+        for (_, writer) in self.manifest_writers.drain() {
             let manifest_file = writer.write_manifest_file().await?;
             self.new_manifests.push(manifest_file);
         }
@@ -349,7 +347,7 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
 
         self.snapshot_produce_action
             .apply(
-                RewriteManifsetActionOperation {
+                RewriteManifestActionOperation {
                     existing_manifests,
                     summary,
                 },
@@ -359,12 +357,12 @@ impl<'a, T: Hash + Eq> RewriteManifsetAction<'a, T> {
     }
 }
 
-struct RewriteManifsetActionOperation {
+struct RewriteManifestActionOperation {
     existing_manifests: Vec<ManifestFile>,
     summary: HashMap<String, String>,
 }
 
-impl SnapshotProduceOperation for RewriteManifsetActionOperation {
+impl SnapshotProduceOperation for RewriteManifestActionOperation {
     fn operation(&self) -> Operation {
         Operation::Replace
     }
