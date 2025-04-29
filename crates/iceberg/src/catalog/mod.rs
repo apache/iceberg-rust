@@ -68,6 +68,10 @@ pub trait Catalog: Debug + Sync + Send {
     ) -> Result<()>;
 
     /// Drop a namespace from the catalog, or returns error if it doesn't exist.
+    ///
+    /// If a parent namespace gets dropped, all its children namespaces will be dropped as well.
+    /// This function doesn't provide transaction guarantee, which means it's possible to have parent namespace deleted with children namespaces still left.
+    /// This function is idempotent, and could be retried infinitely.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()>;
 
     /// List tables from namespace.

@@ -878,6 +878,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_drop_parent_namespace_also_drop_children() {
+        let catalog = new_memory_catalog();
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let child_namespace_ident =
+            NamespaceIdent::from_vec(vec!["abc".to_string(), "def".to_string()]).unwrap();
+        create_namespace(&catalog, &child_namespace_ident).await;
+
+        catalog.drop_namespace(&namespace_ident).await.unwrap();
+
+        assert!(!catalog.namespace_exists(&namespace_ident).await.unwrap());
+        assert!(!catalog
+            .namespace_exists(&child_namespace_ident)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn test_drop_nested_namespace() {
         let catalog = new_memory_catalog();
         let namespace_ident_a = NamespaceIdent::new("a".into());
