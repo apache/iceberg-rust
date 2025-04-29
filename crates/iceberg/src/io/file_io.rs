@@ -95,9 +95,14 @@ impl FileIO {
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
-    pub async fn remove_all(&self, path: impl AsRef<str>) -> Result<()> {
+    pub async fn remove_dir_all(&self, path: impl AsRef<str>) -> Result<()> {
         let (op, relative_path) = self.inner.create_operator(&path)?;
-        Ok(op.remove_all(relative_path).await?)
+        let path = if relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        Ok(op.remove_all(&path).await?)
     }
 
     /// Check file exists.
@@ -441,7 +446,7 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(file_io.exists(&a_path).await.unwrap());
 
-        file_io.remove_all(&sub_dir_path).await.unwrap();
+        file_io.remove_dir_all(&sub_dir_path).await.unwrap();
         assert!(!file_io.exists(&b_path).await.unwrap());
         assert!(!file_io.exists(&c_path).await.unwrap());
         assert!(file_io.exists(&a_path).await.unwrap());
@@ -460,7 +465,7 @@ mod tests {
         let file_io = create_local_file_io();
         assert!(!file_io.exists(&full_path).await.unwrap());
         assert!(file_io.delete(&full_path).await.is_ok());
-        assert!(file_io.remove_all(&full_path).await.is_ok());
+        assert!(file_io.remove_dir_all(&full_path).await.is_ok());
     }
 
     #[tokio::test]
