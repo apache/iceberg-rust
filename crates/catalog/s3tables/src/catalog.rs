@@ -577,6 +577,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_drop_parent_namespace_also_drop_children() {
+        let catalog = match load_s3tables_catalog_from_env().await {
+            Ok(Some(catalog)) => catalog,
+            Ok(None) => return,
+            Err(e) => panic!("Error loading catalog: {}", e),
+        };
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        catalog
+            .create_namespace(&namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+
+        let child_namespace_ident =
+            NamespaceIdent::from_vec(vec!["abc".to_string(), "def".to_string()]).unwrap();
+        catalog
+            .create_namespace(&child_namespace_ident, HashMap::new())
+            .await
+            .unwrap();
+
+        catalog.drop_namespace(&namespace_ident).await.unwrap();
+
+        assert!(!catalog.namespace_exists(&namespace_ident).await.unwrap());
+        assert!(!catalog
+            .namespace_exists(&child_namespace_ident)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn test_s3tables_create_delete_table() {
         let catalog = match load_s3tables_catalog_from_env().await {
             Ok(Some(catalog)) => catalog,
