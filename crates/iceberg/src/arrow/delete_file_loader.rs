@@ -16,99 +16,56 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, OnceLock, RwLock};
-use std::task::{Context, Poll};
+use std::sync::Arc;
 
 use futures::channel::oneshot;
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
+use tokio::sync::oneshot::{channel, Receiver};
 
+use super::delete_filter::{DeleteFilter, EqDelFuture};
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::ArrowReader;
 use crate::delete_vector::DeleteVector;
-use crate::expr::Predicate::AlwaysTrue;
-use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::expr::Predicate;
 use crate::io::FileIO;
-use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskDeleteFile};
+use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, Schema, SchemaRef};
 use crate::{Error, ErrorKind, Result};
 
 #[allow(unused)]
-pub trait DeleteFileManager {
+pub trait DeleteFileLoader {
     /// Read the delete file referred to in the task
     ///
-    /// Returns the raw contents of the delete file as a RecordBatch stream
-    fn read_delete_file(task: &FileScanTaskDeleteFile) -> Result<ArrowRecordBatchStream>;
+    /// Returns the contents of the delete file as a RecordBatch stream. Applies schema evolution.
+    async fn read_delete_file(
+        &self,
+        task: &FileScanTaskDeleteFile,
+        schema: SchemaRef,
+    ) -> Result<ArrowRecordBatchStream>;
 }
 
 #[allow(unused)]
 #[derive(Clone, Debug)]
-pub(crate) struct CachingDeleteFileManager {
+pub(crate) struct CachingDeleteFileLoader {
     file_io: FileIO,
     concurrency_limit_data_files: usize,
-    state: Arc<RwLock<DeleteFileManagerState>>,
+    del_filter: DeleteFilter,
 }
 
-impl DeleteFileManager for CachingDeleteFileManager {
-    fn read_delete_file(_task: &FileScanTaskDeleteFile) -> Result<ArrowRecordBatchStream> {
-        // TODO, implementation in https://github.com/apache/iceberg-rust/pull/982
+impl DeleteFileLoader for CachingDeleteFileLoader {
+    async fn read_delete_file(
+        &self,
+        task: &FileScanTaskDeleteFile,
+        schema: SchemaRef,
+    ) -> Result<ArrowRecordBatchStream> {
+        let raw_batch_stream =
+            CachingDeleteFileLoader::parquet_to_batch_stream(&task.file_path, self.file_io.clone())
+                .await?;
 
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Reading delete files is not yet supported",
-        ))
+        Self::evolve_schema(raw_batch_stream, schema).await
     }
 }
-// Equality deletes may apply to more than one DataFile in a scan, and so
-// the same equality delete file may be present in more than one invocation of
-// DeleteFileManager::load_deletes in the same scan. We want to deduplicate these
-// to avoid having to load them twice, so we immediately store cloneable futures in the
-// state that can be awaited upon to get te EQ deletes. That way we can check to see if
-// a load of each Eq delete file is already in progress and avoid starting another one.
-#[derive(Debug, Clone)]
-struct EqDelFuture {
-    result: OnceLock<Predicate>,
-}
-
-impl EqDelFuture {
-    pub fn new() -> (oneshot::Sender<Predicate>, Self) {
-        let (tx, rx) = oneshot::channel();
-        let result = OnceLock::new();
-
-        crate::runtime::spawn({
-            let result = result.clone();
-            async move { result.set(rx.await.unwrap()) }
-        });
-
-        (tx, Self { result })
-    }
-}
-
-impl Future for EqDelFuture {
-    type Output = Predicate;
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.result.get() {
-            None => Poll::Pending,
-            Some(predicate) => Poll::Ready(predicate.clone()),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct DeleteFileManagerState {
-    // delete vectors and positional deletes get merged when loaded into a single delete vector
-    // per data file
-    delete_vectors: HashMap<String, Arc<RwLock<DeleteVector>>>,
-
-    // equality delete files are parsed into unbound `Predicate`s. We store them here as
-    // cloneable futures (see note below)
-    equality_deletes: HashMap<String, EqDelFuture>,
-}
-
-type StateRef = Arc<RwLock<DeleteFileManagerState>>;
 
 // Intermediate context during processing of a delete file task.
 enum DeleteFileContext {
@@ -130,12 +87,12 @@ enum ParsedDeleteFileContext {
 }
 
 #[allow(unused_variables)]
-impl CachingDeleteFileManager {
+impl CachingDeleteFileLoader {
     pub(crate) fn new(file_io: FileIO, concurrency_limit_data_files: usize) -> Self {
-        CachingDeleteFileManager {
+        CachingDeleteFileLoader {
             file_io,
             concurrency_limit_data_files,
-            state: Arc::new(Default::default()),
+            del_filter: DeleteFilter::default(),
         }
     }
 
@@ -169,7 +126,7 @@ impl CachingDeleteFileManager {
     ///      vector maps that resulted from any positional delete or delete vector files into a
     ///      single map and persist it in the state.
     ///
-    ///  
+    ///
     ///  Conceptually, the data flow is like this:
     /// ```none
     ///                                          FileScanTaskDeleteFile
@@ -204,59 +161,74 @@ impl CachingDeleteFileManager {
     ///                                               |
     ///                                            [join!]
     /// ```
-    pub(crate) async fn load_deletes(
+    pub(crate) fn load_deletes(
         &self,
         delete_file_entries: &[FileScanTaskDeleteFile],
         schema: SchemaRef,
-    ) -> Result<()> {
+    ) -> Receiver<Result<DeleteFilter>> {
+        let (tx, rx) = channel();
+
         let stream_items = delete_file_entries
             .iter()
             .map(|t| {
                 (
                     t.clone(),
                     self.file_io.clone(),
-                    self.state.clone(),
+                    self.del_filter.clone(),
                     schema.clone(),
                 )
             })
             .collect::<Vec<_>>();
-        // NOTE: removing the collect and just passing the iterator to futures::stream:iter
-        // results in an error 'implementation of `std::ops::FnOnce` is not general enough'
+        let task_stream = futures::stream::iter(stream_items);
+        let del_filter = self.del_filter.clone();
+        let concurrency_limit_data_files = self.concurrency_limit_data_files;
+        crate::runtime::spawn(async move {
+            let result = async move {
+                let mut del_filter = del_filter;
 
-        let task_stream = futures::stream::iter(stream_items.into_iter());
+                let results: Vec<ParsedDeleteFileContext> = task_stream
+                    .map(move |(task, file_io, del_filter, schema)| async move {
+                        Self::load_file_for_task(&task, file_io, del_filter, schema).await
+                    })
+                    .map(move |ctx| {
+                        Ok(async { Self::parse_file_content_for_task(ctx.await?).await })
+                    })
+                    .try_buffer_unordered(concurrency_limit_data_files)
+                    .try_collect::<Vec<_>>()
+                    .await?;
 
-        let results: Vec<ParsedDeleteFileContext> = task_stream
-            .map(move |(task, file_io, state_ref, schema)| async {
-                Self::load_file_for_task(task, file_io, state_ref, schema).await
-            })
-            .map(move |ctx| Ok(async { Self::parse_file_content_for_task(ctx.await?).await }))
-            .try_buffer_unordered(self.concurrency_limit_data_files)
-            .try_collect::<Vec<_>>()
-            .await?;
+                // wait for all in-progress EQ deletes from other tasks
+                let _ = join_all(results.iter().filter_map(|i| {
+                    if let ParsedDeleteFileContext::InProgEqDel(fut) = i {
+                        Some(fut.clone())
+                    } else {
+                        None
+                    }
+                }))
+                .await;
 
-        // wait for all in-progress EQ deletes from other tasks
-        let _ = join_all(results.iter().filter_map(|i| {
-            if let ParsedDeleteFileContext::InProgEqDel(fut) = i {
-                Some(fut.clone())
-            } else {
-                None
+                for item in results {
+                    if let ParsedDeleteFileContext::DelVecs(hash_map) = item {
+                        for (data_file_path, delete_vector) in hash_map.into_iter() {
+                            del_filter.upsert_delete_vector(data_file_path, delete_vector);
+                        }
+                    }
+                }
+
+                Ok(del_filter)
             }
-        }))
-        .await;
+            .await;
 
-        let merged_delete_vectors = results
-            .into_iter()
-            .fold(HashMap::default(), Self::merge_delete_vectors);
+            let _ = tx.send(result);
+        });
 
-        self.state.write().unwrap().delete_vectors = merged_delete_vectors;
-
-        Ok(())
+        rx
     }
 
     async fn load_file_for_task(
-        task: FileScanTaskDeleteFile,
+        task: &FileScanTaskDeleteFile,
         file_io: FileIO,
-        state: StateRef,
+        del_filter: DeleteFilter,
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
         match task.file_type {
@@ -266,16 +238,15 @@ impl CachingDeleteFileManager {
 
             DataContentType::EqualityDeletes => {
                 let sender = {
-                    let mut state = state.write().unwrap();
-                    if let Some(existing) = state.equality_deletes.get(&task.file_path) {
+                    if let Some(existing) = del_filter
+                        .get_equality_delete_predicate_for_delete_file_path(&task.file_path)
+                    {
                         return Ok(DeleteFileContext::InProgEqDel(existing.clone()));
                     }
 
                     let (sender, fut) = EqDelFuture::new();
 
-                    state
-                        .equality_deletes
-                        .insert(task.file_path.to_string(), fut);
+                    del_filter.insert_equality_delete(task.file_path.to_string(), fut);
 
                     sender
                 };
@@ -325,23 +296,6 @@ impl CachingDeleteFileManager {
                     .map(|_| ParsedDeleteFileContext::EqDel)
             }
         }
-    }
-
-    fn merge_delete_vectors(
-        mut merged_delete_vectors: HashMap<String, Arc<RwLock<DeleteVector>>>,
-        item: ParsedDeleteFileContext,
-    ) -> HashMap<String, Arc<RwLock<DeleteVector>>> {
-        if let ParsedDeleteFileContext::DelVecs(del_vecs) = item {
-            del_vecs.into_iter().for_each(|(key, val)| {
-                let entry = merged_delete_vectors.entry(key).or_default();
-                {
-                    let mut inner = entry.write().unwrap();
-                    (*inner).intersect_assign(&val);
-                }
-            });
-        }
-
-        merged_delete_vectors
     }
 
     /// Loads a RecordBatchStream for a given datafile.
@@ -416,72 +370,6 @@ impl CachingDeleteFileManager {
             "parsing of equality deletes is not yet supported",
         ))
     }
-
-    /// Builds eq delete predicate for the provided task.
-    ///
-    /// Must await on load_deletes before calling this.
-    pub(crate) async fn build_delete_predicate_for_task(
-        &self,
-        file_scan_task: &FileScanTask,
-    ) -> Result<Option<BoundPredicate>> {
-        // * Filter the task's deletes into just the Equality deletes
-        // * Retrieve the unbound predicate for each from self.state.equality_deletes
-        // * Logical-AND them all together to get a single combined `Predicate`
-        // * Bind the predicate to the task's schema to get a `BoundPredicate`
-
-        let mut combined_predicate = AlwaysTrue;
-        for delete in &file_scan_task.deletes {
-            if !is_equality_delete(delete) {
-                continue;
-            }
-
-            let predicate = {
-                let state = self.state.read().unwrap();
-
-                let Some(predicate) = state.equality_deletes.get(&delete.file_path) else {
-                    return Err(Error::new(
-                        ErrorKind::Unexpected,
-                        format!(
-                            "Missing predicate for equality delete file '{}'",
-                            delete.file_path
-                        ),
-                    ));
-                };
-
-                predicate.clone()
-            };
-
-            combined_predicate = combined_predicate.and(predicate.await);
-        }
-
-        if combined_predicate == AlwaysTrue {
-            return Ok(None);
-        }
-
-        // TODO: handle case-insensitive case
-        let bound_predicate = combined_predicate.bind(file_scan_task.schema.clone(), false)?;
-        Ok(Some(bound_predicate))
-    }
-
-    /// Retrieve a delete vector for the data file associated with a given file scan task
-    ///
-    /// Should only be called after awaiting on load_deletes. Takes the vector to avoid a
-    /// clone since each item is specific to a single data file and won't need to be used again
-    pub(crate) fn get_delete_vector_for_task(
-        &self,
-        file_scan_task: &FileScanTask,
-    ) -> Option<Arc<RwLock<DeleteVector>>> {
-        self.state
-            .write()
-            .unwrap()
-            .delete_vectors
-            .get(file_scan_task.data_file_path())
-            .map(Clone::clone)
-    }
-}
-
-pub(crate) fn is_equality_delete(f: &FileScanTaskDeleteFile) -> bool {
-    matches!(f.file_type, DataContentType::EqualityDeletes)
 }
 
 #[cfg(test)]
@@ -498,6 +386,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::scan::FileScanTask;
     use crate::spec::{DataFileFormat, Schema};
 
     type ArrowSchemaRef = Arc<ArrowSchema>;
@@ -516,13 +405,14 @@ mod tests {
 
         // Note that with the delete file parsing not yet in place, all we can test here is that
         // the call to the loader fails with the expected FeatureUnsupportedError.
-        let delete_file_manager = CachingDeleteFileManager::new(file_io.clone(), 10);
+        let delete_file_manager = CachingDeleteFileLoader::new(file_io.clone(), 10);
 
         let file_scan_tasks = setup(table_location);
 
         let result = delete_file_manager
             .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
-            .await;
+            .await
+            .unwrap();
 
         assert!(result.is_err_and(|e| e.kind() == ErrorKind::FeatureUnsupported));
     }
