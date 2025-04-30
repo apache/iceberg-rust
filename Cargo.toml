@@ -75,6 +75,7 @@ http = "1.1"
 iceberg = { version = "0.4.0", path = "./crates/iceberg" }
 iceberg-catalog-memory = { version = "0.4.0", path = "./crates/catalog/memory" }
 iceberg-catalog-rest = { version = "0.4.0", path = "./crates/catalog/rest" }
+iceberg-catalog-hadoop = { version = "0.4.0", path = "./crates/catalog/hadoop" }
 iceberg-datafusion = { version = "0.4.0", path = "./crates/integrations/datafusion" }
 indicatif = "0.17"
 itertools = "0.13"
