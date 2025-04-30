@@ -245,22 +245,22 @@ impl Default for RestCatalogBuilder {
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
-    fn name(mut self, name: impl Into<String>) -> Self {
+    fn name(&mut self, name: impl Into<String>) -> &mut Self {
         self.0.name = Some(name.into());
         self
     }
 
-    fn uri(mut self, uri: impl Into<String>) -> Self {
+    fn uri(&mut self, uri: impl Into<String>) -> &mut Self {
         self.0.uri = uri.into();
         self
     }
 
-    fn warehouse(mut self, warehouse: impl Into<String>) -> Self {
+    fn warehouse(&mut self, warehouse: impl Into<String>) -> &mut Self {
         self.0.warehouse = Some(warehouse.into());
         self
     }
 
-    fn with_prop(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    fn with_prop(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.0.props.insert(key.into(), value.into());
         self
     }
@@ -288,7 +288,7 @@ impl CatalogBuilder for RestCatalogBuilder {
 
 impl RestCatalogBuilder {
     /// Configures the catalog with a custom HTTP client.
-    pub fn with_client(mut self, client: Client) -> Self {
+    pub fn with_client(&mut self, client: Client) -> &mut Self {
         self.0.client = Some(client);
         self
     }
@@ -2331,13 +2331,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_rest_catalog() {
-        let catalog = RestCatalogBuilder::default()
+        let mut builder = RestCatalogBuilder::default();
+        builder
             .name("test")
             .uri("http://localhost:8080")
             .with_client(Client::new())
-            .with_prop("a", "b")
-            .build()
-            .await;
+            .with_prop("a", "b");
+        let catalog = builder.build().await;
 
         assert!(catalog.is_ok());
     }
