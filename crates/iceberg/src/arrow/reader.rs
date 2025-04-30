@@ -41,7 +41,7 @@ use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask, PARQUET_FI
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
-use crate::arrow::delete_file_manager::CachingDeleteFileManager;
+use crate::arrow::delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformer;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
@@ -117,7 +117,7 @@ impl ArrowReaderBuilder {
         ArrowReader {
             batch_size: self.batch_size,
             file_io: self.file_io.clone(),
-            delete_file_manager: CachingDeleteFileManager::new(
+            delete_file_loader: CachingDeleteFileLoader::new(
                 self.file_io.clone(),
                 self.concurrency_limit_data_files,
             ),
@@ -134,7 +134,7 @@ impl ArrowReaderBuilder {
 pub struct ArrowReader {
     batch_size: Option<usize>,
     file_io: FileIO,
-    delete_file_manager: CachingDeleteFileManager,
+    delete_file_loader: CachingDeleteFileLoader,
 
     /// the maximum number of data files that can be fetched at the same time
     concurrency_limit_data_files: usize,
@@ -163,7 +163,7 @@ impl ArrowReader {
                     task,
                     batch_size,
                     file_io,
-                    self.delete_file_manager.clone(),
+                    self.delete_file_loader.clone(),
                     row_group_filtering_enabled,
                     row_selection_enabled,
                     delete_file_support_enabled,
@@ -183,7 +183,7 @@ impl ArrowReader {
         task: FileScanTask,
         batch_size: Option<usize>,
         file_io: FileIO,
-        delete_file_manager: CachingDeleteFileManager,
+        delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
         delete_file_support_enabled: bool,
@@ -198,22 +198,20 @@ impl ArrowReader {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
 
-        // concurrently retrieve delete files and create RecordBatchStreamBuilder
-        let (_, mut record_batch_stream_builder) = try_join!(
-            delete_file_manager.load_deletes(
-                if delete_file_support_enabled {
-                    &task.deletes
-                } else {
-                    &[]
-                },
-                task.schema.clone()
-            ),
-            Self::create_parquet_record_batch_stream_builder(
-                &task.data_file_path,
-                file_io.clone(),
-                should_load_page_index,
-            )
-        )?;
+        let delete_filter_rx = delete_file_loader.load_deletes(
+            if delete_file_support_enabled {
+                &task.deletes
+            } else {
+                &[]
+            },
+            task.schema.clone(),
+        );
+        let mut record_batch_stream_builder = Self::create_parquet_record_batch_stream_builder(
+            &task.data_file_path,
+            file_io.clone(),
+            should_load_page_index,
+        )
+        .await?;
 
         // Create a projection mask for the batch stream to select which columns in the
         // Parquet file that we want in the response
@@ -235,9 +233,8 @@ impl ArrowReader {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
         }
 
-        let delete_predicate = delete_file_manager
-            .build_delete_predicate_for_task(&task)
-            .await?;
+        let delete_filter = delete_filter_rx.await.unwrap()?;
+        let delete_predicate = delete_filter.build_equality_delete_predicate(&task).await?;
 
         // In addition to the optional predicate supplied in the `FileScanTask`,
         // we also have an optional predicate resulting from equality delete files.
@@ -305,18 +302,18 @@ impl ArrowReader {
             }
         }
 
-        let positional_delete_indexes = delete_file_manager.get_delete_vector_for_task(&task);
+        let positional_delete_indexes = delete_filter.get_delete_vector(&task);
 
         if let Some(positional_delete_indexes) = positional_delete_indexes {
             let delete_row_selection = {
-                let positional_delete_indexes = positional_delete_indexes.read().unwrap();
+                let positional_delete_indexes = positional_delete_indexes.lock().unwrap();
 
                 Self::build_deletes_row_selection(
                     record_batch_stream_builder.metadata().row_groups(),
                     &selected_row_group_indices,
                     &positional_delete_indexes,
-                )?
-            };
+                )
+            }?;
 
             // merge the row selection from the delete files with the row selection
             // from the filter predicate, if there is one from the filter predicate
@@ -1749,7 +1746,7 @@ message schema {
 
         /* cases to cover:
            * {skip|select} {first|intermediate|last} {one row|multiple rows} in
-             {first|imtermediate|last} {skipped|selected} row group
+             {first|intermediate|last} {skipped|selected} row group
            * row group selection disabled
         */
 
