@@ -156,6 +156,7 @@ pub struct DataFile {
     /// Fully qualified location (URI with FS scheme) of a data file that all deletes reference.
     /// Position delete metadata can use `referenced_data_file` when all deletes tracked by the
     /// entry are in a single data file. Setting the referenced file is required for deletion vectors.
+    #[builder(default)]
     pub(crate) referenced_data_file: Option<String>,
     /// field: 144
     ///
@@ -163,10 +164,12 @@ pub struct DataFile {
     /// The `content_offset` and `content_size_in_bytes` fields are used to reference a specific blob
     /// for direct access to a deletion vector. For deletion vectors, these values are required and must
     /// exactly match the `offset` and `length` stored in the Puffin footer for the deletion vector blob.
+    #[builder(default)]
     pub(crate) content_offset: Option<i64>,
     /// field: 145
     ///
     /// The length of a referenced content stored in the file; required if `content_offset` is present
+    #[builder(default)]
     pub(crate) content_size_in_bytes: Option<i64>,
 }
 
