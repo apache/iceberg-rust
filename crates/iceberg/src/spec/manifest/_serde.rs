@@ -215,6 +215,9 @@ impl DataFileSerde {
             equality_ids: self.equality_ids.unwrap_or_default(),
             sort_order_id: self.sort_order_id,
             partition_spec_id,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         })
     }
 }
@@ -359,7 +362,10 @@ mod tests {
             split_offsets: vec![4],
             equality_ids: vec![],
             sort_order_id: Some(0),
-            partition_spec_id: 0
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }];
 
         let mut buffer = Vec::new();

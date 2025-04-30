@@ -43,7 +43,7 @@ pub struct DataFile {
     pub(crate) file_path: String,
     /// field id: 101
     ///
-    /// String file format name, avro, orc or parquet
+    /// String file format name, `avro`, `orc`, `parquet`, or `puffin`
     pub(crate) file_format: DataFileFormat,
     /// field id: 102
     ///
@@ -52,7 +52,7 @@ pub struct DataFile {
     pub(crate) partition: Struct,
     /// field id: 103
     ///
-    /// Number of records in this file
+    /// Number of records in this file, or the cardinality of a deletion vector
     pub(crate) record_count: u64,
     /// field id: 104
     ///
@@ -151,6 +151,23 @@ pub struct DataFile {
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
     pub(crate) partition_spec_id: i32,
+    /// field id: 143
+    ///
+    /// Fully qualified location (URI with FS scheme) of a data file that all deletes reference.
+    /// Position delete metadata can use `referenced_data_file` when all deletes tracked by the
+    /// entry are in a single data file. Setting the referenced file is required for deletion vectors.
+    pub(crate) referenced_data_file: Option<String>,
+    /// field: 144
+    ///
+    /// The offset in the file where the content starts.
+    /// The `content_offset` and `content_size_in_bytes` fields are used to reference a specific blob
+    /// for direct access to a deletion vector. For deletion vectors, these values are required and must
+    /// exactly match the `offset` and `length` stored in the Puffin footer for the deletion vector blob.
+    pub(crate) content_offset: Option<i64>,
+    /// field: 145
+    ///
+    /// The length of a referenced content stored in the file; required if `content_offset` is present
+    pub(crate) content_size_in_bytes: Option<i64>,
 }
 
 impl DataFile {
@@ -323,6 +340,8 @@ pub enum DataFileFormat {
     Orc,
     /// Parquet file format: <https://parquet.apache.org/>
     Parquet,
+    /// Puffin file format: <https://iceberg.apache.org/puffin-spec/>
+    Puffin,
 }
 
 impl FromStr for DataFileFormat {
@@ -333,6 +352,7 @@ impl FromStr for DataFileFormat {
             "avro" => Ok(Self::Avro),
             "orc" => Ok(Self::Orc),
             "parquet" => Ok(Self::Parquet),
+            "puffin" => Ok(Self::Puffin),
             _ => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Unsupported data file format: {}", s),
@@ -347,6 +367,7 @@ impl std::fmt::Display for DataFileFormat {
             DataFileFormat::Avro => write!(f, "avro"),
             DataFileFormat::Orc => write!(f, "orc"),
             DataFileFormat::Parquet => write!(f, "parquet"),
+            DataFileFormat::Puffin => write!(f, "puffin"),
         }
     }
 }
