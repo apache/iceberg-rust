@@ -38,10 +38,6 @@ impl DeleteVector {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
-
-    pub(crate) fn intersect_assign(&mut self, other: &DeleteVector) {
-        self.inner.bitor_assign(&other.inner);
-    }
 }
 
 // Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
@@ -107,5 +103,11 @@ impl DeleteVectorIterator<'_> {
         }
 
         inner.bitmap_iter.advance_to(lo);
+    }
+}
+
+impl BitOrAssign for DeleteVector {
+    fn bitor_assign(&mut self, other: Self) {
+        self.inner.bitor_assign(&other.inner);
     }
 }
