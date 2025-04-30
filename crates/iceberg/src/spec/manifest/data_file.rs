@@ -148,6 +148,12 @@ pub struct DataFile {
     /// delete files.
     #[builder(default, setter(strip_option))]
     pub(crate) sort_order_id: Option<i32>,
+    /// field id: 142
+    ///
+    /// The _row_id for the first row in the data file.
+    /// For more details, refer to https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance
+    #[builder(default)]
+    pub(crate) first_row_id: Option<i64>,
     /// This field is not included in spec. It is just store in memory representation used
     /// in process.
     pub(crate) partition_spec_id: i32,
