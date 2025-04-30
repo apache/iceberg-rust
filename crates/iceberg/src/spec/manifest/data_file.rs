@@ -252,6 +252,10 @@ impl DataFile {
     pub fn equality_ids(&self) -> &[i32] {
         &self.equality_ids
     }
+    /// Get the first row id in the data file.
+    pub fn first_row_id(&self) -> Option<i64> {
+        self.first_row_id
+    }
     /// Get the sort order id of the data file.
     /// Only data files and equality delete files should be
     /// written with a non-null order id. Position deletes are required to be
@@ -260,6 +264,21 @@ impl DataFile {
     /// delete files.
     pub fn sort_order_id(&self) -> Option<i32> {
         self.sort_order_id
+    }
+    /// Get the fully qualified referenced location for the corresponding data file.
+    /// Positional delete files could have the field set, and deletion vectors must the field set.
+    pub fn referenced_data_file(&self) -> Option<String> {
+        self.referenced_data_file.clone()
+    }
+    /// Get the offset in the file where the blob content starts.
+    /// Only meaningful for puffin blobs, and required for deletion vectors.
+    pub fn content_offset(&self) -> Option<i64> {
+        self.content_offset
+    }
+    /// Get the length of a puffin blob.
+    /// Only meaningful for puffin blobs, and required for deletion vectors.
+    pub fn content_size_in_bytes(&self) -> Option<i64> {
+        self.content_size_in_bytes
     }
 }
 
