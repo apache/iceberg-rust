@@ -14,3 +14,4 @@ repository = { workspace = true }
 [dependencies]
 iceberg = { workspace = true }
 iceberg-catalog-rest = {workspace = true}
+tokio = { workspace = true }
