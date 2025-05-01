@@ -990,7 +990,27 @@
 <a href="#989" id="989">989</a>
 <a href="#990" id="990">990</a>
 <a href="#991" id="991">991</a>
-<a href="#992" id="992">992</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -1761,6 +1781,10 @@
             equality_ids: <span class="macro">vec!</span>[],
             sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
             partition_spec_id: <span class="number">0</span>,
+            first_row_id: <span class="prelude-val">None</span>,
+            referenced_data_file: <span class="prelude-val">None</span>,
+            content_offset: <span class="prelude-val">None</span>,
+            content_size_in_bytes: <span class="prelude-val">None</span>,
         };
 
         <span class="kw">let </span>file2 = DataFile {
@@ -1789,6 +1813,10 @@
             equality_ids: <span class="macro">vec!</span>[],
             sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
             partition_spec_id: <span class="number">0</span>,
+            first_row_id: <span class="prelude-val">None</span>,
+            referenced_data_file: <span class="prelude-val">None</span>,
+            content_offset: <span class="prelude-val">None</span>,
+            content_size_in_bytes: <span class="prelude-val">None</span>,
         };
 
         collector.add_file(<span class="kw-2">&amp;</span>file1, schema.clone(), partition_spec.clone());
@@ -1893,6 +1921,10 @@
                 equality_ids: <span class="macro">vec!</span>[],
                 sort_order_id: <span class="prelude-val">None</span>,
                 partition_spec_id: <span class="number">0</span>,
+                first_row_id: <span class="prelude-val">None</span>,
+                referenced_data_file: <span class="prelude-val">None</span>,
+                content_offset: <span class="prelude-val">None</span>,
+                content_size_in_bytes: <span class="prelude-val">None</span>,
             },
             schema.clone(),
             partition_spec.clone(),
@@ -1917,6 +1949,10 @@
                 equality_ids: <span class="macro">vec!</span>[],
                 sort_order_id: <span class="prelude-val">None</span>,
                 partition_spec_id: <span class="number">0</span>,
+                first_row_id: <span class="prelude-val">None</span>,
+                referenced_data_file: <span class="prelude-val">None</span>,
+                content_offset: <span class="prelude-val">None</span>,
+                content_size_in_bytes: <span class="prelude-val">None</span>,
             },
             schema.clone(),
             partition_spec.clone(),
@@ -1967,6 +2003,10 @@
                 equality_ids: <span class="macro">vec!</span>[],
                 sort_order_id: <span class="prelude-val">None</span>,
                 partition_spec_id: <span class="number">0</span>,
+                first_row_id: <span class="prelude-val">None</span>,
+                referenced_data_file: <span class="prelude-val">None</span>,
+                content_offset: <span class="prelude-val">None</span>,
+                content_size_in_bytes: <span class="prelude-val">None</span>,
             },
             schema.clone(),
             partition_spec.clone(),

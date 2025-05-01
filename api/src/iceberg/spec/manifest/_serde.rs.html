@@ -383,7 +383,23 @@
 <a href="#382" id="382">382</a>
 <a href="#383" id="383">383</a>
 <a href="#384" id="384">384</a>
-<a href="#385" id="385">385</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -504,6 +520,10 @@
     <span class="attr">#[serde(default)]
     </span>equality_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;,
     sort_order_id: <span class="prelude-ty">Option</span>&lt;i32&gt;,
+    first_row_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+    referenced_data_file: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    content_offset: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+    content_size_in_bytes: <span class="prelude-ty">Option</span>&lt;i64&gt;,
 }
 
 <span class="kw">impl </span>DataFileSerde {
@@ -534,6 +554,10 @@
             split_offsets: <span class="prelude-val">Some</span>(value.split_offsets),
             equality_ids: <span class="prelude-val">Some</span>(value.equality_ids),
             sort_order_id: value.sort_order_id,
+            first_row_id: value.first_row_id,
+            referenced_data_file: value.referenced_data_file,
+            content_offset: value.content_offset,
+            content_size_in_bytes: value.content_size_in_bytes,
         })
     }
 
@@ -600,6 +624,10 @@
             equality_ids: <span class="self">self</span>.equality_ids.unwrap_or_default(),
             sort_order_id: <span class="self">self</span>.sort_order_id,
             partition_spec_id,
+            first_row_id: <span class="self">self</span>.first_row_id,
+            referenced_data_file: <span class="self">self</span>.referenced_data_file,
+            content_offset: <span class="self">self</span>.content_offset,
+            content_size_in_bytes: <span class="self">self</span>.content_size_in_bytes,
         })
     }
 }
@@ -744,8 +772,12 @@
             split_offsets: <span class="macro">vec!</span>[<span class="number">4</span>],
             equality_ids: <span class="macro">vec!</span>[],
             sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-            partition_spec_id: <span class="number">0
-        </span>}];
+            partition_spec_id: <span class="number">0</span>,
+            first_row_id: <span class="prelude-val">None</span>,
+            referenced_data_file: <span class="prelude-val">None</span>,
+            content_offset: <span class="prelude-val">None</span>,
+            content_size_in_bytes: <span class="prelude-val">None</span>,
+        }];
 
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
         <span class="kw">let _ </span>= write_data_files_to_avro(
