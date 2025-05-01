@@ -171,7 +171,8 @@ impl ManifestWriter {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Content type of entry {:?} should have DataContentType::Data",
+                            "Date file at path {} with manifest content type `data`, should have DataContentType `Data`, but has `{:?}`",
+                            data_file.file_path(),
                             data_file.content
                         ),
                     ));
@@ -183,7 +184,11 @@ impl ManifestWriter {
                 {
                     return Err(Error::new(
                     ErrorKind::DataInvalid,
-                    format!("Content type of entry {:?} should have DataContentType::EqualityDeletes or DataContentType::PositionDeletes", data_file.content),
+                    format!(
+                        "Date file at path {} with manifest content type `deletes`, should have DataContentType `Data`, but has `{:?}`",
+                        data_file.file_path(),
+                        data_file.content
+                    ),
                 ));
                 }
             }
