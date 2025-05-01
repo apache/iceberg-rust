@@ -119,6 +119,10 @@ pub(super) struct DataFileSerde {
     #[serde(default)]
     equality_ids: Option<Vec<i32>>,
     sort_order_id: Option<i32>,
+    first_row_id: Option<i64>,
+    referenced_data_file: Option<String>,
+    content_offset: Option<i64>,
+    content_size_in_bytes: Option<i64>,
 }
 
 impl DataFileSerde {
@@ -149,6 +153,10 @@ impl DataFileSerde {
             split_offsets: Some(value.split_offsets),
             equality_ids: Some(value.equality_ids),
             sort_order_id: value.sort_order_id,
+            first_row_id: value.first_row_id,
+            referenced_data_file: value.referenced_data_file,
+            content_offset: value.content_offset,
+            content_size_in_bytes: value.content_size_in_bytes,
         })
     }
 
@@ -215,10 +223,10 @@ impl DataFileSerde {
             equality_ids: self.equality_ids.unwrap_or_default(),
             sort_order_id: self.sort_order_id,
             partition_spec_id,
-            first_row_id: None,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
+            first_row_id: self.first_row_id,
+            referenced_data_file: self.referenced_data_file,
+            content_offset: self.content_offset,
+            content_size_in_bytes: self.content_size_in_bytes,
         })
     }
 }
