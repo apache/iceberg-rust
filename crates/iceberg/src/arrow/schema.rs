@@ -167,6 +167,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
             )),
         },
         DataType::Struct(fields) => visit_struct(fields, visitor),
+        DataType::Dictionary(_, value_type) => visit_type(value_type, visitor),
         other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Cannot visit Arrow data type: {other}"),
@@ -1678,6 +1679,15 @@ mod tests {
                 .into(),
             ]));
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
+        }
+
+        // test dictionary type
+        {
+            let arrow_type =
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+            let iceberg_type = Type::Primitive(PrimitiveType::String);
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+            assert_eq!(DataType::Utf8, type_to_arrow_type(&iceberg_type).unwrap());
         }
     }
 }
