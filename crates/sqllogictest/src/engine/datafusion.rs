@@ -23,7 +23,7 @@ use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
 use indicatif::ProgressBar;
-use sqllogictest::runner::AsyncDB;
+use sqllogictest::AsyncDB;
 use toml::Table as TomlTable;
 
 use crate::engine::Engine;
