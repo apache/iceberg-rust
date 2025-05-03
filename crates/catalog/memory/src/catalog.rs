@@ -18,6 +18,7 @@
 //! This module contains memory catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
@@ -29,9 +30,8 @@ use iceberg::{
     TableIdent, TableUpdate,
 };
 use itertools::Itertools;
-use uuid::Uuid;
 
-use crate::namespace_state::NamespaceState;
+use crate::namespace_state::{MetadataLocation, NamespaceState};
 
 /// namespace `location` property
 const LOCATION: &str = "location";
@@ -71,7 +71,11 @@ impl MemoryCatalog {
             .build()
     }
 
-    async fn update_table(&self, table: &Table, updates: Vec<TableUpdate>) -> Result<Table> {
+    async fn update_table(
+        &self,
+        table: &Table,
+        updates: Vec<TableUpdate>,
+    ) -> Result<(Table, MetadataLocation)> {
         let (new_metadata, new_metadata_location) = apply_table_updates(table, updates)?;
 
         self.write_metadata(&new_metadata, &new_metadata_location)
@@ -84,11 +88,11 @@ impl MemoryCatalog {
             .file_io(self.file_io.clone())
             .build()?;
 
-        Ok(new_table)
+        Ok((new_table, new_metadata_location))
     }
 
-    async fn read_metadata(&self, location: &str) -> Result<TableMetadata> {
-        let input_file = self.file_io.new_input(location)?;
+    async fn read_metadata(&self, location: &MetadataLocation) -> Result<TableMetadata> {
+        let input_file = self.file_io.new_input(location.to_string())?;
         let metadata_content = input_file.read().await?;
         let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
@@ -98,10 +102,10 @@ impl MemoryCatalog {
     async fn write_metadata(
         &self,
         metadata: &TableMetadata,
-        metadata_location: &str,
+        metadata_location: &MetadataLocation,
     ) -> Result<()> {
         self.file_io
-            .new_output(metadata_location)?
+            .new_output(metadata_location.to_string())?
             .write(serde_json::to_vec(metadata)?.into())
             .await
     }
@@ -249,12 +253,7 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = format!(
-            "{}/metadata/{}-{}.metadata.json",
-            &location,
-            0,
-            Uuid::new_v4()
-        );
+        let metadata_location = MetadataLocation::new(&location);
 
         self.write_metadata(&metadata, &metadata_location).await?;
 
@@ -262,7 +261,7 @@ impl Catalog for MemoryCatalog {
 
         Table::builder()
             .file_io(self.file_io.clone())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
             .build()
@@ -281,7 +280,7 @@ impl Catalog for MemoryCatalog {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
         let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
-        self.file_io.delete(&metadata_location).await
+        self.file_io.delete(metadata_location.to_string()).await
     }
 
     /// Check if a table exists in the catalog.
@@ -322,17 +321,11 @@ impl Catalog for MemoryCatalog {
             requirement.check(Some(current_table.metadata()))?;
         }
 
-        let updated_table = self
+        let (updated_table, new_metadata_location) = self
             .update_table(&current_table, commit.take_updates())
             .await?;
 
-        root_namespace_state.update_table(
-            updated_table.identifier(),
-            updated_table
-                .metadata_location()
-                .ok_or(empty_metadata_location_err(&updated_table))?
-                .to_string(),
-        )?;
+        root_namespace_state.update_table(updated_table.identifier(), new_metadata_location)?;
 
         Ok(updated_table)
     }
@@ -341,10 +334,11 @@ impl Catalog for MemoryCatalog {
 fn apply_table_updates(
     table: &Table,
     updates: Vec<TableUpdate>,
-) -> Result<(TableMetadata, String)> {
-    let metadata_location = table
-        .metadata_location()
-        .ok_or(empty_metadata_location_err(table))?;
+) -> Result<(TableMetadata, MetadataLocation)> {
+    let metadata_location = table.metadata_location().ok_or(Error::new(
+        ErrorKind::DataInvalid,
+        format!("Table metadata location is not set: {}", table.identifier()),
+    ))?;
 
     let mut builder = TableMetadataBuilder::new_from_metadata(
         table.metadata().clone(),
@@ -355,53 +349,9 @@ fn apply_table_updates(
         builder = update.apply(builder)?;
     }
 
-    let new_metadata_location = bump_metadata_version(metadata_location)?;
+    let new_metadata_location = MetadataLocation::from_str(metadata_location)?.with_next_version();
 
     Ok((builder.build()?.metadata, new_metadata_location))
-}
-
-fn empty_metadata_location_err(table: &Table) -> Error {
-    Error::new(
-        ErrorKind::DataInvalid,
-        format!("Table metadata location is not set: {}", table.identifier()),
-    )
-}
-/// Parses a metadata location of format `<prefix>/metadata/<version>-<uuid>.metadata.json`,
-/// increments the version and generates a new UUID.
-/// It returns an error if the format is invalid.
-fn bump_metadata_version(metadata_location: &str) -> Result<String> {
-    let (path, file_name) = metadata_location.rsplit_once('/').ok_or(Error::new(
-        ErrorKind::Unexpected,
-        format!("Invalid metadata location: {}", metadata_location),
-    ))?;
-
-    let prefix = path.strip_suffix("/metadata").ok_or(Error::new(
-        ErrorKind::Unexpected,
-        format!(
-            "Metadata location not under /metadata/ subdirectory: {}",
-            metadata_location
-        ),
-    ))?;
-
-    let (version, _id) = file_name
-        .strip_suffix(".metadata.json")
-        .ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("Invalid metadata file ending: {}", file_name),
-        ))?
-        .split_once('-')
-        .ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("Invalid metadata file name: {}", file_name),
-        ))?;
-
-    let new_version = version.parse::<i32>()? + 1;
-    let new_id = Uuid::new_v4();
-
-    Ok(format!(
-        "{}/metadata/{}-{}.metadata.json",
-        prefix, new_version, new_id
-    ))
 }
 
 #[cfg(test)]
