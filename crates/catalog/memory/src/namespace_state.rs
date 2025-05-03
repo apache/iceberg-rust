@@ -295,4 +295,23 @@ impl NamespaceState {
             Some(metadata_location) => Ok(metadata_location),
         }
     }
+
+    /// Updates the metadata location of the given table or returns an error if doesn't exist
+    pub(crate) fn update_table(
+        &mut self,
+        table_ident: &TableIdent,
+        new_metadata_location: String,
+    ) -> Result<()> {
+        let namespace = self.get_mut_namespace(table_ident.namespace())?;
+
+        let _ = namespace
+            .table_metadata_locations
+            .insert(table_ident.name().to_string(), new_metadata_location)
+            .ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("No such table: {:?}", table_ident),
+            ))?;
+
+        Ok(())
+    }
 }

@@ -26,7 +26,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent,
+    TableIdent, TableUpdate,
 };
 use itertools::Itertools;
 use uuid::Uuid;
@@ -61,7 +61,7 @@ impl MemoryCatalog {
         root_namespace_state: &MutexGuard<'_, NamespaceState>,
     ) -> Result<Table> {
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let metadata = self.read_metadata(&metadata_location).await?;
+        let metadata = self.read_metadata(metadata_location).await?;
 
         Table::builder()
             .identifier(table_ident.clone())
@@ -69,6 +69,30 @@ impl MemoryCatalog {
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
             .build()
+    }
+
+    async fn update_table(&self, table: &Table, updates: Vec<TableUpdate>) -> Result<Table> {
+        let (new_metadata, new_metadata_location) = apply_table_updates(table, updates)?;
+
+        self.write_metadata(&new_metadata, &new_metadata_location)
+            .await?;
+
+        let new_table = Table::builder()
+            .identifier(table.identifier().clone())
+            .metadata(new_metadata)
+            .metadata_location(new_metadata_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()?;
+
+        Ok(new_table)
+    }
+
+    async fn read_metadata(&self, location: &str) -> Result<TableMetadata> {
+        let input_file = self.file_io.new_input(location)?;
+        let metadata_content = input_file.read().await?;
+        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+        Ok(metadata)
     }
 
     async fn write_metadata(
@@ -286,13 +310,98 @@ impl Catalog for MemoryCatalog {
         Ok(())
     }
 
-    /// Update a table to the catalog.
-    async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "MemoryCatalog does not currently support updating tables.",
-        ))
+    /// Update a table in the catalog.
+    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let current_table = self
+            .load_table_from_locked_namespace_state(commit.identifier(), &root_namespace_state)
+            .await?;
+
+        for requirement in commit.take_requirements() {
+            requirement.check(Some(current_table.metadata()))?;
+        }
+
+        let updated_table = self
+            .update_table(&current_table, commit.take_updates())
+            .await?;
+
+        root_namespace_state.update_table(
+            updated_table.identifier(),
+            updated_table
+                .metadata_location()
+                .ok_or(empty_metadata_location_err(&updated_table))?
+                .to_string(),
+        )?;
+
+        Ok(updated_table)
     }
+}
+
+fn apply_table_updates(
+    table: &Table,
+    updates: Vec<TableUpdate>,
+) -> Result<(TableMetadata, String)> {
+    let metadata_location = table
+        .metadata_location()
+        .ok_or(empty_metadata_location_err(table))?;
+
+    let mut builder = TableMetadataBuilder::new_from_metadata(
+        table.metadata().clone(),
+        Some(metadata_location.to_string()),
+    );
+
+    for update in updates {
+        builder = update.apply(builder)?;
+    }
+
+    let new_metadata_location = bump_metadata_version(metadata_location)?;
+
+    Ok((builder.build()?.metadata, new_metadata_location))
+}
+
+fn empty_metadata_location_err(table: &Table) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!("Table metadata location is not set: {}", table.identifier()),
+    )
+}
+/// Parses a metadata location of format `<prefix>/metadata/<version>-<uuid>.metadata.json`,
+/// increments the version and generates a new UUID.
+/// It returns an error if the format is invalid.
+fn bump_metadata_version(metadata_location: &str) -> Result<String> {
+    let (path, file_name) = metadata_location.rsplit_once('/').ok_or(Error::new(
+        ErrorKind::Unexpected,
+        format!("Invalid metadata location: {}", metadata_location),
+    ))?;
+
+    let prefix = path.strip_suffix("/metadata").ok_or(Error::new(
+        ErrorKind::Unexpected,
+        format!(
+            "Metadata location not under /metadata/ subdirectory: {}",
+            metadata_location
+        ),
+    ))?;
+
+    let (version, _id) = file_name
+        .strip_suffix(".metadata.json")
+        .ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("Invalid metadata file ending: {}", file_name),
+        ))?
+        .split_once('-')
+        .ok_or(Error::new(
+            ErrorKind::Unexpected,
+            format!("Invalid metadata file name: {}", file_name),
+        ))?;
+
+    let new_version = version.parse::<i32>()? + 1;
+    let new_id = Uuid::new_v4();
+
+    Ok(format!(
+        "{}/metadata/{}-{}.metadata.json",
+        prefix, new_version, new_id
+    ))
 }
 
 #[cfg(test)]
@@ -300,9 +409,11 @@ mod tests {
     use std::collections::HashSet;
     use std::hash::Hash;
     use std::iter::FromIterator;
+    use std::vec;
 
     use iceberg::io::FileIOBuilder;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
 
@@ -348,8 +459,8 @@ mod tests {
             .unwrap()
     }
 
-    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) {
-        let _ = catalog
+    async fn create_table<C: Catalog>(catalog: &C, table_ident: &TableIdent) -> Table {
+        catalog
             .create_table(
                 &table_ident.namespace,
                 TableCreation::builder()
@@ -358,7 +469,7 @@ mod tests {
                     .build(),
             )
             .await
-            .unwrap();
+            .unwrap()
     }
 
     async fn create_tables<C: Catalog>(catalog: &C, table_idents: Vec<&TableIdent>) {
@@ -1692,6 +1803,32 @@ mod tests {
                 "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
                 &dst_table_ident
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table() {
+        let catalog = new_memory_catalog();
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        let table = create_table(&catalog, &table_ident).await;
+
+        // Assert the table doesn't contain the update yet
+        assert!(!table.metadata().properties().contains_key("key"));
+
+        // Update table metadata
+        let updated_table = Transaction::new(&table)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated_table.metadata().properties().get("key").unwrap(),
+            "value"
         );
     }
 }
