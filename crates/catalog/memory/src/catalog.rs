@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use futures::lock::Mutex;
+use futures::lock::{Mutex, MutexGuard};
 use iceberg::io::FileIO;
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -52,6 +52,23 @@ impl MemoryCatalog {
             file_io,
             warehouse_location,
         }
+    }
+
+    /// Loads a table from the locked namespace state.
+    async fn load_table_from_locked_namespace_state(
+        &self,
+        table_ident: &TableIdent,
+        root_namespace_state: &MutexGuard<'_, NamespaceState>,
+    ) -> Result<Table> {
+        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
+        let metadata = self.read_metadata(&metadata_location).await?;
+
+        Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()
     }
 }
 
@@ -223,17 +240,8 @@ impl Catalog for MemoryCatalog {
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
-        let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
-        let input_file = self.file_io.new_input(metadata_location)?;
-        let metadata_content = input_file.read().await?;
-        let metadata = serde_json::from_slice::<TableMetadata>(&metadata_content)?;
-
-        Table::builder()
-            .file_io(self.file_io.clone())
-            .metadata_location(metadata_location.clone())
-            .metadata(metadata)
-            .identifier(table_ident.clone())
-            .build()
+        self.load_table_from_locked_namespace_state(table_ident, &root_namespace_state)
+            .await
     }
 
     /// Drop a table from the catalog.
