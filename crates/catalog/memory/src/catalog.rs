@@ -70,6 +70,17 @@ impl MemoryCatalog {
             .file_io(self.file_io.clone())
             .build()
     }
+
+    async fn write_metadata(
+        &self,
+        metadata: &TableMetadata,
+        metadata_location: &str,
+    ) -> Result<()> {
+        self.file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(metadata)?.into())
+            .await
+    }
 }
 
 #[async_trait]
@@ -221,10 +232,7 @@ impl Catalog for MemoryCatalog {
             Uuid::new_v4()
         );
 
-        self.file_io
-            .new_output(&metadata_location)?
-            .write(serde_json::to_vec(&metadata)?.into())
-            .await?;
+        self.write_metadata(&metadata, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
 
