@@ -167,6 +167,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
             )),
         },
         DataType::Struct(fields) => visit_struct(fields, visitor),
+        DataType::Dictionary(_key_type, value_type) => visit_type(value_type, visitor),
         other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Cannot visit Arrow data type: {other}"),
