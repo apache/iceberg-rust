@@ -1308,7 +1308,7 @@ mod tests {
         let arrow_schema = arrow_schema_for_arrow_schema_to_schema_test();
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-        assert_eq!(converted_schema, schema);
+        pretty_assertions::assert_eq!(converted_schema, schema);
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
