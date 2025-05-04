@@ -379,18 +379,21 @@ impl MetadataLocation {
                 format!("Invalid metadata file name format: {}", file_name),
             ))?;
 
-        let version = version.parse::<i32>().map_err(|_| {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!("Metadata version not a number: {}", version),
-            )
-        })?;
-        if version < 0 {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Negative metadata version: {}", version),
-            ));
-        }
+        let version = version
+            .parse::<i32>()
+            .map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "Metadata version not a number").with_source(e)
+            })
+            .and_then(|v| {
+                if v < 0 {
+                    Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!("Negative metadata version: {}", version),
+                    ))
+                } else {
+                    Ok(v)
+                }
+            })?;
 
         Ok((version, Uuid::parse_str(id)?))
     }

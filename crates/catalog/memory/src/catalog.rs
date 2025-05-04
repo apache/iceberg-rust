@@ -82,7 +82,7 @@ impl MemoryCatalog {
 
         // Checks whether the commit's expectations are met by the current table state.
         let location =
-            check_current_table_state(&current_table, commit.take_requirements()).await?;
+            Self::check_current_table_state(&current_table, commit.take_requirements()).await?;
 
         self.apply_table_updates_and_write_metadata(
             &current_table,
@@ -102,7 +102,7 @@ impl MemoryCatalog {
 
         // Build the new table metadata.
         let new_metadata =
-            apply_table_updates(current_table, current_location, &new_location, updates)?;
+            Self::apply_table_updates(current_table, current_location, &new_location, updates)?;
 
         // Write the updated metadata to it's new location.
         self.write_metadata(&new_metadata, &new_location).await?;
@@ -135,6 +135,56 @@ impl MemoryCatalog {
             .new_output(metadata_location.to_string())?
             .write(serde_json::to_vec(metadata)?.into())
             .await
+    }
+
+    /// Verifies that the a TableCommit's requirements are met by the current table state.
+    /// If not, there's a conflict and the client should retry the commit.
+    async fn check_current_table_state(
+        current_table: &Table,
+        requirements: Vec<TableRequirement>,
+    ) -> Result<MetadataLocation> {
+        let location =
+            MetadataLocation::from_str(current_table.metadata_location().ok_or(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Table metadata location is not set: {}",
+                    current_table.identifier()
+                ),
+            ))?)?;
+
+        // Check that the commit's point of view is still reflected by the current state of the table.
+        for requirement in requirements {
+            requirement
+                .check(Some(current_table.metadata()))
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Conflict: One or more requirements failed, the client my retry",
+                    )
+                    .with_source(e)
+                })?;
+        }
+
+        Ok(location)
+    }
+
+    fn apply_table_updates(
+        table: &Table,
+        current_location: &MetadataLocation,
+        new_location: &MetadataLocation,
+        updates: Vec<TableUpdate>,
+    ) -> Result<TableMetadata> {
+        let mut builder = TableMetadataBuilder::new_from_metadata(
+            table.metadata().clone(),
+            Some(current_location.to_string()),
+        )
+        .set_location(new_location.to_string());
+
+        for update in updates {
+            builder = update.apply(builder)?;
+        }
+
+        Ok(builder.build()?.metadata)
     }
 }
 
@@ -341,66 +391,19 @@ impl Catalog for MemoryCatalog {
         let mut locked_namespace_state = self.root_namespace_state.lock().await;
 
         // Updates the current table version and writes a new metadata file.
-        let (updated_table, new_metadata_location) = self
+        let (staged_updated_table, new_metadata_location) = self
             .update_table_in_locked_state(commit, &locked_namespace_state)
             .await?;
 
         // Flip the pointer to reference the new metadata file.
         locked_namespace_state
-            .commit_table_update(updated_table.identifier(), new_metadata_location)?;
+            .commit_table_update(staged_updated_table.identifier(), new_metadata_location)?;
+
+        // After the update is committed, the table is now the current version.
+        let updated_table = staged_updated_table;
 
         Ok(updated_table)
     }
-}
-
-/// Verifies that the a TableCommit's requirements are met by the current table state.
-/// If not, there's a conflict and the client should retry the commit.
-async fn check_current_table_state(
-    current_table: &Table,
-    requirements: Vec<TableRequirement>,
-) -> Result<MetadataLocation> {
-    let location =
-        MetadataLocation::from_str(current_table.metadata_location().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Table metadata location is not set: {}",
-                current_table.identifier()
-            ),
-        ))?)?;
-
-    // Check that the commit's point of view is still reflected by the current state of the table.
-    for requirement in requirements {
-        requirement
-            .check(Some(current_table.metadata()))
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Conflict: One or more requirements failed, the client my retry",
-                )
-                .with_source(e)
-            })?;
-    }
-
-    Ok(location)
-}
-
-fn apply_table_updates(
-    table: &Table,
-    current_location: &MetadataLocation,
-    new_location: &MetadataLocation,
-    updates: Vec<TableUpdate>,
-) -> Result<TableMetadata> {
-    let mut builder = TableMetadataBuilder::new_from_metadata(
-        table.metadata().clone(),
-        Some(current_location.to_string()),
-    )
-    .set_location(new_location.to_string());
-
-    for update in updates {
-        builder = update.apply(builder)?;
-    }
-
-    Ok(builder.build()?.metadata)
 }
 
 #[cfg(test)]
@@ -411,9 +414,7 @@ mod tests {
     use std::vec;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{
-        NestedField, NullOrder, PartitionSpec, PrimitiveType, Schema, SortOrder, Type,
-    };
+    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
