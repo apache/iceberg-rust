@@ -1030,6 +1030,7 @@ mod tests {
             Arc::new(simple_field(DEFAULT_MAP_FIELD_NAME, r#struct, false, "17")),
             false,
         );
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         let fields = Fields::from(vec![
             simple_field("aa", DataType::Int32, false, "18"),
@@ -1109,6 +1110,7 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
+            simple_field("dictionary", dictionary, false, "30"),
         ])
     }
 
@@ -1286,6 +1288,12 @@ mod tests {
                             }
                         ]
                     }
+                },
+                {
+                    "id":30,
+                    "name":"dictionary",
+                    "required":true,
+                    "type":"string"
                 }
             ],
             "identifier-field-ids":[]
