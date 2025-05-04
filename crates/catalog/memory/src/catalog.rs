@@ -414,7 +414,9 @@ mod tests {
     use std::vec;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::spec::{
+        NestedField, NullOrder, PartitionSpec, PrimitiveType, Schema, SortOrder, Type,
+    };
     use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
@@ -478,6 +480,14 @@ mod tests {
         for table_ident in table_idents {
             create_table(catalog, table_ident).await;
         }
+    }
+
+    async fn create_table_with_namespace<C: Catalog>(catalog: &C) -> Table {
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(catalog, &namespace_ident).await;
+
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+        create_table(catalog, &table_ident).await
     }
 
     fn assert_table_eq(table: &Table, expected_table_ident: &TableIdent, expected_schema: &Schema) {
@@ -1812,10 +1822,7 @@ mod tests {
     async fn test_update_table() {
         let catalog = new_memory_catalog();
 
-        let namespace_ident = NamespaceIdent::new("a".into());
-        create_namespace(&catalog, &namespace_ident).await;
-        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
-        let table = create_table(&catalog, &table_ident).await;
+        let table = create_table_with_namespace(&catalog).await;
 
         // Assert the table doesn't contain the update yet
         assert!(!table.metadata().properties().contains_key("key"));
@@ -1843,14 +1850,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_table_fails_if_commit_conflicts() {
+        let catalog = new_memory_catalog();
+        let base_table = create_table_with_namespace(&catalog).await;
+
+        // Update the table by adding a new sort order.
+        let _sorted_table = Transaction::new(&base_table)
+            .replace_sort_order()
+            .asc("foo", NullOrder::First)
+            .unwrap()
+            .apply()
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        // Try to update the -now old- table again with a different sort order.
+        let err = Transaction::new(&base_table)
+            .replace_sort_order()
+            .desc("foo", NullOrder::Last)
+            .unwrap()
+            .apply()
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+
+        // The second transaction should fail because it didn't take the new update
+        // into account.
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().to_lowercase().contains("conflict"));
+    }
+
+    #[tokio::test]
     async fn test_update_table_fails_if_table_doesnt_exist() {
         let catalog = new_memory_catalog();
 
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
-        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
 
         // This table is not known to the catalog.
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
         let table = build_table(table_ident);
 
         let err = Transaction::new(&table)
