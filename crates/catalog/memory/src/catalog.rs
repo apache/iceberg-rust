@@ -1812,7 +1812,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!(
-                "TableAlreadyExists => Cannot create table {:? }. Table already exists.",
+                "TableAlreadyExists => Cannot create table {:?}. Table already exists.",
                 &dst_table_ident
             ),
         );
