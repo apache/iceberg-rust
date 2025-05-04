@@ -306,7 +306,7 @@ impl NamespaceState {
     }
 
     /// Updates the metadata location of the given table or returns an error if doesn't exist
-    pub(crate) fn update_table(
+    pub(crate) fn commit_table_update(
         &mut self,
         table_ident: &TableIdent,
         new_location: MetadataLocation,
@@ -317,7 +317,7 @@ impl NamespaceState {
             .table_metadata_locations
             .insert(table_ident.name().to_string(), new_location)
             .ok_or(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 format!("No such table: {:?}", table_ident),
             ))?;
 
@@ -379,7 +379,20 @@ impl MetadataLocation {
                 format!("Invalid metadata file name format: {}", file_name),
             ))?;
 
-        Ok((version.parse::<i32>()?, Uuid::parse_str(id)?))
+        let version = version.parse::<i32>().map_err(|_| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Metadata version not a number: {}", version),
+            )
+        })?;
+        if version < 0 {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!("Negative metadata version: {}", version),
+            ));
+        }
+
+        Ok((version, Uuid::parse_str(id)?))
     }
 }
 

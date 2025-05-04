@@ -27,7 +27,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-    TableIdent, TableUpdate,
+    TableIdent, TableRequirement, TableUpdate,
 };
 use itertools::Itertools;
 
@@ -55,7 +55,7 @@ impl MemoryCatalog {
     }
 
     /// Loads a table from the locked namespace state.
-    async fn load_table_from_locked_namespace_state(
+    async fn load_table_from_locked_state(
         &self,
         table_ident: &TableIdent,
         root_namespace_state: &MutexGuard<'_, NamespaceState>,
@@ -71,24 +71,51 @@ impl MemoryCatalog {
             .build()
     }
 
-    async fn update_table(
+    async fn update_table_in_locked_state(
         &self,
-        table: &Table,
-        updates: Vec<TableUpdate>,
+        mut commit: TableCommit,
+        locked_state: &MutexGuard<'_, NamespaceState>,
     ) -> Result<(Table, MetadataLocation)> {
-        let (new_metadata, new_metadata_location) = apply_table_updates(table, updates)?;
-
-        self.write_metadata(&new_metadata, &new_metadata_location)
+        let current_table = self
+            .load_table_from_locked_state(commit.identifier(), locked_state)
             .await?;
 
+        // Checks whether the commit's expectations are met by the current table state.
+        let location =
+            check_current_table_state(&current_table, commit.take_requirements()).await?;
+
+        self.apply_table_updates_and_write_metadata(
+            &current_table,
+            &location,
+            commit.take_updates(),
+        )
+        .await
+    }
+
+    async fn apply_table_updates_and_write_metadata(
+        &self,
+        current_table: &Table,
+        current_location: &MetadataLocation,
+        updates: Vec<TableUpdate>,
+    ) -> Result<(Table, MetadataLocation)> {
+        let new_location = current_location.with_next_version();
+
+        // Build the new table metadata.
+        let new_metadata =
+            apply_table_updates(current_table, current_location, &new_location, updates)?;
+
+        // Write the updated metadata to it's new location.
+        self.write_metadata(&new_metadata, &new_location).await?;
+
+        // Return a table representing the updated version.
         let new_table = Table::builder()
-            .identifier(table.identifier().clone())
+            .identifier(current_table.identifier().clone())
             .metadata(new_metadata)
-            .metadata_location(new_metadata_location.to_string())
+            .metadata_location(new_location.to_string())
             .file_io(self.file_io.clone())
             .build()?;
 
-        Ok((new_table, new_metadata_location))
+        Ok((new_table, new_location))
     }
 
     async fn read_metadata(&self, location: &MetadataLocation) -> Result<TableMetadata> {
@@ -271,7 +298,7 @@ impl Catalog for MemoryCatalog {
     async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
         let root_namespace_state = self.root_namespace_state.lock().await;
 
-        self.load_table_from_locked_namespace_state(table_ident, &root_namespace_state)
+        self.load_table_from_locked_state(table_ident, &root_namespace_state)
             .await
     }
 
@@ -310,48 +337,70 @@ impl Catalog for MemoryCatalog {
     }
 
     /// Update a table in the catalog.
-    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
-        let mut root_namespace_state = self.root_namespace_state.lock().await;
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        let mut locked_namespace_state = self.root_namespace_state.lock().await;
 
-        let current_table = self
-            .load_table_from_locked_namespace_state(commit.identifier(), &root_namespace_state)
-            .await?;
-
-        for requirement in commit.take_requirements() {
-            requirement.check(Some(current_table.metadata()))?;
-        }
-
+        // Updates the current table version and writes a new metadata file.
         let (updated_table, new_metadata_location) = self
-            .update_table(&current_table, commit.take_updates())
+            .update_table_in_locked_state(commit, &locked_namespace_state)
             .await?;
 
-        root_namespace_state.update_table(updated_table.identifier(), new_metadata_location)?;
+        // Flip the pointer to reference the new metadata file.
+        locked_namespace_state
+            .commit_table_update(updated_table.identifier(), new_metadata_location)?;
 
         Ok(updated_table)
     }
 }
 
+/// Verifies that the a TableCommit's requirements are met by the current table state.
+/// If not, there's a conflict and the client should retry the commit.
+async fn check_current_table_state(
+    current_table: &Table,
+    requirements: Vec<TableRequirement>,
+) -> Result<MetadataLocation> {
+    let location =
+        MetadataLocation::from_str(current_table.metadata_location().ok_or(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Table metadata location is not set: {}",
+                current_table.identifier()
+            ),
+        ))?)?;
+
+    // Check that the commit's point of view is still reflected by the current state of the table.
+    for requirement in requirements {
+        requirement
+            .check(Some(current_table.metadata()))
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Conflict: One or more requirements failed, the client my retry",
+                )
+                .with_source(e)
+            })?;
+    }
+
+    Ok(location)
+}
+
 fn apply_table_updates(
     table: &Table,
+    current_location: &MetadataLocation,
+    new_location: &MetadataLocation,
     updates: Vec<TableUpdate>,
-) -> Result<(TableMetadata, MetadataLocation)> {
-    let metadata_location = table.metadata_location().ok_or(Error::new(
-        ErrorKind::DataInvalid,
-        format!("Table metadata location is not set: {}", table.identifier()),
-    ))?;
-
+) -> Result<TableMetadata> {
     let mut builder = TableMetadataBuilder::new_from_metadata(
         table.metadata().clone(),
-        Some(metadata_location.to_string()),
-    );
+        Some(current_location.to_string()),
+    )
+    .set_location(new_location.to_string());
 
     for update in updates {
         builder = update.apply(builder)?;
     }
 
-    let new_metadata_location = MetadataLocation::from_str(metadata_location)?.with_next_version();
-
-    Ok((builder.build()?.metadata, new_metadata_location))
+    Ok(builder.build()?.metadata)
 }
 
 #[cfg(test)]
