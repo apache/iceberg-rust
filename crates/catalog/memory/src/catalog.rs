@@ -411,7 +411,9 @@ mod tests {
     use std::vec;
 
     use iceberg::io::FileIOBuilder;
-    use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use iceberg::spec::{
+        NestedField, NullOrder, PartitionSpec, PrimitiveType, Schema, SortOrder, Type,
+    };
     use iceberg::transaction::Transaction;
     use regex::Regex;
     use tempfile::TempDir;
@@ -1829,5 +1831,58 @@ mod tests {
             updated_table.metadata().properties().get("key").unwrap(),
             "value"
         );
+
+        assert_eq!(table.identifier(), updated_table.identifier());
+        assert_eq!(table.metadata().uuid(), updated_table.metadata().uuid());
+        assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
+        assert_ne!(table.metadata_location(), updated_table.metadata_location());
+        assert!(
+            table.metadata().metadata_log().len() < updated_table.metadata().metadata_log().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_fails_if_table_doesnt_exist() {
+        let catalog = new_memory_catalog();
+
+        let namespace_ident = NamespaceIdent::new("a".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let table_ident = TableIdent::new(namespace_ident, "test".to_string());
+
+        // This table is not known to the catalog.
+        let table = build_table(table_ident);
+
+        let err = Transaction::new(&table)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    fn build_table(ident: TableIdent) -> Table {
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let location = temp_dir.path().to_str().unwrap().to_string();
+
+        let table_creation = TableCreation::builder()
+            .name(ident.name().to_string())
+            .schema(simple_table_schema())
+            .location(location)
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .identifier(ident)
+            .metadata(metadata)
+            .file_io(file_io)
+            .build()
+            .unwrap()
     }
 }
