@@ -24,7 +24,7 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result as DFResult;
 use futures::future::try_join_all;
-use iceberg::{Catalog, NamespaceIdent, Result};
+use iceberg::{Catalog, NamespaceIdent, Result, TableIdent};
 
 use crate::table::IcebergTableProvider;
 
@@ -64,7 +64,10 @@ impl IcebergSchemaProvider {
         let providers = try_join_all(
             table_names
                 .iter()
-                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+                .map(|name| {
+                    let table_ident = TableIdent::new(namespace.clone(), name.clone());
+                    IcebergTableProvider::try_new(client.clone(), table_ident)
+                })
                 .collect::<Vec<_>>(),
         )
         .await?;
