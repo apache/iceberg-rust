@@ -39,9 +39,8 @@ impl PuffinReader {
 
     /// Returns file metadata
     pub async fn file_metadata(&self) -> Result<&FileMetadata> {
-        let file_metadata = FileMetadata::default();
         self.file_metadata
-            .get_or_try_init(|| file_metadata.read(&self.input_file))
+            .get_or_try_init(|| FileMetadata::read(&self.input_file))
             .await
     }
 
