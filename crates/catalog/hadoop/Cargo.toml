@@ -36,8 +36,9 @@ iceberg = { workspace = true }
 serde_json = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-aws-sdk-s3 = "1.16.0"
+aws-sdk-s3 = {version="1.84.0",features = ["behavior-version-latest"]}
+tokio = { workspace = true }
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 itertools = { workspace = true }
-tokio = { workspace = true }
+

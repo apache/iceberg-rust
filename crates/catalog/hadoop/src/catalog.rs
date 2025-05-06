@@ -19,13 +19,14 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder};
+use iceberg::io::{FileIO, FileIOBuilder, S3_ENDPOINT};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
     TableIdent,
 };
+use tokio::io::AsyncReadExt;
 use typed_builder::TypedBuilder;
 
 use crate::utils::{
@@ -69,21 +70,40 @@ impl HadoopCatalog {
     pub async fn new(config: HadoopCatalogConfig) -> Result<Self> {
         let mut s3_client: Option<aws_sdk_s3::Client> = None;
         if let Some(warehouse_url) = &config.warehouse {
-            let file_io = FileIO::from_path(&warehouse_url)?
-                .with_props(&config.properties)
-                .build()?;
-            if warehouse_url.starts_with("s3://") {
-                let aws_config =
-                    create_sdk_config(&config.properties, config.endpoint_url.clone()).await;
-                s3_client = Some(aws_sdk_s3::Client::new(&aws_config));
+            if warehouse_url.starts_with("s3://") || warehouse_url.starts_with("s3a://") {
+                let mut io_props = config.properties.clone();
+                if config.endpoint_url.is_some() {
+                    io_props.insert(
+                        S3_ENDPOINT.to_string(),
+                        config.endpoint_url.clone().unwrap_or_default(),
+                    );
+                }
+                let file_io = FileIO::from_path(&warehouse_url)?
+                    .with_props(&io_props)
+                    .build()?;
+                let aws_config = create_sdk_config(&config.properties, config.endpoint_url.clone());
+                s3_client = Some(aws_sdk_s3::Client::from_conf(aws_config));
+                return Ok(Self {
+                    config: config,
+                    file_io,
+                    s3_client: s3_client,
+                });
             } else if warehouse_url.starts_with("hdfs://") {
+                //todo hdfs native client
+                let file_io = FileIO::from_path(&warehouse_url)?
+                    .with_props(&config.properties)
+                    .build()?;
+                return Ok(Self {
+                    config: config,
+                    file_io: file_io,
+                    s3_client: None,
+                });
             }
 
-            Ok(Self {
-                config: config,
-                file_io,
-                s3_client: s3_client,
-            })
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "warehouse_url is not supported",
+            ));
         } else {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -544,6 +564,12 @@ impl Catalog for HadoopCatalog {
             let s3_client = self.s3_client.as_ref().unwrap();
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
+                    println!(
+                        "Loading table: {}.{} from warehouse: {}",
+                        table_ident.namespace.join("."),
+                        table_ident.name,
+                        warehouse_url
+                    );
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let table_name = table_ident.name.clone();
                     let table_version_hint_path = format!(
@@ -556,39 +582,68 @@ impl Catalog for HadoopCatalog {
                         table_ident.namespace.join("/"),
                         &table_name
                     );
+                    println!("table_version_hint_path: {}", &table_version_hint_path);
                     let table_version_hint_result = s3_client
                         .get_object()
                         .bucket(bucket)
                         .key(table_version_hint_path)
                         .send()
-                        .await
-                        .map_err(|e| {
-                            Error::new(
+                        .await;
+                    let location = match self.config.warehouse.clone() {
+                        Some(warehouse_url) => get_default_table_location(
+                            &table_ident.namespace,
+                            &table_name,
+                            &warehouse_url,
+                        ),
+                        None => {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                "warehouse_url is required",
+                            ));
+                        }
+                    };
+
+                    println!("location: {}", &location);
+
+                    match table_version_hint_result {
+                        Ok(table_version_hint_result_output) => {
+                            let mut buf = Vec::new();
+                            table_version_hint_result_output
+                                .body
+                                .into_async_read()
+                                .read_to_end(&mut buf)
+                                .await?;
+                            println!("buf: {:?}", &buf);
+                            let table_version_hint = String::from_utf8_lossy(&buf);
+                            println!("table_version_hint: {}", &table_version_hint);
+                            let metadata_location = format!(
+                                "{}/{}/{}/metadata/v{}.metadata.json",
+                                &warehouse_url,
+                                table_ident.namespace.join("/"),
+                                &table_name,
+                                &table_version_hint
+                            );
+                            println!("metadata_location: {}", &metadata_location);
+                            let metadata_content =
+                                self.file_io.new_input(&metadata_location)?.read().await?;
+                            println!("metadata_content: {:?}", &metadata_content);
+                            let metadata =
+                                serde_json::from_slice::<TableMetadata>(&metadata_content)?;
+
+                            return Ok(Table::builder()
+                                .file_io(self.file_io.clone())
+                                .metadata_location(metadata_location)
+                                .metadata(metadata)
+                                .identifier(table_ident.clone())
+                                .build()?);
+                        }
+
+                        Err(e) => {
+                            return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!("Failed to get table version hint: {}", e),
-                            )
-                        });
-                        let location = match self.config.warehouse.clone() {
-                            Some(warehouse_url) => {
-                                get_default_table_location(&table_ident.namespace, &table_name, &warehouse_url)
-                            }
-                            None => {
-                                return Err(Error::new(
-                                    ErrorKind::DataInvalid,
-                                    "warehouse_url is required",
-                                ));
-                            }
-                        };
-                
-                        
-                    if table_version_hint_result.is_ok() {
-                        let table_version_hint =String::from_utf8_lossy( table_version_hint_result.unwrap().body().bytes().unwrap_or_default()).to_string();
-                        let metadata_location = create_metadata_location(&location, table_version_hint.parse().unwrap_or(0))?;
-                        return Ok(Table::builder()
-                            .file_io(self.file_io.clone())
-                            .metadata_location(metadata_location)
-                            .identifier(table_ident.clone())
-                            .build()?);
+                            ));
+                        }
                     }
                 }
                 None => {
@@ -607,7 +662,6 @@ impl Catalog for HadoopCatalog {
             "Table does not have a metadata location",
         ))
     }
-
 
     /// Asynchronously drops a table from the database.
     ///
@@ -684,7 +738,7 @@ impl Catalog for HadoopCatalog {
                             .skip(3)
                             .collect::<Vec<_>>()
                             .join("/"),
-                            table.namespace.join("/"),
+                        table.namespace.join("/"),
                         &table_name
                     );
                     s3_client
@@ -714,7 +768,6 @@ impl Catalog for HadoopCatalog {
         Ok(true)
     }
 
-
     async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -727,7 +780,7 @@ impl Catalog for HadoopCatalog {
     /// # Returns
     /// - `Ok(())` on successful rename or move of the table.
     /// - `Err(...)` if an error occurs during the process.
-    async fn rename_table(&self, _src: &TableIdent,_destt: &TableIdent) -> Result<()> {
+    async fn rename_table(&self, _src: &TableIdent, _destt: &TableIdent) -> Result<()> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "Updating a table is not supported yet",

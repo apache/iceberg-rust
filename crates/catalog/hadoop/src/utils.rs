@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-
-use aws_config::{BehaviorVersion, Region, SdkConfig};
+use aws_sdk_s3::{Config, config::{Credentials,BehaviorVersion}};
 use iceberg::NamespaceIdent;
 use iceberg::{Error, ErrorKind, Namespace, Result};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Property aws profile name
@@ -32,33 +31,47 @@ pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
 pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
 /// Property aws session token
 pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
-
+/// S3 Path Style Access.
+pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// Creates an aws sdk configuration based on
 /// provided properties and an optional endpoint URL.
-pub(crate) async fn create_sdk_config(
+pub(crate)  fn create_sdk_config(
     properties: &HashMap<String, String>,
     endpoint_url: Option<String>,
-) -> SdkConfig {
-    let mut config = aws_config::defaults(BehaviorVersion::latest());
-
+) -> Config {
+    let mut config =Config::builder()
+        .behavior_version(BehaviorVersion::latest());
+    
     if properties.is_empty() {
-        return config.load().await;
+        return config.build();
     }
 
     if let Some(endpoint_url) = endpoint_url {
         config = config.endpoint_url(endpoint_url);
     }
 
-    if let Some(profile_name) = properties.get(AWS_PROFILE_NAME) {
-        config = config.profile_name(profile_name);
+
+    if let Some(path_style_access) = properties.get(S3_PATH_STYLE_ACCESS) {
+        config = config.force_path_style(path_style_access.parse::<bool>().unwrap_or(false));
     }
 
+    if let (Some(access_key), Some(secret_key)) = (
+        properties.get(AWS_ACCESS_KEY_ID),
+        properties.get(AWS_SECRET_ACCESS_KEY),
+    ) {
+        let session_token = properties.get(AWS_SESSION_TOKEN).cloned();
+        let credentials_provider =
+            Credentials::new(access_key, secret_key, session_token, None, "properties");
+
+        config = config.credentials_provider(credentials_provider)
+    };
+
     if let Some(region_name) = properties.get(AWS_REGION_NAME) {
-        let region = Region::new(region_name.clone());
+        let region = aws_sdk_s3::config::Region::new(region_name.clone());
         config = config.region(region);
     }
 
-    config.load().await
+    config.build()
 }
 
 /// Create metadata location from `location` and `version`
