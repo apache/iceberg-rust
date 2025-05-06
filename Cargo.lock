@@ -4505,13 +4505,13 @@ dependencies = [
 
 [[package]]
 name = "motore-macros"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d952e1440b4d20c571450c5068649823532560156e554a4642c31f91ccbb65e7"
+checksum = "b40e46c845ac234bcba19db7ab252bc2778cbadd516a466d2f12b1580852d136"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.101",
 ]
 
 [[package]]
