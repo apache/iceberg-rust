@@ -1681,7 +1681,16 @@
 <a href="#1680" id="1680">1680</a>
 <a href="#1681" id="1681">1681</a>
 <a href="#1682" id="1682">1682</a>
-<a href="#1683" id="1683">1683</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href="#1683" id="1683">1683</a>
+<a href="#1684" id="1684">1684</a>
+<a href="#1685" id="1685">1685</a>
+<a href="#1686" id="1686">1686</a>
+<a href="#1687" id="1687">1687</a>
+<a href="#1688" id="1688">1688</a>
+<a href="#1689" id="1689">1689</a>
+<a href="#1690" id="1690">1690</a>
+<a href="#1691" id="1691">1691</a>
+<a href="#1692" id="1692">1692</a></pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -1850,6 +1859,7 @@
             )),
         },
         DataType::Struct(fields) =&gt; visit_struct(fields, visitor),
+        DataType::Dictionary(_key_type, value_type) =&gt; visit_type(value_type, visitor),
         other =&gt; <span class="prelude-val">Err</span>(Error::new(
             ErrorKind::DataInvalid,
             <span class="macro">format!</span>(<span class="string">"Cannot visit Arrow data type: {other}"</span>),
@@ -2712,6 +2722,7 @@
             Arc::new(simple_field(DEFAULT_MAP_FIELD_NAME, r#struct, <span class="bool-val">false</span>, <span class="string">"17"</span>)),
             <span class="bool-val">false</span>,
         );
+        <span class="kw">let </span>dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         <span class="kw">let </span>fields = Fields::from(<span class="macro">vec!</span>[
             simple_field(<span class="string">"aa"</span>, DataType::Int32, <span class="bool-val">false</span>, <span class="string">"18"</span>),
@@ -2791,6 +2802,7 @@
             ),
             simple_field(<span class="string">"map"</span>, map, <span class="bool-val">false</span>, <span class="string">"16"</span>),
             simple_field(<span class="string">"struct"</span>, r#struct, <span class="bool-val">false</span>, <span class="string">"17"</span>),
+            simple_field(<span class="string">"dictionary"</span>, dictionary, <span class="bool-val">false</span>, <span class="string">"30"</span>),
         ])
     }
 
@@ -2968,6 +2980,12 @@
                             }
                         ]
                     }
+                },
+                {
+                    "id":30,
+                    "name":"dictionary",
+                    "required":true,
+                    "type":"string"
                 }
             ],
             "identifier-field-ids":[]
@@ -2982,7 +3000,7 @@
         <span class="kw">let </span>arrow_schema = arrow_schema_for_arrow_schema_to_schema_test();
         <span class="kw">let </span>schema = iceberg_schema_for_arrow_schema_to_schema_test();
         <span class="kw">let </span>converted_schema = arrow_schema_to_schema(<span class="kw-2">&amp;</span>arrow_schema).unwrap();
-        <span class="macro">assert_eq!</span>(converted_schema, schema);
+        <span class="macro">pretty_assertions::assert_eq!</span>(converted_schema, schema);
     }
 
     <span class="kw">fn </span>arrow_schema_for_schema_to_arrow_schema_test() -&gt; ArrowSchema {
