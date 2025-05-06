@@ -335,17 +335,6 @@ pub(crate) fn update_snapshot_summaries(
     previous_summary: Option<&Summary>,
     truncate_full_table: bool,
 ) -> Result<Summary> {
-    // Validate that the operation is supported
-    if summary.operation != Operation::Append
-        && summary.operation != Operation::Overwrite
-        && summary.operation != Operation::Delete
-    {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Operation is not supported.",
-        ));
-    }
-
     let mut summary = match previous_summary {
         Some(prev_summary) if truncate_full_table && summary.operation == Operation::Overwrite => {
             truncate_table_summary(summary, prev_summary)
