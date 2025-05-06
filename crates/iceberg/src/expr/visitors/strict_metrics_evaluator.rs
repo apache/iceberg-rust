@@ -590,6 +590,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 
@@ -612,6 +616,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 
@@ -634,6 +642,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 
@@ -657,6 +669,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 

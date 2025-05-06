@@ -16,24 +16,32 @@
 # under the License.
 
 [package]
-edition = { workspace = true }
-homepage = { workspace = true }
-license = { workspace = true }
-name = "iceberg-sqllogictest"
-repository = { workspace = true }
-rust-version = { workspace = true }
-version = { workspace = true }
+name = "iceberg-cli"
+description = "Apache iceberg client"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+readme = "README.md"
 
 [dependencies]
-anyhow = { workspace = true }
-async-trait = {workspace = true}
-toml = {workspace = true}
+clap = {workspace = true}
+datafusion-cli = {workspace = true}
 datafusion = {workspace = true}
-datafusion-sqllogictest = {workspace = true}
-enum-ordinalize = {workspace = true}
-sqllogictest = {workspace = true}
-indicatif = {workspace = true}
+tokio = {workspace = true}
+anyhow = {workspace = true}
+iceberg-datafusion = {workspace = true}
+toml = {workspace = true}
+iceberg-catalog-rest = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+dirs = {workspace = true}
+stacker = {workspace = true}
+mimalloc = {workspace = true}
+fs-err = {workspace = true}
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
-ignored = ["enum-ordinalize"]
+ignored = ["stacker", "mimalloc"]
