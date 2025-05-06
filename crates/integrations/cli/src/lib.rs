@@ -15,12 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod bound_predicate_visitor;
-pub(crate) mod expression_evaluator;
-pub(crate) mod inclusive_metrics_evaluator;
-pub(crate) mod inclusive_projection;
-pub(crate) mod manifest_evaluator;
-pub(crate) mod page_index_evaluator;
-pub(crate) mod row_group_metrics_evaluator;
-pub(crate) mod strict_metrics_evaluator;
-pub(crate) mod strict_projection;
+#![doc = include_str!("../README.md")]
+pub const ICEBERG_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+mod catalog;
+pub use catalog::*;

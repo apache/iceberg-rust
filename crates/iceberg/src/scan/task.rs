@@ -98,6 +98,7 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             file_path: ctx.manifest_entry.file_path().to_string(),
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
+            equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
         }
     }
 }
@@ -113,4 +114,7 @@ pub struct FileScanTaskDeleteFile {
 
     /// partition id
     pub partition_spec_id: i32,
+
+    /// equality ids for equality deletes (empty for positional deletes)
+    pub equality_ids: Vec<i32>,
 }

@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod bound_predicate_visitor;
-pub(crate) mod expression_evaluator;
-pub(crate) mod inclusive_metrics_evaluator;
-pub(crate) mod inclusive_projection;
-pub(crate) mod manifest_evaluator;
-pub(crate) mod page_index_evaluator;
-pub(crate) mod row_group_metrics_evaluator;
-pub(crate) mod strict_metrics_evaluator;
-pub(crate) mod strict_projection;
+mod datafusion;
+
+use std::path::Path;
+
+use toml::Table as TomlTable;
+
+use crate::error::Result;
+
+#[async_trait::async_trait]
+pub trait Engine: Sized {
+    async fn new(config: TomlTable) -> Result<Self>;
+    async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
+}

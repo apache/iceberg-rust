@@ -27,7 +27,6 @@ use std::ops::Index;
 use std::str::FromStr;
 
 pub use _serde::RawLiteral;
-use bitvec::vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -1228,6 +1227,22 @@ impl Datum {
 /// It used in Literal::Map, to make it hashable, the order of key-value pairs is stored in a separate vector
 /// so that we can hash the map in a deterministic way. But it also means that the order of key-value pairs is matter
 /// for the hash value.
+///
+/// When converting to Arrow (e.g., for Iceberg), the map should be represented using
+/// the default field name "key_value".
+///
+/// Example:
+///
+/// ```text
+/// let key_value_field = Field::new(
+///     DEFAULT_MAP_FIELD_NAME,
+///     arrow_schema::DataType::Struct(vec![
+///         Arc::new(key_field.clone()),
+///         Arc::new(value_field.clone()),
+///     ].into()),
+///     false
+/// );
+/// '''
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Map {
     index: HashMap<Literal, usize>,
@@ -1726,102 +1741,53 @@ impl Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Struct {
     /// Vector to store the field values
-    fields: Vec<Literal>,
-    /// Null bitmap
-    null_bitmap: BitVec,
+    fields: Vec<Option<Literal>>,
 }
 
 impl Struct {
     /// Create a empty struct.
     pub fn empty() -> Self {
-        Self {
-            fields: Vec::new(),
-            null_bitmap: BitVec::new(),
-        }
+        Self { fields: Vec::new() }
     }
 
     /// Create a iterator to read the field in order of field_value.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = Option<&Literal>> {
-        self.null_bitmap.iter().zip(self.fields.iter()).map(
-            |(null, value)| {
-                if *null {
-                    None
-                } else {
-                    Some(value)
-                }
-            },
-        )
+        self.fields.iter().map(|field| field.as_ref())
     }
 
     /// returns true if the field at position `index` is null
     pub fn is_null_at_index(&self, index: usize) -> bool {
-        self.null_bitmap[index]
+        self.fields[index].is_none()
     }
 
     /// Return fields in the struct.
-    pub fn fields(&self) -> &[Literal] {
+    pub fn fields(&self) -> &[Option<Literal>] {
         &self.fields
     }
 }
 
 impl Index<usize> for Struct {
-    type Output = Literal;
+    type Output = Option<Literal>;
 
     fn index(&self, idx: usize) -> &Self::Output {
         &self.fields[idx]
     }
 }
 
-/// An iterator that moves out of a struct.
-pub struct StructValueIntoIter {
-    null_bitmap: bitvec::boxed::IntoIter,
-    fields: std::vec::IntoIter<Literal>,
-}
-
-impl Iterator for StructValueIntoIter {
-    type Item = Option<Literal>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match (self.null_bitmap.next(), self.fields.next()) {
-            (Some(null), Some(value)) => Some(if null { None } else { Some(value) }),
-            _ => None,
-        }
-    }
-}
-
 impl IntoIterator for Struct {
     type Item = Option<Literal>;
 
-    type IntoIter = StructValueIntoIter;
+    type IntoIter = std::vec::IntoIter<Option<Literal>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        StructValueIntoIter {
-            null_bitmap: self.null_bitmap.into_iter(),
-            fields: self.fields.into_iter(),
-        }
+        self.fields.into_iter()
     }
 }
 
 impl FromIterator<Option<Literal>> for Struct {
     fn from_iter<I: IntoIterator<Item = Option<Literal>>>(iter: I) -> Self {
-        let mut fields = Vec::new();
-        let mut null_bitmap = BitVec::new();
-
-        for value in iter.into_iter() {
-            match value {
-                Some(value) => {
-                    fields.push(value);
-                    null_bitmap.push(false)
-                }
-                None => {
-                    fields.push(Literal::Primitive(PrimitiveLiteral::Boolean(false)));
-                    null_bitmap.push(true)
-                }
-            }
-        }
         Struct {
-            fields,
-            null_bitmap,
+            fields: iter.into_iter().collect(),
         }
     }
 }
@@ -3402,7 +3368,7 @@ mod tests {
             match (&desered_literal, &struct_literal) {
                 (Literal::Struct(desered), Literal::Struct(expected)) => {
                     match (&desered.fields[0], &expected.fields[0]) {
-                        (Literal::Map(desered), Literal::Map(expected)) => {
+                        (Some(Literal::Map(desered)), Some(Literal::Map(expected))) => {
                             assert!(desered.has_same_content(expected))
                         }
                         _ => {

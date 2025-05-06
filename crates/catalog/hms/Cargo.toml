@@ -42,7 +42,23 @@ typed-builder = { workspace = true }
 uuid = { workspace = true }
 volo-thrift = { workspace = true }
 
+# Transitive dependencies below
+
+# Some dependencies don't correctly specify a minimal version for their dependencies and will fail to build in minimal versions build.
+# So we specify the version of these transitive dependencies here.
+# They can be removed when the direct dependencies are updated.
+
+# transitive dependencies of pilota/volo-thrift
+volo = { workspace = true }
+faststr = { workspace = true }
+linkedbytes = { workspace = true }
+metainfo = { workspace = true }
+
 [dev-dependencies]
 ctor = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 port_scanner = { workspace = true }
+
+[package.metadata.cargo-machete]
+# These dependencies are added to ensure minimal dependency version
+ignored = ["faststr", "linkedbytes", "metainfo", "volo"]

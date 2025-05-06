@@ -163,11 +163,7 @@ impl PartitionSpec {
             .iter()
             .enumerate()
             .map(|(i, field)| {
-                let value = if data.is_null_at_index(i) {
-                    None
-                } else {
-                    Some(&data.fields()[i])
-                };
+                let value = data[i].as_ref();
                 format!(
                     "{}={}",
                     field.name,
