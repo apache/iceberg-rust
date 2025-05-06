@@ -3590,6 +3590,7 @@ dependencies = [
  "iceberg_test_utils",
  "linkedbytes",
  "metainfo",
+ "motore-macros",
  "pilota",
  "port_scanner",
  "serde_json",
@@ -4504,9 +4505,9 @@ dependencies = [
 
 [[package]]
 name = "motore-macros"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b040aba76fd8414d68cf6ddb6e89c7d8f8579a7ec1ce963eb04e60b423aa174b"
+checksum = "d952e1440b4d20c571450c5068649823532560156e554a4642c31f91ccbb65e7"
 dependencies = [
  "proc-macro2",
  "quote",
