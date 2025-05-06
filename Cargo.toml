@@ -96,9 +96,9 @@ regex = "1.10.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.10.12" }
 rust_decimal = ">=1.37.1"
-serde = { version = ">=1.0.204", features = ["rc"] }
+serde = { version = ">=1.0.210", features = ["rc"] }
 serde_bytes = "0.11.15"
-serde_derive = { version = ">=1.0.204" }
+serde_derive = { version = ">=1.0.210" }
 serde_json = "1.0.138"
 serde_repr = "0.1.16"
 serde_with = "3.4"
