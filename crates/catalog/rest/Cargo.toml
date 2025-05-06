@@ -16,31 +16,31 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-rest"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg-catalog-rest"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust REST API"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "rest", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 # async-trait = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-http = "1.1.0"
+http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
-log = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 

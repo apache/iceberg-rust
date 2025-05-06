@@ -30,6 +30,7 @@ use iceberg_test_utils::docker::DockerCompose;
 use iceberg_test_utils::{normalize_test_name, set_up};
 use port_scanner::scan_port_addr;
 use tokio::time::sleep;
+use tracing::info;
 
 const REST_CATALOG_PORT: u16 = 8181;
 static DOCKER_COMPOSE_ENV: RwLock<Option<DockerCompose>> = RwLock::new(None);
@@ -62,7 +63,7 @@ async fn get_catalog() -> RestCatalog {
 
     let rest_socket_addr = SocketAddr::new(rest_catalog_ip, REST_CATALOG_PORT);
     while !scan_port_addr(rest_socket_addr) {
-        log::info!("Waiting for 1s rest catalog to ready...");
+        info!("Waiting for 1s rest catalog to ready...");
         sleep(std::time::Duration::from_millis(1000)).await;
     }
 

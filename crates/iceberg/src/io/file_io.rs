@@ -266,7 +266,7 @@ impl InputFile {
 
     /// Read and returns whole content of file.
     ///
-    /// For continues reading, use [`Self::reader`] instead.
+    /// For continuous reading, use [`Self::reader`] instead.
     pub async fn read(&self) -> crate::Result<Bytes> {
         Ok(self
             .op
@@ -275,7 +275,7 @@ impl InputFile {
             .to_bytes())
     }
 
-    /// Creates [`FileRead`] for continues reading.
+    /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
     pub async fn reader(&self) -> crate::Result<impl FileRead> {
@@ -309,7 +309,8 @@ impl FileWrite for opendal::Writer {
     }
 
     async fn close(&mut self) -> crate::Result<()> {
-        Ok(opendal::Writer::close(self).await?)
+        let _ = opendal::Writer::close(self).await?;
+        Ok(())
     }
 }
 
@@ -330,8 +331,15 @@ impl OutputFile {
     }
 
     /// Checks if file exists.
-    pub async fn exists(&self) -> crate::Result<bool> {
+    pub async fn exists(&self) -> Result<bool> {
         Ok(self.op.exists(&self.path[self.relative_path_pos..]).await?)
+    }
+
+    /// Deletes file.
+    ///
+    /// If the file does not exist, it will not return error.
+    pub async fn delete(&self) -> Result<()> {
+        Ok(self.op.delete(&self.path[self.relative_path_pos..]).await?)
     }
 
     /// Converts into [`InputFile`].
@@ -348,14 +356,14 @@ impl OutputFile {
     /// # Notes
     ///
     /// Calling `write` will overwrite the file if it exists.
-    /// For continues writing, use [`Self::writer`].
+    /// For continuous writing, use [`Self::writer`].
     pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
         let mut writer = self.writer().await?;
         writer.write(bs).await?;
         writer.close().await
     }
 
-    /// Creates output file for continues writing.
+    /// Creates output file for continuous writing.
     ///
     /// # Notes
     ///

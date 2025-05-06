@@ -129,12 +129,14 @@ pub(super) struct ListNamespaceResponse {
     pub(super) next_page_token: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct UpdateNamespacePropsRequest {
     removals: Option<Vec<String>>,
     updates: Option<HashMap<String, String>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct UpdateNamespacePropsResponse {
     updated: Vec<String>,

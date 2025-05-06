@@ -17,13 +17,13 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Mutex;
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 
 use crate::types::{ErrorResponse, TokenResponse};
 use crate::RestCatalogConfig;
@@ -59,9 +59,7 @@ impl HttpClient {
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()?,
+            client: cfg.client().unwrap_or_default(),
             token: Mutex::new(cfg.token()),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
@@ -80,13 +78,8 @@ impl HttpClient {
             .transpose()?
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
-            client: Client::builder()
-                .default_headers(extra_headers.clone())
-                .build()?,
-            token: Mutex::new(
-                cfg.token()
-                    .or_else(|| self.token.into_inner().ok().flatten()),
-            ),
+            client: cfg.client().unwrap_or(self.client),
+            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
             token_endpoint: (!cfg.get_token_endpoint().is_empty())
                 .then(|| cfg.get_token_endpoint())
                 .unwrap_or(self.token_endpoint),
@@ -106,7 +99,7 @@ impl HttpClient {
             .build()
             .unwrap();
         self.authenticate(&mut req).await.ok();
-        self.token.lock().unwrap().clone()
+        self.token.lock().await.clone()
     }
 
     /// Authenticate the request by filling token.
@@ -120,7 +113,7 @@ impl HttpClient {
     /// Support refreshing token while needed.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
         // Clone the token from lock without holding the lock for entire function.
-        let token = { self.token.lock().expect("lock poison").clone() };
+        let token = self.token.lock().await.clone();
 
         if self.credential.is_none() && token.is_none() {
             return Ok(());
@@ -162,12 +155,11 @@ impl HttpClient {
         );
 
         let auth_req = self
-            .client
             .request(Method::POST, &self.token_endpoint)
             .form(&params)
             .build()?;
         let auth_url = auth_req.url().clone();
-        let auth_resp = self.client.execute(auth_req).await?;
+        let auth_resp = self.execute(auth_req).await?;
 
         let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
             let text = auth_resp
@@ -202,7 +194,7 @@ impl HttpClient {
         }?;
         let token = auth_res.access_token;
         // Update token.
-        *self.token.lock().expect("lock poison") = Some(token.clone());
+        *self.token.lock().await = Some(token.clone());
         // Insert token in request.
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
@@ -220,14 +212,22 @@ impl HttpClient {
 
     #[inline]
     pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
-        self.client.request(method, url)
+        self.client
+            .request(method, url)
+            .headers(self.extra_headers.clone())
+    }
+
+    /// Executes the given `Request` and returns a `Response`.
+    pub async fn execute(&self, mut request: Request) -> Result<Response> {
+        request.headers_mut().extend(self.extra_headers.clone());
+        Ok(self.client.execute(request).await?)
     }
 
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
         self.authenticate(&mut request).await?;
-        Ok(self.client.execute(request).await?)
+        self.execute(request).await
     }
 }
 
@@ -250,18 +250,21 @@ pub(crate) async fn deserialize_catalog_response<R: DeserializeOwned>(
 }
 
 /// Deserializes a unexpected catalog response into an error.
-///
-/// TODO: Eventually, this function should return an error response that is custom to the error
-/// codes that all endpoints share (400, 404, etc.).
 pub(crate) async fn deserialize_unexpected_catalog_error(response: Response) -> Error {
-    let (status, headers) = (response.status(), response.headers().clone());
+    let err = Error::new(
+        ErrorKind::Unexpected,
+        "Received response with unexpected status code",
+    )
+    .with_context("status", response.status().to_string())
+    .with_context("headers", format!("{:?}", response.headers()));
+
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => return err.into(),
     };
 
-    Error::new(ErrorKind::Unexpected, "Received unexpected response")
-        .with_context("status", status.to_string())
-        .with_context("headers", format!("{:?}", headers))
-        .with_context("json", String::from_utf8_lossy(&bytes))
+    if bytes.is_empty() {
+        return err;
+    }
+    err.with_context("json", String::from_utf8_lossy(&bytes))
 }

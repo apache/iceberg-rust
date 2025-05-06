@@ -70,6 +70,7 @@ pub use catalog::{
 pub mod table;
 
 mod avro;
+pub mod cache;
 pub mod io;
 pub mod spec;
 
@@ -88,4 +89,4 @@ mod utils;
 pub mod writer;
 
 mod delete_vector;
-mod puffin;
+pub mod puffin;

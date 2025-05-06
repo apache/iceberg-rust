@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-s3tables"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-rust-version = "1.81.0"
+name = "iceberg-catalog-s3tables"
+rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust S3Tables Catalog"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "sql", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }

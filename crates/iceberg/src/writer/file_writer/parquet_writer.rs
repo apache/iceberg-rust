@@ -44,10 +44,11 @@ use crate::arrow::{
 };
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
-    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, MapType,
-    NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct, StructType,
-    TableMetadata, Type,
+    visit_schema, DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
+    MapType, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor,
+    Struct, StructType, TableMetadata, Type,
 };
+use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
@@ -458,6 +459,54 @@ impl ParquetWriter {
 
         Ok(builder)
     }
+
+    #[allow(dead_code)]
+    fn partition_value_from_bounds(
+        table_spec: Arc<PartitionSpec>,
+        lower_bounds: &HashMap<i32, Datum>,
+        upper_bounds: &HashMap<i32, Datum>,
+    ) -> Result<Struct> {
+        let mut partition_literals: Vec<Option<Literal>> = Vec::new();
+
+        for field in table_spec.fields() {
+            if let (Some(lower), Some(upper)) = (
+                lower_bounds.get(&field.source_id),
+                upper_bounds.get(&field.source_id),
+            ) {
+                if !field.transform.preserves_order() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
+                            field.name, field.transform
+                        ),
+                    ));
+                }
+
+                if lower != upper {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "multiple partition values for field {}: lower: {:?}, upper: {:?}",
+                            field.name, lower, upper
+                        ),
+                    ));
+                }
+
+                let transform_fn = create_transform_function(&field.transform)?;
+                let transform_literal =
+                    Literal::from(transform_fn.transform_literal_result(lower)?);
+
+                partition_literals.push(Some(transform_literal));
+            } else {
+                partition_literals.push(None);
+            }
+        }
+
+        let partition_struct = Struct::from_iter(partition_literals);
+
+        Ok(partition_struct)
+    }
 }
 
 impl FileWriter for ParquetWriter {
@@ -505,7 +554,7 @@ impl FileWriter for ParquetWriter {
         Ok(())
     }
 
-    async fn close(mut self) -> crate::Result<Vec<crate::spec::DataFileBuilder>> {
+    async fn close(mut self) -> Result<Vec<DataFileBuilder>> {
         let writer = match self.inner_writer.take() {
             Some(writer) => writer,
             None => return Ok(vec![]),
@@ -517,22 +566,33 @@ impl FileWriter for ParquetWriter {
 
         let written_size = self.written_size.load(std::sync::atomic::Ordering::Relaxed);
 
-        let parquet_metadata =
-            Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
+        if self.current_row_num == 0 {
+            self.out_file.delete().await.map_err(|err| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "Failed to convert metadata from thrift to parquet.",
+                    "Failed to delete empty parquet file.",
                 )
                 .with_source(err)
-            })?);
+            })?;
+            Ok(vec![])
+        } else {
+            let parquet_metadata =
+                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to convert metadata from thrift to parquet.",
+                    )
+                    .with_source(err)
+                })?);
 
-        Ok(vec![Self::parquet_to_data_file_builder(
-            self.schema,
-            parquet_metadata,
-            written_size as usize,
-            self.out_file.location().to_string(),
-            self.nan_value_count_visitor.nan_value_counts,
-        )?])
+            Ok(vec![Self::parquet_to_data_file_builder(
+                self.schema,
+                parquet_metadata,
+                written_size as usize,
+                self.out_file.location().to_string(),
+                self.nan_value_count_visitor.nan_value_counts,
+            )?])
+        }
     }
 }
 
@@ -2168,5 +2228,45 @@ mod tests {
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_parquet_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let location_gen =
+            MockLocationGenerator::new(temp_dir.path().to_str().unwrap().to_string());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        // write data
+        let pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(1)
+                    .with_fields(vec![NestedField::required(
+                        0,
+                        "col",
+                        Type::Primitive(PrimitiveType::Long),
+                    )
+                    .with_id(0)
+                    .into()])
+                    .build()
+                    .expect("Failed to create schema"),
+            ),
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        )
+        .build()
+        .await
+        .unwrap();
+
+        let res = pw.close().await.unwrap();
+        assert_eq!(res.len(), 0);
+
+        // Check that file should have been deleted.
+        assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
     }
 }

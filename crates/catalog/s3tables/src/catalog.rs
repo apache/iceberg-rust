@@ -24,7 +24,7 @@ use aws_sdk_s3tables::operation::get_namespace::GetNamespaceOutput;
 use aws_sdk_s3tables::operation::get_table::GetTableOutput;
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::types::OpenTableFormat;
-use iceberg::io::FileIO;
+use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -70,19 +70,7 @@ impl S3TablesCatalog {
         let aws_config = create_sdk_config(&config.properties, config.endpoint_url.clone()).await;
         let s3tables_client = aws_sdk_s3tables::Client::new(&aws_config);
 
-        // parse bucket name from ARN format like: arn:aws:s3:<region>:<account>:bucket/<bucket_name>
-        let bucket_name = config
-            .table_bucket_arn
-            .rsplit(":bucket/")
-            .next()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Invalid bucket ARN format: {}", config.table_bucket_arn),
-                )
-            })?;
-
-        let file_io = FileIO::from_path(&format!("s3://{}", bucket_name))?
+        let file_io = FileIOBuilder::new("s3")
             .with_props(&config.properties)
             .build()?;
 

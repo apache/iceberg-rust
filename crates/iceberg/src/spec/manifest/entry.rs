@@ -469,6 +469,46 @@ static SORT_ORDER_ID: Lazy<NestedFieldRef> = {
     })
 };
 
+static FIRST_ROW_ID: Lazy<NestedFieldRef> = {
+    Lazy::new(|| {
+        Arc::new(NestedField::optional(
+            142,
+            "first_row_id",
+            Type::Primitive(PrimitiveType::Long),
+        ))
+    })
+};
+
+static REFERENCE_DATA_FILE: Lazy<NestedFieldRef> = {
+    Lazy::new(|| {
+        Arc::new(NestedField::optional(
+            143,
+            "referenced_data_file",
+            Type::Primitive(PrimitiveType::String),
+        ))
+    })
+};
+
+static CONTENT_OFFSET: Lazy<NestedFieldRef> = {
+    Lazy::new(|| {
+        Arc::new(NestedField::optional(
+            144,
+            "content_offset",
+            Type::Primitive(PrimitiveType::Long),
+        ))
+    })
+};
+
+static CONTENT_SIZE_IN_BYTES: Lazy<NestedFieldRef> = {
+    Lazy::new(|| {
+        Arc::new(NestedField::optional(
+            145,
+            "content_size_in_bytes",
+            Type::Primitive(PrimitiveType::Long),
+        ))
+    })
+};
+
 fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
     vec![
         CONTENT.clone(),
@@ -491,6 +531,10 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         SPLIT_OFFSETS.clone(),
         EQUALITY_IDS.clone(),
         SORT_ORDER_ID.clone(),
+        FIRST_ROW_ID.clone(),
+        REFERENCE_DATA_FILE.clone(),
+        CONTENT_OFFSET.clone(),
+        CONTENT_SIZE_IN_BYTES.clone(),
     ]
 }
 

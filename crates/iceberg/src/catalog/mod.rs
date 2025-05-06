@@ -67,7 +67,7 @@ pub trait Catalog: Debug + Sync + Send {
         properties: HashMap<String, String>,
     ) -> Result<()>;
 
-    /// Drop a namespace from the catalog.
+    /// Drop a namespace from the catalog, or returns error if it doesn't exist.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()>;
 
     /// List tables from namespace.
@@ -83,7 +83,7 @@ pub trait Catalog: Debug + Sync + Send {
     /// Load table from the catalog.
     async fn load_table(&self, table: &TableIdent) -> Result<Table>;
 
-    /// Drop a table from the catalog.
+    /// Drop a table from the catalog, or returns error if it doesn't exist.
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
@@ -261,7 +261,9 @@ pub struct TableCreation {
     #[builder(default, setter(strip_option(fallback = sort_order_opt)))]
     pub sort_order: Option<SortOrder>,
     /// The properties of the table.
-    #[builder(default)]
+    #[builder(default, setter(transform = |props: impl IntoIterator<Item=(String, String)>| {
+        props.into_iter().collect()
+    }))]
     pub properties: HashMap<String, String>,
 }
 
@@ -361,6 +363,7 @@ pub enum TableRequirement {
 /// TableUpdate represents an update to a table in the catalog.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "action", rename_all = "kebab-case")]
+#[allow(clippy::large_enum_variant)]
 pub enum TableUpdate {
     /// Upgrade table's format version
     #[serde(rename_all = "kebab-case")]
@@ -482,6 +485,12 @@ pub enum TableUpdate {
         /// Snapshot id to remove partition statistics for.
         snapshot_id: i64,
     },
+    /// Remove schemas
+    #[serde(rename_all = "kebab-case")]
+    RemoveSchemas {
+        /// Schema IDs to remove.
+        schema_ids: Vec<i32>,
+    },
 }
 
 impl TableUpdate {
@@ -525,6 +534,7 @@ impl TableUpdate {
             TableUpdate::RemovePartitionStatistics { snapshot_id } => {
                 Ok(builder.remove_partition_statistics(snapshot_id))
             }
+            TableUpdate::RemoveSchemas { schema_ids } => builder.remove_schemas(&schema_ids),
         }
     }
 }
@@ -750,6 +760,7 @@ pub struct ViewCreation {
 /// ViewUpdate represents an update to a view in the catalog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ViewUpdate {
     /// Assign a new UUID to the view
     #[serde(rename_all = "kebab-case")]
@@ -890,6 +901,26 @@ mod tests {
         };
 
         assert_eq!(table_id, TableIdent::from_strs(vec!["ns1", "t1"]).unwrap());
+    }
+
+    #[test]
+    fn test_table_creation_iterator_properties() {
+        let builder = TableCreation::builder()
+            .name("table".to_string())
+            .schema(Schema::builder().build().unwrap());
+
+        fn s(k: &str, v: &str) -> (String, String) {
+            (k.to_string(), v.to_string())
+        }
+
+        let table_creation = builder
+            .properties([s("key", "value"), s("foo", "bar")])
+            .build();
+
+        assert_eq!(
+            HashMap::from([s("key", "value"), s("foo", "bar")]),
+            table_creation.properties
+        );
     }
 
     fn test_serde_json<T: Serialize + DeserializeOwned + PartialEq + Debug>(
@@ -1125,7 +1156,7 @@ mod tests {
 {
     "type": "assert-ref-snapshot-id",
     "ref": "snapshot-name",
-    "snapshot-id": null 
+    "snapshot-id": null
 }
         "#,
             TableRequirement::RefSnapshotIdMatch {
@@ -1245,7 +1276,7 @@ mod tests {
 {
     "action": "assign-uuid",
     "uuid": "2cc52516-5e73-41f2-b139-545d41a4e151"
-}        
+}
         "#,
             TableUpdate::AssignUuid {
                 uuid: uuid!("2cc52516-5e73-41f2-b139-545d41a4e151"),
@@ -1260,7 +1291,7 @@ mod tests {
 {
     "action": "upgrade-format-version",
     "format-version": 2
-}        
+}
         "#,
             TableUpdate::UpgradeFormatVersion {
                 format_version: FormatVersion::V2,
@@ -1569,7 +1600,7 @@ mod tests {
         1,
         2
     ]
-}  
+}
         "#;
 
         let update = TableUpdate::RemoveSnapshots {
@@ -1629,7 +1660,7 @@ mod tests {
     "min-snapshots-to-keep": 2,
     "max-snapshot-age-ms": 3,
     "max-ref-age-ms": 4
-}        
+}
         "#;
 
         let update = TableUpdate::SetSnapshotRef {
@@ -1656,7 +1687,7 @@ mod tests {
         "prop1": "v1",
         "prop2": "v2"
     }
-}        
+}
         "#;
 
         let update = TableUpdate::SetProperties {
@@ -1680,7 +1711,7 @@ mod tests {
         "prop1",
         "prop2"
     ]
-}        
+}
         "#;
 
         let update = TableUpdate::RemoveProperties {
@@ -1742,7 +1773,7 @@ mod tests {
 {
     "action": "assign-uuid",
     "uuid": "2cc52516-5e73-41f2-b139-545d41a4e151"
-}        
+}
         "#,
             ViewUpdate::AssignUuid {
                 uuid: uuid!("2cc52516-5e73-41f2-b139-545d41a4e151"),
@@ -1757,7 +1788,7 @@ mod tests {
 {
     "action": "upgrade-format-version",
     "format-version": 1
-}        
+}
         "#,
             ViewUpdate::UpgradeFormatVersion {
                 format_version: ViewFormatVersion::V1,
@@ -1825,7 +1856,7 @@ mod tests {
 {
     "action": "set-location",
     "location": "s3://db/view"
-}        
+}
         "#,
             ViewUpdate::SetLocation {
                 location: "s3://db/view".to_string(),
@@ -1843,7 +1874,7 @@ mod tests {
         "prop1": "v1",
         "prop2": "v2"
     }
-}        
+}
         "#,
             ViewUpdate::SetProperties {
                 updates: vec![
@@ -1866,7 +1897,7 @@ mod tests {
         "prop1",
         "prop2"
     ]
-}        
+}
         "#,
             ViewUpdate::RemoveProperties {
                 removals: vec!["prop1".to_string(), "prop2".to_string()],
@@ -1895,7 +1926,7 @@ mod tests {
               "dialect" : "spark"
             } ]
     }
-}        
+}
         "#,
             ViewUpdate::AddViewVersion {
                 view_version: ViewVersion::builder()
@@ -1925,7 +1956,7 @@ mod tests {
 {
     "action": "set-current-view-version",
     "view-version-id": 1
-}        
+}
         "#,
             ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
         );
@@ -1938,7 +1969,7 @@ mod tests {
 {
     "action": "remove-partition-specs",
     "spec-ids": [1, 2]
-}        
+}
         "#,
             TableUpdate::RemovePartitionSpecs {
                 spec_ids: vec![1, 2],
@@ -1972,7 +2003,7 @@ mod tests {
                                 }
                         ]
                 }
-        } 
+        }
         "#,
             TableUpdate::SetStatistics {
                 statistics: StatisticsFile {
@@ -2002,7 +2033,7 @@ mod tests {
         {
                 "action": "remove-statistics",
                 "snapshot-id": 1940541653261589030
-        } 
+        }
         "#,
             TableUpdate::RemoveStatistics {
                 snapshot_id: 1940541653261589030,
@@ -2046,5 +2077,20 @@ mod tests {
                 snapshot_id: 1940541653261589030,
             },
         )
+    }
+
+    #[test]
+    fn test_remove_schema_update() {
+        test_serde_json(
+            r#"
+                {
+                    "action": "remove-schemas",
+                    "schema-ids": [1, 2]
+                }        
+            "#,
+            TableUpdate::RemoveSchemas {
+                schema_ids: vec![1, 2],
+            },
+        );
     }
 }

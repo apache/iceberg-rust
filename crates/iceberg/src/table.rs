@@ -162,6 +162,10 @@ pub struct Table {
 }
 
 impl Table {
+    pub(crate) fn with_metadata(&mut self, metadata: TableMetadataRef) {
+        self.metadata = metadata;
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()
