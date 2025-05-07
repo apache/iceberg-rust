@@ -35,7 +35,7 @@ use crate::physical_plan::scan::IcebergTableScan;
 
 /// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
 /// managing access to a [`Table`].
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
     /// A table in the catalog.
     table: Table,
@@ -45,16 +45,6 @@ pub struct IcebergTableProvider {
     schema: ArrowSchemaRef,
     /// A reference to the catalog that this table provider belongs to.
     catalog: Option<Arc<dyn Catalog>>,
-}
-
-impl std::fmt::Debug for IcebergTableProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IcebergTableProvider")
-            .field("table", &self.table)
-            .field("snapshot_id", &self.snapshot_id)
-            .field("schema", &self.schema)
-            .finish_non_exhaustive()
-    }
 }
 
 impl IcebergTableProvider {

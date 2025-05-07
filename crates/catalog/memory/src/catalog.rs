@@ -53,6 +53,19 @@ impl MemoryCatalog {
             warehouse_location,
         }
     }
+
+    /// Register an existing table in the memory catalog.
+    pub async fn register_existing_table(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<()> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        root_namespace_state.insert_new_table(table_ident, metadata_location.clone())?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
