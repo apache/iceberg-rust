@@ -64,8 +64,13 @@ impl<'a> UpdateSchema<'a> {
         case_sensitive: bool,
         schema: Option<SchemaRef>,
     ) -> Self {
-        let current_schema =
-            schema.unwrap_or_else(|| transaction.table().metadata().current_schema().clone());
+        let current_schema = schema.unwrap_or_else(|| {
+            transaction
+                .current_table()
+                .metadata()
+                .current_schema()
+                .clone()
+        });
         let last_column_id = current_schema.highest_field_id() + 1;
 
         UpdateSchema {
@@ -209,7 +214,6 @@ impl<'a> UpdateSchema<'a> {
     /// # Returns
     ///
     /// Returns the `UpdateSchema` with the delete operation staged.
-
     fn delete_column(&mut self, column_name: Vec<String>) -> Result<&mut Self, Error> {
         let full_name = column_name.join(".");
 
