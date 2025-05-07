@@ -19,6 +19,7 @@
 
 mod append;
 mod remove_snapshots;
+mod rewrite_files;
 mod snapshot;
 mod sort_order;
 
@@ -27,8 +28,8 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::Arc;
 
-pub use append::{MANIFEST_MERGE_ENABLED, MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES};
 use remove_snapshots::RemoveSnapshotAction;
+use rewrite_files::RewriteFilesAction;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -38,6 +39,19 @@ use crate::transaction::append::{FastAppendAction, MergeAppendAction};
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::TableUpdate::UpgradeFormatVersion;
 use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
+
+/// Target size of manifest file when merging manifests.
+pub const MANIFEST_TARGET_SIZE_BYTES: &str = "commit.manifest.target-size-bytes";
+/// This is the default value for `MANIFEST_TARGET_SIZE_BYTES`.
+pub const MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u32 = 8 * 1024 * 1024; // 8 MB
+/// Minimum number of manifests to merge.
+pub const MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
+/// This is the default value for `MANIFEST_MIN_MERGE_COUNT`.
+pub const MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
+/// Whether allow to merge manifests.
+pub const MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+/// This is the default value for `MANIFEST_MERGE_ENABLED`.
+pub const MANIFEST_MERGE_ENABLED_DEFAULT: bool = false;
 
 /// Table transaction.
 pub struct Transaction<'a> {
@@ -213,6 +227,22 @@ impl<'a> Transaction<'a> {
     /// Creates remove snapshot action.
     pub fn expire_snapshot(self) -> RemoveSnapshotAction<'a> {
         RemoveSnapshotAction::new(self)
+    }
+
+    /// Creates rewrite files action.
+    pub fn rewrite_files(
+        self,
+        commit_uuid: Option<Uuid>,
+        key_metadata: Vec<u8>,
+    ) -> Result<RewriteFilesAction<'a>> {
+        let snapshot_id = self.generate_unique_snapshot_id();
+        RewriteFilesAction::new(
+            self,
+            snapshot_id,
+            commit_uuid.unwrap_or_else(Uuid::now_v7),
+            key_metadata,
+            HashMap::new(),
+        )
     }
 
     /// Remove properties in table.

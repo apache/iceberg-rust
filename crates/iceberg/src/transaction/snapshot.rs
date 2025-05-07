@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 use std::pin::Pin;
@@ -45,7 +45,7 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
     fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProduceAction,
+        snapshot_produce: &mut SnapshotProduceAction,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
@@ -77,6 +77,14 @@ pub(crate) struct SnapshotProduceAction<'a> {
     snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
     pub added_delete_files: Vec<DataFile>,
+
+    removed_data_files: Vec<DataFile>,
+    removed_delete_files: Vec<DataFile>,
+
+    // for filtering out files that are removed by action
+    pub removed_data_file_paths: HashSet<String>,
+    pub removed_delete_file_paths: HashSet<String>,
+
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -98,6 +106,10 @@ impl<'a> SnapshotProduceAction<'a> {
             snapshot_properties,
             added_data_files: vec![],
             added_delete_files: vec![],
+            removed_data_files: vec![],
+            removed_delete_files: vec![],
+            removed_data_file_paths: HashSet::new(),
+            removed_delete_file_paths: HashSet::new(),
             manifest_counter: (0..),
             key_metadata,
         })
@@ -165,7 +177,29 @@ impl<'a> SnapshotProduceAction<'a> {
         Ok(self)
     }
 
-    fn new_manifest_writer(
+    pub fn delete_files(
+        &mut self,
+        remove_data_files: impl IntoIterator<Item = DataFile>,
+    ) -> Result<&mut Self> {
+        for data_file in remove_data_files.into_iter() {
+            Self::validate_partition_value(
+                data_file.partition(),
+                self.tx.current_table.metadata().default_partition_type(),
+            )?;
+            if data_file.content_type() == DataContentType::Data {
+                self.removed_data_file_paths
+                    .insert(data_file.file_path.clone());
+                self.removed_data_files.push(data_file);
+            } else {
+                self.removed_delete_file_paths
+                    .insert(data_file.file_path.clone());
+                self.removed_delete_files.push(data_file);
+            }
+        }
+        Ok(self)
+    }
+
+    pub fn new_manifest_writer(
         &mut self,
         content_type: &ManifestContentType,
         partition_spec_id: i32,
