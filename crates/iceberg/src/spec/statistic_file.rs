@@ -374,6 +374,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: Some(0),
             partition_spec_id: spec_id,
+            content_offset: None,
+            content_size_in_bytes: None,
+            first_row_id: None,
+            referenced_data_file: None,
         };
         stats.live_entry(data_file, snapshot1.clone())?;
         assert_eq!(stats.data_record_count(), 1);
@@ -412,6 +416,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: spec_id,
+            content_offset: None,
+            content_size_in_bytes: None,
+            first_row_id: None,
+            referenced_data_file: None,
         };
 
         stats.live_entry(posdel_file, snapshot2.clone())?;
@@ -451,6 +459,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: None,
             partition_spec_id: spec_id,
+            content_offset: None,
+            content_size_in_bytes: None,
+            first_row_id: None,
+            referenced_data_file: None,
         };
         stats.live_entry(eqdel_file, snapshot3.clone())?;
         assert_eq!(stats.equality_delete_record_count(), 3);
@@ -487,6 +499,10 @@ mod test {
             equality_ids: vec![],
             sort_order_id: Some(0),
             partition_spec_id: spec_id + 1, // mismatch spec id.
+            content_offset: None,
+            content_size_in_bytes: None,
+            first_row_id: None,
+            referenced_data_file: None,
         };
 
         let result = stats.live_entry(wrong_file, snapshot4);
