@@ -46,6 +46,8 @@ impl<'a> MetadataTable<'a> {
 
 #[cfg(test)]
 pub mod tests {
+    //! Sharable tests for the metadata table.
+
     use expect_test::Expect;
     use futures::TryStreamExt;
     use itertools::Itertools;

@@ -16,29 +16,30 @@
 # under the License.
 
 [package]
-name = "iceberg"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust implementation"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [features]
 default = ["storage-memory", "storage-fs", "storage-s3", "tokio"]
 storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-gcs"]
 
-storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
-storage-s3 = ["opendal/services-s3"]
 storage-gcs = ["opendal/services-gcs"]
+storage-memory = ["opendal/services-memory"]
+storage-oss = ["opendal/services-oss"]
+storage-s3 = ["opendal/services-s3"]
 
 async-std = ["dep:async-std"]
-tokio = ["dep:tokio"]
+tokio = ["tokio/rt-multi-thread"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -55,7 +56,6 @@ arrow-string = { workspace = true }
 async-std = { workspace = true, optional = true, features = ["attributes"] }
 async-trait = { workspace = true }
 bimap = { workspace = true }
-bitvec = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = { workspace = true }
@@ -80,7 +80,7 @@ serde_json = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
 thrift = { workspace = true }
-tokio = { workspace = true, optional = true, features = ["sync"] }
+tokio = { workspace = true, optional = false, features = ["sync"] }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -95,3 +95,7 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tera = { workspace = true }
+
+[package.metadata.cargo-machete]
+# These dependencies are added to ensure minimal dependency version
+ignored = ["tap"]

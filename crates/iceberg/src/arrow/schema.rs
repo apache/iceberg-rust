@@ -28,7 +28,6 @@ use arrow_array::{
     Int64Array, PrimitiveArray, Scalar, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
-use bitvec::macros::internal::funty::Fundamental;
 use num_bigint::BigInt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
@@ -168,6 +167,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
             )),
         },
         DataType::Struct(fields) => visit_struct(fields, visitor),
+        DataType::Dictionary(_key_type, value_type) => visit_type(value_type, visitor),
         other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Cannot visit Arrow data type: {other}"),
@@ -213,6 +213,10 @@ fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) ->
 }
 
 /// Convert Arrow schema to Iceberg schema.
+///
+/// Iceberg schema fields require a unique field id, and this function assumes that each field
+/// in the provided Arrow schema contains a field id in its metadata. If the metadata is missing
+/// or the field id is not set, the conversion will fail
 pub fn arrow_schema_to_schema(schema: &ArrowSchema) -> Result<Schema> {
     let mut visitor = ArrowSchemaConverter::new();
     visit_schema(schema, &mut visitor)
@@ -658,10 +662,10 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Box<dyn ArrowDatum + Send
             Ok(Box::new(Int64Array::new_scalar(*value)))
         }
         (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
-            Ok(Box::new(Float32Array::new_scalar(value.as_f32())))
+            Ok(Box::new(Float32Array::new_scalar(value.to_f32().unwrap())))
         }
         (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
-            Ok(Box::new(Float64Array::new_scalar(value.as_f64())))
+            Ok(Box::new(Float64Array::new_scalar(value.to_f64().unwrap())))
         }
         (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
             Ok(Box::new(StringArray::new_scalar(value.as_str())))
@@ -1026,6 +1030,7 @@ mod tests {
             Arc::new(simple_field(DEFAULT_MAP_FIELD_NAME, r#struct, false, "17")),
             false,
         );
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         let fields = Fields::from(vec![
             simple_field("aa", DataType::Int32, false, "18"),
@@ -1105,6 +1110,7 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
+            simple_field("dictionary", dictionary, false, "30"),
         ])
     }
 
@@ -1282,6 +1288,12 @@ mod tests {
                             }
                         ]
                     }
+                },
+                {
+                    "id":30,
+                    "name":"dictionary",
+                    "required":true,
+                    "type":"string"
                 }
             ],
             "identifier-field-ids":[]
@@ -1296,7 +1308,7 @@ mod tests {
         let arrow_schema = arrow_schema_for_arrow_schema_to_schema_test();
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-        assert_eq!(converted_schema, schema);
+        pretty_assertions::assert_eq!(converted_schema, schema);
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {

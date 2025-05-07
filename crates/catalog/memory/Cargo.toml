@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "iceberg-catalog-memory"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
+name = "iceberg-catalog-memory"
 rust-version = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Rust Memory Catalog API"
-repository = { workspace = true }
-license = { workspace = true }
 keywords = ["iceberg", "memory", "catalog"]
+license = { workspace = true }
+repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }

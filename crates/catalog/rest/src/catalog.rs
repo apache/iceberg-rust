@@ -31,7 +31,7 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
@@ -58,6 +58,9 @@ pub struct RestCatalogConfig {
 
     #[builder(default)]
     props: HashMap<String, String>,
+
+    #[builder(default)]
+    client: Option<Client>,
 }
 
 impl RestCatalogConfig {
@@ -104,6 +107,11 @@ impl RestCatalogConfig {
             "tables",
             &table.name,
         ])
+    }
+
+    /// Get the client from the config.
+    pub(crate) fn client(&self) -> Option<Client> {
+        self.client.clone()
     }
 
     /// Get the token from the config.
@@ -395,7 +403,7 @@ impl Catalog for RestCatalog {
                     deserialize_catalog_response::<NamespaceSerde>(http_response).await?;
                 Namespace::try_from(response)
             }
-            StatusCode::NOT_FOUND => Err(Error::new(
+            StatusCode::CONFLICT => Err(Error::new(
                 ErrorKind::Unexpected,
                 "Tried to create a namespace that already exists",
             )),
