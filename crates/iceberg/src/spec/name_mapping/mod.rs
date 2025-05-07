@@ -105,7 +105,7 @@ impl MappedField {
         Self {
             field_id,
             names,
-            fields: fields,
+            fields,
         }
     }
 
@@ -457,14 +457,12 @@ mod tests {
                             field_id: Some(4),
                             names: vec!["latitude".to_string(), "lat".to_string()],
                             fields: vec![]
-                        }
-                        .into(),
+                        },
                         MappedField {
                             field_id: Some(5),
                             names: vec!["longitude".to_string(), "long".to_string()],
                             fields: vec![]
-                        }
-                        .into(),
+                        },
                     ]
                 }
             ],
@@ -499,8 +497,7 @@ mod tests {
                         field_id: Some(5),
                         names: vec!["element".to_string()],
                         fields: vec![],
-                    }
-                    .into()],
+                    }],
                 },
                 MappedField {
                     field_id: Some(6),
@@ -510,8 +507,7 @@ mod tests {
                             field_id: Some(7),
                             names: vec!["key".to_string()],
                             fields: vec![],
-                        }
-                        .into(),
+                        },
                         MappedField {
                             field_id: Some(8),
                             names: vec!["value".to_string()],
@@ -520,17 +516,14 @@ mod tests {
                                     field_id: Some(9),
                                     names: vec!["key".to_string()],
                                     fields: vec![],
-                                }
-                                .into(),
+                                },
                                 MappedField {
                                     field_id: Some(10),
                                     names: vec!["value".to_string()],
                                     fields: vec![],
-                                }
-                                .into(),
+                                },
                             ],
-                        }
-                        .into(),
+                        },
                     ],
                 },
                 MappedField {
@@ -544,17 +537,14 @@ mod tests {
                                 field_id: Some(13),
                                 names: vec!["latitude".to_string()],
                                 fields: vec![],
-                            }
-                            .into(),
+                            },
                             MappedField {
                                 field_id: Some(14),
                                 names: vec!["longitude".to_string()],
                                 fields: vec![],
-                            }
-                            .into(),
+                            },
                         ],
-                    }
-                    .into()],
+                    }],
                 },
                 MappedField {
                     field_id: Some(15),
@@ -564,14 +554,12 @@ mod tests {
                             field_id: Some(16),
                             names: vec!["name".to_string()],
                             fields: vec![],
-                        }
-                        .into(),
+                        },
                         MappedField {
                             field_id: Some(17),
                             names: vec!["age".to_string()],
                             fields: vec![],
-                        }
-                        .into(),
+                        },
                     ],
                 },
             ],
