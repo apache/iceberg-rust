@@ -462,7 +462,7 @@ impl Catalog for HadoopCatalog {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let prefix = format!(
-                        "{}/{}",
+                        "{}/{}/",
                         &warehouse_url
                             .split("/")
                             .skip(3)
