@@ -129,6 +129,13 @@ impl<'a> SnapshotProduceAction<'a> {
         data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
         let data_files: Vec<DataFile> = data_files.into_iter().collect();
+        if data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidArgument,
+                "Doesn't add any data files when fast append",
+            ));
+        }
+
         for data_file in &data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
@@ -172,6 +179,13 @@ impl<'a> SnapshotProduceAction<'a> {
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
+        if added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "No added data files found when write a manifest file",
+            ));
+        }
+
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {

@@ -220,6 +220,14 @@ mod tests {
     use crate::{TableRequirement, TableUpdate};
 
     #[tokio::test]
+    async fn test_empty_data_append_action() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let mut action = tx.fast_append(None, vec![]).unwrap();
+        assert!(action.add_data_files(vec![]).is_err());
+    }
+
+    #[tokio::test]
     async fn test_fast_append_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
