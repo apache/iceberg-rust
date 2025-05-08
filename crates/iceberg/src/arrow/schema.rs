@@ -167,6 +167,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
             )),
         },
         DataType::Struct(fields) => visit_struct(fields, visitor),
+        DataType::Dictionary(_key_type, value_type) => visit_type(value_type, visitor),
         other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Cannot visit Arrow data type: {other}"),
@@ -1029,6 +1030,7 @@ mod tests {
             Arc::new(simple_field(DEFAULT_MAP_FIELD_NAME, r#struct, false, "17")),
             false,
         );
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         let fields = Fields::from(vec![
             simple_field("aa", DataType::Int32, false, "18"),
@@ -1108,6 +1110,7 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
+            simple_field("dictionary", dictionary, false, "30"),
         ])
     }
 
@@ -1285,6 +1288,12 @@ mod tests {
                             }
                         ]
                     }
+                },
+                {
+                    "id":30,
+                    "name":"dictionary",
+                    "required":true,
+                    "type":"string"
                 }
             ],
             "identifier-field-ids":[]
@@ -1299,7 +1308,7 @@ mod tests {
         let arrow_schema = arrow_schema_for_arrow_schema_to_schema_test();
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
-        assert_eq!(converted_schema, schema);
+        pretty_assertions::assert_eq!(converted_schema, schema);
     }
 
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
