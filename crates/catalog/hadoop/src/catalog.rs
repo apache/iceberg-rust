@@ -17,9 +17,9 @@
 
 use std::collections::HashMap;
 
-use anyhow::anyhow;
+
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, S3_ENDPOINT};
+use iceberg::io::{FileIO, S3_ENDPOINT};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
@@ -123,24 +123,35 @@ impl Catalog for HadoopCatalog {
         &self,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        if parent.is_some() {
-            return Ok(vec![]);
-        }
         let mut result = Vec::new();
         if self.s3_client.is_some() {
             let s3_client = self.s3_client.as_ref().unwrap();
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
-                    let prefix = warehouse_url
-                        .split("/")
-                        .skip(3)
-                        .collect::<Vec<_>>()
-                        .join("/");
+                    let warehouse_prefix= warehouse_url
+                    .split("/")
+                    .skip(3)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                    let mut prefix = format!(
+                        "{}/",
+                        &warehouse_prefix
+                    );
+
+                    if let Some(parent) = parent {
+                        prefix = format!(
+                            "{}/{}/",
+                            &warehouse_prefix,
+                            parent.join("/")
+                        );
+                    }
+
                     let list = s3_client
                         .list_objects_v2()
                         .bucket(bucket)
-                        .prefix(prefix)
+                        .prefix(&prefix)
+                        .delimiter("/")
                         .send()
                         .await
                         .map_err(|e| {
@@ -149,11 +160,55 @@ impl Catalog for HadoopCatalog {
                                 format!("Failed to list objects: {}", e),
                             )
                         })?;
-                    for object in list.contents.unwrap_or_default() {
-                        let key = object.key.unwrap_or_default();
-                        if key.ends_with("/") {
-                            let namespace = key.split("/").nth(3).unwrap_or("");
-                            result.push(NamespaceIdent::new(namespace.to_string()));
+                    for object in list.common_prefixes.unwrap_or_default() {
+                        let key = object.prefix.unwrap_or_default();
+                        // Skip the prefix part and check if it's a first level directory
+                        let relative_path = if key.starts_with(&prefix) {
+                            &key[prefix.len()..]
+                        } else {
+                            &key
+                        };
+                        // Only add namespace if it's a first level directory (has only one /)
+                        
+                        if relative_path.ends_with("/") {
+                            let warehouse_relative_path = if key.starts_with(&warehouse_prefix) {
+                                &key[warehouse_prefix.len()..]
+                            } else {
+                                &key
+                            };
+                            
+                            let namespaces = warehouse_relative_path.split("/").collect::<Vec<_>>();
+                            
+
+                            let table_version_hint_path = format!(
+                                "{}/{}/metadata/version-hint.text",
+                                &warehouse_url
+                                    .split("/")
+                                    .skip(3)
+                                    .collect::<Vec<_>>()
+                                    .join("/"),
+                                namespaces.join("/"),
+                            );
+
+                            //check It's not table
+                            let table_version_hint = s3_client
+                                .get_object()
+                                .bucket(bucket)
+                                .key(table_version_hint_path)
+                                .send()
+                                .await
+                                .map_err(|e| {
+                                    Error::new(
+                                        ErrorKind::DataInvalid,
+                                        format!("Failed to get table version hint: {}", e),
+                                    )
+                                });
+                            
+                            
+                            
+                            if !table_version_hint.is_ok() && !namespaces.is_empty() {
+                                result.push(NamespaceIdent::from_vec(namespaces.iter().filter(|e|!e.is_empty()).map(|e|e.to_string()).collect())?);
+                            }
                         }
                     }
                 }
@@ -564,12 +619,6 @@ impl Catalog for HadoopCatalog {
             let s3_client = self.s3_client.as_ref().unwrap();
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
-                    println!(
-                        "Loading table: {}.{} from warehouse: {}",
-                        table_ident.namespace.join("."),
-                        table_ident.name,
-                        warehouse_url
-                    );
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let table_name = table_ident.name.clone();
                     let table_version_hint_path = format!(
@@ -582,7 +631,6 @@ impl Catalog for HadoopCatalog {
                         table_ident.namespace.join("/"),
                         &table_name
                     );
-                    println!("table_version_hint_path: {}", &table_version_hint_path);
                     let table_version_hint_result = s3_client
                         .get_object()
                         .bucket(bucket)
@@ -603,7 +651,6 @@ impl Catalog for HadoopCatalog {
                         }
                     };
 
-                    println!("location: {}", &location);
 
                     match table_version_hint_result {
                         Ok(table_version_hint_result_output) => {
@@ -613,9 +660,8 @@ impl Catalog for HadoopCatalog {
                                 .into_async_read()
                                 .read_to_end(&mut buf)
                                 .await?;
-                            println!("buf: {:?}", &buf);
                             let table_version_hint = String::from_utf8_lossy(&buf);
-                            println!("table_version_hint: {}", &table_version_hint);
+                            
                             let metadata_location = format!(
                                 "{}/{}/{}/metadata/v{}.metadata.json",
                                 &warehouse_url,
@@ -623,10 +669,8 @@ impl Catalog for HadoopCatalog {
                                 &table_name,
                                 &table_version_hint
                             );
-                            println!("metadata_location: {}", &metadata_location);
                             let metadata_content =
                                 self.file_io.new_input(&metadata_location)?.read().await?;
-                            println!("metadata_content: {:?}", &metadata_content);
                             let metadata =
                                 serde_json::from_slice::<TableMetadata>(&metadata_content)?;
 
