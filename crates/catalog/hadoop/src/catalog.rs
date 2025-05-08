@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-
 use async_trait::async_trait;
 use iceberg::io::{FileIO, S3_ENDPOINT};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
@@ -129,30 +128,18 @@ impl Catalog for HadoopCatalog {
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
-                    let  warehouse_prefix_origin= warehouse_url
-                    .split("/")
-                    .skip(3)
-                    .collect::<Vec<_>>()
-                    .join("/");
-                    let mut warehouse_prefix= warehouse_prefix_origin.clone();
-                    let mut prefix = format!(
-                        "{}/",
-                        &warehouse_prefix
-                    );
+                    let warehouse_prefix_origin = warehouse_url
+                        .split("/")
+                        .skip(3)
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let mut warehouse_prefix = warehouse_prefix_origin.clone();
+                    let mut prefix = format!("{}/", &warehouse_prefix);
 
                     if let Some(parent) = parent {
-                        warehouse_prefix = format!(
-                            "{}/{}",
-                            &warehouse_prefix,
-                            parent.join("/")
-                        );
-                        prefix = format!(
-                            "{}/",
-                            &warehouse_prefix
-                        );
+                        warehouse_prefix = format!("{}/{}", &warehouse_prefix, parent.join("/"));
+                        prefix = format!("{}/", &warehouse_prefix);
                     }
-
-                    println!("prefix={}",&prefix);
 
                     let list = s3_client
                         .list_objects_v2()
@@ -170,13 +157,11 @@ impl Catalog for HadoopCatalog {
                     for object in list.common_prefixes.unwrap_or_default() {
                         let key = object.prefix.unwrap_or_default();
                         // Only add namespace if it's a first level directory (has only one /)
-                        
+
                         if key.ends_with("/") && key.starts_with(&warehouse_prefix) {
-                            let warehouse_relative_path =&key[warehouse_prefix_origin.len()..];
-                            println!("warehouse_relative_path={}",&warehouse_relative_path);
-                            
+                            let warehouse_relative_path = &key[warehouse_prefix_origin.len()..];
+
                             let namespaces = warehouse_relative_path.split("/").collect::<Vec<_>>();
-                            
 
                             let table_version_hint_path = format!(
                                 "{}{}metadata/version-hint.text",
@@ -187,7 +172,6 @@ impl Catalog for HadoopCatalog {
                                     .join("/"),
                                 namespaces.join("/"),
                             );
-                            println!("table_version_hint_path={}",&table_version_hint_path);
 
                             //check It's not table
                             let table_version_hint = s3_client
@@ -202,11 +186,15 @@ impl Catalog for HadoopCatalog {
                                         format!("Failed to get table version hint: {}", e),
                                     )
                                 });
-                            
-                            
-                            
+
                             if !table_version_hint.is_ok() && !namespaces.is_empty() {
-                                result.push(NamespaceIdent::from_vec(namespaces.iter().filter(|e|!e.is_empty()).map(|e|e.to_string()).collect())?);
+                                result.push(NamespaceIdent::from_vec(
+                                    namespaces
+                                        .iter()
+                                        .filter(|e| !e.is_empty())
+                                        .map(|e| e.to_string())
+                                        .collect(),
+                                )?);
                             }
                         }
                     }
@@ -255,7 +243,7 @@ impl Catalog for HadoopCatalog {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let prefix = format!(
-                        "{}/{}",
+                        "{}/{}/",
                         &warehouse_url
                             .split("/")
                             .skip(3)
@@ -267,6 +255,7 @@ impl Catalog for HadoopCatalog {
                         .put_object()
                         .bucket(bucket)
                         .key(prefix)
+                        .content_length(0)
                         .send()
                         .await
                         .map_err(|e| {
@@ -650,7 +639,6 @@ impl Catalog for HadoopCatalog {
                         }
                     };
 
-
                     match table_version_hint_result {
                         Ok(table_version_hint_result_output) => {
                             let mut buf = Vec::new();
@@ -660,7 +648,7 @@ impl Catalog for HadoopCatalog {
                                 .read_to_end(&mut buf)
                                 .await?;
                             let table_version_hint = String::from_utf8_lossy(&buf);
-                            
+
                             let metadata_location = format!(
                                 "{}/{}/{}/metadata/v{}.metadata.json",
                                 &warehouse_url,
