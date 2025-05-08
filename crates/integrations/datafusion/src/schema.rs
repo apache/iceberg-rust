@@ -61,27 +61,26 @@ impl IcebergSchemaProvider {
             .map(|tbl| tbl.name().to_string())
             .collect();
 
-        let providers = join_all(
-            table_names.iter().map(|table_name| {
-                let client = client.clone();
-                let namespace = namespace.clone();
-                async move {
-                    match IcebergTableProvider::try_new(client, namespace, table_name).await {
-                        Ok(provider) => {
-                            println!("Successfully loaded table {}", table_name);
-                            Some(provider)
-                        }
-                        Err(e) => {
-                            println!("Error loading table {} due to {}", table_name, e);
-                            None
-                        }
+        let providers = join_all(table_names.iter().map(|table_name| {
+            let client = client.clone();
+            let namespace = namespace.clone();
+            async move {
+                match IcebergTableProvider::try_new(client, namespace, table_name).await {
+                    Ok(provider) => {
+                        println!("Successfully loaded table {}", table_name);
+                        Some(provider)
+                    }
+                    Err(e) => {
+                        println!("Error loading table {} due to {}", table_name, e);
+                        None
                     }
                 }
-            })
-        ).await
-            .into_iter()
-            .flatten() // Remove the None values
-            .collect::<Vec<_>>();
+            }
+        }))
+        .await
+        .into_iter()
+        .flatten() // Remove the None values
+        .collect::<Vec<_>>();
 
         let tables: HashMap<String, Arc<dyn TableProvider>> = table_names
             .into_iter()
