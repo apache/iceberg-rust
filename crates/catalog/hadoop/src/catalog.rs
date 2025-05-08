@@ -129,23 +129,30 @@ impl Catalog for HadoopCatalog {
             match self.config.warehouse.clone() {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
-                    let warehouse_prefix= warehouse_url
+                    let  warehouse_prefix_origin= warehouse_url
                     .split("/")
                     .skip(3)
                     .collect::<Vec<_>>()
                     .join("/");
+                    let mut warehouse_prefix= warehouse_prefix_origin.clone();
                     let mut prefix = format!(
                         "{}/",
                         &warehouse_prefix
                     );
 
                     if let Some(parent) = parent {
-                        prefix = format!(
-                            "{}/{}/",
+                        warehouse_prefix = format!(
+                            "{}/{}",
                             &warehouse_prefix,
                             parent.join("/")
                         );
+                        prefix = format!(
+                            "{}/",
+                            &warehouse_prefix
+                        );
                     }
+
+                    println!("prefix={}",&prefix);
 
                     let list = s3_client
                         .list_objects_v2()
@@ -162,26 +169,17 @@ impl Catalog for HadoopCatalog {
                         })?;
                     for object in list.common_prefixes.unwrap_or_default() {
                         let key = object.prefix.unwrap_or_default();
-                        // Skip the prefix part and check if it's a first level directory
-                        let relative_path = if key.starts_with(&prefix) {
-                            &key[prefix.len()..]
-                        } else {
-                            &key
-                        };
                         // Only add namespace if it's a first level directory (has only one /)
                         
-                        if relative_path.ends_with("/") {
-                            let warehouse_relative_path = if key.starts_with(&warehouse_prefix) {
-                                &key[warehouse_prefix.len()..]
-                            } else {
-                                &key
-                            };
+                        if key.ends_with("/") && key.starts_with(&warehouse_prefix) {
+                            let warehouse_relative_path =&key[warehouse_prefix_origin.len()..];
+                            println!("warehouse_relative_path={}",&warehouse_relative_path);
                             
                             let namespaces = warehouse_relative_path.split("/").collect::<Vec<_>>();
                             
 
                             let table_version_hint_path = format!(
-                                "{}/{}/metadata/version-hint.text",
+                                "{}{}metadata/version-hint.text",
                                 &warehouse_url
                                     .split("/")
                                     .skip(3)
@@ -189,6 +187,7 @@ impl Catalog for HadoopCatalog {
                                     .join("/"),
                                 namespaces.join("/"),
                             );
+                            println!("table_version_hint_path={}",&table_version_hint_path);
 
                             //check It's not table
                             let table_version_hint = s3_client
