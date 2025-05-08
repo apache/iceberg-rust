@@ -298,7 +298,7 @@ impl Catalog for HadoopCatalog {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let prefix = format!(
-                        "{}/{}",
+                        "{}/{}/",
                         &warehouse_url
                             .split("/")
                             .skip(3)
@@ -309,7 +309,7 @@ impl Catalog for HadoopCatalog {
                     s3_client
                         .get_object()
                         .bucket(bucket)
-                        .key(prefix)
+                        .key(&prefix)
                         .send()
                         .await
                         .map_err(|e| {
@@ -318,6 +318,31 @@ impl Catalog for HadoopCatalog {
                                 format!("Failed to get namespace: {}", e),
                             )
                         })?;
+                        let table_version_hint_path = format!(
+                            "{}metadata/version-hint.text",
+                            &prefix,
+                        );
+
+                        //check It's not table
+                        let table_version_hint = s3_client
+                            .get_object()
+                            .bucket(bucket)
+                            .key(table_version_hint_path)
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!("Failed to get table version hint: {}", e),
+                                )
+                            });
+                        if table_version_hint.is_ok() {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                "It's a table not namespace",
+                            ));
+                        }
+
                 }
                 None => {
                     return Err(Error::new(ErrorKind::DataInvalid, "warehouse is required"));
