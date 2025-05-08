@@ -3458,8 +3458,10 @@ dependencies = [
  "datafusion-sqllogictest",
  "enum-ordinalize",
  "indicatif",
+ "serde",
  "sqllogictest",
  "toml",
+ "tracing",
 ]
 
 [[package]]
