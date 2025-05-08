@@ -512,7 +512,7 @@ impl Catalog for HadoopCatalog {
                 Some(warehouse_url) => {
                     let bucket = warehouse_url.split("/").nth(2).unwrap_or("");
                     let prefix = format!(
-                        "{}/{}",
+                        "{}/{}/",
                         &warehouse_url
                             .split("/")
                             .skip(3)
@@ -523,7 +523,8 @@ impl Catalog for HadoopCatalog {
                     let list = s3_client
                         .list_objects_v2()
                         .bucket(bucket)
-                        .prefix(prefix)
+                        .prefix(&prefix)
+                        .delimiter("/")
                         .send()
                         .await
                         .map_err(|e| {
@@ -533,22 +534,18 @@ impl Catalog for HadoopCatalog {
                             )
                         })?;
                     let mut result = Vec::new();
-                    for object in list.contents.unwrap_or_default() {
-                        let key = object.key.unwrap_or_default();
+                    for object in list.common_prefixes.unwrap_or_default() {
+                        let key = object.prefix.unwrap_or_default();
                         if key.ends_with("/") {
-                            let table_name = key.split("/").nth(4).unwrap_or("");
+                            let mut table_name = if key.ends_with("/") {
+                                key[..key.len() - 1].to_string()
+                            } else {
+                                key.clone()
+                            };
+                            table_name = table_name.split("/").last().unwrap_or(&"").to_string();
 
-                            let table_version_hint_path = format!(
-                                "{}/{}/{}/metadata/version-hint.text",
-                                &warehouse_url
-                                    .split("/")
-                                    .skip(3)
-                                    .collect::<Vec<_>>()
-                                    .join("/"),
-                                namespace.join("/"),
-                                &table_name
-                            );
-
+                            let table_version_hint_path =
+                                format!("{}metadata/version-hint.text", &key);
                             let table_version_hint = s3_client
                                 .get_object()
                                 .bucket(bucket)
