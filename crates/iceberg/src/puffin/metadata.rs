@@ -133,7 +133,7 @@ impl Flag {
 /// Metadata about a puffin file.
 ///
 /// For more information, see: https://iceberg.apache.org/puffin-spec/#filemetadata
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
     pub(crate) blobs: Vec<BlobMetadata>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -280,10 +280,6 @@ impl FileMetadata {
     }
 
     /// Returns the file metadata about a Puffin file
-    ///
-    /// `prefetch_hint` is used to try to fetch the entire footer in one read. If
-    /// the entire footer isn't fetched in one read the function will call the `read_no_prefetch`
-    /// option.
     pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
         let file_read = input_file.reader().await?;
 
@@ -307,9 +303,13 @@ impl FileMetadata {
             FileMetadata::extract_footer_payload_as_str(&footer_bytes, footer_payload_length)?;
 
         FileMetadata::from_json_str(&footer_payload_str)
-        //
     }
 
+    /// Reads file_metadata in puffin file with a prefetch hint
+    ///
+    /// `prefetch_hint` is used to try to fetch the entire footer in one read. If
+    /// the entire footer isn't fetched in one read the function will call the regular
+    /// read option.
     #[allow(dead_code)]
     pub(crate) async fn read_with_prefetch(
         input_file: &InputFile,
